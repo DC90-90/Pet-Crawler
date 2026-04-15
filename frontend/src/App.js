@@ -1,53 +1,30 @@
-import { useEffect } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+import { Toaster } from "@/components/ui/sonner";
+import Sidebar from "@/components/Sidebar";
+import DashboardPage from "@/pages/DashboardPage";
+import CompetitorsPage from "@/pages/CompetitorsPage";
+import ProductsPage from "@/pages/ProductsPage";
+import BestSellersPage from "@/pages/BestSellersPage";
+import PriceComparisonPage from "@/pages/PriceComparisonPage";
 
 function App() {
   return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
+    <BrowserRouter>
+      <div className="flex min-h-screen bg-background" data-testid="app-root">
+        <Sidebar />
+        <main className="flex-1 ml-[220px] min-h-screen">
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/competitors" element={<CompetitorsPage />} />
+            <Route path="/products" element={<ProductsPage />} />
+            <Route path="/best-sellers" element={<BestSellersPage />} />
+            <Route path="/price-comparison" element={<PriceComparisonPage />} />
+          </Routes>
+        </main>
+        <Toaster position="top-right" />
+      </div>
+    </BrowserRouter>
   );
 }
 

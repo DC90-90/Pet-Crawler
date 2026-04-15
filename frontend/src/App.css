@@ -1,34 +1,53 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: hsl(228 10% 82%);
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: hsl(228 10% 70%);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+/* Table density */
+.dense-table th,
+.dense-table td {
+    padding: 8px 12px;
+    font-size: 13px;
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+/* Metric card pulse animation */
+@keyframes sync-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+.sync-pulse {
+    animation: sync-pulse 1.5s ease-in-out infinite;
 }
 
-.App-link {
-    color: #61dafb;
+/* Status dot */
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
 }
+.status-dot.synced { background-color: hsl(145 80% 42%); }
+.status-dot.syncing { background-color: hsl(40 100% 50%); animation: sync-pulse 1.5s ease-in-out infinite; }
+.status-dot.failed { background-color: hsl(0 84% 60%); }
+.status-dot.pending { background-color: hsl(228 10% 70%); }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+/* Sortable header */
+.sort-header {
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 200ms;
+}
+.sort-header:hover {
+    background-color: hsl(228 10% 93%);
 }
