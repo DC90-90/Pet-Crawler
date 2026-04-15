@@ -876,7 +876,7 @@ async def alert_feed(user=Depends(get_user)):
 # ── Export ──────────────────────────────────────────────────
 @router.get("/export/products")
 async def export_csv(days: int = Query(30), user=Depends(get_user)):
-    data = await my_products(days=days, user=user)
+    data = await my_products(days=days, category=None, animal_type=None, search=None, sort_by="revenue_est", sort_order="desc", user=user)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["SKU", "Name (AR)", "Name (EN)", "Category", "Price (SAR)", "Min Price", "Max Price", "Est. Sales", "Est. Revenue", "Sellers", "Stock Signal", "Confidence"])
