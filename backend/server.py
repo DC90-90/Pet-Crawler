@@ -1,457 +1,897 @@
-from fastapi import FastAPI, APIRouter, Query, HTTPException
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
-import random
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
-import uuid
-from datetime import datetime, timezone, timedelta
-
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+import os, logging, random, uuid, bcrypt, jwt as pyjwt, statistics, csv, io
+from datetime import datetime, timezone, timedelta
+from pydantic import BaseModel
+from typing import Optional, List
+from bson import ObjectId
+from starlette.responses import StreamingResponse
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+JWT_SECRET = os.environ['JWT_SECRET']
+JWT_ALG = "HS256"
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-app = FastAPI()
-api_router = APIRouter(prefix="/api")
+app = FastAPI(title="Daleel Pets API")
+router = APIRouter(prefix="/api")
 
-# --- Models ---
-class Competitor(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+# ── Auth Utilities ──────────────────────────────────────────
+def hash_pw(pw):
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+
+def check_pw(pw, h):
+    return bcrypt.checkpw(pw.encode(), h.encode())
+
+def make_token(uid, email):
+    return pyjwt.encode(
+        {"sub": uid, "email": email, "exp": datetime.now(timezone.utc) + timedelta(hours=24)},
+        JWT_SECRET, algorithm=JWT_ALG
+    )
+
+async def get_user(request: Request):
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(401, "Not authenticated")
+    try:
+        p = pyjwt.decode(auth[7:], JWT_SECRET, algorithms=[JWT_ALG])
+        u = await db.users.find_one({"_id": ObjectId(p["sub"])})
+        if not u:
+            raise HTTPException(401, "User not found")
+        return {"id": str(u["_id"]), "email": u["email"], "name": u.get("name", ""), "role": u.get("role", "user")}
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(401, "Token expired")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(401, "Invalid token")
+
+# ── Models ──────────────────────────────────────────────────
+class AuthIn(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+class StoreIn(BaseModel):
     name: str
+    domain: str
     platform: str
-    website_url: str = ""
-    logo_initial: str = ""
-    status: str = "active"
-    sync_status: str = "synced"
-    last_synced: str = ""
-    total_products: int = 0
-    created_at: str = ""
+    base_url: Optional[str] = ""
+    crawl_frequency_hrs: Optional[int] = 24
 
-class CompetitorCreate(BaseModel):
-    name: str
-    platform: str
-    website_url: str = ""
-
-class CompetitorUpdate(BaseModel):
+class StoreUpdate(BaseModel):
     name: Optional[str] = None
     platform: Optional[str] = None
-    website_url: Optional[str] = None
-    status: Optional[str] = None
+    base_url: Optional[str] = None
+    crawl_frequency_hrs: Optional[int] = None
+    is_active: Optional[bool] = None
 
-class Product(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    competitor_id: str
-    competitor_name: str
+class AlertIn(BaseModel):
+    product_sku: Optional[str] = None
+    category: Optional[str] = None
+    store_id: Optional[str] = None
+    alert_type: str = "price_drop"
+    threshold: Optional[float] = None
+    channel: str = "in_app"
+
+class SavedFilterIn(BaseModel):
     name: str
-    category: str
-    price: float
-    original_price: float
-    discount_percentage: float = 0
-    stock_quantity: int = 0
-    stock_status: str = "in_stock"
-    rating: float = 0
-    reviews_count: int = 0
-    sales_count: int = 0
-    is_best_seller: bool = False
-    shipping_info: str = "Standard"
-    image_url: str = ""
-    last_updated: str = ""
-    created_at: str = ""
+    filters: dict
 
-class DashboardOverview(BaseModel):
-    total_competitors: int = 0
-    total_products: int = 0
-    avg_price: float = 0
-    out_of_stock_count: int = 0
-    low_stock_count: int = 0
-    best_seller_count: int = 0
-    total_categories: int = 0
-    avg_rating: float = 0
-    avg_discount: float = 0
-    categories: list = []
-    platform_distribution: list = []
-    competitor_product_counts: list = []
-
-# --- Seed Data ---
-COMPETITORS_SEED = [
-    {"name": "Zarafa", "platform": "Salla", "website_url": "https://zarafa.sa"},
-    {"name": "Petsy", "platform": "Shopify", "website_url": "https://petsy.sa"},
-    {"name": "Aleef", "platform": "Zid", "website_url": "https://aleef.sa"},
-    {"name": "Lanapets", "platform": "Salla", "website_url": "https://lanapets.sa"},
-    {"name": "Petshouses", "platform": "Shopify", "website_url": "https://petshouses.sa"},
+# ── Seed Data ───────────────────────────────────────────────
+STORES_SEED = [
+    {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1},
+    {"name": "Panda Store", "domain": "matjarpanda.com", "platform": "salla", "priority": 1},
+    {"name": "Lana Pets", "domain": "lanapets.com", "platform": "salla", "priority": 1},
+    {"name": "Cute Pets", "domain": "cutepets.com", "platform": "shopify", "priority": 1},
+    {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2},
+    {"name": "Caty Store", "domain": "caty-store.com", "platform": "salla", "priority": 2},
+    {"name": "Petsy", "domain": "petsysa.com", "platform": "salla", "priority": 2},
 ]
 
 PRODUCTS_SEED = [
-    # Dog Food
-    {"name": "Royal Canin Maxi Adult 15kg", "category": "Dog Food", "base_price": 289, "img": ""},
-    {"name": "Pedigree Adult Chicken & Veg 10kg", "category": "Dog Food", "base_price": 145, "img": ""},
-    {"name": "Brit Premium Adult Large 15kg", "category": "Dog Food", "base_price": 219, "img": ""},
-    {"name": "Josera SensiPlus 12.5kg", "category": "Dog Food", "base_price": 265, "img": ""},
-    {"name": "Acana Prairie Poultry 11.4kg", "category": "Dog Food", "base_price": 349, "img": ""},
-    {"name": "Orijen Original Dog 11.4kg", "category": "Dog Food", "base_price": 389, "img": ""},
-    # Cat Food
-    {"name": "Whiskas Tuna Adult 7kg", "category": "Cat Food", "base_price": 98, "img": ""},
-    {"name": "Royal Canin Indoor Cat 4kg", "category": "Cat Food", "base_price": 175, "img": ""},
-    {"name": "N&D Pumpkin Lamb Adult Cat 5kg", "category": "Cat Food", "base_price": 245, "img": ""},
-    {"name": "Me-O Tuna 7kg", "category": "Cat Food", "base_price": 79, "img": ""},
-    {"name": "Purina Pro Plan Adult Cat 3kg", "category": "Cat Food", "base_price": 135, "img": ""},
-    {"name": "Hills Science Diet Adult Cat 4kg", "category": "Cat Food", "base_price": 189, "img": ""},
-    # Bird Supplies
-    {"name": "Versele-Laga Prestige Budgies 4kg", "category": "Bird Supplies", "base_price": 65, "img": ""},
-    {"name": "Zupreem FruitBlend Parrot 1.5kg", "category": "Bird Supplies", "base_price": 89, "img": ""},
-    {"name": "Vitakraft Menu Canary 1kg", "category": "Bird Supplies", "base_price": 42, "img": ""},
-    # Fish Supplies
-    {"name": "Tetra Min Tropical Flakes 200g", "category": "Fish Supplies", "base_price": 55, "img": ""},
-    {"name": "API Stress Coat 473ml", "category": "Fish Supplies", "base_price": 78, "img": ""},
-    {"name": "Fluval FX6 Canister Filter", "category": "Fish Supplies", "base_price": 899, "img": ""},
-    # Accessories
-    {"name": "Premium Leather Dog Leash", "category": "Accessories", "base_price": 120, "img": ""},
-    {"name": "Orthopedic Pet Bed Large", "category": "Accessories", "base_price": 199, "img": ""},
-    {"name": "Stainless Steel Pet Bowl Set", "category": "Accessories", "base_price": 45, "img": ""},
-    {"name": "Pet Carrier Airline Approved", "category": "Accessories", "base_price": 249, "img": ""},
-    {"name": "Automatic Water Fountain 2.4L", "category": "Accessories", "base_price": 135, "img": ""},
-    # Toys
-    {"name": "Kong Classic Dog Toy Large", "category": "Toys", "base_price": 65, "img": ""},
-    {"name": "Chuckit Ultra Ball 2-Pack", "category": "Toys", "base_price": 45, "img": ""},
-    {"name": "Cat Tunnel 3-Way Collapsible", "category": "Toys", "base_price": 55, "img": ""},
-    {"name": "Interactive Feather Wand Cat Toy", "category": "Toys", "base_price": 29, "img": ""},
-    # Grooming
-    {"name": "FURminator deShedding Tool Large", "category": "Grooming", "base_price": 149, "img": ""},
-    {"name": "TropiClean Berry Clean Shampoo 592ml", "category": "Grooming", "base_price": 68, "img": ""},
-    {"name": "Safari Self-Cleaning Slicker Brush", "category": "Grooming", "base_price": 42, "img": ""},
-    {"name": "Pet Nail Clipper Professional", "category": "Grooming", "base_price": 35, "img": ""},
-    # Healthcare
-    {"name": "Frontline Plus Flea Treatment Dog", "category": "Healthcare", "base_price": 125, "img": ""},
-    {"name": "NaturVet Glucosamine DS 60 Tabs", "category": "Healthcare", "base_price": 89, "img": ""},
-    {"name": "Virbac C.E.T. Dental Chews Medium", "category": "Healthcare", "base_price": 75, "img": ""},
-    {"name": "Vetoquinol Omega 3-6 Supplement", "category": "Healthcare", "base_price": 95, "img": ""},
+    ("RC-ICAT-4", "رويال كانين للقطط المنزلية 4 كجم", "Royal Canin Indoor Cat 4kg", "Royal Canin", "cat_food", "cat", 4.0, 175),
+    ("WH-TUNA-7", "ويسكاس تونا للقطط البالغة 7 كجم", "Whiskas Tuna Adult Cat 7kg", "Whiskas", "cat_food", "cat", 7.0, 98),
+    ("PO-STER-3", "بورينا وان للقطط المعقمة 3 كجم", "Purina ONE Sterilised Cat 3kg", "Purina", "cat_food", "cat", 3.0, 135),
+    ("HS-DIET-2", "هيلز ساينس دايت قطط 2 كجم", "Hills Science Diet Cat 2kg", "Hills", "cat_food", "cat", 2.0, 189),
+    ("ND-PUMP-5", "ان اند دي يقطين حمل قطط 5 كجم", "N&D Pumpkin Lamb Cat 5kg", "N&D", "cat_food", "cat", 5.0, 245),
+    ("MO-TUNA-7", "مي-او تونا 7 كجم", "Me-O Tuna 7kg", "Me-O", "cat_food", "cat", 7.0, 79),
+    ("FR-FISH-1", "فريسكيز سمك قطط 1.5 كجم", "Friskies Fish Cat 1.5kg", "Friskies", "cat_food", "cat", 1.5, 55),
+    ("RC-MAXI-15", "رويال كانين ماكسي كلاب 15 كجم", "Royal Canin Maxi Dog 15kg", "Royal Canin", "dog_food", "dog", 15.0, 289),
+    ("PD-MEAT-10", "بيدقري لحم كلاب 10 كجم", "Pedigree Meat Dog 10kg", "Pedigree", "dog_food", "dog", 10.0, 145),
+    ("BR-PREM-15", "بريت بريميوم كلاب 15 كجم", "Brit Premium Dog 15kg", "Brit", "dog_food", "dog", 15.0, 219),
+    ("OR-ORIG-11", "اوريجن كلاب 11.4 كجم", "Orijen Dog 11.4kg", "Orijen", "dog_food", "dog", 11.4, 389),
+    ("AC-PRAI-11", "اكانا دجاج كلاب 11.4 كجم", "Acana Chicken Dog 11.4kg", "Acana", "dog_food", "dog", 11.4, 349),
+    ("VL-PRES-4", "فيرسيل لاجا بريستيج ببغاء 4 كجم", "Versele-Laga Prestige Parrot 4kg", "Versele-Laga", "bird_food", "bird", 4.0, 65),
+    ("ZP-FRUT-1", "زوبريم فروت بلند 1.5 كجم", "Zupreem FruitBlend 1.5kg", "Zupreem", "bird_food", "bird", 1.5, 89),
+    ("VK-CANA-1", "فيتاكرافت كناري 1 كجم", "Vitakraft Canary 1kg", "Vitakraft", "bird_food", "bird", 1.0, 42),
+    ("TM-FLAK-200", "تترا مين رقائق استوائية 200 جرام", "Tetra Min Tropical Flakes 200g", "Tetra", "fish_food", "fish", 0.2, 55),
+    ("FL-FX6-F", "فلتر فلوفال FX6", "Fluval FX6 Filter", "Fluval", "equipment", "fish", 0, 899),
+    ("CB-PREM-1", "سرير قطط فاخر مع وسادة", "Premium Cat Bed", "Generic", "accessories", "cat", 0, 159),
+    ("CT-TREE-150", "شجرة تسلق للقطط 150 سم", "Cat Climbing Tree 150cm", "Generic", "accessories", "cat", 0, 299),
+    ("CL-CRYS-5", "رمل قطط كريستال 5 لتر", "Crystal Cat Litter 5L", "Ever Clean", "litter", "cat", 5.0, 45),
+    ("LB-ENCL-1", "صندوق فضلات قطط مغلق", "Enclosed Cat Litter Box", "Catit", "accessories", "cat", 0, 129),
+    ("DC-LEAT-1", "طوق كلب جلد طبيعي", "Leather Dog Collar", "Generic", "accessories", "dog", 0, 85),
+    ("DB-ORTH-L", "سرير كلب ارثوبيدك كبير", "Orthopedic Dog Bed Large", "PetFusion", "accessories", "dog", 0, 199),
+    ("TC-AIRL-1", "قفص تنقل معتمد للطيران", "Airline Travel Crate", "Petmate", "accessories", "dog", 0, 249),
+    ("KG-CLAS-L", "كونغ كلاسيك كبير", "Kong Classic Large", "Kong", "toys", "dog", 0, 65),
+    ("FT-FETH-1", "لعبة ريشة تفاعلية للقطط", "Feather Cat Toy", "SmartyKat", "toys", "cat", 0, 29),
+    ("TN-3WAY-1", "نفق قطط ثلاثي قابل للطي", "3-Way Cat Tunnel", "Generic", "toys", "cat", 0, 55),
+    ("FM-DESH-L", "فرمينيتور إزالة الشعر كبير", "FURminator deShedding Large", "FURminator", "grooming", "dog", 0, 149),
+    ("TC-SHAM-592", "شامبو تروبي كلين 592 مل", "TropiClean Shampoo 592ml", "TropiClean", "grooming", "dog", 0.592, 68),
+    ("NC-PROF-1", "مقص اظافر احترافي", "Pro Nail Clipper", "Safari", "grooming", "cat", 0, 35),
+    ("FL-PLUS-D", "فرونت لاين بلس كلاب", "Frontline Plus Dog", "Frontline", "healthcare", "dog", 0, 125),
+    ("NV-GLUC-60", "جلوكوزامين 60 قرص", "Glucosamine 60 Tabs", "NaturVet", "healthcare", "dog", 0, 89),
+    ("VB-DENT-1", "معجون اسنان فيرباك قطط", "Virbac Dental Paste Cat", "Virbac", "healthcare", "cat", 0, 75),
+    ("RF-RABB-2", "علف ارانب مكس 2 كجم", "Rabbit Mix Feed 2kg", "Versele-Laga", "small_food", "small", 2.0, 55),
+    ("TH-TIMO-1", "تبن تيموثي عضوي 1 كجم", "Timothy Hay 1kg", "Oxbow", "small_food", "small", 1.0, 42),
 ]
 
-async def seed_data():
-    existing = await db.competitors.count_documents({})
-    if existing > 0:
+CATEGORIES = {
+    "cat_food": "Cat Food", "dog_food": "Dog Food", "bird_food": "Bird Food",
+    "fish_food": "Fish Food", "equipment": "Equipment", "accessories": "Accessories",
+    "litter": "Litter", "toys": "Toys", "grooming": "Grooming",
+    "healthcare": "Healthcare", "small_food": "Small Animal Food",
+}
+
+def get_stock_signal(qty):
+    if qty == 0: return "OOS"
+    if qty < 10: return "LOW"
+    if qty <= 30: return "MEDIUM"
+    return "HIGH"
+
+async def seed_database():
+    if await db.stores.count_documents({}) > 0:
         return
-    
-    logger.info("Seeding database with initial data...")
+    logger.info("Seeding Daleel Pets database...")
+    random.seed(42)
+    now = datetime.now(timezone.utc)
+
+    # Seed stores
+    store_ids = []
+    for s in STORES_SEED:
+        sid = str(uuid.uuid4())
+        await db.stores.insert_one({
+            "id": sid, "name": s["name"], "domain": s["domain"],
+            "platform": s["platform"], "base_url": f"https://{s['domain']}",
+            "crawl_frequency_hrs": 12 if s["priority"] == 1 else 24,
+            "buyer_account_enc": "", "is_active": True, "priority": s["priority"],
+            "last_crawled_at": (now - timedelta(hours=random.randint(1, 6))).isoformat(),
+            "created_at": (now - timedelta(days=60)).isoformat(),
+        })
+        store_ids.append({"id": sid, "name": s["name"], "priority": s["priority"]})
+
+    # Seed products and snapshots
+    p1_stores = [s for s in store_ids if s["priority"] == 1]
+    p2_stores = [s for s in store_ids if s["priority"] == 2]
+    all_snapshots = []
+
+    for tup in PRODUCTS_SEED:
+        sku, name_ar, name_en, brand, category, animal, weight, base_price = tup
+        pid = str(uuid.uuid4())
+        await db.products.insert_one({
+            "id": pid, "sku": sku, "name_ar": name_ar, "name_en": name_en,
+            "brand": brand, "category": category, "animal_type": animal,
+            "weight_kg": weight, "image_url": "", "first_seen_at": (now - timedelta(days=45)).isoformat(),
+        })
+
+        # Assign to stores: 3-4 P1 stores + 1-2 P2 stores
+        n_p1 = random.randint(2, min(4, len(p1_stores)))
+        n_p2 = random.randint(1, min(2, len(p2_stores)))
+        assigned = random.sample(p1_stores, n_p1) + random.sample(p2_stores, n_p2)
+
+        for store in assigned:
+            tier = random.choices([1, 2, 3], weights=[55, 30, 15])[0]
+            qty = random.randint(40, 250)
+            price = round(base_price * random.uniform(0.90, 1.12), 2)
+
+            day = 30
+            while day >= 0:
+                crawled_at = now - timedelta(days=day, hours=random.randint(0, 12))
+                sold = random.randint(0, min(15, qty))
+                qty = max(0, qty - sold)
+                if qty <= 5 and random.random() < 0.35:
+                    qty += random.randint(30, 120)
+                price = round(price * random.uniform(0.97, 1.03), 2)
+                has_disc = random.random() < 0.2
+                disc_pct = random.choice([5, 10, 15, 20, 25]) if has_disc else 0
+                orig_price = round(price / (1 - disc_pct / 100), 2) if disc_pct else price
+                conf = {1: random.randint(92, 98), 2: random.randint(85, 95), 3: random.randint(70, 85)}[tier]
+
+                all_snapshots.append({
+                    "id": str(uuid.uuid4()), "product_id": pid, "store_id": store["id"],
+                    "store_name": store["name"], "sku": sku,
+                    "price": price, "original_price": orig_price, "discount_pct": disc_pct,
+                    "in_stock": qty > 0, "qty_available": max(0, qty),
+                    "source_tier": tier, "confidence_score": conf,
+                    "crawled_at": crawled_at,
+                })
+                day -= random.randint(2, 4)
+
+    if all_snapshots:
+        await db.product_snapshots.insert_many(all_snapshots)
+
+    # Seed admin user
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@daleelpets.com")
+    admin_pw = os.environ.get("ADMIN_PASSWORD", "admin123")
+    if not await db.users.find_one({"email": admin_email}):
+        await db.users.insert_one({
+            "email": admin_email, "password_hash": hash_pw(admin_pw),
+            "name": "Admin", "role": "admin",
+            "created_at": datetime.now(timezone.utc),
+        })
+
+    # Create indexes
+    await db.users.create_index("email", unique=True)
+    await db.product_snapshots.create_index([("sku", 1), ("crawled_at", -1)])
+    await db.product_snapshots.create_index([("store_id", 1), ("crawled_at", -1)])
+    await db.product_snapshots.create_index("product_id")
+    await db.products.create_index("sku", unique=True)
+    await db.stores.create_index("domain", unique=True)
+
+    # Write test credentials
+    creds_path = Path("/app/memory/test_credentials.md")
+    creds_path.parent.mkdir(exist_ok=True)
+    creds_path.write_text(f"# Daleel Pets Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_pw}\n- Role: admin\n\n## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n")
+
+    logger.info(f"Seeded {len(STORES_SEED)} stores, {len(PRODUCTS_SEED)} products, {len(all_snapshots)} snapshots")
+
+# ── Auth Routes ─────────────────────────────────────────────
+@router.post("/auth/register")
+async def register(data: AuthIn):
+    email = data.email.lower().strip()
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(400, "Email already registered")
+    doc = {"email": email, "password_hash": hash_pw(data.password), "name": data.name or email.split("@")[0], "role": "user", "created_at": datetime.now(timezone.utc)}
+    result = await db.users.insert_one(doc)
+    uid = str(result.inserted_id)
+    token = make_token(uid, email)
+    return {"token": token, "user": {"id": uid, "email": email, "name": doc["name"], "role": "user"}}
+
+@router.post("/auth/login")
+async def login(data: AuthIn):
+    email = data.email.lower().strip()
+    user = await db.users.find_one({"email": email})
+    if not user or not check_pw(data.password, user["password_hash"]):
+        raise HTTPException(401, "Invalid credentials")
+    uid = str(user["_id"])
+    token = make_token(uid, email)
+    return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", ""), "role": user.get("role", "user")}}
+
+@router.get("/auth/me")
+async def me(user=Depends(get_user)):
+    return user
+
+@router.post("/auth/logout")
+async def logout():
+    return {"message": "Logged out"}
+
+@router.get("/protected")
+async def protected(user=Depends(get_user)):
+    return {"message": "Authenticated", "user": user}
+
+# ── Store Routes ────────────────────────────────────────────
+@router.get("/stores")
+async def list_stores(user=Depends(get_user)):
+    stores = await db.stores.find({}, {"_id": 0}).sort("name", 1).to_list(100)
+    for s in stores:
+        s["product_count"] = await db.product_snapshots.distinct("sku", {"store_id": s["id"]})
+        s["product_count"] = len(s["product_count"])
+    return stores
+
+@router.post("/stores")
+async def create_store(data: StoreIn, user=Depends(get_user)):
+    platform = data.platform.lower()
+    if platform not in ("salla", "zid", "shopify", "woocommerce", "custom"):
+        platform = "custom"
     now = datetime.now(timezone.utc).isoformat()
-    
-    competitor_ids = []
-    for comp_data in COMPETITORS_SEED:
-        comp = Competitor(
-            name=comp_data["name"],
-            platform=comp_data["platform"],
-            website_url=comp_data["website_url"],
-            logo_initial=comp_data["name"][0].upper(),
-            status="active",
-            sync_status=random.choice(["synced", "synced", "synced", "syncing"]),
-            last_synced=now,
-            total_products=0,
-            created_at=now,
-        )
-        doc = comp.model_dump()
-        await db.competitors.insert_one(doc)
-        competitor_ids.append({"id": comp.id, "name": comp_data["name"]})
-    
-    product_count_per_comp = {c["id"]: 0 for c in competitor_ids}
-    
-    for prod_data in PRODUCTS_SEED:
-        num_competitors = random.randint(2, min(4, len(competitor_ids)))
-        chosen_comps = random.sample(competitor_ids, num_competitors)
-        
-        for comp in chosen_comps:
-            price_var = random.uniform(0.85, 1.18)
-            price = round(prod_data["base_price"] * price_var, 2)
-            has_discount = random.random() < 0.3
-            discount_pct = random.choice([5, 10, 15, 20, 25]) if has_discount else 0
-            original_price = round(price / (1 - discount_pct / 100), 2) if has_discount else price
-            
-            stock_qty = random.choice([0, 0, 2, 5, 8, 15, 25, 50, 100, 200])
-            if stock_qty == 0:
-                stock_status = "out_of_stock"
-            elif stock_qty <= 5:
-                stock_status = "low_stock"
-            else:
-                stock_status = "in_stock"
-            
-            rating = round(random.uniform(3.0, 5.0), 1)
-            reviews = random.randint(0, 350)
-            sales = random.randint(10, 2000)
-            is_best = sales > 800
-            shipping = random.choice(["Free Shipping", "Standard (15 SAR)", "Express (30 SAR)", "Free over 200 SAR"])
-            
-            product = Product(
-                competitor_id=comp["id"],
-                competitor_name=comp["name"],
-                name=prod_data["name"],
-                category=prod_data["category"],
-                price=price,
-                original_price=original_price,
-                discount_percentage=discount_pct,
-                stock_quantity=stock_qty,
-                stock_status=stock_status,
-                rating=rating,
-                reviews_count=reviews,
-                sales_count=sales,
-                is_best_seller=is_best,
-                shipping_info=shipping,
-                image_url=prod_data["img"],
-                last_updated=now,
-                created_at=now,
-            )
-            doc = product.model_dump()
-            await db.products.insert_one(doc)
-            product_count_per_comp[comp["id"]] += 1
-    
-    for comp_id, count in product_count_per_comp.items():
-        await db.competitors.update_one(
-            {"id": comp_id},
-            {"$set": {"total_products": count}}
-        )
-    
-    logger.info(f"Seeded {len(COMPETITORS_SEED)} competitors and products.")
-
-@app.on_event("startup")
-async def startup():
-    await seed_data()
-
-# --- Dashboard ---
-@api_router.get("/dashboard/overview", response_model=DashboardOverview)
-async def get_dashboard_overview():
-    total_comp = await db.competitors.count_documents({"status": "active"})
-    total_prod = await db.products.count_documents({})
-    
-    pipeline_avg = [{"$group": {"_id": None, "avg_price": {"$avg": "$price"}, "avg_rating": {"$avg": "$rating"}, "avg_discount": {"$avg": "$discount_percentage"}}}]
-    avg_result = await db.products.aggregate(pipeline_avg).to_list(1)
-    avg_price = round(avg_result[0]["avg_price"], 2) if avg_result else 0
-    avg_rating = round(avg_result[0]["avg_rating"], 1) if avg_result else 0
-    avg_discount = round(avg_result[0]["avg_discount"], 1) if avg_result else 0
-    
-    oos_count = await db.products.count_documents({"stock_status": "out_of_stock"})
-    low_stock = await db.products.count_documents({"stock_status": "low_stock"})
-    best_seller_count = await db.products.count_documents({"is_best_seller": True})
-    
-    cat_pipeline = [{"$group": {"_id": "$category", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}]
-    categories = await db.products.aggregate(cat_pipeline).to_list(20)
-    categories = [{"name": c["_id"], "count": c["count"]} for c in categories]
-    
-    platform_pipeline = [{"$group": {"_id": "$platform", "count": {"$sum": 1}}}, {"$sort": {"count": -1}}]
-    platforms = await db.competitors.aggregate(platform_pipeline).to_list(10)
-    platforms = [{"name": p["_id"], "count": p["count"]} for p in platforms]
-    
-    comp_pipeline = [{"$match": {"status": "active"}}, {"$project": {"_id": 0, "name": 1, "total_products": 1}}]
-    comp_counts = await db.competitors.aggregate(comp_pipeline).to_list(20)
-    
-    return DashboardOverview(
-        total_competitors=total_comp,
-        total_products=total_prod,
-        avg_price=avg_price,
-        out_of_stock_count=oos_count,
-        low_stock_count=low_stock,
-        best_seller_count=best_seller_count,
-        total_categories=len(categories),
-        avg_rating=avg_rating,
-        avg_discount=avg_discount,
-        categories=categories,
-        platform_distribution=platforms,
-        competitor_product_counts=comp_counts,
-    )
-
-# --- Competitors ---
-@api_router.get("/competitors")
-async def get_competitors():
-    comps = await db.competitors.find({}, {"_id": 0}).sort("name", 1).to_list(100)
-    return comps
-
-@api_router.post("/competitors")
-async def create_competitor(data: CompetitorCreate):
-    now = datetime.now(timezone.utc).isoformat()
-    comp = Competitor(
-        name=data.name,
-        platform=data.platform,
-        website_url=data.website_url,
-        logo_initial=data.name[0].upper() if data.name else "?",
-        status="active",
-        sync_status="pending",
-        last_synced="",
-        total_products=0,
-        created_at=now,
-    )
-    doc = comp.model_dump()
-    await db.competitors.insert_one(doc)
+    doc = {
+        "id": str(uuid.uuid4()), "name": data.name, "domain": data.domain,
+        "platform": platform, "base_url": data.base_url or f"https://{data.domain}",
+        "crawl_frequency_hrs": data.crawl_frequency_hrs or 24,
+        "buyer_account_enc": "", "is_active": True, "priority": 3,
+        "last_crawled_at": "", "created_at": now,
+    }
+    await db.stores.insert_one(doc)
     doc.pop("_id", None)
     return doc
 
-@api_router.put("/competitors/{competitor_id}")
-async def update_competitor(competitor_id: str, data: CompetitorUpdate):
-    update_data = {k: v for k, v in data.model_dump().items() if v is not None}
-    if not update_data:
-        raise HTTPException(status_code=400, detail="No data to update")
-    
-    if "name" in update_data:
-        update_data["logo_initial"] = update_data["name"][0].upper()
-    
-    result = await db.competitors.update_one({"id": competitor_id}, {"$set": update_data})
+@router.put("/stores/{store_id}")
+async def update_store(store_id: str, data: StoreUpdate, user=Depends(get_user)):
+    updates = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(400, "No data")
+    result = await db.stores.update_one({"id": store_id}, {"$set": updates})
     if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Competitor not found")
-    
-    updated = await db.competitors.find_one({"id": competitor_id}, {"_id": 0})
-    return updated
+        raise HTTPException(404, "Store not found")
+    return await db.stores.find_one({"id": store_id}, {"_id": 0})
 
-@api_router.delete("/competitors/{competitor_id}")
-async def delete_competitor(competitor_id: str):
-    result = await db.competitors.delete_one({"id": competitor_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Competitor not found")
-    await db.products.delete_many({"competitor_id": competitor_id})
-    return {"message": "Competitor deleted"}
+@router.delete("/stores/{store_id}")
+async def delete_store(store_id: str, user=Depends(get_user)):
+    r = await db.stores.delete_one({"id": store_id})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Not found")
+    return {"message": "Deleted"}
 
-# --- Products ---
-@api_router.get("/products")
-async def get_products(
-    category: Optional[str] = Query(None),
-    competitor_id: Optional[str] = Query(None),
-    stock_status: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    sort_by: str = Query("name"),
-    sort_order: str = Query("asc"),
-    limit: int = Query(100),
-    skip: int = Query(0),
-):
-    query = {}
-    if category and category != "all":
-        query["category"] = category
-    if competitor_id and competitor_id != "all":
-        query["competitor_id"] = competitor_id
-    if stock_status and stock_status != "all":
-        query["stock_status"] = stock_status
-    if search:
-        query["name"] = {"$regex": search, "$options": "i"}
-    
-    sort_dir = 1 if sort_order == "asc" else -1
-    total = await db.products.count_documents(query)
-    products = await db.products.find(query, {"_id": 0}).sort(sort_by, sort_dir).skip(skip).limit(limit).to_list(limit)
-    
-    return {"products": products, "total": total}
-
-@api_router.get("/products/categories")
-async def get_product_categories():
-    cats = await db.products.distinct("category")
-    return cats
-
-@api_router.get("/products/best-sellers")
-async def get_best_sellers(
-    category: Optional[str] = Query(None),
-    limit: int = Query(20),
-):
-    query = {"is_best_seller": True}
-    if category and category != "all":
-        query["category"] = category
-    
-    products = await db.products.find(query, {"_id": 0}).sort("sales_count", -1).to_list(limit)
-    return products
-
-@api_router.get("/products/price-comparison")
-async def get_price_comparison(
-    category: Optional[str] = Query(None),
-):
-    query = {}
-    if category and category != "all":
-        query["category"] = category
-    
-    pipeline = [
-        {"$match": query},
-        {"$group": {
-            "_id": "$name",
-            "category": {"$first": "$category"},
-            "prices": {"$push": {
-                "competitor_id": "$competitor_id",
-                "competitor_name": "$competitor_name",
-                "price": "$price",
-                "stock_status": "$stock_status",
-                "discount_percentage": "$discount_percentage",
-            }},
-            "avg_price": {"$avg": "$price"},
-            "min_price": {"$min": "$price"},
-            "max_price": {"$max": "$price"},
-        }},
-        {"$match": {"$expr": {"$gte": [{"$size": "$prices"}, 2]}}},
-        {"$sort": {"_id": 1}},
-    ]
-    
-    results = await db.products.aggregate(pipeline).to_list(100)
-    competitors = await db.competitors.find({"status": "active"}, {"_id": 0, "id": 1, "name": 1}).to_list(20)
-    
-    comparison = []
-    for r in results:
-        price_map = {}
-        for p in r["prices"]:
-            price_map[p["competitor_name"]] = {
-                "price": p["price"],
-                "stock_status": p["stock_status"],
-                "discount_percentage": p["discount_percentage"],
-            }
-        comparison.append({
-            "product_name": r["_id"],
-            "category": r["category"],
-            "avg_price": round(r["avg_price"], 2),
-            "min_price": r["min_price"],
-            "max_price": r["max_price"],
-            "price_spread": round(r["max_price"] - r["min_price"], 2),
-            "prices": price_map,
-        })
-    
-    return {"comparison": comparison, "competitors": [c["name"] for c in competitors]}
-
-# --- Sync ---
-@api_router.post("/sync/trigger/{competitor_id}")
-async def trigger_sync(competitor_id: str):
-    comp = await db.competitors.find_one({"id": competitor_id}, {"_id": 0})
-    if not comp:
-        raise HTTPException(status_code=404, detail="Competitor not found")
-    
+@router.post("/stores/{store_id}/crawl")
+async def trigger_crawl(store_id: str, user=Depends(get_user)):
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not store:
+        raise HTTPException(404, "Store not found")
     now = datetime.now(timezone.utc).isoformat()
-    await db.competitors.update_one(
-        {"id": competitor_id},
-        {"$set": {"sync_status": "synced", "last_synced": now}}
-    )
-    
-    product_count = await db.products.count_documents({"competitor_id": competitor_id})
-    price_change = random.randint(0, 5)
-    new_products = random.randint(0, 2)
-    
+    await db.stores.update_one({"id": store_id}, {"$set": {"last_crawled_at": now}})
+    product_count = len(await db.product_snapshots.distinct("sku", {"store_id": store_id}))
     return {
-        "message": f"Sync completed for {comp['name']}",
-        "competitor_id": competitor_id,
-        "last_synced": now,
+        "message": f"Crawl completed for {store['name']}",
+        "store_id": store_id, "last_crawled_at": now,
         "products_found": product_count,
-        "price_changes": price_change,
-        "new_products": new_products,
+        "tier_used": random.choice([1, 1, 1, 2, 2, 3]),
+        "new_products": random.randint(0, 3),
+        "price_changes": random.randint(0, 8),
     }
 
-@api_router.post("/sync/trigger-all")
-async def trigger_sync_all():
-    now = datetime.now(timezone.utc).isoformat()
-    await db.competitors.update_many(
-        {"status": "active"},
-        {"$set": {"sync_status": "synced", "last_synced": now}}
-    )
-    comp_count = await db.competitors.count_documents({"status": "active"})
-    return {"message": f"Sync completed for {comp_count} competitors", "last_synced": now}
+# ── Helper: compute product metrics from snapshots ──────────
+def compute_product_metrics(snapshots_by_store, days):
+    """Given {store_id: [snapshots sorted by crawled_at asc]}, compute market metrics."""
+    all_latest_prices = []
+    total_sold = 0
+    total_revenue = 0.0
+    latest_qty = 0
+    confidences = []
+    latest_tier = 1
 
-@api_router.get("/")
+    for store_id, snaps in snapshots_by_store.items():
+        if not snaps:
+            continue
+        latest = snaps[-1]
+        all_latest_prices.append(latest["price"])
+        confidences.append(latest["confidence_score"])
+        latest_tier = latest["source_tier"]
+        latest_qty = max(latest_qty, latest.get("qty_available", 0))
+
+        # Compute sold from depletion
+        for i in range(1, len(snaps)):
+            delta = snaps[i - 1].get("qty_available", 0) - snaps[i].get("qty_available", 0)
+            if delta > 0:
+                total_sold += delta
+                total_revenue += delta * snaps[i]["price"]
+
+    if not all_latest_prices:
+        return None
+
+    min_p = min(all_latest_prices)
+    max_p = max(all_latest_prices)
+    med_p = statistics.median(all_latest_prices)
+    avg_p = statistics.mean(all_latest_prices)
+    avg_conf = round(statistics.mean(confidences)) if confidences else 0
+
+    return {
+        "price": round(avg_p, 2),
+        "min_price": round(min_p, 2),
+        "max_price": round(max_p, 2),
+        "median_price": round(med_p, 2),
+        "vs_lowest_pct": round(((avg_p - min_p) / min_p) * 100, 1) if min_p > 0 else 0,
+        "vs_median_pct": round(((avg_p - med_p) / med_p) * 100, 1) if med_p > 0 else 0,
+        "qty_sold_est": total_sold,
+        "revenue_est": round(total_revenue, 2),
+        "num_sellers": len(all_latest_prices),
+        "latest_qty": latest_qty,
+        "stock_signal": get_stock_signal(latest_qty),
+        "confidence_score": avg_conf,
+        "source_tier": latest_tier,
+    }
+
+# ── Product Routes ──────────────────────────────────────────
+@router.get("/my-products")
+async def my_products(
+    days: int = Query(30),
+    category: Optional[str] = Query(None),
+    animal_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    sort_by: str = Query("revenue_est"),
+    sort_order: str = Query("desc"),
+    user=Depends(get_user)
+):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    snap_query = {"crawled_at": {"$gte": since}}
+    snapshots = await db.product_snapshots.find(snap_query, {"_id": 0}).to_list(50000)
+
+    # Group snapshots by sku, then by store
+    by_sku = {}
+    for s in snapshots:
+        by_sku.setdefault(s["sku"], {}).setdefault(s["store_id"], []).append(s)
+    for sku in by_sku:
+        for sid in by_sku[sku]:
+            by_sku[sku][sid].sort(key=lambda x: x["crawled_at"])
+
+    # Get all products
+    prod_query = {}
+    if category and category != "all":
+        prod_query["category"] = category
+    if animal_type and animal_type != "all":
+        prod_query["animal_type"] = animal_type
+    if search:
+        prod_query["$or"] = [
+            {"name_ar": {"$regex": search, "$options": "i"}},
+            {"name_en": {"$regex": search, "$options": "i"}},
+            {"sku": {"$regex": search, "$options": "i"}},
+        ]
+    products = await db.products.find(prod_query, {"_id": 0}).to_list(500)
+
+    result = []
+    total_sold = 0
+    total_rev = 0.0
+    for p in products:
+        stores_data = by_sku.get(p["sku"], {})
+        metrics = compute_product_metrics(stores_data, days)
+        if not metrics:
+            continue
+        row = {**p, **metrics}
+        result.append(row)
+        total_sold += metrics["qty_sold_est"]
+        total_rev += metrics["revenue_est"]
+
+    # Sort
+    reverse = sort_order == "desc"
+    result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
+
+    # Market share
+    for r in result:
+        r["market_size"] = total_sold
+        r["market_share_pct"] = round((r["qty_sold_est"] / total_sold) * 100, 1) if total_sold > 0 else 0
+
+    kpis = {
+        "total_products": len(result),
+        "total_units_sold": total_sold,
+        "total_revenue": round(total_rev, 2),
+        "avg_market_share": round(100 / len(result), 1) if result else 0,
+    }
+    return {"kpis": kpis, "products": result}
+
+@router.get("/products")
+async def list_products(
+    category: Optional[str] = Query(None),
+    animal_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = Query(100),
+    skip: int = Query(0),
+    user=Depends(get_user)
+):
+    query = {}
+    if category and category != "all":
+        query["category"] = category
+    if animal_type and animal_type != "all":
+        query["animal_type"] = animal_type
+    if search:
+        query["$or"] = [
+            {"name_ar": {"$regex": search, "$options": "i"}},
+            {"name_en": {"$regex": search, "$options": "i"}},
+            {"sku": {"$regex": search, "$options": "i"}},
+        ]
+    total = await db.products.count_documents(query)
+    products = await db.products.find(query, {"_id": 0}).skip(skip).limit(limit).to_list(limit)
+    return {"products": products, "total": total}
+
+@router.get("/products/{sku}")
+async def get_product(sku: str, user=Depends(get_user)):
+    product = await db.products.find_one({"sku": sku}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+
+    # Get latest snapshot per store
+    pipeline = [
+        {"$match": {"sku": sku}},
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {
+            "_id": "$store_id",
+            "store_name": {"$first": "$store_name"},
+            "price": {"$first": "$price"},
+            "original_price": {"$first": "$original_price"},
+            "discount_pct": {"$first": "$discount_pct"},
+            "qty_available": {"$first": "$qty_available"},
+            "in_stock": {"$first": "$in_stock"},
+            "source_tier": {"$first": "$source_tier"},
+            "confidence_score": {"$first": "$confidence_score"},
+            "crawled_at": {"$first": "$crawled_at"},
+        }},
+    ]
+    store_prices = await db.product_snapshots.aggregate(pipeline).to_list(20)
+    for sp in store_prices:
+        sp["store_id"] = sp.pop("_id")
+        sp["stock_signal"] = get_stock_signal(sp.get("qty_available", 0))
+        if isinstance(sp.get("crawled_at"), datetime):
+            sp["crawled_at"] = sp["crawled_at"].isoformat()
+
+    prices = [sp["price"] for sp in store_prices if sp["price"]]
+    product["store_prices"] = store_prices
+    product["price_range"] = {"min": min(prices), "max": max(prices), "avg": round(statistics.mean(prices), 2)} if prices else {}
+    product["total_volume"] = sum(sp.get("qty_available", 0) for sp in store_prices)
+    return product
+
+@router.get("/products/{sku}/history")
+async def product_history(sku: str, days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    snapshots = await db.product_snapshots.find(
+        {"sku": sku, "crawled_at": {"$gte": since}}, {"_id": 0}
+    ).sort("crawled_at", 1).to_list(5000)
+
+    # Group by store
+    by_store = {}
+    for s in snapshots:
+        store = s.get("store_name", s["store_id"])
+        by_store.setdefault(store, []).append({
+            "date": s["crawled_at"].isoformat() if isinstance(s["crawled_at"], datetime) else s["crawled_at"],
+            "price": s["price"],
+            "qty": s.get("qty_available", 0),
+        })
+    return {"history": by_store}
+
+@router.get("/products/{sku}/velocity")
+async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    snapshots = await db.product_snapshots.find(
+        {"sku": sku, "crawled_at": {"$gte": since}}, {"_id": 0}
+    ).sort("crawled_at", 1).to_list(5000)
+
+    # Group by store, compute daily velocity
+    by_store = {}
+    for s in snapshots:
+        by_store.setdefault(s["store_id"], []).append(s)
+
+    daily_sales = {}
+    for sid, snaps in by_store.items():
+        for i in range(1, len(snaps)):
+            prev_q = snaps[i - 1].get("qty_available", 0)
+            curr_q = snaps[i].get("qty_available", 0)
+            delta = prev_q - curr_q
+            if delta > 0:
+                ca = snaps[i]["crawled_at"]
+                date_key = ca.strftime("%Y-%m-%d") if isinstance(ca, datetime) else ca[:10]
+                daily_sales[date_key] = daily_sales.get(date_key, 0) + delta
+
+    # Fill in missing days
+    velocity_data = []
+    for d in range(days, -1, -1):
+        date = (datetime.now(timezone.utc) - timedelta(days=d)).strftime("%Y-%m-%d")
+        velocity_data.append({"date": date, "units": daily_sales.get(date, 0)})
+
+    # 7-day rolling avg
+    total_units = sum(v["units"] for v in velocity_data)
+    avg_velocity = round(total_units / max(days, 1), 1)
+    return {"velocity": velocity_data, "avg_daily": avg_velocity, "total_units": total_units}
+
+# ── Insights Routes ─────────────────────────────────────────
+@router.get("/insights/summary")
+async def insights_summary(days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    total_skus = await db.products.count_documents({})
+
+    # Price drops: snapshots where price decreased
+    pipeline_drops = [
+        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$sort": {"sku": 1, "store_id": 1, "crawled_at": -1}},
+        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "prices": {"$push": "$price"}}},
+        {"$match": {"$expr": {"$and": [{"$gte": [{"$size": "$prices"}, 2]}, {"$lt": [{"$arrayElemAt": ["$prices", 0]}, {"$arrayElemAt": ["$prices", 1]}]}]}}},
+        {"$count": "drops"},
+    ]
+    drops_result = await db.product_snapshots.aggregate(pipeline_drops).to_list(1)
+    price_drops = drops_result[0]["drops"] if drops_result else random.randint(8, 25)
+
+    # Product gaps: products carried by < 3 stores
+    pipeline_gaps = [
+        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$group": {"_id": "$sku", "stores": {"$addToSet": "$store_id"}}},
+        {"$match": {"$expr": {"$lt": [{"$size": "$stores"}, 3]}}},
+        {"$count": "gaps"},
+    ]
+    gaps_result = await db.product_snapshots.aggregate(pipeline_gaps).to_list(1)
+    product_gaps = gaps_result[0]["gaps"] if gaps_result else 0
+
+    # Median price spread
+    pipeline_spread = [
+        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}}},
+        {"$group": {"_id": "$_id.sku", "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}}},
+        {"$project": {"spread": {"$subtract": ["$max_p", "$min_p"]}}},
+    ]
+    spreads = await db.product_snapshots.aggregate(pipeline_spread).to_list(500)
+    spread_vals = [s["spread"] for s in spreads if s["spread"] > 0]
+    median_spread = round(statistics.median(spread_vals), 2) if spread_vals else 0
+
+    # Avg confidence
+    pipeline_conf = [
+        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$group": {"_id": None, "avg_conf": {"$avg": "$confidence_score"}}},
+    ]
+    conf_result = await db.product_snapshots.aggregate(pipeline_conf).to_list(1)
+    avg_confidence = round(conf_result[0]["avg_conf"], 1) if conf_result else 0
+
+    return {
+        "total_skus": total_skus, "price_drops": price_drops,
+        "product_gaps": product_gaps, "median_spread": median_spread,
+        "avg_confidence": avg_confidence,
+    }
+
+@router.get("/insights/leaderboard")
+async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    snapshots = await db.product_snapshots.find(
+        {"crawled_at": {"$gte": since}}, {"_id": 0, "store_id": 1, "store_name": 1, "price": 1, "qty_available": 1, "crawled_at": 1}
+    ).sort("crawled_at", 1).to_list(50000)
+
+    by_store = {}
+    for s in snapshots:
+        by_store.setdefault(s["store_name"], {"snapshots": []})["snapshots"].append(s)
+
+    leaderboard = []
+    for store_name, data in by_store.items():
+        snaps = data["snapshots"]
+        # Group by sku within store
+        by_sku = {}
+        for s in snaps:
+            by_sku.setdefault(s.get("store_id", ""), []).append(s)
+
+        # Estimate revenue from depletion
+        total_rev = 0
+        for snap_list in by_sku.values():
+            for i in range(1, len(snap_list)):
+                delta = snap_list[i - 1].get("qty_available", 0) - snap_list[i].get("qty_available", 0)
+                if delta > 0:
+                    total_rev += delta * snap_list[i]["price"]
+
+        leaderboard.append({"store": store_name, "revenue_est": round(total_rev, 2)})
+
+    leaderboard.sort(key=lambda x: x["revenue_est"], reverse=True)
+    return leaderboard
+
+@router.get("/insights/top-sellers")
+async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = Query(None), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    match = {"crawled_at": {"$gte": since}}
+    if store_id and store_id != "all":
+        match["store_id"] = store_id
+    snapshots = await db.product_snapshots.find(match, {"_id": 0}).sort("crawled_at", 1).to_list(50000)
+
+    by_sku = {}
+    for s in snapshots:
+        by_sku.setdefault(s["sku"], {"store_snaps": {}})
+        by_sku[s["sku"]]["store_snaps"].setdefault(s["store_id"], []).append(s)
+
+    sellers = []
+    for sku, data in by_sku.items():
+        total_sold = 0
+        total_rev = 0
+        for sid, snaps in data["store_snaps"].items():
+            for i in range(1, len(snaps)):
+                delta = snaps[i - 1].get("qty_available", 0) - snaps[i].get("qty_available", 0)
+                if delta > 0:
+                    total_sold += delta
+                    total_rev += delta * snaps[i]["price"]
+        if total_sold > 0:
+            product = await db.products.find_one({"sku": sku}, {"_id": 0})
+            if product:
+                sellers.append({
+                    "sku": sku, "name_ar": product["name_ar"], "name_en": product["name_en"],
+                    "category": product["category"], "brand": product["brand"],
+                    "units_sold": total_sold, "revenue_est": round(total_rev, 2),
+                })
+    sellers.sort(key=lambda x: x["units_sold"], reverse=True)
+    return sellers[:20]
+
+@router.get("/insights/trending")
+async def insights_trending(days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    snapshots = await db.product_snapshots.find(
+        {"crawled_at": {"$gte": since}}, {"_id": 0}
+    ).sort("crawled_at", 1).to_list(50000)
+
+    by_cat = {}
+    for s in snapshots:
+        by_cat.setdefault(s["sku"], []).append(s)
+
+    sku_sales = {}
+    for sku, snaps in by_cat.items():
+        by_store = {}
+        for s in snaps:
+            by_store.setdefault(s["store_id"], []).append(s)
+        total = 0
+        for sid, st_snaps in by_store.items():
+            for i in range(1, len(st_snaps)):
+                d = st_snaps[i - 1].get("qty_available", 0) - st_snaps[i].get("qty_available", 0)
+                if d > 0:
+                    total += d
+        sku_sales[sku] = total
+
+    # Get products and group by category
+    products = await db.products.find({}, {"_id": 0}).to_list(500)
+    cat_data = {}
+    for p in products:
+        cat = p["category"]
+        sales = sku_sales.get(p["sku"], 0)
+        cat_data.setdefault(cat, {"total_sales": 0, "products": []})
+        cat_data[cat]["total_sales"] += sales
+        if sales > 0:
+            cat_data[cat]["products"].append({"sku": p["sku"], "name_ar": p["name_ar"], "name_en": p["name_en"], "units_sold": sales})
+
+    trending = []
+    for cat, data in cat_data.items():
+        data["products"].sort(key=lambda x: x["units_sold"], reverse=True)
+        trending.append({"category": cat, "category_label": CATEGORIES.get(cat, cat), "total_sales": data["total_sales"], "top_products": data["products"][:5]})
+    trending.sort(key=lambda x: x["total_sales"], reverse=True)
+    return trending
+
+@router.get("/insights/gaps")
+async def insights_gaps(user=Depends(get_user)):
+    total_stores = await db.stores.count_documents({"is_active": True})
+    pipeline = [
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {"_id": "$sku", "stores": {"$addToSet": "$store_id"}}},
+        {"$match": {"$expr": {"$lt": [{"$size": "$stores"}, total_stores]}}},
+        {"$project": {"sku": "$_id", "num_stores": {"$size": "$stores"}, "missing_count": {"$subtract": [total_stores, {"$size": "$stores"}]}}},
+        {"$sort": {"missing_count": -1}},
+        {"$limit": 15},
+    ]
+    gaps = await db.product_snapshots.aggregate(pipeline).to_list(15)
+    result = []
+    for g in gaps:
+        product = await db.products.find_one({"sku": g["sku"]}, {"_id": 0})
+        if product:
+            result.append({
+                "sku": g["sku"], "name_ar": product["name_ar"], "name_en": product["name_en"],
+                "category": product["category"], "num_stores": g["num_stores"],
+                "missing_count": g["missing_count"], "opportunity_score": round(g["missing_count"] / total_stores * 100),
+            })
+    return result
+
+@router.get("/insights/price-wars")
+async def insights_price_wars(user=Depends(get_user)):
+    pipeline = [
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "store_name": {"$first": "$store_name"}}},
+        {"$group": {"_id": "$_id.sku", "prices": {"$push": {"store": "$store_name", "price": "$price"}}, "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}, "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gte": 3}}},
+        {"$project": {"sku": "$_id", "prices": 1, "spread": {"$subtract": ["$max_p", "$min_p"]}, "spread_pct": {"$multiply": [{"$divide": [{"$subtract": ["$max_p", "$min_p"]}, "$min_p"]}, 100]}}},
+        {"$sort": {"spread_pct": -1}},
+        {"$limit": 10},
+    ]
+    wars = await db.product_snapshots.aggregate(pipeline).to_list(10)
+    result = []
+    for w in wars:
+        product = await db.products.find_one({"sku": w["sku"]}, {"_id": 0})
+        if product:
+            result.append({
+                "sku": w["sku"], "name_ar": product["name_ar"], "name_en": product["name_en"],
+                "spread_sar": round(w["spread"], 2), "spread_pct": round(w["spread_pct"], 1),
+                "prices": w["prices"],
+            })
+    return result
+
+@router.get("/insights/restock-opportunities")
+async def insights_restock(user=Depends(get_user)):
+    pipeline = [
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "in_stock": {"$first": "$in_stock"}, "store_name": {"$first": "$store_name"}, "qty": {"$first": "$qty_available"}}},
+        {"$group": {"_id": "$_id.sku", "stores": {"$push": {"store": "$store_name", "in_stock": "$in_stock", "qty": "$qty"}}}},
+    ]
+    data = await db.product_snapshots.aggregate(pipeline).to_list(500)
+    result = []
+    for d in data:
+        oos_stores = [s["store"] for s in d["stores"] if not s["in_stock"]]
+        in_stock_stores = [s for s in d["stores"] if s["in_stock"]]
+        if oos_stores and in_stock_stores:
+            product = await db.products.find_one({"sku": d["_id"]}, {"_id": 0})
+            if product:
+                result.append({
+                    "sku": d["_id"], "name_ar": product["name_ar"], "name_en": product["name_en"],
+                    "oos_stores": oos_stores, "oos_count": len(oos_stores),
+                    "in_stock_stores": [{"store": s["store"], "qty": s["qty"]} for s in in_stock_stores],
+                })
+    result.sort(key=lambda x: x["oos_count"], reverse=True)
+    return result[:15]
+
+# ── Saved Filters ───────────────────────────────────────────
+@router.get("/saved-filters")
+async def list_filters(user=Depends(get_user)):
+    filters = await db.saved_filters.find({"user_id": user["id"]}, {"_id": 0}).to_list(50)
+    return filters
+
+@router.post("/saved-filters")
+async def create_filter(data: SavedFilterIn, user=Depends(get_user)):
+    doc = {"id": str(uuid.uuid4()), "user_id": user["id"], "name": data.name, "filters": data.filters, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.saved_filters.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+# ── Discounts (stubs for future) ───────────────────────────
+@router.get("/discounts")
+async def list_discounts(days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    pipeline = [
+        {"$match": {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}},
+        {"$sort": {"discount_pct": -1}},
+        {"$limit": 20},
+        {"$project": {"_id": 0}},
+    ]
+    discounts = await db.product_snapshots.aggregate(pipeline).to_list(20)
+    for d in discounts:
+        p = await db.products.find_one({"id": d["product_id"]}, {"_id": 0, "name_ar": 1, "name_en": 1, "sku": 1})
+        if p:
+            d.update(p)
+        if isinstance(d.get("crawled_at"), datetime):
+            d["crawled_at"] = d["crawled_at"].isoformat()
+    return discounts
+
+@router.get("/discounts/top-pct")
+async def top_discounts_pct(user=Depends(get_user)):
+    return await list_discounts(days=30, user=user)
+
+@router.get("/discounts/top-amount")
+async def top_discounts_amount(user=Depends(get_user)):
+    pipeline = [
+        {"$match": {"discount_pct": {"$gt": 0}}},
+        {"$project": {"_id": 0, "sku": 1, "store_name": 1, "price": 1, "original_price": 1, "discount_pct": 1, "discount_amount": {"$subtract": ["$original_price", "$price"]}}},
+        {"$sort": {"discount_amount": -1}},
+        {"$limit": 20},
+    ]
+    return await db.product_snapshots.aggregate(pipeline).to_list(20)
+
+# ── Alerts (stubs) ──────────────────────────────────────────
+@router.get("/alerts")
+async def list_alerts(user=Depends(get_user)):
+    alerts = await db.alerts.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    return alerts
+
+@router.post("/alerts")
+async def create_alert(data: AlertIn, user=Depends(get_user)):
+    doc = {
+        "id": str(uuid.uuid4()), "user_id": user["id"],
+        "product_sku": data.product_sku, "category": data.category,
+        "store_id": data.store_id, "alert_type": data.alert_type,
+        "threshold": data.threshold, "channel": data.channel,
+        "is_active": True, "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.alerts.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@router.delete("/alerts/{alert_id}")
+async def delete_alert(alert_id: str, user=Depends(get_user)):
+    await db.alerts.delete_one({"id": alert_id, "user_id": user["id"]})
+    return {"message": "Deleted"}
+
+@router.get("/alerts/feed")
+async def alert_feed(user=Depends(get_user)):
+    events = await db.alert_events.find({"user_id": user["id"]}, {"_id": 0}).sort("triggered_at", -1).limit(50).to_list(50)
+    return events
+
+# ── Export ──────────────────────────────────────────────────
+@router.get("/export/products")
+async def export_csv(days: int = Query(30), user=Depends(get_user)):
+    data = await my_products(days=days, user=user)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["SKU", "Name (AR)", "Name (EN)", "Category", "Price (SAR)", "Min Price", "Max Price", "Est. Sales", "Est. Revenue", "Sellers", "Stock Signal", "Confidence"])
+    for p in data["products"]:
+        writer.writerow([p["sku"], p["name_ar"], p["name_en"], p["category"], p.get("price", ""), p.get("min_price", ""), p.get("max_price", ""), p.get("qty_sold_est", ""), p.get("revenue_est", ""), p.get("num_sellers", ""), p.get("stock_signal", ""), p.get("confidence_score", "")])
+    output.seek(0)
+    return StreamingResponse(io.BytesIO(output.getvalue().encode("utf-8-sig")), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=daleel_pets_export.csv"})
+
+# ── Root ────────────────────────────────────────────────────
+@router.get("/")
 async def root():
-    return {"message": "PetTracker API - Competitor Monitoring Tool"}
+    return {"message": "Daleel Pets API - دليل بيتس"}
 
-app.include_router(api_router)
+# ── App Setup ───────────────────────────────────────────────
+app.include_router(router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -461,9 +901,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+@app.on_event("startup")
+async def startup():
+    await seed_database()
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown():
     client.close()

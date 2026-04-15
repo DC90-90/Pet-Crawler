@@ -1,53 +1,30 @@
-/* Scrollbar styling */
-::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-::-webkit-scrollbar-thumb {
-    background: hsl(228 10% 82%);
-    border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-    background: hsl(228 10% 70%);
-}
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
 
-/* Table density */
-.dense-table th,
-.dense-table td {
-    padding: 8px 12px;
-    font-size: 13px;
-}
+.dense-table th, .dense-table td { padding: 8px 12px; font-size: 13px; }
 
-/* Metric card pulse animation */
-@keyframes sync-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-}
-.sync-pulse {
-    animation: sync-pulse 1.5s ease-in-out infinite;
-}
+@keyframes sync-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+.animate-sync { animation: sync-spin 1s linear infinite; }
 
-/* Status dot */
-.status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    display: inline-block;
-}
-.status-dot.synced { background-color: hsl(145 80% 42%); }
-.status-dot.syncing { background-color: hsl(40 100% 50%); animation: sync-pulse 1.5s ease-in-out infinite; }
-.status-dot.failed { background-color: hsl(0 84% 60%); }
-.status-dot.pending { background-color: hsl(228 10% 70%); }
+.stock-high { color: #00C853; }
+.stock-medium { color: #FFB300; }
+.stock-low { color: #FF6D00; }
+.stock-oos { color: #FF3B30; }
 
-/* Sortable header */
-.sort-header {
-    cursor: pointer;
-    user-select: none;
-    transition: background-color 200ms;
+.tier-1 { background: #DCFCE7; color: #166534; }
+.tier-2 { background: #FEF9C3; color: #854D0E; }
+.tier-3 { background: #FEE2E2; color: #991B1B; }
+
+.kpi-card {
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 6px;
+  padding: 16px 20px;
+  transition: all 200ms ease-in-out;
 }
-.sort-header:hover {
-    background-color: hsl(228 10% 93%);
+.kpi-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
 }
