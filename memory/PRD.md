@@ -1,90 +1,40 @@
-# Daleel Pets - دليل بيتس PRD
+# Daleel Pets PRD - Phase 2 Complete
 
-## Problem Statement
-Build "Daleel Pets" (دليل بيتس), a Saudi Arabia pet supplies competitor intelligence SaaS platform for pet store owners to monitor and analyze all competitor stores in the Saudi pet market.
+## What's Been Implemented
 
-## Architecture
-- **Backend**: FastAPI + MongoDB (Motor async) + JWT Auth
-- **Frontend**: React 18 + Tailwind CSS + Shadcn UI + Recharts
-- **Database**: MongoDB (users, stores, products, product_snapshots, alerts, saved_filters)
-- **Design**: Swiss & High-Contrast light theme with IBM Plex Sans Arabic font
-- **i18n**: Custom bilingual (Arabic RTL + English LTR) with logical CSS properties
+### Phase 1 (MVP) - April 15, 2026
+- JWT Auth (login/register/me)
+- My Products page (KPI cards, dense table, filters, sorting, date picker, CSV export)
+- Insights page (summary KPIs, revenue leaderboard, top sellers, trending, price wars, restock, gaps)
+- Product Detail side panel (price history chart, velocity chart, store prices, confidence badges)
+- Store Registry (CRUD, 7 seeded Saudi pet stores)
+- Arabic/English bilingual UI with RTL
+- 35 products, 1,746 snapshots
 
-## User Personas
-- **Saudi Pet Store Owner**: Monitors competitor pricing, stock, and best sellers to optimize their own strategy
-- **Market Analyst**: Tracks market trends, product gaps, and restock opportunities across the KSA pet market
+### Phase 2 - April 15, 2026
+1. **Tier 1 Live Salla Crawler**: Real HTTP calls to Salla stores (zarafaksa.com tested), graceful fallback on failure, crawl logging with tier/status/HTTP code, crawl history expansion in Store Registry
+2. **Alerts Page**: Full CRUD (create/toggle/delete), 5 alert types (price_drop, price_increase, out_of_stock, back_in_stock, low_stock), alert feed with 30d history, Check Now manual trigger, email logging (console, Resend-ready)
+3. **Competitor Profiles Page**: Per-store analytics with KPIs (catalog size, active SKUs, est monthly revenue, avg discount), revenue trend chart (weekly/daily toggle, 90 days), top 10 products, category distribution pie chart, new arrivals (7d), recently OOS
+4. **Expanded Mock Data**: 202 products across 14 categories (cat food dry/wet, cat litter, cat accessories, dog food dry/wet, dog accessories, bird, fish, reptile, grooming, healthcare, small animals, toys) distributed across 7 stores with 90 days of snapshot history (31,450 snapshots)
 
-## Core Requirements
-- JWT authentication (login/register)
-- 4-tier waterfall crawler architecture (Tier 1 JSON / Tier 2 XHR / Tier 3 HTML / Tier 4 Account) - SIMULATED with mock data
-- Inventory depletion engine (computes sales velocity from snapshot qty deltas)
-- Confidence scoring per product snapshot (Tier 1: 92-98%, Tier 2: 85-95%, Tier 3: 70-85%)
-- Arabic/English bilingual UI with RTL support
-- All prices in SAR (Saudi Riyal)
-- Date range picker (7/14/30/90 days)
+## Data Summary
+- 7 stores: Zarafa, Panda Store, Lana Pets, Cute Pets, Hamtaro, Caty Store, Petsy
+- 202 products with Arabic/English names
+- 31,450 price snapshots over 90 days
+- 14 product categories
+- ~48K units sold est, ~5M SAR revenue est
 
-## What's Been Implemented (April 15, 2026)
-
-### Backend (27+ endpoints)
-- Auth: login, register, me, logout, protected
-- Stores CRUD: list, create, update, delete, trigger crawl
-- Products: list, detail by SKU, history, velocity, my-products (with KPIs)
-- Insights: summary, leaderboard, top-sellers, trending, gaps, price-wars, restock-opportunities
-- Discounts: list, top-pct, top-amount (stubs)
-- Alerts: CRUD (stubs)
-- Saved Filters: CRUD
-- CSV Export
-
-### Seed Data
-- 7 Saudi pet stores: Zarafa, Panda Store, Lana Pets, Cute Pets, Hamtaro, Caty Store, Petsy
-- 35 products with Arabic/English names across 8 categories
-- 1,746 price snapshots over 30 days with depletion simulation
-- ~10,394 estimated units sold, ~1.52M SAR estimated revenue
-
-### Frontend (4 pages)
-1. **Login Page** - Email/password auth
-2. **My Products** - KPI cards + dense product table with confidence tiers, stock signals, price ranges, sorting, filtering, search, date range picker, CSV export
-3. **Insights** - Summary KPIs, Revenue Leaderboard chart, Top Sellers, Trending by Category (tabs), Price Wars, Restock Opportunities, Product Gaps
-4. **Store Registry** - Store management table with crawl triggers, add/delete stores
-
-### Product Detail Side Panel (Sheet)
-- Product header with Arabic name, SKU, brand, category
-- Price Range / Market Avg / Total Volume KPIs
-- Confidence Tier badge
-- Price by Store table with stock signals
-- Price History multi-line chart (per store)
-- Daily Velocity bar chart
-
-### Other
-- Arabic/English language toggle with RTL support
-- Sidebar navigation
-- JWT token auth with auto-redirect
-
-## Prioritized Backlog
-
-### P0 - Completed
-- [x] JWT Auth
-- [x] My Products page with full metrics
-- [x] Insights page with analytics
-- [x] Store Registry CRUD
-- [x] Product Detail panel with charts
-- [x] Arabic/English toggle
-- [x] CSV Export
-
-### P1 - Next Phase
-- [ ] Live crawler (Tier 1 JSON endpoint scraping for Salla/Shopify/Zid)
-- [ ] Alerts page (create alerts for price drops, OOS events)
-- [ ] Discounts page (discount timeline, aggression score per store)
-- [ ] Competitor Profiles page (per-store deep dive)
-- [ ] Historical data pipeline (automated scheduled crawls)
-
-### P2 - Future
+## Backlog
+### P1
+- [ ] Live Salla/Shopify/Zid crawler deployment (Tier 1 infra ready)
 - [ ] Tier 2 XHR interception crawler
+- [ ] Discounts page (timeline, aggression scoring)
+- [ ] Scheduled crawl jobs (Bull/Redis)
+
+### P2
 - [ ] Tier 3 HTML crawl with Playwright
 - [ ] Tier 4 Buyer Account Layer
-- [ ] Email/SMS alert notifications
-- [ ] Saudi seasonal calendar annotations (Ramadan, Eid, National Day)
-- [ ] SKU matching normalization (Arabic name deduplication across stores)
-- [ ] Brand/weight regex extraction from Arabic product names
-- [ ] TanStack Table upgrade for virtual scrolling
-- [ ] Redis caching + Bull job queues for crawl scheduling
+- [ ] Real email alerts (Resend integration - one-line swap ready)
+- [ ] Saudi seasonal calendar annotations (Ramadan, Eid)
+- [ ] SKU deduplication across stores (Arabic name normalization)
+- [ ] Brand/weight regex extraction improvements
