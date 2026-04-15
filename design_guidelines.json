@@ -1,104 +1,97 @@
 {
-  "theme": "light",
+  "theme": "Light",
   "archetype": "4 (Swiss & High-Contrast)",
-  "design_philosophy": "Objective, rigid, and function-first. 95% of the UI is monochrome to prioritize data clarity (prices, stock, competitors). Color exists solely to guide action and indicate status (e.g., OOS, Price Drops, Sync Status). Sharp edges, dense spacing, and high-contrast typography.",
   "colors": {
-    "background": "#F7F7F8",
-    "surface": "#FFFFFF",
-    "primary": "#002CFA", 
-    "primary_hover": "#001FD1",
-    "text_main": "#0D0D12",
-    "text_muted": "#5C5C66",
-    "border": "#E5E5E8",
-    "status": {
-      "success": "#00C853",
-      "warning": "#FFB300",
-      "danger": "#FF3B30",
-      "info": "#002CFA"
-    }
+    "background": {
+      "primary": "#FFFFFF",
+      "secondary": "#F3F4F6",
+      "tertiary": "#E5E7EB"
+    },
+    "text": {
+      "primary": "#0A0A0A",
+      "secondary": "#4B5563",
+      "muted": "#9CA3AF"
+    },
+    "brand": {
+      "primary": "#002DF5",
+      "accent": "#002DF5"
+    },
+    "functional": {
+      "price_war_alert": "#FF3B30",
+      "restock_warning": "#FFCC00",
+      "positive_trend": "#00C853"
+    },
+    "border": "#E5E7EB"
   },
   "typography": {
-    "heading_font": "Work Sans",
-    "body_font": "IBM Plex Sans",
-    "scale": {
-      "h1": "text-4xl tracking-tight font-semibold",
-      "h2": "text-2xl tracking-tight font-medium",
-      "h3": "text-xl tracking-tight font-medium",
-      "h4": "text-lg font-medium",
+    "font_family": {
+      "headings": "'IBM Plex Sans Arabic', sans-serif",
+      "body": "'IBM Plex Sans Arabic', sans-serif"
+    },
+    "font_sizes": {
+      "h1": "text-4xl tracking-tight font-bold",
+      "h2": "text-2xl tracking-tight font-bold",
+      "h3": "text-xl font-semibold",
       "body": "text-sm leading-relaxed",
-      "small": "text-xs tracking-wide uppercase",
-      "metric_value": "text-3xl font-bold tracking-tighter"
+      "small": "text-xs font-medium uppercase tracking-[0.2em]"
     }
   },
-  "layout": {
-    "grid_system": "The 'Control Room' Grid (grid-cols-1 md:grid-cols-3 lg:grid-cols-4) with gap-4 or gap-6. Every pixel must be utilized.",
-    "spacing": "Dense and compact. p-4 to p-6 for cards. Use generous spacing (p-8 to p-12) only for section boundaries.",
-    "surfaces": "Grid Borders: Expose the skeleton. border-collapse style layouts with 1px subtle borders (border-r border-b border-border). Subtle roundness (max 8px border-radius) or cardless sharp edges.",
-    "alignment": "Paragraphs, tables, and dense content left-aligned. Metrics center-aligned in summary widgets."
+  "spacing_and_layout": {
+    "grid_system": "Control Room Grid (grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4)",
+    "container_padding": "p-6",
+    "bilingual_rtl_strategy": "CRITICAL: Use Tailwind logical properties (ps-, pe-, ms-, me-, text-start, text-end, border-e) exclusively. Do NOT use left/right properties like pl-, pr-, ml-, mr-. Rely on HTML dir attribute to flip layout."
   },
   "components": {
-    "buttons": "Flat solid background, 1px subtle border, sharp or slightly rounded corners (rounded-sm). ALWAYS explicitly set text color on hover. e.g. hover:bg-blue-700 hover:text-white",
-    "tables": "Shadcn UI tables heavily customized for density. Sortable headers, sticky columns. No zebra striping, just 1px bottom borders. Hover states on rows with slight background tint.",
-    "cards": "Flat background, 1px subtle border (border-border), no shadow. On hover: slight lift (-translate-y-1) and subtle shadow (shadow-sm).",
-    "navigation": "Sticky left sidebar or compact top nav with Solid Background and hard bottom/right border.",
-    "charts": "Shadcn chart components / Recharts. Minimal grid lines, monochrome bars with primary color highlight for current user/selected data.",
-    "forms": "Shadcn components (Input, Select). Sharp edges, 1px border. Focus state: ring-1 ring-primary border-primary."
+    "cards": "Cardless or subtle 1px border. Background #FFFFFF, border-border, max rounded-md. Strict padding p-4 to p-6.",
+    "tables": "Dense tables. text-sm. Hover states on rows (hover:bg-gray-50 hover:text-black). Sticky headers. Sortable columns.",
+    "buttons": "Square or rounded-md. Primary: bg-[#002DF5] text-white hover:bg-blue-800. Alert: bg-[#FF3B30] text-white.",
+    "navigation": "Sticky top header, backdrop-blur-xl bg-white/70, border-b border-gray-200. Must have language toggle (EN/AR).",
+    "charts": "Recharts. Use sharp lines, monochrome base with signal colors (Red for price drop, Blue for velocity)."
   },
   "motion": {
-    "transitions": "transition-all duration-200 ease-in-out for interactive states.",
-    "hover": "Slight lift and border color darkening for cards. Background tint for table rows.",
-    "micro_interactions": "Smooth sorting indicators, loading spinners on sync buttons."
+    "hover": "transition-colors duration-200 ease-in-out",
+    "entrance": "fade-in slide-in-from-bottom-2"
   },
-  "icons": {
-    "library": "@phosphor-icons/react",
-    "style": "Regular or Duotone for active states. Keep sizing consistent (w-4 h-4 for inline, w-6 h-6 for nav)."
+  "accessibility": {
+    "contrast": "APCA compliant. High contrast on all text.",
+    "testing_attributes": "All interactive elements MUST have data-testid (e.g., data-testid='lang-toggle-btn')"
   },
-  "pages": [
-    {
-      "name": "Market Overview Dashboard",
-      "description": "High-level metrics (Total Competitors, Avg Price Changes, OOS Items). Use Control Room grid with summary metrics at the top.",
-      "layout": "Grid with 4 col-span-1 summary widgets. 2 large col-span-2 widgets for Charts (e.g., Price Trends)."
+  "image_urls": {
+    "mock_store_1": {
+      "url": "https://images.unsplash.com/photo-1760596687491-7b99fb80bb43?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwyfHxwZXQlMjBzdXBwbGllcyUyMHN0b3JlfGVufDB8fHx8MTc3NjI3NzY0OHww&ixlib=rb-4.1.0&q=85",
+      "description": "Happy corgi, use for sample pet store avatar/profile"
     },
-    {
-      "name": "Competitor Management",
-      "description": "List of competitors (Zarafa, Petsy, etc.) and their sync status. Includes a form to Add/Edit/Remove competitors.",
-      "layout": "Simple list or grid of compact cards. 'Add Competitor' opens a Shadcn Dialog."
+    "mock_store_2": {
+      "url": "https://images.unsplash.com/photo-1776142519732-6d45cc4f5374?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwxfHxwZXQlMjBzdXBwbGllcyUyMHN0b3JlfGVufDB8fHx8MTc3NjI3NzY0OHww&ixlib=rb-4.1.0&q=85",
+      "description": "Store aisle, use for store registry background or card cover"
     },
-    {
-      "name": "Product Tracking Tables",
-      "description": "Dense data table displaying Product Name, Category, Price, Stock Status, Competitor. Features category filtering, price/stock sorting.",
-      "layout": "Full-width table with sticky header. Filter dropdowns above the table."
+    "mock_product_1": {
+      "url": "https://images.unsplash.com/photo-1708105612115-36a658231987?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHw0fHxjYXQlMjBkb2clMjBmb29kJTIwcHJvZHVjdHN8ZW58MHx8fHwxNzc2Mjc3NjQ4fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Two bowls of pet food, use as product thumbnail"
     },
-    {
-      "name": "Best Sellers Ranking",
-      "description": "Ranked list of best-selling products across competitors.",
-      "layout": "Numbered list or table with rank indicators (green/red arrows for rank changes)."
+    "mock_product_2": {
+      "url": "https://images.unsplash.com/photo-1697422836692-043e0fee1fd5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwyfHxjYXQlMjBkb2clMjBmb29kJTIwcHJvZHVjdHN8ZW58MHx8fHwxNzc2Mjc3NjQ4fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Close up of dog food, use as product thumbnail"
     },
-    {
-      "name": "Price Comparison",
-      "description": "Side-by-side comparison of specific products across the tracked stores.",
-      "layout": "Matrix table: Products as rows, Competitors as columns. Cell contains Price and difference %."
+    "mock_product_3": {
+      "url": "https://images.unsplash.com/photo-1646668946448-c0532e782ba8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwxfHxjYXQlMjBkb2clMjBmb29kJTIwcHJvZHVjdHN8ZW58MHx8fHwxNzc2Mjc3NjQ4fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Shelf in store, use as generic product category cover"
+    },
+    "mock_product_4": {
+      "url": "https://images.unsplash.com/photo-1605001550694-0f6323037433?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwzfHxjYXQlMjBkb2clMjBmb29kJTIwcHJvZHVjdHN8ZW58MHx8fHwxNzc2Mjc3NjQ4fDA&ixlib=rb-4.1.0&q=85",
+      "description": "Cat on bowl, use as product thumbnail"
     }
-  ],
-  "media": {
-    "empty_state_image": {
-      "url": "https://static.prod-images.emergentagent.com/jobs/e703fccc-0c9e-4960-bc7a-841f7b4e9557/images/0d7e3378028be99612eeff64c9aa7c7891b1189248d635feac4b981aba59c56f.png",
-      "description": "Minimalist 3D illustration of a cat and dog looking at data. Use for empty table states or 'No tracking data yet' screens."
-    },
-    "product_placeholders": [
-      "https://images.unsplash.com/photo-1697422836728-22bbdfd409c7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwyfHxwcmVtaXVtJTIwcGV0JTIwZm9vZCUyMHN1cHBsaWVzfGVufDB8fHx8MTc3NjI3MjU4MHww&ixlib=rb-4.1.0&q=85",
-      "https://images.unsplash.com/photo-1601758228006-964e41e5e8eb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwzfHxwcmVtaXVtJTIwcGV0JTIwZm9vZCUyMHN1cHBsaWVzfGVufDB8fHx8MTc3NjI3MjU4MHww&ixlib=rb-4.1.0&q=85"
-    ]
   },
   "instructions_to_main_agent": [
-    "Install @phosphor-icons/react for icons.",
-    "Use pure Shadcn UI components for Table, Button, Input, Select, Dialog, Card, Badge.",
-    "Implement real-time visual status indicators (e.g., green dot for 'Synced', red dot for 'Sync Failed').",
-    "Keep border radius strictly at max 8px (rounded-sm/rounded-md) or 0px for a sharp, data-first look.",
-    "Table headers must be sticky, and sorting arrows must be clearly visible.",
-    "Avoid large empty spaces inside data cards; pack data tightly but legibly using IBM Plex Sans.",
-    "Ensure all interactive elements have data-testid attributes (e.g., data-testid='competitor-add-btn').",
-    "Do NOT use generic 'Inter' font. Import and apply Work Sans for headings and IBM Plex Sans for body text in tailwind config.",
-    "Use the generated empty state image when a table has no data or when the user first logs in before adding competitors."
+    "Use raw HTML/Tailwind for layouts heavily relying on CSS logical properties (start/end) for seamless RTL support.",
+    "Implement language context to dynamically switch `dir='ltr'` and `dir='rtl'` on the root element.",
+    "Avoid Shadcn 'Card' wrapper if it hinders strict 1px grid borders. Build custom dense tables.",
+    "Never use `pl-` or `pr-` classes. ALWAYS use `ps-` and `pe-`.",
+    "Install and use `@phosphor-icons/react` for dense dashboard icons.",
+    "Use Recharts for the Price History and Velocity charts on the Product Detail side panel.",
+    "Date picker must use Shadcn, but customize it to fit the high-contrast Swiss theme.",
+    "All prices must be formatted in SAR (Saudi Riyal).",
+    "All components must be written as .js files, not .tsx files.",
+    "Integrate data-testid attributes for QA automation testing."
   ]
 }
