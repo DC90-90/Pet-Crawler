@@ -348,13 +348,14 @@ export default function CompetitorsPage() {
               />
             </div>
           </div>
-          <DialogFooter>
+          <DialogFooter className="relative z-[60]">
             <Button
               variant="outline"
               size="sm"
               onClick={() => setDialogOpen(false)}
               className="rounded-sm"
               data-testid="competitor-cancel-btn"
+              type="button"
             >
               Cancel
             </Button>
@@ -363,6 +364,7 @@ export default function CompetitorsPage() {
               onClick={handleSave}
               className="bg-[#002CFA] hover:bg-[#001FD1] text-white rounded-sm"
               data-testid="competitor-save-btn"
+              type="button"
             >
               {editingComp ? "Update" : "Add Competitor"}
             </Button>
