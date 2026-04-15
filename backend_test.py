@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for Daleel Pets - Saudi Arabia Pet Supplies Competitor Intelligence SaaS
-Tests all API endpoints for authentication, products, insights, and store management
+Daleel Pets Phase 2 Backend API Testing
+Tests all endpoints including new Phase 2 features:
+- Tier 1 crawler with real HTTP calls
+- Alerts CRUD operations
+- Store profiles and competitor analysis
+- Crawl logs and status tracking
 """
 
 import requests
@@ -18,6 +22,8 @@ class DaleelPetsAPITester:
         self.failed_tests = []
         self.token = None
         self.test_store_id = None
+        self.product_sku = None
+        self.alert_id = None
 
     def log_test(self, name, success, details=""):
         """Log test result"""
@@ -130,12 +136,20 @@ class DaleelPetsAPITester:
         def check_products(data):
             return 'kpis' in data and 'products' in data and isinstance(data['products'], list)
         
-        return self.run_test(
+        success, response_data = self.run_test(
             "My Products",
             "GET",
             "my-products",
             check_response=check_products
         )
+        
+        # Store first product SKU for Phase 2 tests
+        if success and response_data and 'products' in response_data:
+            products = response_data['products']
+            if products:
+                self.product_sku = products[0]['sku']
+        
+        return success
 
     def test_my_products_with_filters(self):
         """Test my-products with various filters"""
@@ -337,6 +351,122 @@ class DaleelPetsAPITester:
             except:
                 pass  # Ignore cleanup errors
 
+    # Phase 2 Test Methods
+    def test_crawl_logs(self):
+        """Test crawl logs endpoint"""
+        if not self.test_store_id:
+            print("⚠️  No store ID available for crawl logs test")
+            return True
+            
+        return self.run_test(
+            "Crawl Logs",
+            "GET",
+            f"stores/{self.test_store_id}/crawl-logs?limit=5",
+            check_response=lambda data: isinstance(data, list)
+        )
+
+    def test_store_profile(self):
+        """Test store profile endpoint"""
+        if not self.test_store_id:
+            print("⚠️  No store ID available for profile test")
+            return True
+            
+        return self.run_test(
+            "Store Profile",
+            "GET",
+            f"stores/{self.test_store_id}/profile",
+            check_response=lambda data: 'store' in data and 'kpis' in data
+        )
+
+    def test_alerts_list(self):
+        """Test alerts list endpoint"""
+        return self.run_test(
+            "Alerts List",
+            "GET",
+            "alerts",
+            check_response=lambda data: isinstance(data, list)
+        )
+
+    def test_alerts_create(self):
+        """Test create alert"""
+        if not self.product_sku:
+            print("⚠️  No product SKU available for alert creation")
+            return True
+            
+        alert_data = {
+            "product_sku": self.product_sku,
+            "alert_type": "price_drop",
+            "threshold": 10.0,
+            "channel": "in_app"
+        }
+        
+        success = self.run_test(
+            "Create Alert",
+            "POST",
+            "alerts",
+            expected_status=200,  # Backend returns 200, not 201
+            data=alert_data,
+            check_response=lambda data: 'id' in data
+        )
+        
+        # Store alert ID for later tests
+        if success:
+            try:
+                response = requests.get(f"{self.api_url}/alerts", 
+                                      headers={'Authorization': f'Bearer {self.token}'})
+                if response.status_code == 200:
+                    alerts = response.json()
+                    if alerts:
+                        self.alert_id = alerts[0]['id']
+            except:
+                pass
+        
+        return success
+
+    def test_alerts_toggle(self):
+        """Test toggle alert"""
+        if not self.alert_id:
+            print("⚠️  No alert ID available for toggle test")
+            return True
+            
+        return self.run_test(
+            "Toggle Alert",
+            "PUT",
+            f"alerts/{self.alert_id}/toggle",
+            check_response=lambda data: 'is_active' in data
+        )
+
+    def test_alerts_check(self):
+        """Test check alerts now"""
+        return self.run_test(
+            "Check Alerts",
+            "POST",
+            "alerts/check",
+            check_response=lambda data: 'message' in data
+        )
+
+    def test_alerts_feed(self):
+        """Test alert feed"""
+        return self.run_test(
+            "Alert Feed",
+            "GET",
+            "alerts/feed?days=30",
+            check_response=lambda data: isinstance(data, list)
+        )
+
+    def test_alerts_delete(self):
+        """Test delete alert"""
+        if not self.alert_id:
+            print("⚠️  No alert ID available for delete test")
+            return True
+            
+        return self.run_test(
+            "Delete Alert",
+            "DELETE",
+            f"alerts/{self.alert_id}",
+            check_response=lambda data: 'message' in data
+        )
+
     def run_all_tests(self):
         """Run all API tests"""
         print("🚀 Starting Daleel Pets API Tests...")
@@ -368,6 +498,20 @@ class DaleelPetsAPITester:
         self.test_stores_list()
         self.test_create_store()
         self.test_crawl_store()
+        
+        # Phase 2 Tests - Crawl Logs
+        self.test_crawl_logs()
+        
+        # Phase 2 Tests - Store Profile
+        self.test_store_profile()
+        
+        # Phase 2 Tests - Alerts
+        self.test_alerts_list()
+        self.test_alerts_create()
+        self.test_alerts_toggle()
+        self.test_alerts_check()
+        self.test_alerts_feed()
+        self.test_alerts_delete()
         
         # Test export
         self.test_export_csv()

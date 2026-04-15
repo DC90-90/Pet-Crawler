@@ -6,7 +6,7 @@ load_dotenv(ROOT_DIR / '.env')
 from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, random, uuid, bcrypt, jwt as pyjwt, statistics, csv, io
+import os, logging, random, uuid, bcrypt, jwt as pyjwt, statistics, csv, io, httpx, re
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
@@ -136,11 +136,199 @@ PRODUCTS_SEED = [
 ]
 
 CATEGORIES = {
-    "cat_food": "Cat Food", "dog_food": "Dog Food", "bird_food": "Bird Food",
+    "cat_food": "Cat Food", "cat_food_wet": "Wet Cat Food", "dog_food": "Dog Food",
+    "dog_food_wet": "Wet Dog Food", "bird_food": "Bird Food",
     "fish_food": "Fish Food", "equipment": "Equipment", "accessories": "Accessories",
     "litter": "Litter", "toys": "Toys", "grooming": "Grooming",
     "healthcare": "Healthcare", "small_food": "Small Animal Food",
+    "reptile": "Reptile", "vet_supplies": "Vet Supplies", "pet_food": "Pet Food",
 }
+
+EXTRA_PRODUCT_TEMPLATES = [
+    # (sku_prefix, name_ar, name_en, brand, category, animal, weight, price)
+    # Dry Cat Food extras
+    ("CF-HS-K2", "هيلز كيتن دجاج 2 كجم", "Hills Kitten Chicken 2kg", "Hills", "cat_food", "cat", 2, 145),
+    ("CF-HS-SN3", "هيلز معدة حساسة قطط 3 كجم", "Hills Sensitive Stomach Cat 3kg", "Hills", "cat_food", "cat", 3, 189),
+    ("CF-SC-AD4", "شيسير بالغ قطط 4 كجم", "Schesir Adult Cat 4kg", "Schesir", "cat_food", "cat", 4, 210),
+    ("CF-JO-IN4", "جوسيرا منزلي قطط 4 كجم", "Josera Indoor Cat 4kg", "Josera", "cat_food", "cat", 4, 165),
+    ("CF-BR-ST3", "بريت كير معقم قطط 3 كجم", "Brit Care Sterilised Cat 3kg", "Brit", "cat_food", "cat", 3, 155),
+    ("CF-RC-UR2", "رويال كانين عناية بولية 2 كجم", "Royal Canin Urinary Care 2kg", "Royal Canin", "cat_food", "cat", 2, 195),
+    ("CF-RC-HB4", "رويال كانين كرات الشعر 4 كجم", "Royal Canin Hairball 4kg", "Royal Canin", "cat_food", "cat", 4, 225),
+    ("CF-PO-KT2", "بورينا كيتن 2 كجم", "Purina Kitten 2kg", "Purina", "cat_food", "cat", 2, 110),
+    ("CF-GM-SN3", "جيمكات سناك كرانشي 500 جرام", "Gimcat Crunchy Snack 500g", "Gimcat", "cat_food", "cat", 0.5, 35),
+    ("CF-ND-CB5", "ان اند دي دجاج رمان 5 كجم", "N&D Chicken Pomegranate 5kg", "N&D", "cat_food", "cat", 5, 265),
+    ("CF-RC-PR4", "رويال كانين بيرشن 4 كجم", "Royal Canin Persian 4kg", "Royal Canin", "cat_food", "cat", 4, 235),
+    ("CF-RC-BH4", "رويال كانين بريتش 4 كجم", "Royal Canin British Hair 4kg", "Royal Canin", "cat_food", "cat", 4, 235),
+    # Wet Cat Food
+    ("WC-WH-TN85", "ويسكاس تونا معلب 85 جرام", "Whiskas Tuna Pouch 85g", "Whiskas", "cat_food_wet", "cat", 0.085, 5),
+    ("WC-FX-CH85", "فيلكس دجاج معلب 85 جرام", "Felix Chicken Pouch 85g", "Felix", "cat_food_wet", "cat", 0.085, 6),
+    ("WC-SC-TN100", "شيسير تونا معلب 100 جرام", "Schesir Tuna Can 100g", "Schesir", "cat_food_wet", "cat", 0.1, 12),
+    ("WC-RC-IN85", "رويال كانين منزلي رطب 85 جرام", "Royal Canin Indoor Wet 85g", "Royal Canin", "cat_food_wet", "cat", 0.085, 9),
+    ("WC-GM-PA200", "جورميه باتيه 200 جرام", "Gourmet Pate 200g", "Gourmet", "cat_food_wet", "cat", 0.2, 14),
+    ("WC-HS-KW85", "هيلز كيتن رطب 85 جرام", "Hills Kitten Wet 85g", "Hills", "cat_food_wet", "cat", 0.085, 11),
+    ("WC-WH-CH85", "ويسكاس دجاج معلب 85 جرام", "Whiskas Chicken Pouch 85g", "Whiskas", "cat_food_wet", "cat", 0.085, 5),
+    ("WC-FX-SL85", "فيلكس سالمون معلب 85 جرام", "Felix Salmon Pouch 85g", "Felix", "cat_food_wet", "cat", 0.085, 6),
+    # Cat Litter
+    ("LT-EC-UNS10", "ايفر كلين بدون رائحة 10 لتر", "Ever Clean Unscented 10L", "Ever Clean", "litter", "cat", 10, 89),
+    ("LT-EC-LAV6", "ايفر كلين لافندر 6 لتر", "Ever Clean Lavender 6L", "Ever Clean", "litter", "cat", 6, 59),
+    ("LT-CT-CLMP10", "كات بيست متكتل 10 لتر", "Cat Best Clumping 10L", "Cat Best", "litter", "cat", 10, 65),
+    ("LT-SN-SILC5", "سيليكا رمل كريستال 5 لتر", "Silica Crystal Litter 5L", "Generic", "litter", "cat", 5, 39),
+    ("LT-TW-NAT8", "توفو رمل طبيعي 8 لتر", "Tofu Natural Litter 8L", "Generic", "litter", "cat", 8, 45),
+    ("LT-PR-BCLP20", "بريما متكتل 20 لتر", "Prima Clumping 20L", "Prima", "litter", "cat", 20, 75),
+    ("LT-EC-MS10", "ايفر كلين متعدد القطط 10 لتر", "Ever Clean Multi-Cat 10L", "Ever Clean", "litter", "cat", 10, 95),
+    # Cat Accessories
+    ("CA-CT-SC60", "عمود خدش للقطط 60 سم", "Cat Scratching Post 60cm", "Trixie", "accessories", "cat", 0, 89),
+    ("CA-CT-FN2L", "نافورة مياه للقطط 2 لتر", "Cat Water Fountain 2L", "Catit", "accessories", "cat", 0, 135),
+    ("CA-CT-BW2", "طقم اطباق ستانلس للقطط", "Cat Stainless Bowl Set", "Generic", "accessories", "cat", 0, 35),
+    ("CA-CT-CL01", "طوق قطط مع جرس", "Cat Collar with Bell", "Generic", "accessories", "cat", 0, 19),
+    ("CA-CT-HR01", "فرشاة شعر للقطط ذاتية التنظيف", "Cat Self-Clean Brush", "Trixie", "accessories", "cat", 0, 29),
+    ("CA-CT-CR01", "حامل قطط للنوافذ", "Cat Window Perch", "Generic", "accessories", "cat", 0, 79),
+    ("CA-CT-BD01", "سرير قطط دائري فاخر", "Round Luxury Cat Bed", "Generic", "accessories", "cat", 0, 119),
+    # Dry Dog Food extras
+    ("DF-RC-MN8", "رويال كانين ميني بالغ 8 كجم", "Royal Canin Mini Adult 8kg", "Royal Canin", "dog_food", "dog", 8, 225),
+    ("DF-RC-MNP2", "رويال كانين ميني جرو 2 كجم", "Royal Canin Mini Puppy 2kg", "Royal Canin", "dog_food", "dog", 2, 105),
+    ("DF-HS-AD12", "هيلز بالغ كلاب 12 كجم", "Hills Adult Dog 12kg", "Hills", "dog_food", "dog", 12, 289),
+    ("DF-HS-PUP3", "هيلز جرو صغير 3 كجم", "Hills Puppy Small 3kg", "Hills", "dog_food", "dog", 3, 139),
+    ("DF-JO-LB15", "جوسيرا لارج بريد 15 كجم", "Josera Large Breed 15kg", "Josera", "dog_food", "dog", 15, 245),
+    ("DF-BR-LF15", "بريت لايف كلاب 15 كجم", "Brit Life Dog 15kg", "Brit", "dog_food", "dog", 15, 199),
+    ("DF-PD-PUP10", "بيدقري جرو 10 كجم", "Pedigree Puppy 10kg", "Pedigree", "dog_food", "dog", 10, 129),
+    ("DF-ND-MN7", "ان اند دي ميني بالغ 7 كجم", "N&D Mini Adult 7kg", "N&D", "dog_food", "dog", 7, 289),
+    ("DF-AC-SM6", "اكانا سمول بريد 6 كجم", "Acana Small Breed 6kg", "Acana", "dog_food", "dog", 6, 279),
+    ("DF-OR-PUP6", "اوريجن جرو 6 كجم", "Orijen Puppy 6kg", "Orijen", "dog_food", "dog", 6, 299),
+    ("DF-RC-GS12", "رويال كانين جيرمن شيبرد 12 كجم", "Royal Canin German Shepherd 12kg", "Royal Canin", "dog_food", "dog", 12, 345),
+    ("DF-RC-GR12", "رويال كانين جولدن ريتريفر 12 كجم", "Royal Canin Golden Retriever 12kg", "Royal Canin", "dog_food", "dog", 12, 345),
+    # Wet Dog Food
+    ("WD-PD-CH400", "بيدقري دجاج معلب 400 جرام", "Pedigree Chicken Can 400g", "Pedigree", "dog_food_wet", "dog", 0.4, 12),
+    ("WD-RC-MN85", "رويال كانين ميني رطب 85 جرام", "Royal Canin Mini Wet 85g", "Royal Canin", "dog_food_wet", "dog", 0.085, 9),
+    ("WD-HS-AD370", "هيلز بالغ رطب 370 جرام", "Hills Adult Wet 370g", "Hills", "dog_food_wet", "dog", 0.37, 15),
+    ("WD-BR-PT400", "بريت باتيه كلاب 400 جرام", "Brit Pate Dog 400g", "Brit", "dog_food_wet", "dog", 0.4, 10),
+    ("WD-SC-CH150", "شيسير دجاج كلاب 150 جرام", "Schesir Chicken Dog 150g", "Schesir", "dog_food_wet", "dog", 0.15, 14),
+    # Dog Accessories
+    ("DA-TX-HR01", "حزام صدر للكلاب مقاس وسط", "Dog Harness Medium", "Trixie", "accessories", "dog", 0, 75),
+    ("DA-TX-LS01", "سلسلة كلب قابلة للسحب 5 متر", "Retractable Dog Leash 5m", "Flexi", "accessories", "dog", 0, 95),
+    ("DA-PF-BD02", "سرير كلب متوسط", "Medium Dog Bed", "PetFusion", "accessories", "dog", 0, 149),
+    ("DA-KN-KG02", "كونغ وابل كبير", "Kong Wobbler Large", "Kong", "accessories", "dog", 0, 85),
+    ("DA-TX-BL01", "مشبك كلب معدني", "Metal Dog Clip", "Trixie", "accessories", "dog", 0, 25),
+    ("DA-BW-ST2", "طقم اطباق مرتفع للكلاب", "Elevated Dog Bowl Set", "Generic", "accessories", "dog", 0, 65),
+    ("DA-CR-FLD01", "قفص قابل للطي للكلاب كبير", "Foldable Dog Crate Large", "Generic", "accessories", "dog", 0, 289),
+    ("DA-CL-NY01", "طوق نايلون كلب وسط", "Nylon Dog Collar Medium", "Generic", "accessories", "dog", 0, 25),
+    # Bird extras
+    ("BD-VL-BDG2", "فيرسيل لاجا بادجي 2 كجم", "Versele-Laga Budgies 2kg", "Versele-Laga", "bird_food", "bird", 2, 45),
+    ("BD-VL-FNC1", "فيرسيل لاجا فينش 1 كجم", "Versele-Laga Finch 1kg", "Versele-Laga", "bird_food", "bird", 1, 38),
+    ("BD-TX-CG01", "قفص طيور كبير 80 سم", "Large Bird Cage 80cm", "Trixie", "accessories", "bird", 0, 199),
+    ("BD-TX-CG02", "قفص طيور صغير 40 سم", "Small Bird Cage 40cm", "Trixie", "accessories", "bird", 0, 89),
+    ("BD-TX-SW01", "ارجوحة طيور خشبية", "Wooden Bird Swing", "Generic", "toys", "bird", 0, 19),
+    ("BD-TX-BT01", "حمام طيور", "Bird Bath", "Generic", "accessories", "bird", 0, 25),
+    ("BD-VT-VIT01", "فيتامينات طيور 50 مل", "Bird Vitamins 50ml", "Vitakraft", "healthcare", "bird", 0, 29),
+    # Fish extras
+    ("FS-TT-GP100", "تترا جولد فيش 100 جرام", "Tetra Goldfish 100g", "Tetra", "fish_food", "fish", 0.1, 35),
+    ("FS-TT-BT200", "تترا بيتا 200 مل", "Tetra Betta 200ml", "Tetra", "fish_food", "fish", 0.2, 25),
+    ("FS-AP-WC473", "مكيف مياه API 473 مل", "API Water Conditioner 473ml", "API", "fish_food", "fish", 0.473, 65),
+    ("FS-FV-207", "فلتر فلوفال 207", "Fluval 207 Filter", "Fluval", "equipment", "fish", 0, 449),
+    ("FS-TT-HT100", "سخان تترا 100 واط", "Tetra Heater 100W", "Tetra", "equipment", "fish", 0, 89),
+    ("FS-AQ-LED60", "اضاءة LED للاحواض 60 سم", "LED Aquarium Light 60cm", "Generic", "equipment", "fish", 0, 119),
+    ("FS-DEC-PL01", "نباتات اصطناعية للاحواض", "Artificial Aquarium Plants", "Generic", "accessories", "fish", 0, 29),
+    ("FS-GRV-5KG", "حصى احواض طبيعي 5 كجم", "Natural Gravel 5kg", "Generic", "accessories", "fish", 5, 25),
+    # Reptile
+    ("RP-UVB-10", "مصباح UVB للزواحف 10.0", "UVB Reptile Lamp 10.0", "Exo Terra", "reptile", "reptile", 0, 89),
+    ("RP-HT-CRM", "مصباح سيراميك حراري 100 واط", "Ceramic Heat Lamp 100W", "Exo Terra", "reptile", "reptile", 0, 65),
+    ("RP-TR-60", "حوض زواحف زجاجي 60 سم", "Glass Terrarium 60cm", "Exo Terra", "reptile", "reptile", 0, 349),
+    ("RP-TR-45", "حوض زواحف زجاجي 45 سم", "Glass Terrarium 45cm", "Exo Terra", "reptile", "reptile", 0, 249),
+    ("RP-FD-CRK", "صراصير مجففة للزواحف 35 جرام", "Dried Crickets 35g", "Exo Terra", "reptile", "reptile", 0.035, 35),
+    ("RP-SUB-CB", "تربة جوز الهند للزواحف", "Coconut Substrate", "Exo Terra", "reptile", "reptile", 0, 29),
+    ("RP-WB-SM", "وعاء ماء صغير للزواحف", "Small Reptile Water Bowl", "Exo Terra", "reptile", "reptile", 0, 19),
+    ("RP-TH-DG", "مقياس حرارة رقمي للزواحف", "Digital Thermometer", "Exo Terra", "reptile", "reptile", 0, 35),
+    # Grooming extras
+    ("GR-BP-DG01", "شامبو بيفار للكلاب 250 مل", "Beaphar Dog Shampoo 250ml", "Beaphar", "grooming", "dog", 0.25, 45),
+    ("GR-BP-CT01", "شامبو بيفار للقطط 250 مل", "Beaphar Cat Shampoo 250ml", "Beaphar", "grooming", "cat", 0.25, 45),
+    ("GR-TX-BR02", "فرشاة شعر بين مزدوج", "Double Pin Brush", "Trixie", "grooming", "dog", 0, 39),
+    ("GR-FM-SM", "فرمينيتور صغير للقطط", "FURminator Small Cat", "FURminator", "grooming", "cat", 0, 129),
+    ("GR-VB-TP01", "معجون اسنان فيرباك كلاب", "Virbac Toothpaste Dog", "Virbac", "grooming", "dog", 0, 55),
+    ("GR-VB-TB01", "فرشاة اسنان للحيوانات", "Pet Toothbrush", "Virbac", "grooming", "cat", 0, 25),
+    ("GR-TX-CL01", "مقص شعر احترافي", "Pro Grooming Clippers", "Trixie", "grooming", "dog", 0, 195),
+    ("GR-SF-EW01", "مناديل تنظيف الاذن", "Ear Cleaning Wipes", "Safari", "grooming", "dog", 0, 35),
+    ("GR-SF-EY01", "مناديل تنظيف العيون", "Eye Cleaning Wipes", "Safari", "grooming", "cat", 0, 35),
+    ("GR-TC-CON592", "بلسم تروبي كلين 592 مل", "TropiClean Conditioner 592ml", "TropiClean", "grooming", "dog", 0.592, 75),
+    # Healthcare / Vet Supplies
+    ("VT-FL-CT", "فرونت لاين بلس قطط", "Frontline Plus Cat", "Frontline", "healthcare", "cat", 0, 115),
+    ("VT-FL-SP", "فرونت لاين سبراي 250 مل", "Frontline Spray 250ml", "Frontline", "healthcare", "dog", 0.25, 145),
+    ("VT-AD-DWM", "ادفانتيج ضد البراغيث كلاب وسط", "Advantage Flea Dog Medium", "Bayer", "healthcare", "dog", 0, 99),
+    ("VT-AD-CTS", "ادفانتيج ضد البراغيث قطط صغير", "Advantage Flea Cat Small", "Bayer", "healthcare", "cat", 0, 89),
+    ("VT-BP-WM01", "بيفار مضاد ديدان كلاب", "Beaphar Wormer Dog", "Beaphar", "healthcare", "dog", 0, 45),
+    ("VT-BP-WM02", "بيفار مضاد ديدان قطط", "Beaphar Wormer Cat", "Beaphar", "healthcare", "cat", 0, 39),
+    ("VT-VT-OM01", "اوميغا 3 للكلاب 90 كبسولة", "Omega 3 Dog 90 Caps", "Vetoquinol", "healthcare", "dog", 0, 95),
+    ("VT-VT-JT01", "مكمل مفاصل للكلاب", "Joint Supplement Dog", "Vetoquinol", "healthcare", "dog", 0, 115),
+    ("VT-VT-PB01", "بروبيوتيك للقطط", "Probiotic Cat", "Purina", "healthcare", "cat", 0, 85),
+    ("VT-VT-CR01", "كريم حماية الكفوف", "Paw Protection Cream", "Beaphar", "healthcare", "dog", 0, 39),
+    ("VT-BP-MC01", "قطرة عين بيفار", "Beaphar Eye Drops", "Beaphar", "healthcare", "cat", 0, 29),
+    ("VT-BP-VT01", "فيتامينات بيفار للقطط", "Beaphar Cat Vitamins", "Beaphar", "healthcare", "cat", 0, 39),
+    # Toys extras
+    ("TY-KG-PUP", "كونغ جرو صغير", "Kong Puppy Small", "Kong", "toys", "dog", 0, 39),
+    ("TY-KG-SQ", "كونغ سكويكر", "Kong Squeaker", "Kong", "toys", "dog", 0, 45),
+    ("TY-TX-BALL", "كرة تنس للكلاب 3 قطع", "Tennis Ball Dog 3pk", "Trixie", "toys", "dog", 0, 15),
+    ("TY-TX-ROPE", "حبل لعب للكلاب", "Dog Rope Toy", "Trixie", "toys", "dog", 0, 25),
+    ("TY-CT-MOUSE", "فأر قطيفة للقطط", "Plush Mouse Cat Toy", "Generic", "toys", "cat", 0, 12),
+    ("TY-CT-LASER", "مؤشر ليزر للقطط", "Cat Laser Pointer", "Generic", "toys", "cat", 0, 19),
+    ("TY-CT-BALL3", "كرات قطط 3 قطع", "Cat Ball Toys 3pk", "Generic", "toys", "cat", 0, 15),
+    ("TY-CT-FISH", "لعبة سمكة متحركة للقطط", "Moving Fish Cat Toy", "Generic", "toys", "cat", 0, 35),
+    ("TY-TX-FRSBEE", "فريسبي للكلاب", "Dog Frisbee", "Trixie", "toys", "dog", 0, 29),
+    # Small Animals extras
+    ("SM-VL-GP2", "فيرسيل لاجا خنزير غيني 2.5 كجم", "Versele-Laga Guinea Pig 2.5kg", "Versele-Laga", "small_food", "small", 2.5, 49),
+    ("SM-OX-HAY2", "اوكسبو تيموثي 2 كجم", "Oxbow Timothy 2kg", "Oxbow", "small_food", "small", 2, 69),
+    ("SM-VL-HM1", "فيرسيل لاجا هامستر 1 كجم", "Versele-Laga Hamster 1kg", "Versele-Laga", "small_food", "small", 1, 35),
+    ("SM-TX-WL01", "عجلة هامستر 18 سم", "Hamster Wheel 18cm", "Trixie", "accessories", "small", 0, 25),
+    ("SM-TX-CG01", "قفص ارانب كبير", "Large Rabbit Cage", "Trixie", "accessories", "small", 0, 189),
+    ("SM-TX-HH01", "بيت هامستر خشبي", "Wooden Hamster House", "Trixie", "accessories", "small", 0, 35),
+    # Additional to reach 200+
+    ("CF-RC-SN8", "رويال كانين سنسيبل قطط 8 كجم", "Royal Canin Sensible Cat 8kg", "Royal Canin", "cat_food", "cat", 8, 345),
+    ("CF-RC-OD4", "رويال كانين آوتدور قطط 4 كجم", "Royal Canin Outdoor Cat 4kg", "Royal Canin", "cat_food", "cat", 4, 210),
+    ("CF-PO-AD7", "بورينا وان بالغ 7 كجم", "Purina ONE Adult Cat 7kg", "Purina", "cat_food", "cat", 7, 175),
+    ("CF-SC-KT2", "شيسير كيتن 2 كجم", "Schesir Kitten 2kg", "Schesir", "cat_food", "cat", 2, 125),
+    ("CF-MO-SH3", "مي-او عناية الشعر 3 كجم", "Me-O Hairball 3kg", "Me-O", "cat_food", "cat", 3, 85),
+    ("WC-SC-SM100", "شيسير سالمون معلب 100 جرام", "Schesir Salmon Can 100g", "Schesir", "cat_food_wet", "cat", 0.1, 13),
+    ("WC-RC-KT85", "رويال كانين كيتن رطب 85 جرام", "Royal Canin Kitten Wet 85g", "Royal Canin", "cat_food_wet", "cat", 0.085, 10),
+    ("WC-WH-SH85", "ويسكاس جمبري معلب 85 جرام", "Whiskas Shrimp Pouch 85g", "Whiskas", "cat_food_wet", "cat", 0.085, 6),
+    ("LT-EC-FRS6", "ايفر كلين منعش 6 لتر", "Ever Clean Fresh 6L", "Ever Clean", "litter", "cat", 6, 62),
+    ("LT-CB-PN5", "رمل صنوبر للقطط 5 لتر", "Pine Cat Litter 5L", "Cat Best", "litter", "cat", 5, 42),
+    ("LT-TF-LV6", "رمل توفو لافندر 6 لتر", "Tofu Lavender Litter 6L", "Generic", "litter", "cat", 6, 48),
+    ("DF-RC-LB15", "رويال كانين لابرادور 12 كجم", "Royal Canin Labrador 12kg", "Royal Canin", "dog_food", "dog", 12, 355),
+    ("DF-JO-SN12", "جوسيرا سنسيبلس 12 كجم", "Josera Sensible 12kg", "Josera", "dog_food", "dog", 12, 235),
+    ("DF-BR-AD3", "بريت بريميوم بالغ 3 كجم", "Brit Premium Adult 3kg", "Brit", "dog_food", "dog", 3, 89),
+    ("DF-PD-SN10", "بيدقري سناك كلاب 500 جرام", "Pedigree Snack Dog 500g", "Pedigree", "dog_food", "dog", 0.5, 22),
+    ("WD-PD-BF400", "بيدقري لحم بقر معلب 400 جرام", "Pedigree Beef Can 400g", "Pedigree", "dog_food_wet", "dog", 0.4, 13),
+    ("WD-RC-MX85", "رويال كانين ماكسي رطب 140 جرام", "Royal Canin Maxi Wet 140g", "Royal Canin", "dog_food_wet", "dog", 0.14, 12),
+    ("WD-HS-PUP370", "هيلز جرو رطب 370 جرام", "Hills Puppy Wet 370g", "Hills", "dog_food_wet", "dog", 0.37, 16),
+    ("BD-ZP-PR2", "زوبريم بريميوم كوكتيل 2 كجم", "Zupreem Premium Cockatiel 2kg", "Zupreem", "bird_food", "bird", 2, 79),
+    ("BD-VL-AF1", "فيرسيل لاجا افريكان 1 كجم", "Versele-Laga African 1kg", "Versele-Laga", "bird_food", "bird", 1, 55),
+    ("BD-VK-SN01", "فيتاكرافت سناك للطيور 100 جرام", "Vitakraft Bird Snack 100g", "Vitakraft", "bird_food", "bird", 0.1, 18),
+    ("BD-TX-PH01", "مجثم طيور خشبي طبيعي", "Natural Wood Perch", "Trixie", "accessories", "bird", 0, 15),
+    ("BD-TX-NB01", "عش تربية طيور", "Bird Breeding Nest", "Trixie", "accessories", "bird", 0, 29),
+    ("FS-TT-CT50", "تترا كاتفيش 50 جرام", "Tetra Catfish 50g", "Tetra", "fish_food", "fish", 0.05, 22),
+    ("FS-TT-PL100", "تترا بلانتا مين 100 مل", "Tetra PlantaMin 100ml", "Tetra", "fish_food", "fish", 0.1, 39),
+    ("FS-AP-PH237", "اختبار PH من API", "API pH Test Kit", "API", "equipment", "fish", 0, 55),
+    ("FS-AQ-GR5", "حصى ملونة احواض 5 كجم", "Colored Aquarium Gravel 5kg", "Generic", "accessories", "fish", 5, 29),
+    ("FS-AQ-BG01", "خلفية احواض 60 سم", "Aquarium Background 60cm", "Generic", "accessories", "fish", 0, 19),
+    ("RP-EX-HY01", "مرطب للزواحف", "Reptile Humidifier", "Exo Terra", "reptile", "reptile", 0, 119),
+    ("RP-EX-FD02", "دود الوجبات المجفف 30 جرام", "Dried Mealworms 30g", "Exo Terra", "reptile", "reptile", 0.03, 29),
+    ("RP-EX-HG01", "مخبأ صخري للزواحف كبير", "Rock Hide Large", "Exo Terra", "reptile", "reptile", 0, 49),
+    ("GR-BP-PP01", "بخاخ عطري بيفار للكلاب", "Beaphar Dog Perfume Spray", "Beaphar", "grooming", "dog", 0, 35),
+    ("GR-TX-DM01", "مزيل عقد شعر للكلاب", "Dog Detangling Spray", "Trixie", "grooming", "dog", 0, 45),
+    ("GR-SF-PW01", "بودرة كفوف حماية", "Paw Protection Powder", "Safari", "grooming", "dog", 0, 29),
+    ("VT-NX-FL01", "نيكسجارد ضد البراغيث كلاب", "Nexgard Flea Dog", "Merial", "healthcare", "dog", 0, 135),
+    ("VT-BP-CL01", "بيفار مضاد حشرات طوق قطط", "Beaphar Flea Collar Cat", "Beaphar", "healthcare", "cat", 0, 35),
+    ("VT-BP-CL02", "بيفار مضاد حشرات طوق كلاب", "Beaphar Flea Collar Dog", "Beaphar", "healthcare", "dog", 0, 39),
+    ("VT-VT-LV01", "مكمل كبد للكلاب", "Liver Supplement Dog", "Vetoquinol", "healthcare", "dog", 0, 79),
+    ("TY-CT-SCR01", "لوح خدش من الكرتون للقطط", "Cardboard Cat Scratcher", "Generic", "toys", "cat", 0, 19),
+    ("TY-CT-TNL02", "نفق قطط مع كرة", "Cat Tunnel with Ball", "Generic", "toys", "cat", 0, 39),
+    ("TY-TX-CHEW", "عظمة مضغ للكلاب كبير", "Dog Chew Bone Large", "Trixie", "toys", "dog", 0, 19),
+    ("TY-KG-DN01", "كونغ دنتل ستيك", "Kong Dental Stick", "Kong", "toys", "dog", 0, 55),
+    ("SM-VL-CH2", "فيرسيل لاجا شنشيلا 2 كجم", "Versele-Laga Chinchilla 2kg", "Versele-Laga", "small_food", "small", 2, 55),
+    ("SM-OX-PL1", "اوكسبو بيليتس ارانب 1 كجم", "Oxbow Rabbit Pellets 1kg", "Oxbow", "small_food", "small", 1, 45),
+    ("SM-TX-BT01", "زجاجة مياه للقوارض 250 مل", "Rodent Water Bottle 250ml", "Trixie", "accessories", "small", 0, 15),
+    ("DA-TX-RMP01", "رامب كلاب للسيارة", "Dog Car Ramp", "Trixie", "accessories", "dog", 0, 199),
+    ("CA-CT-TR02", "شجرة قطط صغيرة 80 سم", "Small Cat Tree 80cm", "Generic", "accessories", "cat", 0, 159),
+    ("CA-CT-CG01", "حقيبة حمل قطط شفافة", "Transparent Cat Carrier", "Generic", "accessories", "cat", 0, 109),
+]
 
 def get_stock_signal(qty):
     if qty == 0: return "OOS"
@@ -170,11 +358,12 @@ async def seed_database():
         store_ids.append({"id": sid, "name": s["name"], "priority": s["priority"]})
 
     # Seed products and snapshots
+    all_products_data = PRODUCTS_SEED + EXTRA_PRODUCT_TEMPLATES
     p1_stores = [s for s in store_ids if s["priority"] == 1]
     p2_stores = [s for s in store_ids if s["priority"] == 2]
     all_snapshots = []
 
-    for tup in PRODUCTS_SEED:
+    for tup in all_products_data:
         sku, name_ar, name_en, brand, category, animal, weight, base_price = tup
         pid = str(uuid.uuid4())
         await db.products.insert_one({
@@ -183,9 +372,9 @@ async def seed_database():
             "weight_kg": weight, "image_url": "", "first_seen_at": (now - timedelta(days=45)).isoformat(),
         })
 
-        # Assign to stores: 3-4 P1 stores + 1-2 P2 stores
+        # Assign to stores: 2-4 P1 stores + 1-3 P2 stores
         n_p1 = random.randint(2, min(4, len(p1_stores)))
-        n_p2 = random.randint(1, min(2, len(p2_stores)))
+        n_p2 = random.randint(1, min(3, len(p2_stores)))
         assigned = random.sample(p1_stores, n_p1) + random.sample(p2_stores, n_p2)
 
         for store in assigned:
@@ -193,10 +382,10 @@ async def seed_database():
             qty = random.randint(40, 250)
             price = round(base_price * random.uniform(0.90, 1.12), 2)
 
-            day = 30
+            day = 90
             while day >= 0:
                 crawled_at = now - timedelta(days=day, hours=random.randint(0, 12))
-                sold = random.randint(0, min(15, qty))
+                sold = random.randint(0, min(12, qty))
                 qty = max(0, qty - sold)
                 if qty <= 5 and random.random() < 0.35:
                     qty += random.randint(30, 120)
@@ -242,7 +431,7 @@ async def seed_database():
     creds_path.parent.mkdir(exist_ok=True)
     creds_path.write_text(f"# Daleel Pets Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_pw}\n- Role: admin\n\n## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n")
 
-    logger.info(f"Seeded {len(STORES_SEED)} stores, {len(PRODUCTS_SEED)} products, {len(all_snapshots)} snapshots")
+    logger.info(f"Seeded {len(STORES_SEED)} stores, {len(all_products_data)} products, {len(all_snapshots)} snapshots")
 
 # ── Auth Routes ─────────────────────────────────────────────
 @router.post("/auth/register")
@@ -277,6 +466,168 @@ async def logout():
 @router.get("/protected")
 async def protected(user=Depends(get_user)):
     return {"message": "Authenticated", "user": user}
+
+# ── Tier 1 Crawler ──────────────────────────────────────────
+KNOWN_BRANDS = ["Royal Canin", "رويال كانين", "Whiskas", "ويسكاس", "Pedigree", "بيدقري",
+    "Purina", "بورينا", "Hills", "هيلز", "N&D", "Orijen", "اوريجن", "Acana", "اكانا",
+    "Friskies", "فريسكيز", "Me-O", "مي-او", "Kong", "كونغ", "FURminator", "فرمينيتور",
+    "Frontline", "فرونت لاين", "Versele-Laga", "فيرسيل", "Catit", "Oxbow", "Tetra",
+    "Virbac", "Ever Clean", "Josera", "Brit", "Schesir", "Gimcat", "Trixie", "Beaphar"]
+
+def extract_brand(name):
+    for b in KNOWN_BRANDS:
+        if b.lower() in name.lower():
+            return b
+    return ""
+
+def guess_category(name):
+    n = name.lower()
+    if any(w in n for w in ["طعام", "غذاء", "food", "دراي", "ويت", "علف", "كيبل", "معلب"]):
+        if any(w in n for w in ["قط", "كات", "cat"]): return "cat_food"
+        if any(w in n for w in ["كلب", "كلاب", "dog"]): return "dog_food"
+        if any(w in n for w in ["طير", "طيور", "ببغاء", "bird"]): return "bird_food"
+        if any(w in n for w in ["سمك", "أسماك", "fish"]): return "fish_food"
+        return "pet_food"
+    if any(w in n for w in ["رمل", "لتر", "litter", "فضلات", "تراب"]): return "litter"
+    if any(w in n for w in ["لعب", "toy", "ألعاب", "كونغ"]): return "toys"
+    if any(w in n for w in ["شامبو", "فرشاة", "shampoo", "brush", "groom", "عناية", "مقص", "تنظيف"]): return "grooming"
+    if any(w in n for w in ["بيطر", "vet", "دواء", "علاج", "فيتامين", "مكمل", "برغوث"]): return "healthcare"
+    return "accessories"
+
+def guess_animal(name):
+    n = name.lower()
+    if any(w in n for w in ["قط", "كات", "cat", "هر"]): return "cat"
+    if any(w in n for w in ["كلب", "كلاب", "dog"]): return "dog"
+    if any(w in n for w in ["طير", "طيور", "ببغاء", "bird", "كناري"]): return "bird"
+    if any(w in n for w in ["سمك", "أسماك", "fish"]): return "fish"
+    if any(w in n for w in ["زواحف", "reptile"]): return "reptile"
+    if any(w in n for w in ["أرنب", "هامستر", "rabbit", "hamster"]): return "small"
+    return "other"
+
+def extract_weight(name):
+    m = re.search(r'(\d+(?:\.\d+)?)\s*(?:كجم|كيلو|kg)', name.lower())
+    if m: return float(m.group(1))
+    m = re.search(r'(\d+(?:\.\d+)?)\s*(?:جرام|غرام|g)\b', name.lower())
+    if m: return float(m.group(1)) / 1000
+    return 0
+
+async def crawl_salla_tier1(store):
+    """Tier 1: Attempt to fetch products from Salla public JSON endpoint."""
+    domain = store["domain"]
+    base = f"https://{domain}"
+    crawl_log = {
+        "id": str(uuid.uuid4()), "store_id": store["id"], "store_name": store["name"],
+        "tier_attempted": 1, "tier_used": None, "http_status": None,
+        "products_found": 0, "products_new": 0, "products_updated": 0,
+        "snapshots_created": 0, "error": None,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": None,
+    }
+    all_raw = []
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; DaleelPets/1.0)",
+            "Accept": "application/json",
+        }) as http:
+            page = 1
+            while page <= 20:
+                url = f"{base}/api/product/list"
+                resp = await http.get(url, params={"per_page": 50, "page": page})
+                crawl_log["http_status"] = resp.status_code
+                if resp.status_code != 200:
+                    crawl_log["error"] = f"HTTP {resp.status_code} from {url}"
+                    break
+                body = resp.json()
+                items = body.get("data", body.get("products", []))
+                if not items:
+                    break
+                all_raw.extend(items)
+                page += 1
+                if len(items) < 50:
+                    break
+    except httpx.TimeoutException:
+        crawl_log["error"] = f"Timeout connecting to {base}"
+        crawl_log["http_status"] = 0
+    except Exception as e:
+        crawl_log["error"] = str(e)[:300]
+        crawl_log["http_status"] = 0
+
+    now = datetime.now(timezone.utc)
+    if all_raw:
+        crawl_log["tier_used"] = 1
+        crawl_log["products_found"] = len(all_raw)
+        new_count = 0
+        snap_count = 0
+        for raw in all_raw:
+            name_ar = raw.get("name", raw.get("title", ""))
+            sku_raw = raw.get("sku") or raw.get("mpn") or f"S-{store['name'][:2].upper()}-{raw.get('id', uuid.uuid4().hex[:6])}"
+            price_field = raw.get("price", 0)
+            if isinstance(price_field, dict):
+                price = float(price_field.get("amount", 0))
+            else:
+                price = float(price_field or 0)
+            sale_field = raw.get("sale_price", raw.get("promotion", {}).get("price", 0))
+            if isinstance(sale_field, dict):
+                sale_price = float(sale_field.get("amount", 0))
+            else:
+                sale_price = float(sale_field or 0)
+            original_price = price
+            if 0 < sale_price < price:
+                original_price = price
+                price = sale_price
+            qty = int(raw.get("quantity", raw.get("stock_quantity", raw.get("qty", 0))) or 0)
+            in_stock = raw.get("status") in ("sale", "active") or raw.get("is_available", raw.get("availability", qty > 0))
+            imgs = raw.get("images", raw.get("image", []))
+            img_url = ""
+            if isinstance(imgs, list) and imgs:
+                img_url = imgs[0].get("url", imgs[0].get("src", "")) if isinstance(imgs[0], dict) else str(imgs[0])
+            elif isinstance(imgs, dict):
+                img_url = imgs.get("url", imgs.get("src", ""))
+
+            existing = await db.products.find_one({"sku": sku_raw})
+            if not existing:
+                pid = str(uuid.uuid4())
+                await db.products.insert_one({
+                    "id": pid, "sku": sku_raw, "name_ar": name_ar, "name_en": name_ar,
+                    "brand": extract_brand(name_ar), "category": guess_category(name_ar),
+                    "animal_type": guess_animal(name_ar), "weight_kg": extract_weight(name_ar),
+                    "image_url": img_url, "first_seen_at": now.isoformat(),
+                })
+                new_count += 1
+            else:
+                pid = existing["id"]
+                if img_url and not existing.get("image_url"):
+                    await db.products.update_one({"id": pid}, {"$set": {"image_url": img_url}})
+
+            disc_pct = round((1 - price / original_price) * 100) if original_price > price > 0 else 0
+            await db.product_snapshots.insert_one({
+                "id": str(uuid.uuid4()), "product_id": pid, "store_id": store["id"],
+                "store_name": store["name"], "sku": sku_raw,
+                "price": round(price, 2), "original_price": round(original_price, 2),
+                "discount_pct": max(0, disc_pct), "in_stock": bool(in_stock),
+                "qty_available": max(0, qty), "source_tier": 1, "confidence_score": 95,
+                "crawled_at": now,
+            })
+            snap_count += 1
+
+        crawl_log["products_new"] = new_count
+        crawl_log["products_updated"] = len(all_raw) - new_count
+        crawl_log["snapshots_created"] = snap_count
+    else:
+        if not crawl_log["error"]:
+            crawl_log["error"] = "No products returned from endpoint"
+
+    crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
+    await db.crawl_logs.insert_one(crawl_log)
+    await db.stores.update_one({"id": store["id"]}, {"$set": {
+        "last_crawled_at": crawl_log["completed_at"],
+        "last_crawl_tier": crawl_log["tier_used"],
+        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
+        "last_crawl_error": crawl_log["error"],
+        "last_crawl_products": crawl_log["products_found"],
+    }})
+    logger.info(f"Crawl {store['name']}: tier={crawl_log['tier_used']}, found={crawl_log['products_found']}, new={crawl_log['products_new']}, error={crawl_log['error']}")
+    return crawl_log
 
 # ── Store Routes ────────────────────────────────────────────
 @router.get("/stores")
@@ -326,17 +677,41 @@ async def trigger_crawl(store_id: str, user=Depends(get_user)):
     store = await db.stores.find_one({"id": store_id}, {"_id": 0})
     if not store:
         raise HTTPException(404, "Store not found")
-    now = datetime.now(timezone.utc).isoformat()
-    await db.stores.update_one({"id": store_id}, {"$set": {"last_crawled_at": now}})
-    product_count = len(await db.product_snapshots.distinct("sku", {"store_id": store_id}))
+    platform = store.get("platform", "").lower()
+    if platform == "salla":
+        result = await crawl_salla_tier1(store)
+    else:
+        # For non-Salla stores, simulate crawl (Tier 1 not available)
+        now = datetime.now(timezone.utc).isoformat()
+        result = {
+            "id": str(uuid.uuid4()), "store_id": store_id, "store_name": store["name"],
+            "tier_attempted": 1, "tier_used": None, "http_status": 0,
+            "products_found": 0, "products_new": 0, "products_updated": 0,
+            "snapshots_created": 0, "error": f"Tier 1 crawler not implemented for {platform} platform yet",
+            "started_at": now, "completed_at": now,
+        }
+        await db.crawl_logs.insert_one(result)
+        await db.stores.update_one({"id": store_id}, {"$set": {
+            "last_crawled_at": now, "last_crawl_tier": None,
+            "last_crawl_status": "unsupported", "last_crawl_error": result["error"],
+            "last_crawl_products": 0,
+        }})
     return {
-        "message": f"Crawl completed for {store['name']}",
-        "store_id": store_id, "last_crawled_at": now,
-        "products_found": product_count,
-        "tier_used": random.choice([1, 1, 1, 2, 2, 3]),
-        "new_products": random.randint(0, 3),
-        "price_changes": random.randint(0, 8),
+        "message": f"Crawl {'completed' if result.get('tier_used') else 'attempted'} for {store['name']}",
+        "store_id": store_id,
+        "tier_used": result.get("tier_used"),
+        "http_status": result.get("http_status"),
+        "products_found": result.get("products_found", 0),
+        "products_new": result.get("products_new", 0),
+        "snapshots_created": result.get("snapshots_created", 0),
+        "error": result.get("error"),
+        "last_crawled_at": result.get("completed_at"),
     }
+
+@router.get("/stores/{store_id}/crawl-logs")
+async def get_crawl_logs(store_id: str, limit: int = Query(10), user=Depends(get_user)):
+    logs = await db.crawl_logs.find({"store_id": store_id}, {"_id": 0}).sort("completed_at", -1).limit(limit).to_list(limit)
+    return logs
 
 # ── Helper: compute product metrics from snapshots ──────────
 def compute_product_metrics(snapshots_by_store, days):
@@ -844,34 +1219,223 @@ async def top_discounts_amount(user=Depends(get_user)):
     ]
     return await db.product_snapshots.aggregate(pipeline).to_list(20)
 
-# ── Alerts (stubs) ──────────────────────────────────────────
+# ── Alerts ───────────────────────────────────────────────────
+ALERT_TYPES = ["price_drop", "price_increase", "out_of_stock", "back_in_stock", "low_stock"]
+
+def send_alert_notification(alert, event, channel="console"):
+    """Send alert notification. Currently logs to console. Swap for Resend with one-line change."""
+    msg = f"[ALERT] {event.get('alert_type','')}: SKU={event.get('sku','')} at {event.get('store_name','')}: {event.get('old_value','')} -> {event.get('new_value','')} (threshold: {alert.get('threshold','')})"
+    logger.info(msg)  # Replace with: await resend.emails.send(...) for real email
+
 @router.get("/alerts")
 async def list_alerts(user=Depends(get_user)):
-    alerts = await db.alerts.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+    alerts = await db.alerts.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    # Enrich with product info
+    for a in alerts:
+        if a.get("product_sku"):
+            p = await db.products.find_one({"sku": a["product_sku"]}, {"_id": 0, "name_ar": 1, "name_en": 1})
+            if p:
+                a["product_name_ar"] = p["name_ar"]
+                a["product_name_en"] = p["name_en"]
     return alerts
 
 @router.post("/alerts")
 async def create_alert(data: AlertIn, user=Depends(get_user)):
+    if data.alert_type not in ALERT_TYPES:
+        raise HTTPException(400, f"Invalid alert type. Valid: {ALERT_TYPES}")
     doc = {
         "id": str(uuid.uuid4()), "user_id": user["id"],
         "product_sku": data.product_sku, "category": data.category,
         "store_id": data.store_id, "alert_type": data.alert_type,
-        "threshold": data.threshold, "channel": data.channel,
+        "threshold": data.threshold, "channel": data.channel or "in_app",
         "is_active": True, "created_at": datetime.now(timezone.utc).isoformat(),
+        "triggered_count": 0, "last_triggered_at": None,
     }
     await db.alerts.insert_one(doc)
     doc.pop("_id", None)
     return doc
 
+@router.put("/alerts/{alert_id}/toggle")
+async def toggle_alert(alert_id: str, user=Depends(get_user)):
+    alert = await db.alerts.find_one({"id": alert_id, "user_id": user["id"]})
+    if not alert:
+        raise HTTPException(404, "Alert not found")
+    new_state = not alert.get("is_active", True)
+    await db.alerts.update_one({"id": alert_id}, {"$set": {"is_active": new_state}})
+    return {"id": alert_id, "is_active": new_state}
+
 @router.delete("/alerts/{alert_id}")
 async def delete_alert(alert_id: str, user=Depends(get_user)):
-    await db.alerts.delete_one({"id": alert_id, "user_id": user["id"]})
+    r = await db.alerts.delete_one({"id": alert_id, "user_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(404, "Alert not found")
     return {"message": "Deleted"}
 
 @router.get("/alerts/feed")
-async def alert_feed(user=Depends(get_user)):
-    events = await db.alert_events.find({"user_id": user["id"]}, {"_id": 0}).sort("triggered_at", -1).limit(50).to_list(50)
+async def alert_feed(days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    events = await db.alert_events.find(
+        {"user_id": user["id"], "triggered_at": {"$gte": since.isoformat()}},
+        {"_id": 0}
+    ).sort("triggered_at", -1).limit(100).to_list(100)
     return events
+
+@router.post("/alerts/check")
+async def check_alerts_now(user=Depends(get_user)):
+    """Manually trigger alert checking against latest snapshots."""
+    alerts = await db.alerts.find({"user_id": user["id"], "is_active": True}, {"_id": 0}).to_list(100)
+    events_created = 0
+    now = datetime.now(timezone.utc)
+
+    for alert in alerts:
+        sku = alert.get("product_sku")
+        if not sku:
+            continue
+        # Get latest two snapshots for this SKU
+        snaps = await db.product_snapshots.find({"sku": sku}, {"_id": 0}).sort("crawled_at", -1).limit(2).to_list(2)
+        if len(snaps) < 2:
+            continue
+        latest, prev = snaps[0], snaps[1]
+        event = None
+        at = alert.get("alert_type")
+        threshold = alert.get("threshold") or 0
+
+        if at == "price_drop" and latest["price"] < prev["price"]:
+            drop_pct = round((1 - latest["price"] / prev["price"]) * 100, 1) if prev["price"] > 0 else 0
+            if drop_pct >= threshold:
+                event = {"old_value": f"{prev['price']} SAR", "new_value": f"{latest['price']} SAR ({-drop_pct}%)"}
+        elif at == "price_increase" and latest["price"] > prev["price"]:
+            inc_pct = round((latest["price"] / prev["price"] - 1) * 100, 1) if prev["price"] > 0 else 0
+            if inc_pct >= threshold:
+                event = {"old_value": f"{prev['price']} SAR", "new_value": f"{latest['price']} SAR (+{inc_pct}%)"}
+        elif at == "out_of_stock" and not latest["in_stock"] and prev["in_stock"]:
+            event = {"old_value": "In Stock", "new_value": "Out of Stock"}
+        elif at == "back_in_stock" and latest["in_stock"] and not prev["in_stock"]:
+            event = {"old_value": "Out of Stock", "new_value": "Back in Stock"}
+        elif at == "low_stock" and latest.get("qty_available", 0) <= (threshold or 10) and prev.get("qty_available", 0) > (threshold or 10):
+            event = {"old_value": f"{prev.get('qty_available', 0)} units", "new_value": f"{latest.get('qty_available', 0)} units"}
+
+        if event:
+            ev_doc = {
+                "id": str(uuid.uuid4()), "alert_id": alert["id"], "user_id": user["id"],
+                "product_sku": sku, "store_name": latest.get("store_name", ""),
+                "alert_type": at, "sku": sku,
+                "old_value": event["old_value"], "new_value": event["new_value"],
+                "triggered_at": now.isoformat(),
+            }
+            await db.alert_events.insert_one(ev_doc)
+            await db.alerts.update_one({"id": alert["id"]}, {"$set": {"last_triggered_at": now.isoformat()}, "$inc": {"triggered_count": 1}})
+            send_alert_notification(alert, ev_doc, alert.get("channel", "console"))
+            events_created += 1
+
+    return {"message": f"Checked {len(alerts)} alerts, created {events_created} events"}
+
+# ── Competitor Profile Routes ────────────────────────────────
+@router.get("/stores/{store_id}/profile")
+async def store_profile(store_id: str, user=Depends(get_user)):
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not store:
+        raise HTTPException(404, "Store not found")
+
+    now = datetime.now(timezone.utc)
+    since_90d = now - timedelta(days=90)
+    since_7d = now - timedelta(days=7)
+
+    # Catalog stats
+    skus = await db.product_snapshots.distinct("sku", {"store_id": store_id})
+    active_skus = await db.product_snapshots.distinct("sku", {"store_id": store_id, "in_stock": True, "crawled_at": {"$gte": since_7d}})
+
+    # Latest snapshots per sku for this store
+    pipeline_latest = [
+        {"$match": {"store_id": store_id}},
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {"_id": "$sku", "price": {"$first": "$price"}, "discount_pct": {"$first": "$discount_pct"}, "qty": {"$first": "$qty_available"}, "in_stock": {"$first": "$in_stock"}, "crawled_at": {"$first": "$crawled_at"}, "product_id": {"$first": "$product_id"}}},
+    ]
+    latest = await db.product_snapshots.aggregate(pipeline_latest).to_list(500)
+
+    avg_disc = round(statistics.mean([l["discount_pct"] for l in latest if l["discount_pct"] > 0]) if any(l["discount_pct"] > 0 for l in latest) else 0, 1)
+
+    # Revenue estimation from depletion over 90 days
+    snaps_90d = await db.product_snapshots.find({"store_id": store_id, "crawled_at": {"$gte": since_90d}}, {"_id": 0}).sort("crawled_at", 1).to_list(50000)
+    by_sku = {}
+    for s in snaps_90d:
+        by_sku.setdefault(s["sku"], []).append(s)
+
+    total_rev = 0
+    total_sold = 0
+    weekly_rev = {}
+    sku_sales = {}
+
+    for sku, slist in by_sku.items():
+        for i in range(1, len(slist)):
+            delta = slist[i-1].get("qty_available", 0) - slist[i].get("qty_available", 0)
+            if delta > 0:
+                rev = delta * slist[i]["price"]
+                total_sold += delta
+                total_rev += rev
+                sku_sales[sku] = sku_sales.get(sku, 0) + delta
+                ca = slist[i]["crawled_at"]
+                week_key = ca.strftime("%Y-W%W") if isinstance(ca, datetime) else ca[:10]
+                weekly_rev[week_key] = weekly_rev.get(week_key, 0) + rev
+
+    # Revenue trend (weekly)
+    revenue_trend = [{"week": k, "revenue": round(v, 2)} for k, v in sorted(weekly_rev.items())]
+
+    # Also compute daily for toggle
+    daily_rev = {}
+    for sku, slist in by_sku.items():
+        for i in range(1, len(slist)):
+            delta = slist[i-1].get("qty_available", 0) - slist[i].get("qty_available", 0)
+            if delta > 0:
+                ca = slist[i]["crawled_at"]
+                day_key = ca.strftime("%Y-%m-%d") if isinstance(ca, datetime) else ca[:10]
+                daily_rev[day_key] = daily_rev.get(day_key, 0) + delta * slist[i]["price"]
+    daily_trend = [{"date": k, "revenue": round(v, 2)} for k, v in sorted(daily_rev.items())]
+
+    # Top 10 products by sales
+    top_10 = sorted(sku_sales.items(), key=lambda x: x[1], reverse=True)[:10]
+    top_products = []
+    for sku, sales in top_10:
+        p = await db.products.find_one({"sku": sku}, {"_id": 0, "name_ar": 1, "name_en": 1, "category": 1, "brand": 1})
+        if p:
+            top_products.append({**p, "sku": sku, "units_sold": sales})
+
+    # Category distribution
+    cat_count = {}
+    for l in latest:
+        p = await db.products.find_one({"sku": l["_id"]}, {"_id": 0, "category": 1})
+        if p:
+            cat_count[p["category"]] = cat_count.get(p["category"], 0) + 1
+    category_dist = [{"category": k, "count": v} for k, v in sorted(cat_count.items(), key=lambda x: x[1], reverse=True)]
+
+    # New arrivals last 7 days
+    new_products = await db.products.find(
+        {"first_seen_at": {"$gte": since_7d.isoformat()}, "sku": {"$in": skus}},
+        {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1}
+    ).to_list(20)
+
+    # Recently OOS
+    oos_latest = [l for l in latest if not l["in_stock"]]
+    recently_oos = []
+    for l in oos_latest[:10]:
+        p = await db.products.find_one({"sku": l["_id"]}, {"_id": 0, "name_ar": 1, "name_en": 1})
+        if p:
+            recently_oos.append({**p, "sku": l["_id"], "last_qty": l["qty"]})
+
+    return {
+        "store": store,
+        "kpis": {
+            "catalog_size": len(skus), "active_skus": len(active_skus),
+            "est_monthly_revenue": round(total_rev / 3, 2),
+            "avg_discount_rate": avg_disc, "last_crawled": store.get("last_crawled_at"),
+        },
+        "revenue_trend_weekly": revenue_trend,
+        "revenue_trend_daily": daily_trend,
+        "top_products": top_products,
+        "category_distribution": category_dist,
+        "new_arrivals": new_products,
+        "recently_oos": recently_oos,
+    }
 
 # ── Export ──────────────────────────────────────────────────
 @router.get("/export/products")
