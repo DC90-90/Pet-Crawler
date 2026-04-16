@@ -1,97 +1,163 @@
 {
-  "theme": "Light",
-  "archetype": "4 (Swiss & High-Contrast)",
+  "project_info": {
+    "name": "Daleel Pets",
+    "tagline": "Saudi Pet Market, Decoded",
+    "market": "Saudi Arabia B2B (Store owners, buyers, market analysts)",
+    "tone": "Premium, data-driven, modern, dark, precise, fast-feeling",
+    "theme": "Dark",
+    "archetype": "High-Contrast Swiss & Electric Fintech (Archetype 4 + 7 fusion)",
+    "references": "Linear.app meets Hex.tech meets Saudi fintech dashboard"
+  },
   "colors": {
     "background": {
-      "primary": "#FFFFFF",
-      "secondary": "#F3F4F6",
-      "tertiary": "#E5E7EB"
+      "base": "#060B14",
+      "gradient": "radial-gradient(circle at top center, #0A0F1E 0%, #060B14 100%)"
+    },
+    "surface": {
+      "card": "#111827",
+      "card_hover": "#1F2937",
+      "glass": "rgba(17, 24, 39, 0.8)",
+      "border": "rgba(255, 255, 255, 0.06)",
+      "border_hover": "rgba(255, 255, 255, 0.12)"
+    },
+    "primary": {
+      "navy": "#0A0F1E",
+      "teal": "#00D4B4",
+      "teal_glow": "rgba(0, 212, 180, 0.2)"
+    },
+    "accent": {
+      "amber": "#F59E0B",
+      "amber_glow": "rgba(245, 158, 11, 0.2)"
     },
     "text": {
-      "primary": "#0A0A0A",
-      "secondary": "#4B5563",
-      "muted": "#9CA3AF"
+      "primary": "#FFFFFF",
+      "muted": "#9CA3AF",
+      "inverse": "#0A0F1E"
     },
-    "brand": {
-      "primary": "#002DF5",
-      "accent": "#002DF5"
-    },
-    "functional": {
-      "price_war_alert": "#FF3B30",
-      "restock_warning": "#FFCC00",
-      "positive_trend": "#00C853"
-    },
-    "border": "#E5E7EB"
+    "status": {
+      "success": "#10B981",
+      "success_bg": "rgba(16, 185, 129, 0.1)",
+      "warning": "#F59E0B",
+      "warning_bg": "rgba(245, 158, 11, 0.1)",
+      "danger": "#EF4444",
+      "danger_bg": "rgba(239, 68, 68, 0.1)"
+    }
   },
   "typography": {
-    "font_family": {
-      "headings": "'IBM Plex Sans Arabic', sans-serif",
-      "body": "'IBM Plex Sans Arabic', sans-serif"
+    "fonts": {
+      "english_primary": "'Plus Jakarta Sans', sans-serif",
+      "arabic_primary": "'IBM Plex Arabic', sans-serif",
+      "mono_metrics": "'IBM Plex Mono', monospace"
     },
-    "font_sizes": {
-      "h1": "text-4xl tracking-tight font-bold",
-      "h2": "text-2xl tracking-tight font-bold",
-      "h3": "text-xl font-semibold",
-      "body": "text-sm leading-relaxed",
-      "small": "text-xs font-medium uppercase tracking-[0.2em]"
+    "rules": {
+      "h1": "text-4xl sm:text-5xl font-semibold tracking-tight text-white",
+      "h2": "text-2xl sm:text-3xl font-medium tracking-tight text-white",
+      "h3": "text-xl sm:text-2xl font-medium text-white",
+      "body": "text-base text-[#9CA3AF] leading-relaxed",
+      "small_label": "text-xs font-semibold tracking-widest uppercase text-[#9CA3AF]",
+      "kpi_metric": "text-4xl font-bold font-mono text-white tracking-tight"
     }
   },
   "spacing_and_layout": {
-    "grid_system": "Control Room Grid (grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4)",
-    "container_padding": "p-6",
-    "bilingual_rtl_strategy": "CRITICAL: Use Tailwind logical properties (ps-, pe-, ms-, me-, text-start, text-end, border-e) exclusively. Do NOT use left/right properties like pl-, pr-, ml-, mr-. Rely on HTML dir attribute to flip layout."
+    "grid_system": "MODE B: THE CONTROL ROOM GRID (Tight gap-4 to gap-6, dense data density).",
+    "container_padding": "p-6 or p-8 for glassmorphic cards.",
+    "border_radius": "rounded-2xl for main cards, rounded-full for buttons and pills."
+  },
+  "surfaces_and_effects": {
+    "glassmorphism_card": "bg-[#111827]/80 backdrop-blur-xl border border-white/10 shadow-lg",
+    "active_glow": "shadow-[0_0_15px_rgba(0,212,180,0.3)] border-[#00D4B4]/50",
+    "hover_lift": "transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_8px_30px_rgba(0,212,180,0.1)] hover:border-white/20",
+    "table_zebra": "even:bg-[#060B14] odd:bg-[#111827]/50 hover:bg-[#1F2937]/50 transition-colors",
+    "skeleton_loader": "animate-pulse bg-[#1F2937] rounded"
   },
   "components": {
-    "cards": "Cardless or subtle 1px border. Background #FFFFFF, border-border, max rounded-md. Strict padding p-4 to p-6.",
-    "tables": "Dense tables. text-sm. Hover states on rows (hover:bg-gray-50 hover:text-black). Sticky headers. Sortable columns.",
-    "buttons": "Square or rounded-md. Primary: bg-[#002DF5] text-white hover:bg-blue-800. Alert: bg-[#FF3B30] text-white.",
-    "navigation": "Sticky top header, backdrop-blur-xl bg-white/70, border-b border-gray-200. Must have language toggle (EN/AR).",
-    "charts": "Recharts. Use sharp lines, monochrome base with signal colors (Red for price drop, Blue for velocity)."
-  },
-  "motion": {
-    "hover": "transition-colors duration-200 ease-in-out",
-    "entrance": "fade-in slide-in-from-bottom-2"
-  },
-  "accessibility": {
-    "contrast": "APCA compliant. High contrast on all text.",
-    "testing_attributes": "All interactive elements MUST have data-testid (e.g., data-testid='lang-toggle-btn')"
-  },
-  "image_urls": {
-    "mock_store_1": {
-      "url": "https://images.unsplash.com/photo-1760596687491-7b99fb80bb43?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwyfHxwZXQlMjBzdXBwbGllcyUyMHN0b3JlfGVufDB8fHx8MTc3NjI3NzY0OHww&ixlib=rb-4.1.0&q=85",
-      "description": "Happy corgi, use for sample pet store avatar/profile"
+    "buttons": {
+      "primary": "rounded-full bg-[#00D4B4] text-[#0A0F1E] font-semibold hover:bg-[#00E5C3] hover:shadow-[0_0_20px_rgba(0,212,180,0.4)] transition-all px-6 py-2.5",
+      "secondary": "rounded-full bg-transparent border border-white/10 text-white hover:bg-white/5 transition-all px-6 py-2.5"
     },
-    "mock_store_2": {
-      "url": "https://images.unsplash.com/photo-1776142519732-6d45cc4f5374?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMzl8MHwxfHNlYXJjaHwxfHxwZXQlMjBzdXBwbGllcyUyMHN0b3JlfGVufDB8fHx8MTc3NjI3NzY0OHww&ixlib=rb-4.1.0&q=85",
-      "description": "Store aisle, use for store registry background or card cover"
+    "badges": {
+      "tier": "rounded-full px-2.5 py-0.5 text-xs font-mono font-bold bg-[#F59E0B]/10 text-[#F59E0B] border border-[#F59E0B]/20",
+      "status": "rounded-full px-2.5 py-0.5 text-xs font-medium"
     },
-    "mock_product_1": {
-      "url": "https://images.unsplash.com/photo-1708105612115-36a658231987?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHw0fHxjYXQlMjBkb2clMjBmb29kJTIwcHJvZHVjdHN8ZW58MHx8fHwxNzc2Mjc3NjQ4fDA&ixlib=rb-4.1.0&q=85",
-      "description": "Two bowls of pet food, use as product thumbnail"
+    "sidebar": {
+      "base": "bg-[#0D1321] border-r border-white/5",
+      "item_active": "text-[#00D4B4] bg-[#00D4B4]/5 border-l-2 border-[#00D4B4] shadow-[-4px_0_12px_rgba(0,212,180,0.2)]"
     },
-    "mock_product_2": {
-      "url": "https://images.unsplash.com/photo-1697422836692-043e0fee1fd5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwyfHxjYXQlMjBkb2clMjBmb29kJTIwcHJvZHVjdHN8ZW58MHx8fHwxNzc2Mjc3NjQ4fDA&ixlib=rb-4.1.0&q=85",
-      "description": "Close up of dog food, use as product thumbnail"
-    },
-    "mock_product_3": {
-      "url": "https://images.unsplash.com/photo-1646668946448-c0532e782ba8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwxfHxjYXQlMjBkb2clMjBmb29kJTIwcHJvZHVjdHN8ZW58MHx8fHwxNzc2Mjc3NjQ4fDA&ixlib=rb-4.1.0&q=85",
-      "description": "Shelf in store, use as generic product category cover"
-    },
-    "mock_product_4": {
-      "url": "https://images.unsplash.com/photo-1605001550694-0f6323037433?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDR8MHwxfHNlYXJjaHwzfHxjYXQlMjBkb2clMjBmb29kJTIwcHJvZHVjdHN8ZW58MHx8fHwxNzc2Mjc3NjQ4fDA&ixlib=rb-4.1.0&q=85",
-      "description": "Cat on bowl, use as product thumbnail"
+    "charts": {
+      "tooltip": "bg-[#111827] border border-white/10 text-white rounded-lg shadow-xl",
+      "grid_lines": "rgba(255,255,255,0.05)"
     }
   },
+  "pages": {
+    "login": {
+      "layout": "Split screen (50/50). Left: Animated hero graphic with glassmorphic overlay. Right: Login form centered.",
+      "features": "Bilingual toggle, electric teal primary button, glowing input focus states."
+    },
+    "dashboard": {
+      "layout": "Hero KPI row (4 metrics), followed by charts and latest data table.",
+      "features": "Glowing metric cards (monospaced numbers), teal/amber accent mini sparklines."
+    },
+    "stores_registry": {
+      "layout": "Card grid layout (grid-cols-1 md:grid-cols-2 lg:grid-cols-3).",
+      "features": "Tier 4 badges, crawl status indicators, hover-lift micro-animations."
+    },
+    "insights": {
+      "layout": "Bento grid with varied span sizes.",
+      "features": "Price wars leaderboard, top sellers, restock alerts. Heavy chart usage."
+    },
+    "scanner": {
+      "layout": "Opportunity card grid. Focus on quick wins.",
+      "features": "Highlight undercut margins in Success Green, Overpriced in Warning Amber."
+    },
+    "alerts": {
+      "layout": "Clean list view inside a single glassmorphic panel.",
+      "features": "Event feed with colored severity dots."
+    },
+    "market_digest": {
+      "layout": "Modal / Newsletter style centered reading view.",
+      "features": "Text-heavy but highly legible. Generous line-height, clear typography."
+    },
+    "settings": {
+      "layout": "Tabbed layout within a main glass card.",
+      "features": "Credential vault with Tier 4 encryption verify visual."
+    }
+  },
+  "accessibility_and_testing": {
+    "testing": "All interactive elements MUST use data-testid (e.g., data-testid='login-submit-button').",
+    "motion": "Respect prefers-reduced-motion for all hover and entrance animations."
+  },
+  "media": {
+    "saas_hero_bg": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/e703fccc-0c9e-4960-bc7a-841f7b4e9557/images/10760f1c33ca1363281d0fbf1bb272afb8e800265786e402e77d5ebbfd63a90f.png",
+      "description": "Abstract 3D glassmorphic background for dark mode SaaS with teal and amber light streaks.",
+      "usage": "Use as the background for the Login page left split-screen or main dashboard hero background with low opacity."
+    },
+    "market_data_bg": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/e703fccc-0c9e-4960-bc7a-841f7b4e9557/images/49cfb34697c0aab87701ed251b4dbfe576cf60bd442bba20a379334522fc142c.png",
+      "description": "Abstract glowing data visualization background with dark tech theme.",
+      "usage": "Use in the Empty States, Market Digest header, or as a subtle overlay pattern for the Settings Vault."
+    },
+    "tech_logos": [
+      {
+        "url": "https://images.unsplash.com/photo-1622651132634-a7ed1fbb86dd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzZ8MHwxfHNlYXJjaHwzfHx0ZWNoJTIwYnJhbmQlMjBsb2dvfGVufDB8fHx8MTc3NjM1MjE0MXww&ixlib=rb-4.1.0&q=85",
+        "usage": "Generic placeholder tech logo for stores or integration examples in Settings."
+      },
+      {
+        "url": "https://images.pexels.com/photos/7202944/pexels-photo-7202944.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "usage": "Logitech logo for tech equipment store examples."
+      }
+    ]
+  },
   "instructions_to_main_agent": [
-    "Use raw HTML/Tailwind for layouts heavily relying on CSS logical properties (start/end) for seamless RTL support.",
-    "Implement language context to dynamically switch `dir='ltr'` and `dir='rtl'` on the root element.",
-    "Avoid Shadcn 'Card' wrapper if it hinders strict 1px grid borders. Build custom dense tables.",
-    "Never use `pl-` or `pr-` classes. ALWAYS use `ps-` and `pe-`.",
-    "Install and use `@phosphor-icons/react` for dense dashboard icons.",
-    "Use Recharts for the Price History and Velocity charts on the Product Detail side panel.",
-    "Date picker must use Shadcn, but customize it to fit the high-contrast Swiss theme.",
-    "All prices must be formatted in SAR (Saudi Riyal).",
-    "All components must be written as .js files, not .tsx files.",
-    "Integrate data-testid attributes for QA automation testing."
+    "Install required fonts: '@fontsource/plus-jakarta-sans', '@fontsource/ibm-plex-arabic', '@fontsource/ibm-plex-mono'.",
+    "Install Phosphor Icons or Lucide for tech-heavy, precise dashboard iconography.",
+    "Implement pure dark mode. Do NOT include a light mode toggle. The platform is dark-first and dark-only.",
+    "All cards must strictly follow the glassmorphism rules: `#111827` at 80% opacity with `backdrop-blur-xl` and `border-white/10`.",
+    "Data tables must have monospaced numerical values and right-aligned numeric columns.",
+    "Avoid standard Shadcn outlines. Customize Shadcn primitives (like inputs and selects) to match the dark glassmorphic theme with teal focus rings (`focus:ring-[#00D4B4]/50`).",
+    "The Sidebar must have a subtle background `#0D1321`. Active links must display a prominent left-border `#00D4B4` and an inner shadow glow.",
+    "Include empty states using the 'market_data_bg' with a heavy blur and an informative text block.",
+    "Ensure the OTP Banner uses the Warning Amber (#F59E0B) with high-contrast text.",
+    "No plain text placeholders for images, use the provided media URLs."
   ]
 }
