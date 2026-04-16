@@ -52,6 +52,7 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 - Deployment guide for AWS Bahrain / Ubuntu VPS
 - start.sh launcher script with validation
 - GET /api/health endpoint (MongoDB, scheduler, Playwright, uptime)
+- GET /api/health/detailed endpoint (per-store connectivity: reachable, response_time_ms, http_status, last_crawl)
 - Rate limiting on auth endpoints (5/min/IP, 429 response)
 - HTTP security headers middleware (CSP, nosniff, DENY, strict-origin)
 - PLATFORM_SUMMARY.md — complete API/page/crawler/DB reference

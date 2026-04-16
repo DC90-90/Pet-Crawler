@@ -7,7 +7,7 @@ from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends, 
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re, time, shutil
+import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re, time, shutil, asyncio
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
@@ -152,6 +152,46 @@ async def health_check():
         "playwright_available": pw_available,
         "last_successful_crawl": last_crawl,
         "uptime_seconds": uptime_secs,
+    }
+
+@router.get("/health/detailed")
+async def health_detailed(user=Depends(get_user)):
+    import httpx
+
+    stores = await db.stores.find({"is_active": True}, {"_id": 0, "id": 1, "name": 1, "domain": 1, "base_url": 1, "last_crawled_at": 1}).sort("name", 1).to_list(50)
+
+    async def probe_store(store):
+        url = store.get("base_url") or f"https://{store['domain']}"
+        result = {
+            "store_name": store["name"],
+            "domain": store["domain"],
+            "reachable": False,
+            "response_time_ms": None,
+            "http_status": None,
+            "last_successful_crawl": store.get("last_crawled_at"),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=5, follow_redirects=True, verify=False) as client_http:
+                start = time.monotonic()
+                resp = await client_http.head(url)
+                elapsed_ms = round((time.monotonic() - start) * 1000)
+                result["reachable"] = resp.status_code < 500
+                result["response_time_ms"] = elapsed_ms
+                result["http_status"] = resp.status_code
+        except httpx.TimeoutException:
+            result["response_time_ms"] = 5000
+        except Exception:
+            pass
+        return result
+
+    results = await asyncio.gather(*[probe_store(s) for s in stores])
+
+    reachable_count = sum(1 for r in results if r["reachable"])
+    return {
+        "total_stores": len(results),
+        "reachable": reachable_count,
+        "unreachable": len(results) - reachable_count,
+        "stores": list(results),
     }
 
 # ── Models ──────────────────────────────────────────────────

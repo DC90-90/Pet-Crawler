@@ -51,6 +51,7 @@
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | GET | `/api/health` | No | System health: MongoDB, scheduler jobs, Playwright, last crawl, uptime |
+| GET | `/api/health/detailed` | Yes | Per-store connectivity probe: reachable, response time, HTTP status, last crawl |
 | GET | `/api/` | No | API root status message |
 | GET | `/api/scheduler/status` | Yes | APScheduler job listing |
 | POST | `/api/scheduler/toggle-pause` | Yes | Pause/resume all crawl jobs |
