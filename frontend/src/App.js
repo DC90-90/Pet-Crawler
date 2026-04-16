@@ -68,6 +68,7 @@ function AppLayout() {
           <Route path="/discounts" element={<ProtectedRoute><DiscountsPage /></ProtectedRoute>} />
           <Route path="/scanner" element={<ProtectedRoute><ScannerPage /></ProtectedRoute>} />
           <Route path="/stores" element={<ProtectedRoute><StoreRegistryPage /></ProtectedRoute>} />
+          <Route path="/stores/:storeId" element={<ProtectedRoute><CompetitorProfilePage /></ProtectedRoute>} />
         </Routes>
       </main>
     </div>

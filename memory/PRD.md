@@ -57,6 +57,14 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 - HTTP security headers middleware (CSP, nosniff, DENY, strict-origin)
 - PLATFORM_SUMMARY.md — complete API/page/crawler/DB reference
 
+### Code Quality Fixes (Done — Feb 2026)
+- Removed verify=False from SSL calls in health/detailed endpoint
+- Fixed hardcoded secrets in test file (now uses os.environ.get)
+- Clarified i18n.js has no API keys (pure local translation dictionary)
+- React hook dependencies verified clean (0 ESLint exhaustive-deps issues)
+- Replaced all index-as-key patterns with stable unique IDs (6 instances across 4 files)
+- Fixed missing /stores/:storeId route for CompetitorProfilePage in App.js
+
 ## What's MOCKED
 - Email alerts → logged to console (Resend not yet integrated)
 - Weekly digest delivery → logged to console
