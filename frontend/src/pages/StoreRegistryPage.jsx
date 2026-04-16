@@ -44,11 +44,16 @@ export default function StoreRegistryPage() {
   const [crawling, setCrawling] = useState({});
   const [expandedStore, setExpandedStore] = useState(null);
   const [crawlLogs, setCrawlLogs] = useState({});
+  const [crawlPaused, setCrawlPaused] = useState(false);
   const navigate = useNavigate();
 
   const fetchStores = useCallback(() => {
     setLoading(true);
-    api.get("/stores").then((r) => setStores(r.data)).catch(() => toast.error("Failed to load stores")).finally(() => setLoading(false));
+    api.get("/stores").then((r) => {
+      const data = r.data;
+      if (Array.isArray(data)) { setStores(data); }
+      else { setStores(data.stores || []); setCrawlPaused(data.crawl_paused || false); }
+    }).catch(() => toast.error("Failed to load stores")).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { fetchStores(); }, [fetchStores]);
@@ -117,9 +122,19 @@ export default function StoreRegistryPage() {
           <h1 className="text-2xl font-bold tracking-tight text-[#0A0A0A]">{t("nav_stores")}</h1>
           <p className="text-sm text-[#9CA3AF] mt-0.5">Manage tracked competitor stores</p>
         </div>
-        <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#002DF5] hover:bg-blue-700 text-white rounded-md text-xs" data-testid="add-store-btn">
-          <Plus className="w-3.5 h-3.5 me-1.5" />{t("btn_add_store")}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant={crawlPaused ? "destructive" : "outline"} size="sm"
+            onClick={async () => {
+              try { const r = await api.post("/scheduler/toggle-pause"); setCrawlPaused(r.data.crawl_paused); toast.success(r.data.message); }
+              catch { toast.error("Failed"); }
+            }}
+            className="rounded-md text-xs" data-testid="pause-crawls-btn">
+            {crawlPaused ? "Resume All Crawls" : "Pause All Crawls"}
+          </Button>
+          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#002DF5] hover:bg-blue-700 text-white rounded-md text-xs" data-testid="add-store-btn">
+            <Plus className="w-3.5 h-3.5 me-1.5" />{t("btn_add_store")}
+          </Button>
+        </div>
       </div>
 
       <div className="bg-white border border-[#E5E7EB] rounded-md overflow-hidden">
@@ -133,14 +148,15 @@ export default function StoreRegistryPage() {
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Crawl Status</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Tier</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_last_crawled")}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Next Crawl</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF] text-end">{t("col_actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12 text-[#9CA3AF] text-sm">{t("loading")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center py-12 text-[#9CA3AF] text-sm">{t("loading")}</TableCell></TableRow>
             ) : stores.length === 0 ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12 text-[#9CA3AF] text-sm">{t("no_data")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center py-12 text-[#9CA3AF] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : stores.map((s) => (
               <TableRow key={s.id} data-testid={`store-row-${s.id}`} className="hover:bg-[#F9FAFB] transition-colors group">
                 <TableCell>
@@ -162,8 +178,24 @@ export default function StoreRegistryPage() {
                 <TableCell><Badge variant="outline" className="text-[10px] capitalize rounded-md">{s.platform}</Badge></TableCell>
                 <TableCell><span className="text-sm font-medium">{s.product_count ?? 0}</span></TableCell>
                 <TableCell><CrawlStatusBadge status={s.last_crawl_status} /></TableCell>
-                <TableCell><TierBadge tier={s.last_crawl_tier} /></TableCell>
+                <TableCell>
+                  <div>
+                    <TierBadge tier={s.last_crawl_tier} />
+                    {s.last_crawl_endpoint && s.last_crawl_endpoint !== "none — tier 2 stub" && (
+                      <p className="text-[9px] text-[#9CA3AF] mt-0.5 font-mono truncate max-w-[100px]" title={s.last_crawl_endpoint}>{s.last_crawl_endpoint}</p>
+                    )}
+                  </div>
+                </TableCell>
                 <TableCell><span className="text-xs text-[#9CA3AF]">{formatDate(s.last_crawled_at)}</span></TableCell>
+                <TableCell>
+                  <div>
+                    <span className="text-xs text-[#4B5563]">{s.crawl_frequency_label}</span>
+                    {s.next_crawl_at && !crawlPaused && (
+                      <p className="text-[9px] text-[#9CA3AF]">{formatDate(s.next_crawl_at)}</p>
+                    )}
+                    {crawlPaused && <p className="text-[9px] text-red-400">Paused</p>}
+                  </div>
+                </TableCell>
                 <TableCell className="text-end">
                   <div className="flex items-center gap-1 justify-end">
                     <Button variant="ghost" size="sm" onClick={() => toggleExpand(s.id)} className="h-7 w-7 p-0 opacity-60 hover:opacity-100" data-testid={`expand-btn-${s.id}`}>
@@ -189,17 +221,28 @@ export default function StoreRegistryPage() {
             <div className="space-y-2">
               {crawlLogs[expandedStore].length === 0 && <p className="text-xs text-[#9CA3AF]">No crawl history yet</p>}
               {crawlLogs[expandedStore].map((log) => (
-                <div key={log.id} className="flex items-center gap-4 text-xs bg-white border border-[#E5E7EB] rounded-md px-3 py-2">
-                  <span className="text-[#9CA3AF] w-[110px] shrink-0">{formatDate(log.completed_at)}</span>
-                  <TierBadge tier={log.tier_used} />
-                  <span className={`font-medium ${log.tier_used ? "text-green-600" : "text-red-500"}`}>
-                    {log.tier_used ? "Success" : "Failed"}
-                  </span>
-                  {log.http_status > 0 && <span className="text-[#9CA3AF]">HTTP {log.http_status}</span>}
-                  <span className="text-[#4B5563]">{log.products_found} found</span>
-                  {log.products_new > 0 && <span className="text-green-600">+{log.products_new} new</span>}
-                  {log.snapshots_created > 0 && <span className="text-[#002DF5]">{log.snapshots_created} snapshots</span>}
-                  {log.error && <span className="text-red-400 truncate max-w-[250px]" title={log.error}>{log.error}</span>}
+                <div key={log.id} className="bg-white border border-[#E5E7EB] rounded-md px-3 py-2 space-y-1">
+                  <div className="flex items-center gap-4 text-xs">
+                    <span className="text-[#9CA3AF] w-[110px] shrink-0">{formatDate(log.completed_at)}</span>
+                    <TierBadge tier={log.tier_used} />
+                    <span className={`font-medium ${log.tier_used ? "text-green-600" : "text-red-500"}`}>
+                      {log.tier_used ? "Success" : "Failed"}
+                    </span>
+                    {log.endpoint_used && <span className="text-[10px] font-mono text-[#002DF5]">{log.endpoint_used}</span>}
+                    <span className="text-[#4B5563]">{log.products_found} found</span>
+                    {log.products_new > 0 && <span className="text-green-600">+{log.products_new} new</span>}
+                    {log.snapshots_created > 0 && <span className="text-[#002DF5]">{log.snapshots_created} snapshots</span>}
+                  </div>
+                  {log.endpoints_tried && log.endpoints_tried.length > 0 && (
+                    <div className="flex flex-wrap gap-2 ps-[110px]">
+                      {log.endpoints_tried.map((ep, idx) => (
+                        <span key={idx} className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ep.products > 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-500"}`} title={ep.error || ""}>
+                          {ep.endpoint} → {ep.status || "err"} {ep.products > 0 ? `(${ep.products})` : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {log.error && <p className="text-[10px] text-red-400 ps-[110px] truncate" title={log.error}>{log.error}</p>}
                 </div>
               ))}
             </div>

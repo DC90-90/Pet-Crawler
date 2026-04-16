@@ -1,12 +1,14 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell } from "lucide-react";
+import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
   { to: "/", icon: Package, labelKey: "nav_products" },
   { to: "/insights", icon: BarChart3, labelKey: "nav_insights" },
+  { to: "/scanner", icon: Zap, labelKey: "nav_scanner" },
+  { to: "/discounts", icon: Percent, labelKey: "nav_discounts" },
   { to: "/alerts", icon: Bell, labelKey: "nav_alerts" },
   { to: "/stores", icon: Store, labelKey: "nav_stores" },
 ];

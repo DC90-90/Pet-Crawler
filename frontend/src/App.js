@@ -11,6 +11,8 @@ import InsightsPage from "@/pages/InsightsPage";
 import StoreRegistryPage from "@/pages/StoreRegistryPage";
 import AlertsPage from "@/pages/AlertsPage";
 import CompetitorProfilePage from "@/pages/CompetitorProfilePage";
+import DiscountsPage from "@/pages/DiscountsPage";
+import ScannerPage from "@/pages/ScannerPage";
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -63,6 +65,8 @@ function AppLayout() {
           <Route path="/" element={<ProtectedRoute><MyProductsPage /></ProtectedRoute>} />
           <Route path="/insights" element={<ProtectedRoute><InsightsPage /></ProtectedRoute>} />
           <Route path="/alerts" element={<ProtectedRoute><AlertsPage /></ProtectedRoute>} />
+          <Route path="/discounts" element={<ProtectedRoute><DiscountsPage /></ProtectedRoute>} />
+          <Route path="/scanner" element={<ProtectedRoute><ScannerPage /></ProtectedRoute>} />
           <Route path="/stores" element={<ProtectedRoute><StoreRegistryPage /></ProtectedRoute>} />
         </Routes>
       </main>

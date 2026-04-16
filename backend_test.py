@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Daleel Pets Phase 2 Backend API Testing
-Tests all endpoints including new Phase 2 features:
-- Tier 1 crawler with real HTTP calls
-- Alerts CRUD operations
-- Store profiles and competitor analysis
-- Crawl logs and status tracking
+Daleel Pets Phase 3 Backend API Testing
+Tests all endpoints including new Phase 3 features:
+- Multi-endpoint Salla crawler (4 endpoints tried in sequence)
+- APScheduler for automated crawl scheduling (4h/8h)
+- Full Discounts page (top by %, top by SAR, timeline heatmap, aggression leaderboard)
+- Price Opportunity Scanner page (overpriced products, revenue uplift, quick win/overpriced risk badges)
+- Store API returns {stores: [...], crawl_paused: bool}
+- Scheduler status and toggle pause functionality
 """
 
 import requests
@@ -268,20 +270,27 @@ class DaleelPetsAPITester:
         )
 
     def test_stores_list(self):
-        """Test stores list endpoint"""
+        """Test stores list endpoint - Phase 3 returns {stores: [...], crawl_paused: bool}"""
         def check_stores(data):
-            return isinstance(data, list) and len(data) >= 7  # Should have 7 seeded stores
+            # Phase 3: API returns {stores: [...], crawl_paused: bool}
+            if isinstance(data, dict) and 'stores' in data and 'crawl_paused' in data:
+                stores = data['stores']
+                return isinstance(stores, list) and len(stores) >= 7  # Should have 7 seeded stores
+            # Fallback for old format
+            return isinstance(data, list) and len(data) >= 7
         
         success, data = self.run_test(
-            "Stores List",
+            "Stores List (Phase 3 format)",
             "GET",
             "stores",
             check_response=check_stores
         )
         
         # Store first store ID for crawl test
-        if success and data and len(data) > 0:
-            self.test_store_id = data[0].get('id')
+        if success and data:
+            stores = data.get('stores', data) if isinstance(data, dict) else data
+            if stores and len(stores) > 0:
+                self.test_store_id = stores[0].get('id')
         
         return success, data
 
@@ -467,9 +476,89 @@ class DaleelPetsAPITester:
             check_response=lambda data: 'message' in data
         )
 
+    # Phase 3 Test Methods
+    def test_discounts_top_pct(self):
+        """Test discounts top percentage endpoint"""
+        return self.run_test(
+            "Discounts Top Percentage",
+            "GET",
+            "discounts/top-pct",
+            check_response=lambda data: isinstance(data, list)
+        )
+
+    def test_discounts_top_amount(self):
+        """Test discounts top amount endpoint"""
+        return self.run_test(
+            "Discounts Top Amount",
+            "GET",
+            "discounts/top-amount",
+            check_response=lambda data: isinstance(data, list)
+        )
+
+    def test_discounts_timeline(self):
+        """Test discounts timeline heatmap endpoint"""
+        def check_timeline(data):
+            return 'timeline' in data and 'stores' in data and isinstance(data['timeline'], list)
+        
+        return self.run_test(
+            "Discounts Timeline",
+            "GET",
+            "discounts/timeline",
+            check_response=check_timeline
+        )
+
+    def test_discounts_aggression(self):
+        """Test discounts aggression leaderboard endpoint"""
+        def check_aggression(data):
+            return isinstance(data, list) and (len(data) == 0 or 'store' in data[0] and 'score' in data[0])
+        
+        return self.run_test(
+            "Discounts Aggression Leaderboard",
+            "GET",
+            "discounts/aggression",
+            check_response=check_aggression
+        )
+
+    def test_scanner_opportunities(self):
+        """Test price scanner opportunities endpoint"""
+        def check_opportunities(data):
+            required_fields = ['summary', 'opportunities', 'well_positioned', 'undercut']
+            return all(field in data for field in required_fields)
+        
+        return self.run_test(
+            "Scanner Opportunities",
+            "GET",
+            "scanner/opportunities?days=14",
+            check_response=check_opportunities
+        )
+
+    def test_scheduler_status(self):
+        """Test scheduler status endpoint"""
+        def check_scheduler(data):
+            return 'crawl_paused' in data and 'jobs' in data and 'total_jobs' in data
+        
+        return self.run_test(
+            "Scheduler Status",
+            "GET",
+            "scheduler/status",
+            check_response=check_scheduler
+        )
+
+    def test_scheduler_toggle_pause(self):
+        """Test scheduler toggle pause endpoint"""
+        def check_toggle(data):
+            return 'crawl_paused' in data and 'message' in data
+        
+        return self.run_test(
+            "Scheduler Toggle Pause",
+            "POST",
+            "scheduler/toggle-pause",
+            check_response=check_toggle
+        )
+
     def run_all_tests(self):
         """Run all API tests"""
-        print("🚀 Starting Daleel Pets API Tests...")
+        print("🚀 Starting Daleel Pets Phase 3 API Tests...")
         print(f"Testing against: {self.api_url}")
         print("=" * 60)
         
@@ -512,6 +601,19 @@ class DaleelPetsAPITester:
         self.test_alerts_check()
         self.test_alerts_feed()
         self.test_alerts_delete()
+        
+        # Phase 3 Tests - Discounts
+        self.test_discounts_top_pct()
+        self.test_discounts_top_amount()
+        self.test_discounts_timeline()
+        self.test_discounts_aggression()
+        
+        # Phase 3 Tests - Scanner
+        self.test_scanner_opportunities()
+        
+        # Phase 3 Tests - Scheduler
+        self.test_scheduler_status()
+        self.test_scheduler_toggle_pause()
         
         # Test export
         self.test_export_csv()

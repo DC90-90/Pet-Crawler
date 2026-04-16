@@ -12,6 +12,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 from bson import ObjectId
 from starlette.responses import StreamingResponse
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -23,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Daleel Pets API")
 router = APIRouter(prefix="/api")
+scheduler = AsyncIOScheduler()
+crawl_paused = False
 
 # ── Auth Utilities ──────────────────────────────────────────
 def hash_pw(pw):
@@ -512,53 +516,134 @@ def extract_weight(name):
     return 0
 
 async def crawl_salla_tier1(store):
-    """Tier 1: Attempt to fetch products from Salla public JSON endpoint."""
+    """Tier 1: Try multiple Salla public JSON endpoints in sequence. Cache working endpoint."""
     domain = store["domain"]
     base = f"https://{domain}"
+    cached_endpoint = store.get("working_endpoint")
+
+    SALLA_ENDPOINTS = [
+        {"url": f"{base}/api/v2/products", "params": {"per_page": 50, "page": 1}, "tag": "/api/v2/products"},
+        {"url": f"{base}/products.json", "params": {"limit": 250, "page": 1}, "tag": "/products.json"},
+        {"url": f"{base}/api/store/products", "params": {"limit": 50, "page": 1}, "tag": "/api/store/products"},
+        {"url": f"{base}/api/product/list", "params": {"per_page": 50, "page": 1}, "tag": "/api/product/list"},
+    ]
+
+    # If we have a cached working endpoint, try it first
+    if cached_endpoint:
+        matching = [e for e in SALLA_ENDPOINTS if e["tag"] == cached_endpoint]
+        others = [e for e in SALLA_ENDPOINTS if e["tag"] != cached_endpoint]
+        SALLA_ENDPOINTS = matching + others
+
     crawl_log = {
         "id": str(uuid.uuid4()), "store_id": store["id"], "store_name": store["name"],
         "tier_attempted": 1, "tier_used": None, "http_status": None,
         "products_found": 0, "products_new": 0, "products_updated": 0,
-        "snapshots_created": 0, "error": None,
+        "snapshots_created": 0, "error": None, "endpoint_used": None,
+        "endpoints_tried": [],
         "started_at": datetime.now(timezone.utc).isoformat(),
         "completed_at": None,
     }
+
     all_raw = []
+    winning_endpoint = None
+
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers={
-            "User-Agent": "Mozilla/5.0 (compatible; DaleelPets/1.0)",
-            "Accept": "application/json",
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/html, */*",
         }) as http:
-            page = 1
-            while page <= 20:
-                url = f"{base}/api/product/list"
-                resp = await http.get(url, params={"per_page": 50, "page": page})
-                crawl_log["http_status"] = resp.status_code
-                if resp.status_code != 200:
-                    crawl_log["error"] = f"HTTP {resp.status_code} from {url}"
-                    break
-                body = resp.json()
-                items = body.get("data", body.get("products", []))
-                if not items:
-                    break
-                all_raw.extend(items)
-                page += 1
-                if len(items) < 50:
-                    break
-    except httpx.TimeoutException:
-        crawl_log["error"] = f"Timeout connecting to {base}"
-        crawl_log["http_status"] = 0
+            for ep in SALLA_ENDPOINTS:
+                attempt = {"endpoint": ep["tag"], "status": None, "products": 0, "error": None}
+                try:
+                    resp = await http.get(ep["url"], params=ep["params"])
+                    attempt["status"] = resp.status_code
+                    if resp.status_code == 200:
+                        try:
+                            body = resp.json()
+                        except Exception:
+                            attempt["error"] = "Non-JSON response"
+                            crawl_log["endpoints_tried"].append(attempt)
+                            continue
+                        items = body.get("data", body.get("products", []))
+                        if isinstance(items, list) and len(items) >= 5:
+                            all_raw = items
+                            winning_endpoint = ep
+                            attempt["products"] = len(items)
+                            crawl_log["endpoints_tried"].append(attempt)
+                            # Paginate through remaining pages
+                            page = 2
+                            page_key = "page"
+                            limit_key = list(ep["params"].keys())[0]
+                            limit_val = ep["params"][limit_key]
+                            while page <= 20:
+                                params = {limit_key: limit_val, page_key: page}
+                                r2 = await http.get(ep["url"], params=params)
+                                if r2.status_code != 200:
+                                    break
+                                try:
+                                    more = r2.json().get("data", r2.json().get("products", []))
+                                except Exception:
+                                    break
+                                if not more:
+                                    break
+                                all_raw.extend(more)
+                                page += 1
+                                if len(more) < limit_val:
+                                    break
+                            break  # Found working endpoint
+                        else:
+                            attempt["products"] = len(items) if isinstance(items, list) else 0
+                            attempt["error"] = f"Only {attempt['products']} products (need 5+)"
+                    else:
+                        attempt["error"] = f"HTTP {resp.status_code}"
+                except httpx.TimeoutException:
+                    attempt["status"] = 0
+                    attempt["error"] = "Timeout"
+                except Exception as e:
+                    attempt["status"] = 0
+                    attempt["error"] = str(e)[:100]
+                crawl_log["endpoints_tried"].append(attempt)
+
     except Exception as e:
         crawl_log["error"] = str(e)[:300]
-        crawl_log["http_status"] = 0
 
     now = datetime.now(timezone.utc)
-    if all_raw:
+    if all_raw and winning_endpoint:
         crawl_log["tier_used"] = 1
+        crawl_log["http_status"] = 200
+        crawl_log["endpoint_used"] = winning_endpoint["tag"]
         crawl_log["products_found"] = len(all_raw)
-        new_count = 0
-        snap_count = 0
-        for raw in all_raw:
+        # Cache the working endpoint
+        await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
+        # Process products
+        new_count, snap_count = await _process_crawled_products(store, all_raw, now)
+        crawl_log["products_new"] = new_count
+        crawl_log["products_updated"] = len(all_raw) - new_count
+        crawl_log["snapshots_created"] = snap_count
+    else:
+        last_attempt = crawl_log["endpoints_tried"][-1] if crawl_log["endpoints_tried"] else {}
+        crawl_log["http_status"] = last_attempt.get("status", 0)
+        crawl_log["error"] = f"Tier 1 exhausted — all {len(SALLA_ENDPOINTS)} endpoints failed. Escalating to Tier 2. Last: {last_attempt.get('error', 'unknown')}"
+        crawl_log["endpoint_used"] = "none — tier 2 stub"
+
+    crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
+    await db.crawl_logs.insert_one(crawl_log)
+    await db.stores.update_one({"id": store["id"]}, {"$set": {
+        "last_crawled_at": crawl_log["completed_at"],
+        "last_crawl_tier": crawl_log["tier_used"],
+        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
+        "last_crawl_error": crawl_log["error"],
+        "last_crawl_products": crawl_log["products_found"],
+        "last_crawl_endpoint": crawl_log["endpoint_used"],
+    }})
+    logger.info(f"Crawl {store['name']}: tier={crawl_log['tier_used']}, endpoint={crawl_log.get('endpoint_used')}, found={crawl_log['products_found']}, new={crawl_log['products_new']}, error={crawl_log['error']}")
+    return crawl_log
+
+async def _process_crawled_products(store, all_raw, now):
+    """Process raw product data from any crawler tier into products + snapshots."""
+    new_count = 0
+    snap_count = 0
+    for raw in all_raw:
             name_ar = raw.get("name", raw.get("title", ""))
             sku_raw = raw.get("sku") or raw.get("mpn") or f"S-{store['name'][:2].upper()}-{raw.get('id', uuid.uuid4().hex[:6])}"
             price_field = raw.get("price", 0)
@@ -610,24 +695,54 @@ async def crawl_salla_tier1(store):
             })
             snap_count += 1
 
-        crawl_log["products_new"] = new_count
-        crawl_log["products_updated"] = len(all_raw) - new_count
-        crawl_log["snapshots_created"] = snap_count
-    else:
-        if not crawl_log["error"]:
-            crawl_log["error"] = "No products returned from endpoint"
+    return new_count, snap_count
 
-    crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
-    await db.crawl_logs.insert_one(crawl_log)
-    await db.stores.update_one({"id": store["id"]}, {"$set": {
-        "last_crawled_at": crawl_log["completed_at"],
-        "last_crawl_tier": crawl_log["tier_used"],
-        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
-        "last_crawl_error": crawl_log["error"],
-        "last_crawl_products": crawl_log["products_found"],
-    }})
-    logger.info(f"Crawl {store['name']}: tier={crawl_log['tier_used']}, found={crawl_log['products_found']}, new={crawl_log['products_new']}, error={crawl_log['error']}")
-    return crawl_log
+# ── Scheduler Helpers ────────────────────────────────────────
+async def scheduled_crawl_job(store_id: str):
+    """Run by APScheduler for automated crawls."""
+    global crawl_paused
+    if crawl_paused:
+        logger.info(f"Scheduler: Skipping {store_id} — crawls paused")
+        return
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not store or not store.get("is_active", True):
+        return
+    platform = store.get("platform", "").lower()
+    if platform == "salla":
+        await crawl_salla_tier1(store)
+    else:
+        logger.info(f"Scheduler: Skipping {store['name']} — {platform} crawler not implemented")
+
+def register_crawl_job(store_id, store_name, priority, offset_minutes=0):
+    """Register a crawl job for a store in the scheduler."""
+    job_id = f"crawl_{store_id}"
+    hours = 4 if priority <= 1 else 8
+    try:
+        scheduler.remove_job(job_id)
+    except Exception:
+        pass
+    scheduler.add_job(
+        scheduled_crawl_job, IntervalTrigger(hours=hours),
+        id=job_id, args=[store_id],
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=offset_minutes + 2),
+        replace_existing=True,
+    )
+    logger.info(f"Scheduler: Registered {store_name} every {hours}h (offset +{offset_minutes}min)")
+
+def unregister_crawl_job(store_id):
+    try:
+        scheduler.remove_job(f"crawl_{store_id}")
+    except Exception:
+        pass
+
+def get_next_run(store_id):
+    try:
+        job = scheduler.get_job(f"crawl_{store_id}")
+        if job and job.next_run_time:
+            return job.next_run_time.isoformat()
+    except Exception:
+        pass
+    return None
 
 # ── Store Routes ────────────────────────────────────────────
 @router.get("/stores")
@@ -636,7 +751,11 @@ async def list_stores(user=Depends(get_user)):
     for s in stores:
         s["product_count"] = await db.product_snapshots.distinct("sku", {"store_id": s["id"]})
         s["product_count"] = len(s["product_count"])
-    return stores
+        s["next_crawl_at"] = get_next_run(s["id"])
+        hrs = 4 if s.get("priority", 3) <= 1 else 8
+        s["crawl_frequency_label"] = f"Every {hrs}h"
+    s_paused = crawl_paused
+    return {"stores": stores, "crawl_paused": s_paused}
 
 @router.post("/stores")
 async def create_store(data: StoreIn, user=Depends(get_user)):
@@ -653,6 +772,7 @@ async def create_store(data: StoreIn, user=Depends(get_user)):
     }
     await db.stores.insert_one(doc)
     doc.pop("_id", None)
+    register_crawl_job(doc["id"], doc["name"], doc.get("priority", 3), 0)
     return doc
 
 @router.put("/stores/{store_id}")
@@ -670,6 +790,7 @@ async def delete_store(store_id: str, user=Depends(get_user)):
     r = await db.stores.delete_one({"id": store_id})
     if r.deleted_count == 0:
         raise HTTPException(404, "Not found")
+    unregister_crawl_job(store_id)
     return {"message": "Deleted"}
 
 @router.post("/stores/{store_id}/crawl")
@@ -712,6 +833,23 @@ async def trigger_crawl(store_id: str, user=Depends(get_user)):
 async def get_crawl_logs(store_id: str, limit: int = Query(10), user=Depends(get_user)):
     logs = await db.crawl_logs.find({"store_id": store_id}, {"_id": 0}).sort("completed_at", -1).limit(limit).to_list(limit)
     return logs
+
+@router.post("/scheduler/toggle-pause")
+async def toggle_pause_crawls(user=Depends(get_user)):
+    global crawl_paused
+    crawl_paused = not crawl_paused
+    return {"crawl_paused": crawl_paused, "message": f"Crawls {'paused' if crawl_paused else 'resumed'}"}
+
+@router.get("/scheduler/status")
+async def scheduler_status(user=Depends(get_user)):
+    jobs = []
+    for job in scheduler.get_jobs():
+        jobs.append({
+            "id": job.id,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+        })
+    return {"crawl_paused": crawl_paused, "jobs": jobs, "total_jobs": len(jobs)}
+
 
 # ── Helper: compute product metrics from snapshots ──────────
 def compute_product_metrics(snapshots_by_store, days):
@@ -1186,38 +1324,198 @@ async def create_filter(data: SavedFilterIn, user=Depends(get_user)):
     doc.pop("_id", None)
     return doc
 
-# ── Discounts (stubs for future) ───────────────────────────
-@router.get("/discounts")
-async def list_discounts(days: int = Query(30), user=Depends(get_user)):
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    pipeline = [
-        {"$match": {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}},
-        {"$sort": {"discount_pct": -1}},
-        {"$limit": 20},
-        {"$project": {"_id": 0}},
-    ]
-    discounts = await db.product_snapshots.aggregate(pipeline).to_list(20)
-    for d in discounts:
-        p = await db.products.find_one({"id": d["product_id"]}, {"_id": 0, "name_ar": 1, "name_en": 1, "sku": 1})
-        if p:
-            d.update(p)
-        if isinstance(d.get("crawled_at"), datetime):
-            d["crawled_at"] = d["crawled_at"].isoformat()
-    return discounts
-
+# ── Discounts ────────────────────────────────────────────────
 @router.get("/discounts/top-pct")
-async def top_discounts_pct(user=Depends(get_user)):
-    return await list_discounts(days=30, user=user)
+async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}
+    if store_id and store_id != "all": match["store_id"] = store_id
+    pipeline = [
+        {"$match": match}, {"$sort": {"crawled_at": -1}},
+        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "original_price": {"$first": "$original_price"}, "discount_pct": {"$first": "$discount_pct"}, "store_name": {"$first": "$store_name"}, "crawled_at": {"$first": "$crawled_at"}, "sku": {"$first": "$sku"}}},
+        {"$sort": {"discount_pct": -1}}, {"$limit": limit},
+    ]
+    results = await db.product_snapshots.aggregate(pipeline).to_list(limit)
+    out = []
+    for r in results:
+        p = await db.products.find_one({"sku": r["sku"]}, {"_id": 0, "name_ar": 1, "name_en": 1, "category": 1, "image_url": 1})
+        if p and (not category or category == "all" or p.get("category") == category):
+            ca = r["crawled_at"]
+            if isinstance(ca, datetime):
+                if ca.tzinfo is None:
+                    ca = ca.replace(tzinfo=timezone.utc)
+                days_on_sale = (datetime.now(timezone.utc) - ca).days
+            else:
+                days_on_sale = 0
+            out.append({**p, "sku": r["sku"], "store_name": r["store_name"], "price": r["price"], "original_price": r["original_price"],
+                "discount_pct": r["discount_pct"], "savings_sar": round(r["original_price"] - r["price"], 2), "days_on_sale": days_on_sale})
+    return out
 
 @router.get("/discounts/top-amount")
-async def top_discounts_amount(user=Depends(get_user)):
+async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}
+    if store_id and store_id != "all": match["store_id"] = store_id
     pipeline = [
-        {"$match": {"discount_pct": {"$gt": 0}}},
-        {"$project": {"_id": 0, "sku": 1, "store_name": 1, "price": 1, "original_price": 1, "discount_pct": 1, "discount_amount": {"$subtract": ["$original_price", "$price"]}}},
-        {"$sort": {"discount_amount": -1}},
-        {"$limit": 20},
+        {"$match": match}, {"$sort": {"crawled_at": -1}},
+        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "original_price": {"$first": "$original_price"}, "discount_pct": {"$first": "$discount_pct"}, "store_name": {"$first": "$store_name"}, "crawled_at": {"$first": "$crawled_at"}, "sku": {"$first": "$sku"}}},
+        {"$project": {"price": 1, "original_price": 1, "discount_pct": 1, "store_name": 1, "crawled_at": 1, "sku": 1, "savings": {"$subtract": ["$original_price", "$price"]}}},
+        {"$sort": {"savings": -1}}, {"$limit": limit},
     ]
-    return await db.product_snapshots.aggregate(pipeline).to_list(20)
+    results = await db.product_snapshots.aggregate(pipeline).to_list(limit)
+    out = []
+    for r in results:
+        p = await db.products.find_one({"sku": r["sku"]}, {"_id": 0, "name_ar": 1, "name_en": 1, "category": 1, "image_url": 1})
+        if p and (not category or category == "all" or p.get("category") == category):
+            out.append({**p, "sku": r["sku"], "store_name": r["store_name"], "price": r["price"], "original_price": r["original_price"],
+                "discount_pct": r["discount_pct"], "savings_sar": round(r["savings"], 2)})
+    return out
+
+@router.get("/discounts/timeline")
+async def discount_timeline(user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=90)
+    pipeline = [
+        {"$match": {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}},
+        {"$project": {"store_name": 1, "week": {"$dateToString": {"format": "%Y-W%V", "date": "$crawled_at"}}, "discount_pct": 1}},
+        {"$group": {"_id": {"store": "$store_name", "week": "$week"}, "count": {"$sum": 1}, "avg_depth": {"$avg": "$discount_pct"}}},
+        {"$sort": {"_id.week": 1}},
+    ]
+    data = await db.product_snapshots.aggregate(pipeline).to_list(1000)
+    stores_set = set()
+    weeks_set = set()
+    grid = {}
+    for d in data:
+        s, w = d["_id"]["store"], d["_id"]["week"]
+        stores_set.add(s)
+        weeks_set.add(w)
+        grid[(s, w)] = {"count": d["count"], "avg_depth": round(d["avg_depth"], 1)}
+    weeks = sorted(weeks_set)
+    stores = sorted(stores_set)
+    timeline = []
+    for w in weeks:
+        row = {"week": w}
+        for s in stores:
+            cell = grid.get((s, w))
+            row[s] = cell["count"] if cell else 0
+            row[f"{s}_depth"] = cell["avg_depth"] if cell else 0
+        timeline.append(row)
+    return {"timeline": timeline, "stores": stores, "weeks": weeks}
+
+@router.get("/discounts/aggression")
+async def discount_aggression(user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=90)
+    stores = await db.stores.find({"is_active": True}, {"_id": 0, "id": 1, "name": 1}).to_list(20)
+    leaderboard = []
+    for store in stores:
+        pipeline = [
+            {"$match": {"store_id": store["id"], "crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}},
+            {"$group": {"_id": None, "avg_depth": {"$avg": "$discount_pct"}, "max_disc": {"$max": "$discount_pct"}, "total_discounted": {"$sum": 1}}},
+        ]
+        result = await db.product_snapshots.aggregate(pipeline).to_list(1)
+        total_snaps = await db.product_snapshots.count_documents({"store_id": store["id"], "crawled_at": {"$gte": since}})
+        if result:
+            r = result[0]
+            avg_depth = round(r["avg_depth"], 1)
+            max_disc = r["max_disc"]
+            freq = round(r["total_discounted"] / max(total_snaps, 1) * 100, 1)
+            score = round(avg_depth * 0.4 + freq * 0.35 + max_disc * 0.25, 1)
+            leaderboard.append({"store": store["name"], "score": min(100, score), "avg_depth": avg_depth, "frequency": freq, "max_discount": max_disc})
+        else:
+            leaderboard.append({"store": store["name"], "score": 0, "avg_depth": 0, "frequency": 0, "max_discount": 0})
+    leaderboard.sort(key=lambda x: x["score"], reverse=True)
+    if leaderboard:
+        leaderboard[0]["label"] = "Most Aggressive"
+        leaderboard[-1]["label"] = "Most Stable Pricing"
+        max_single = max(leaderboard, key=lambda x: x["max_discount"])
+        for l in leaderboard:
+            if l["store"] == max_single["store"] and "label" not in l:
+                l["label"] = "Highest Single Discount"
+    return leaderboard
+
+# ── Price Opportunity Scanner ────────────────────────────────
+@router.get("/scanner/opportunities")
+async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    snaps = await db.product_snapshots.find({"crawled_at": {"$gte": since}}, {"_id": 0}).sort("crawled_at", -1).to_list(100000)
+    # Group latest per sku per store
+    latest = {}
+    for s in snaps:
+        key = (s["sku"], s["store_id"])
+        if key not in latest:
+            latest[key] = s
+    # Group by sku
+    by_sku = {}
+    for (sku, sid), s in latest.items():
+        by_sku.setdefault(sku, []).append(s)
+    # Compute sales velocity per sku
+    all_snaps_sorted = {}
+    for s in snaps:
+        all_snaps_sorted.setdefault((s["sku"], s["store_id"]), []).append(s)
+    sku_sales = {}
+    for (sku, sid), sl in all_snaps_sorted.items():
+        sl.sort(key=lambda x: x["crawled_at"])
+        sold = 0
+        for i in range(1, len(sl)):
+            d = sl[i-1].get("qty_available", 0) - sl[i].get("qty_available", 0)
+            if d > 0: sold += d
+        sku_sales[(sku, sid)] = sold
+    # Build opportunities
+    products = await db.products.find({}, {"_id": 0}).to_list(500)
+    prod_map = {p["sku"]: p for p in products}
+    opportunities = []
+    total_overpriced = 0
+    total_uplift = 0
+    zero_sales_overpriced = 0
+    for sku, store_snaps in by_sku.items():
+        if len(store_snaps) < 2: continue
+        prices = [s["price"] for s in store_snaps if s["price"] > 0]
+        if not prices: continue
+        min_price = min(prices)
+        avg_price = statistics.mean(prices)
+        max_price = max(prices)
+        for s in store_snaps:
+            if s["price"] <= 0: continue
+            gap_pct = round((s["price"] - min_price) / min_price * 100, 1) if min_price > 0 else 0
+            if gap_pct < 10: continue
+            total_sold_market = sum(sku_sales.get((sku, st["store_id"]), 0) for st in store_snaps)
+            my_sold = sku_sales.get((sku, s["store_id"]), 0)
+            uplift = round((s["price"] - min_price) * total_sold_market / max(len(store_snaps), 1), 2)
+            p = prod_map.get(sku, {})
+            badge = "overpriced_risk" if gap_pct >= 25 and my_sold == 0 else "quick_win" if uplift >= 500 and s.get("qty_available", 0) > 0 else "overpriced"
+            if badge == "overpriced_risk": zero_sales_overpriced += 1
+            total_overpriced += 1
+            total_uplift += uplift
+            opportunities.append({
+                "sku": sku, "name_ar": p.get("name_ar", sku), "name_en": p.get("name_en", ""), "category": p.get("category", ""),
+                "image_url": p.get("image_url", ""), "store_name": s["store_name"], "store_id": s["store_id"],
+                "my_price": s["price"], "market_lowest": min_price, "market_avg": round(avg_price, 2),
+                "gap_pct": gap_pct, "units_sold": my_sold, "market_sold": total_sold_market,
+                "revenue_uplift": uplift, "badge": badge, "num_sellers": len(store_snaps),
+                "in_stock": s.get("in_stock", False), "qty": s.get("qty_available", 0),
+            })
+    opportunities.sort(key=lambda x: x["revenue_uplift"], reverse=True)
+    # Also find well-positioned and undercut opportunities
+    well_positioned = []
+    undercut = []
+    for sku, store_snaps in by_sku.items():
+        prices = [s["price"] for s in store_snaps if s["price"] > 0]
+        if len(prices) < 2: continue
+        min_p, avg_p = min(prices), statistics.mean(prices)
+        for s in store_snaps:
+            gap = abs(s["price"] - avg_p) / avg_p * 100 if avg_p > 0 else 0
+            if gap <= 5:
+                p = prod_map.get(sku, {})
+                well_positioned.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_p, 2), "store_name": s["store_name"]})
+            if s["price"] == min_p and s["price"] < avg_p * 0.95:
+                total_sold_market = sum(sku_sales.get((sku, st["store_id"]), 0) for st in store_snaps)
+                p = prod_map.get(sku, {})
+                undercut.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_p, 2), "store_name": s["store_name"], "market_sold": total_sold_market})
+    return {
+        "summary": {"overpriced_count": total_overpriced, "total_uplift_sar": round(total_uplift, 2), "zero_sales_overpriced": zero_sales_overpriced},
+        "opportunities": opportunities[:50],
+        "well_positioned": well_positioned[:20],
+        "undercut": undercut[:20],
+    }
 
 # ── Alerts ───────────────────────────────────────────────────
 ALERT_TYPES = ["price_drop", "price_increase", "out_of_stock", "back_in_stock", "low_stock"]
@@ -1468,7 +1766,16 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await seed_database()
+    # Register crawl jobs for all active stores
+    stores = await db.stores.find({"is_active": True}, {"_id": 0}).to_list(100)
+    for idx, s in enumerate(stores):
+        register_crawl_job(s["id"], s["name"], s.get("priority", 3), idx * 15)
+    if not scheduler.running:
+        scheduler.start()
+    logger.info(f"Scheduler started with {len(stores)} crawl jobs")
 
 @app.on_event("shutdown")
 async def shutdown():
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
     client.close()
