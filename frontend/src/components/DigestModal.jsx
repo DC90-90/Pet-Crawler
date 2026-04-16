@@ -108,7 +108,7 @@ function Section({ title, items, renderItem }) {
     <div>
       <h4 className="text-xs font-semibold text-[#0A0A0A] mb-2">{title}</h4>
       <div className="space-y-2 border border-[#E5E7EB] rounded-md divide-y divide-[#F3F4F6]">
-        {items.map((item, i) => <div key={i} className="px-3 py-2">{renderItem(item)}</div>)}
+        {items.map((item, i) => <div key={item.sku || item.name_ar || `digest-item-${i}`} className="px-3 py-2">{renderItem(item)}</div>)}
       </div>
     </div>
   );

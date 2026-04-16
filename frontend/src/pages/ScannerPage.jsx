@@ -129,8 +129,8 @@ export default function ScannerPage() {
         <div className="bg-white border border-[#E5E7EB] rounded-md p-5">
           <h3 className="text-sm font-semibold text-[#0A0A0A] mb-3 flex items-center gap-1.5"><Shield className="w-4 h-4 text-green-500" />Well Positioned ({well_positioned.length})</h3>
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
-            {well_positioned.slice(0, 10).map((w, i) => (
-              <div key={`wp-${i}`} className="flex items-center justify-between py-1.5 border-b border-[#F3F4F6] last:border-0">
+            {well_positioned.slice(0, 10).map((w) => (
+              <div key={`wp-${w.sku}-${w.store_name}`} className="flex items-center justify-between py-1.5 border-b border-[#F3F4F6] last:border-0">
                 <div><p className="text-xs font-medium text-[#0A0A0A]">{w.name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{w.store_name}</p></div>
                 <div className="text-end"><p className="text-xs font-semibold">{w.price} ﷼</p><p className="text-[10px] text-[#9CA3AF]">avg {w.market_avg} ﷼</p></div>
               </div>
@@ -141,8 +141,8 @@ export default function ScannerPage() {
         <div className="bg-white border border-[#E5E7EB] rounded-md p-5">
           <h3 className="text-sm font-semibold text-[#0A0A0A] mb-3 flex items-center gap-1.5"><Zap className="w-4 h-4 text-[#002DF5]" />Undercut Opportunities ({undercut.length})</h3>
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
-            {undercut.slice(0, 10).map((u, i) => (
-              <div key={`uc-${i}`} className="flex items-center justify-between py-1.5 border-b border-[#F3F4F6] last:border-0">
+            {undercut.slice(0, 10).map((u) => (
+              <div key={`uc-${u.sku}-${u.store_name}`} className="flex items-center justify-between py-1.5 border-b border-[#F3F4F6] last:border-0">
                 <div><p className="text-xs font-medium text-[#0A0A0A]">{u.name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{u.store_name} — lowest price</p></div>
                 <div className="text-end"><p className="text-xs font-semibold text-[#002DF5]">{u.price} ﷼</p><p className="text-[10px] text-[#9CA3AF]">mkt avg {u.market_avg} ﷼</p></div>
               </div>
@@ -181,8 +181,8 @@ export default function ScannerPage() {
                       <YAxis tick={{ fontSize: 9 }} />
                       <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v) => [`${v} ﷼`, "Price"]} />
                       <Bar dataKey="price" radius={[2, 2, 0, 0]}>
-                        {buildPriceDist().map((entry, idx) => (
-                          <Cell key={idx} fill={entry.store === selectedOpp.store_name ? "#FF3B30" : "#002DF5"} />
+                        {buildPriceDist().map((entry) => (
+                          <Cell key={entry.store} fill={entry.store === selectedOpp.store_name ? "#FF3B30" : "#002DF5"} />
                         ))}
                       </Bar>
                     </BarChart>

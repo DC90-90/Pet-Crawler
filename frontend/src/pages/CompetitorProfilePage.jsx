@@ -123,7 +123,7 @@ export default function CompetitorProfilePage() {
             <ResponsiveContainer width="100%" height={240}>
               <PieChart>
                 <Pie data={category_distribution} dataKey="count" nameKey="category" cx="50%" cy="50%" outerRadius={80} label={({ category, percent }) => `${category} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
-                  {category_distribution.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                  {category_distribution.map((cat) => <Cell key={cat.category} fill={PIE_COLORS[category_distribution.indexOf(cat) % PIE_COLORS.length]} />)}
                 </Pie>
                 <Tooltip />
               </PieChart>

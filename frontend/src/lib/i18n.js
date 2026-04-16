@@ -1,5 +1,8 @@
 import { createContext, useContext, useState, useCallback } from "react";
 
+// Local translation dictionary — no external translation API is used.
+// To integrate a translation service (e.g., i18next-http-backend), add REACT_APP_I18N_KEY to .env
+// and configure the backend plugin here.
 const translations = {
   en: {
     app_name: "Daleel Pets", app_name_ar: "دليل بيتس", subtitle: "KSA Pet Market Intelligence",

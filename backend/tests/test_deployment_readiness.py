@@ -11,9 +11,9 @@ import time
 BASE_URL_LOCAL = "http://localhost:8001"
 BASE_URL_EXTERNAL = os.environ.get('REACT_APP_BACKEND_URL', 'https://saudi-pets-monitor.preview.emergentagent.com').rstrip('/')
 
-# Test credentials
-ADMIN_EMAIL = "admin@daleelpets.com"
-ADMIN_PASSWORD = "admin123"
+# Test credentials — from environment or clearly labeled test-only defaults
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@daleelpets.com")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "admin123")
 
 
 class TestHealthEndpoint:

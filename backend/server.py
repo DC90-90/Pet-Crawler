@@ -171,7 +171,7 @@ async def health_detailed(user=Depends(get_user)):
             "last_successful_crawl": store.get("last_crawled_at"),
         }
         try:
-            async with httpx.AsyncClient(timeout=5, follow_redirects=True, verify=False) as client_http:
+            async with httpx.AsyncClient(timeout=5, follow_redirects=True) as client_http:
                 start = time.monotonic()
                 resp = await client_http.head(url)
                 elapsed_ms = round((time.monotonic() - start) * 1000)
@@ -180,7 +180,10 @@ async def health_detailed(user=Depends(get_user)):
                 result["http_status"] = resp.status_code
         except httpx.TimeoutException:
             result["response_time_ms"] = 5000
-        except Exception:
+        except Exception as exc:
+            ssl_err = "ssl" in str(type(exc).__name__).lower() or "ssl" in str(exc).lower()
+            if ssl_err:
+                result["http_status"] = "SSL_ERROR"
             pass
         return result
 

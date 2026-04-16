@@ -235,8 +235,8 @@ export default function StoreRegistryPage() {
                   </div>
                   {log.endpoints_tried && log.endpoints_tried.length > 0 && (
                     <div className="flex flex-wrap gap-2 ps-[110px]">
-                      {log.endpoints_tried.map((ep, idx) => (
-                        <span key={idx} className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ep.products > 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-500"}`} title={ep.error || ""}>
+                      {log.endpoints_tried.map((ep) => (
+                        <span key={`${ep.endpoint}-${ep.status}`} className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ep.products > 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-500"}`} title={ep.error || ""}>
                           {ep.endpoint} → {ep.status || "err"} {ep.products > 0 ? `(${ep.products})` : ""}
                         </span>
                       ))}
