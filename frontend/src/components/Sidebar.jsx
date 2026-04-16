@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap } from "lucide-react";
+import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
@@ -61,6 +61,20 @@ export default function Sidebar() {
           <Languages className="w-3.5 h-3.5" />
           {t("lang_switch")}
         </Button>
+        <NavLink
+          to="/settings"
+          data-testid="nav-settings"
+          className={({ isActive }) =>
+            `flex items-center gap-2 w-full px-3 py-2 rounded-md text-xs transition-colors duration-200 ${
+              isActive
+                ? "bg-[#002DF5] text-white font-medium"
+                : "text-[#4B5563] hover:bg-[#F3F4F6] hover:text-[#0A0A0A]"
+            }`
+          }
+        >
+          <Settings className="w-3.5 h-3.5" />
+          {t("lang_switch") === "English" ? "الإعدادات" : "Settings"}
+        </NavLink>
         {user && (
           <>
             <div className="px-3 py-1">

@@ -23,8 +23,30 @@ from crawlers import (
     crawl_store_waterfall, process_crawled_products,
     extract_brand, guess_category, guess_animal, extract_weight,
 )
+from cryptography.fernet import Fernet, InvalidToken
 
 SERVER_START_TIME = time.time()
+
+# ── Fernet Encryption (Tier 4 Credential Vault) ────────────
+ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')
+if not ENCRYPTION_KEY:
+    raise RuntimeError("FATAL: ENCRYPTION_KEY environment variable is missing. Generate one with: python3 -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"")
+try:
+    fernet = Fernet(ENCRYPTION_KEY.encode())
+    _test = fernet.decrypt(fernet.encrypt(b"startup_check"))
+    assert _test == b"startup_check"
+except Exception as exc:
+    raise RuntimeError(f"FATAL: ENCRYPTION_KEY is invalid — Fernet validation failed: {exc}")
+
+def encrypt_value(plaintext: str) -> str:
+    if not plaintext:
+        return ""
+    return fernet.encrypt(plaintext.encode()).decode()
+
+def decrypt_value(ciphertext: str) -> str:
+    if not ciphertext:
+        return ""
+    return fernet.decrypt(ciphertext.encode()).decode()
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -228,6 +250,11 @@ class AlertIn(BaseModel):
 class SavedFilterIn(BaseModel):
     name: str
     filters: dict
+
+class Tier4CredentialsIn(BaseModel):
+    email: Optional[str] = None
+    password: Optional[str] = None
+    phone: Optional[str] = None
 
 # ── Seed Data ───────────────────────────────────────────────
 STORES_SEED = [
@@ -751,6 +778,159 @@ async def scheduler_status(user=Depends(get_user)):
             "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
         })
     return {"crawl_paused": crawl_paused, "jobs": jobs, "total_jobs": len(jobs)}
+
+
+# ── Tier 4 Credential Vault ─────────────────────────────────
+@router.get("/encryption/verify")
+async def verify_encryption(user=Depends(get_user)):
+    try:
+        test_str = f"verify_{secrets.token_hex(4)}"
+        encrypted = encrypt_value(test_str)
+        decrypted = decrypt_value(encrypted)
+        ok = decrypted == test_str
+        return {"status": "active" if ok else "error", "ok": ok}
+    except Exception as exc:
+        return {"status": "error", "ok": False, "detail": str(exc)}
+
+@router.put("/stores/{store_id}/tier4-credentials")
+async def save_tier4_credentials(store_id: str, data: Tier4CredentialsIn, user=Depends(get_user)):
+    store = await db.stores.find_one({"id": store_id})
+    if not store:
+        raise HTTPException(404, "Store not found")
+    updates = {}
+    if data.email is not None:
+        updates["tier4_email"] = encrypt_value(data.email) if data.email else ""
+    if data.password is not None:
+        updates["tier4_password"] = encrypt_value(data.password) if data.password else ""
+    if data.phone is not None:
+        updates["tier4_phone"] = encrypt_value(data.phone) if data.phone else ""
+    if not updates:
+        raise HTTPException(400, "No credentials provided")
+    has_any = any(updates.get(k) for k in ["tier4_email", "tier4_password", "tier4_phone"])
+    if "tier4_session_status" not in (store or {}):
+        updates["tier4_session_status"] = "not_configured"
+    if has_any and store.get("tier4_session_status", "not_configured") == "not_configured":
+        updates["tier4_session_status"] = "expired"
+    await db.stores.update_one({"id": store_id}, {"$set": updates})
+    has_email = bool(updates.get("tier4_email") or store.get("tier4_email"))
+    has_phone = bool(updates.get("tier4_phone") or store.get("tier4_phone"))
+    return {
+        "message": "Credentials saved (encrypted)",
+        "has_email": has_email,
+        "has_phone": has_phone,
+        "session_status": updates.get("tier4_session_status", store.get("tier4_session_status", "not_configured")),
+    }
+
+@router.get("/stores/{store_id}/tier4-status")
+async def get_tier4_status(store_id: str, user=Depends(get_user)):
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not store:
+        raise HTTPException(404, "Store not found")
+    has_email = bool(store.get("tier4_email"))
+    has_phone = bool(store.get("tier4_phone"))
+    has_password = bool(store.get("tier4_password"))
+    phone_last4 = ""
+    if has_phone:
+        try:
+            phone_plain = decrypt_value(store["tier4_phone"])
+            phone_last4 = phone_plain[-4:] if len(phone_plain) >= 4 else "****"
+        except Exception:
+            phone_last4 = "****"
+    email_masked = ""
+    if has_email:
+        try:
+            email_plain = decrypt_value(store["tier4_email"])
+            parts = email_plain.split("@")
+            email_masked = f"{parts[0][:2]}***@{parts[1]}" if len(parts) == 2 else "***"
+        except Exception:
+            email_masked = "***"
+    session_status = store.get("tier4_session_status", "not_configured")
+    session_expiry = store.get("tier4_session_expiry")
+    if session_status == "active" and session_expiry:
+        exp = session_expiry if isinstance(session_expiry, datetime) else datetime.fromisoformat(session_expiry)
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp < datetime.now(timezone.utc):
+            session_status = "expired"
+            await db.stores.update_one({"id": store_id}, {"$set": {"tier4_session_status": "expired"}})
+    return {
+        "store_id": store_id,
+        "store_name": store.get("name"),
+        "platform": store.get("platform"),
+        "has_email": has_email,
+        "email_masked": email_masked,
+        "has_password": has_password,
+        "has_phone": has_phone,
+        "phone_last4": phone_last4,
+        "session_status": session_status,
+        "session_expiry": session_expiry.isoformat() if isinstance(session_expiry, datetime) else session_expiry,
+        "last_auth_crawl": store.get("tier4_last_auth_crawl"),
+        "working_login_url": store.get("tier4_working_login_url"),
+    }
+
+@router.post("/stores/{store_id}/tier4-test-login")
+async def test_tier4_login(store_id: str, user=Depends(get_user)):
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not store:
+        raise HTTPException(404, "Store not found")
+    if not store.get("tier4_email") and not store.get("tier4_phone"):
+        raise HTTPException(400, "No credentials configured for this store")
+    return {
+        "message": "Test login queued — full login flows available in Part 3",
+        "store_id": store_id,
+        "session_status": store.get("tier4_session_status", "not_configured"),
+    }
+
+@router.post("/stores/{store_id}/tier4-clear-session")
+async def clear_tier4_session(store_id: str, user=Depends(get_user)):
+    store = await db.stores.find_one({"id": store_id})
+    if not store:
+        raise HTTPException(404, "Store not found")
+    updates = {
+        "tier4_session_cookies": "",
+        "tier4_session_expiry": None,
+        "tier4_session_status": "expired" if (store.get("tier4_email") or store.get("tier4_phone")) else "not_configured",
+        "tier4_working_login_url": "",
+    }
+    await db.stores.update_one({"id": store_id}, {"$set": updates})
+    return {"message": "Session cleared", "session_status": updates["tier4_session_status"]}
+
+@router.get("/tier4/summary")
+async def tier4_summary(user=Depends(get_user)):
+    stores = await db.stores.find({"is_active": True}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "tier4_email": 1, "tier4_phone": 1, "tier4_session_status": 1, "tier4_session_expiry": 1, "tier4_last_auth_crawl": 1}).sort("name", 1).to_list(50)
+    result = []
+    for s in stores:
+        has_email = bool(s.get("tier4_email"))
+        has_phone = bool(s.get("tier4_phone"))
+        phone_last4 = ""
+        if has_phone:
+            try:
+                phone_plain = decrypt_value(s["tier4_phone"])
+                phone_last4 = phone_plain[-4:] if len(phone_plain) >= 4 else "****"
+            except Exception:
+                phone_last4 = "****"
+        email_masked = ""
+        if has_email:
+            try:
+                email_plain = decrypt_value(s["tier4_email"])
+                parts = email_plain.split("@")
+                email_masked = f"{parts[0][:2]}***@{parts[1]}" if len(parts) == 2 else "***"
+            except Exception:
+                email_masked = "***"
+        session_status = s.get("tier4_session_status", "not_configured")
+        result.append({
+            "store_id": s["id"],
+            "store_name": s["name"],
+            "platform": s.get("platform", ""),
+            "has_email": has_email,
+            "email_masked": email_masked,
+            "has_phone": has_phone,
+            "phone_last4": phone_last4,
+            "session_status": session_status,
+            "session_expiry": s.get("tier4_session_expiry"),
+            "last_auth_crawl": s.get("tier4_last_auth_crawl"),
+        })
+    return result
 
 
 # ── Helper: compute product metrics from snapshots ──────────

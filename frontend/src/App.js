@@ -13,6 +13,7 @@ import AlertsPage from "@/pages/AlertsPage";
 import CompetitorProfilePage from "@/pages/CompetitorProfilePage";
 import DiscountsPage from "@/pages/DiscountsPage";
 import ScannerPage from "@/pages/ScannerPage";
+import SettingsPage from "@/pages/SettingsPage";
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -69,6 +70,7 @@ function AppLayout() {
           <Route path="/scanner" element={<ProtectedRoute><ScannerPage /></ProtectedRoute>} />
           <Route path="/stores" element={<ProtectedRoute><StoreRegistryPage /></ProtectedRoute>} />
           <Route path="/stores/:storeId" element={<ProtectedRoute><CompetitorProfilePage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
         </Routes>
       </main>
     </div>
