@@ -5,19 +5,26 @@ load_dotenv(ROOT_DIR / '.env')
 
 from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends, Response
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re
+import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re, time, shutil
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
 from bson import ObjectId
-from starlette.responses import StreamingResponse
+from starlette.responses import StreamingResponse, JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from crawlers import (
     crawl_store_waterfall, process_crawled_products,
     extract_brand, guess_category, guess_animal, extract_weight,
 )
+
+SERVER_START_TIME = time.time()
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -31,6 +38,27 @@ app = FastAPI(title="Daleel Pets API")
 router = APIRouter(prefix="/api")
 scheduler = AsyncIOScheduler()
 crawl_paused = False
+
+# ── Rate Limiter ────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many attempts. Wait 60 seconds."},
+    )
+
+# ── Security Headers Middleware ─────────────────────────────
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data: https:; connect-src 'self' https:; frame-ancestors 'none'"
+        return response
 
 # ── Auth Utilities ──────────────────────────────────────────
 def hash_pw(pw):
@@ -66,6 +94,65 @@ async def get_user(request: Request):
         raise
     except Exception:
         raise HTTPException(401, "Invalid token")
+
+# ── Health Endpoint ──────────────────────────────────────────
+@router.get("/health")
+async def health_check():
+    # MongoDB connection state
+    mongo_ok = False
+    try:
+        await client.admin.command("ping")
+        mongo_ok = True
+    except Exception:
+        pass
+
+    # APScheduler active jobs count
+    jobs_count = len(scheduler.get_jobs()) if scheduler.running else 0
+
+    # Playwright availability
+    pw_available = False
+    pw_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
+    try:
+        if Path(pw_path).exists() and any(Path(pw_path).iterdir()):
+            pw_available = True
+        else:
+            pw_available = shutil.which("playwright") is not None
+    except Exception:
+        pass
+
+    # Last successful crawl timestamp
+    last_crawl = None
+    try:
+        log = await db.crawl_logs.find_one(
+            {"tier_used": {"$exists": True}},
+            {"_id": 0, "completed_at": 1},
+            sort=[("completed_at", -1)],
+        )
+        if log and log.get("completed_at"):
+            last_crawl = log["completed_at"] if isinstance(log["completed_at"], str) else log["completed_at"].isoformat()
+        else:
+            store = await db.stores.find_one(
+                {"last_crawled_at": {"$ne": "", "$exists": True}},
+                {"_id": 0, "last_crawled_at": 1},
+                sort=[("last_crawled_at", -1)],
+            )
+            if store and store.get("last_crawled_at"):
+                last_crawl = store["last_crawled_at"]
+    except Exception:
+        pass
+
+    # Server uptime
+    uptime_secs = round(time.time() - SERVER_START_TIME, 1)
+
+    status = "healthy" if mongo_ok else "degraded"
+    return {
+        "status": status,
+        "mongodb": "connected" if mongo_ok else "disconnected",
+        "scheduler_active_jobs": jobs_count,
+        "playwright_available": pw_available,
+        "last_successful_crawl": last_crawl,
+        "uptime_seconds": uptime_secs,
+    }
 
 # ── Models ──────────────────────────────────────────────────
 class AuthIn(BaseModel):
@@ -448,7 +535,8 @@ async def seed_database():
 
 # ── Auth Routes ─────────────────────────────────────────────
 @router.post("/auth/register")
-async def register(data: AuthIn, response: Response):
+@limiter.limit("5/minute")
+async def register(request: Request, data: AuthIn, response: Response):
     email = data.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(400, "Email already registered")
@@ -460,7 +548,8 @@ async def register(data: AuthIn, response: Response):
     return {"token": token, "user": {"id": uid, "email": email, "name": doc["name"], "role": "user"}}
 
 @router.post("/auth/login")
-async def login(data: AuthIn, response: Response):
+@limiter.limit("5/minute")
+async def login(request: Request, data: AuthIn, response: Response):
     email = data.email.lower().strip()
     user = await db.users.find_one({"email": email})
     if not user or not check_pw(data.password, user["password_hash"]):
@@ -1642,6 +1731,8 @@ else:
     cors_origins_list = [o.strip() for o in cors_origins.split(',')]
     allow_creds = True
 
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=allow_creds,
