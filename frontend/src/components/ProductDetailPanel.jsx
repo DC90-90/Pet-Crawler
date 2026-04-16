@@ -17,10 +17,10 @@ function StockBadge({ signal }) {
 }
 
 function TierBadge({ tier, score }) {
-  const cls = { 1: "tier-1", 2: "tier-2", 3: "tier-3" };
+  const cls = { 1: "tier-1", 2: "tier-2", 3: "tier-3", 4: "bg-emerald-50 text-emerald-700" };
   return (
     <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded ${cls[tier] || "tier-2"}`}>
-      Tier {tier} - {score}% confidence
+      {tier === 4 ? "T4 Authenticated" : `Tier ${tier}`} - {score}% confidence
     </span>
   );
 }
@@ -132,9 +132,20 @@ export default function ProductDetailPanel({ sku, onClose }) {
                         <TableCell>
                           <span className="text-xs font-semibold">{sp.price} SAR</span>
                           {sp.discount_pct > 0 && <span className="text-[10px] text-green-600 ms-1">-{sp.discount_pct}%</span>}
+                          {sp.tier4_member_price && sp.tier4_member_price !== sp.price && (
+                            <div className="text-[10px] text-emerald-600 font-medium mt-0.5">Member: {sp.tier4_member_price} SAR</div>
+                          )}
+                          {sp.tier4_flash_sale && (
+                            <Badge variant="outline" className="text-[8px] mt-0.5 bg-red-50 text-red-600 border-red-200">Flash Sale{sp.tier4_flash_price ? ` ${sp.tier4_flash_price} SAR` : ""}</Badge>
+                          )}
                         </TableCell>
-                        <TableCell><StockBadge signal={sp.stock_signal} /></TableCell>
-                        <TableCell><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded tier-${sp.source_tier}`}>T{sp.source_tier}</span></TableCell>
+                        <TableCell>
+                          <StockBadge signal={sp.stock_signal} />
+                          {sp.tier4_qty_exact != null && (
+                            <span className="text-[10px] text-emerald-600 ms-1 font-medium">{sp.tier4_qty_exact} exact</span>
+                          )}
+                        </TableCell>
+                        <TableCell><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${sp.source_tier === 4 ? "bg-emerald-50 text-emerald-700" : `tier-${sp.source_tier}`}`}>T{sp.source_tier}</span></TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

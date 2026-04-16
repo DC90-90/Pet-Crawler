@@ -256,6 +256,10 @@ class Tier4CredentialsIn(BaseModel):
     password: Optional[str] = None
     phone: Optional[str] = None
 
+class OtpSubmitIn(BaseModel):
+    store_id: str
+    otp_code: str
+
 # ── Seed Data ───────────────────────────────────────────────
 STORES_SEED = [
     {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1},
@@ -700,6 +704,12 @@ async def list_stores(user=Depends(get_user)):
         s["next_crawl_at"] = get_next_run(s["id"])
         hrs = 4 if s.get("priority", 3) <= 1 else 8
         s["crawl_frequency_label"] = f"Every {hrs}h"
+        # Strip encrypted credential fields — never send to frontend
+        for k in ["tier4_email", "tier4_password", "tier4_phone", "tier4_session_cookies"]:
+            s.pop(k, None)
+        # Default tier4 status
+        if "tier4_session_status" not in s:
+            s["tier4_session_status"] = "not_configured"
     s_paused = crawl_paused
     return {"stores": stores, "crawl_paused": s_paused}
 
@@ -875,8 +885,13 @@ async def test_tier4_login(store_id: str, user=Depends(get_user)):
         raise HTTPException(404, "Store not found")
     if not store.get("tier4_email") and not store.get("tier4_phone"):
         raise HTTPException(400, "No credentials configured for this store")
+    await db.otp_requests.update_many(
+        {"store_id": store_id, "status": "pending"},
+        {"$set": {"status": "expired"}}
+    )
+    asyncio.create_task(_run_tier4_login(store_id))
     return {
-        "message": "Test login queued — full login flows available in Part 3",
+        "message": f"Login attempt started for {store['name']} — check OTP banner if OTP is required",
         "store_id": store_id,
         "session_status": store.get("tier4_session_status", "not_configured"),
     }
@@ -933,7 +948,330 @@ async def tier4_summary(user=Depends(get_user)):
     return result
 
 
-# ── Helper: compute product metrics from snapshots ──────────
+# ── OTP Handling ────────────────────────────────────────────
+# In-memory store for OTP codes submitted by user (cleared after use)
+_otp_inbox = {}  # {store_id: {"code": "123456", "submitted_at": datetime}}
+
+@router.get("/otp/pending")
+async def list_pending_otps(user=Depends(get_user)):
+    now = datetime.now(timezone.utc)
+    pending = await db.otp_requests.find(
+        {"status": "pending", "expires_at": {"$gt": now.isoformat()}},
+        {"_id": 0}
+    ).sort("requested_at", -1).to_list(20)
+    return pending
+
+@router.post("/otp/submit")
+@limiter.limit("10/hour")
+async def submit_otp(request: Request, data: OtpSubmitIn, user=Depends(get_user)):
+    otp_req = await db.otp_requests.find_one(
+        {"store_id": data.store_id, "status": "pending"},
+        {"_id": 0}
+    )
+    if not otp_req:
+        raise HTTPException(404, "No pending OTP request for this store")
+    now = datetime.now(timezone.utc)
+    expires = datetime.fromisoformat(otp_req["expires_at"]) if isinstance(otp_req["expires_at"], str) else otp_req["expires_at"]
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if now > expires:
+        await db.otp_requests.update_one({"id": otp_req["id"]}, {"$set": {"status": "expired"}})
+        raise HTTPException(410, "OTP request expired")
+    _otp_inbox[data.store_id] = {"code": data.otp_code, "submitted_at": now}
+    await db.otp_requests.update_one(
+        {"id": otp_req["id"]},
+        {"$set": {"status": "completed", "completed_at": now.isoformat()}}
+    )
+    logger.info(f"[OTP] Code submitted for store {data.store_id}")
+    return {"message": "OTP submitted — crawler will proceed", "store_id": data.store_id}
+
+@router.post("/otp/retry/{store_id}")
+async def retry_otp(store_id: str, user=Depends(get_user)):
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not store:
+        raise HTTPException(404, "Store not found")
+    if not store.get("tier4_email") and not store.get("tier4_phone"):
+        raise HTTPException(400, "No credentials configured")
+    await db.otp_requests.update_many(
+        {"store_id": store_id, "status": "pending"},
+        {"$set": {"status": "expired"}}
+    )
+    asyncio.create_task(_run_tier4_login(store_id))
+    return {"message": "Login retry triggered", "store_id": store_id}
+
+@router.get("/otp/status/{store_id}")
+async def otp_status(store_id: str, user=Depends(get_user)):
+    otp_req = await db.otp_requests.find_one(
+        {"store_id": store_id}, {"_id": 0}, sort=[("requested_at", -1)]
+    )
+    if not otp_req:
+        return {"store_id": store_id, "status": "none"}
+    return otp_req
+
+async def _create_otp_request(store_id: str, store_name: str, phone_last4: str):
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(minutes=10)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "store_id": store_id,
+        "store_name": store_name,
+        "phone_last4": phone_last4,
+        "requested_at": now.isoformat(),
+        "expires_at": expires.isoformat(),
+        "status": "pending",
+    }
+    await db.otp_requests.insert_one(doc)
+    doc.pop("_id", None)
+    await db.stores.update_one({"id": store_id}, {"$set": {"tier4_session_status": "otp_required"}})
+    logger.info(f"[OTP] Request created for {store_name} (****{phone_last4})")
+    return doc
+
+async def _wait_for_otp(store_id: str, timeout_secs: int = 600) -> Optional[str]:
+    """Poll _otp_inbox for user-submitted OTP code. Returns code or None on timeout."""
+    start = time.time()
+    while time.time() - start < timeout_secs:
+        if store_id in _otp_inbox:
+            code = _otp_inbox.pop(store_id)["code"]
+            return code
+        await asyncio.sleep(2)
+    return None
+
+
+# ── Tier 4 Login Flows ──────────────────────────────────────
+async def _run_tier4_login(store_id: str):
+    """Background task: attempt Tier 4 authenticated login for a store."""
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not store:
+        return
+    platform = store.get("platform", "").lower()
+    phone_last4 = ""
+    try:
+        if store.get("tier4_phone"):
+            p = decrypt_value(store["tier4_phone"])
+            phone_last4 = p[-4:] if len(p) >= 4 else "****"
+    except Exception:
+        phone_last4 = "****"
+    email = ""
+    password = ""
+    phone = ""
+    try:
+        if store.get("tier4_email"):
+            email = decrypt_value(store["tier4_email"])
+        if store.get("tier4_password"):
+            password = decrypt_value(store["tier4_password"])
+        if store.get("tier4_phone"):
+            phone = decrypt_value(store["tier4_phone"])
+    except Exception as exc:
+        logger.error(f"[T4 Login] Failed to decrypt credentials for {store['name']}: type={type(exc).__name__}")
+        await db.stores.update_one({"id": store_id}, {"$set": {"tier4_session_status": "expired"}})
+        return
+    credentials = {"email": email, "password": password, "phone": phone}
+    base_url = store.get("base_url") or f"https://{store['domain']}"
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                locale="ar-SA",
+            )
+            page = await context.new_page()
+            result = None
+            if platform == "salla":
+                result = await _login_salla(page, base_url, store, credentials, phone_last4)
+            elif platform == "zid":
+                result = await _login_zid(page, base_url, store, credentials, phone_last4)
+            elif platform == "shopify":
+                result = await _login_shopify(page, base_url, store, credentials, phone_last4)
+            else:
+                result = await _login_salla(page, base_url, store, credentials, phone_last4)
+            if result and result.get("success"):
+                cookies = await context.cookies()
+                cookies_json = encrypt_value(str(cookies))
+                expiry = datetime.now(timezone.utc) + timedelta(days=30)
+                await db.stores.update_one({"id": store_id}, {"$set": {
+                    "tier4_session_cookies": cookies_json,
+                    "tier4_session_expiry": expiry,
+                    "tier4_session_status": "active",
+                    "tier4_working_login_url": result.get("login_url", ""),
+                    "tier4_last_auth_crawl": datetime.now(timezone.utc).isoformat(),
+                }})
+                logger.info(f"[T4 Login] SUCCESS for {store['name']} via {result.get('method', 'unknown')}")
+            else:
+                error_msg = result.get("error", "Unknown") if result else "Login handler returned None"
+                logger.warning(f"[T4 Login] FAILED for {store['name']}: {error_msg}")
+                await db.stores.update_one({"id": store_id}, {"$set": {"tier4_session_status": "expired"}})
+            await browser.close()
+    except Exception as exc:
+        logger.error(f"[T4 Login] Exception for {store['name']}: {type(exc).__name__}: {exc}")
+        await db.stores.update_one({"id": store_id}, {"$set": {"tier4_session_status": "expired"}})
+
+async def _login_salla(page, base_url, store, credentials, phone_last4):
+    """Salla login handler — phone + OTP flow."""
+    store_id = store["id"]
+    store_name = store["name"]
+    login_urls = [f"{base_url}/login", f"{base_url}/ar/login", f"{base_url}/account/login"]
+    login_url = None
+    for url in login_urls:
+        try:
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            if resp and resp.status < 400:
+                login_url = url
+                break
+        except Exception:
+            continue
+    if not login_url:
+        return {"success": False, "error": "No login page found"}
+    await page.wait_for_timeout(2000)
+    phone_selectors = ["input[type=tel]", "input[name=phone]", "input[placeholder*=phone]", "input[placeholder*=جوال]", "input[placeholder*=هاتف]"]
+    phone_field = None
+    for sel in phone_selectors:
+        try:
+            el = page.locator(sel).first
+            if await el.count() > 0:
+                phone_field = el
+                break
+        except Exception:
+            continue
+    if phone_field and credentials.get("phone"):
+        try:
+            await phone_field.fill(credentials["phone"])
+            await page.wait_for_timeout(500)
+            submit_selectors = ["button[type=submit]", "button:has-text('إرسال')", "button:has-text('Send')", "button:has-text('تسجيل')", "button:has-text('Login')"]
+            for sel in submit_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if await btn.count() > 0 and await btn.is_visible():
+                        await btn.click()
+                        break
+                except Exception:
+                    continue
+            await page.wait_for_timeout(3000)
+            otp_req = await _create_otp_request(store_id, store_name, phone_last4)
+            otp_code = await _wait_for_otp(store_id, timeout_secs=600)
+            if not otp_code:
+                await db.otp_requests.update_many({"store_id": store_id, "status": "pending"}, {"$set": {"status": "expired"}})
+                return {"success": False, "error": "OTP timeout — no code submitted within 10 minutes"}
+            otp_selectors = ["input[type=number]", "input[name=otp]", "input[placeholder*=رمز]", "input[placeholder*=code]", "input[inputmode=numeric]"]
+            for sel in otp_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if await el.count() > 0:
+                        await el.fill(otp_code)
+                        break
+                except Exception:
+                    continue
+            await page.wait_for_timeout(500)
+            for sel in submit_selectors:
+                try:
+                    btn = page.locator(sel).first
+                    if await btn.count() > 0 and await btn.is_visible():
+                        await btn.click()
+                        break
+                except Exception:
+                    continue
+            await page.wait_for_timeout(5000)
+            success_indicators = ["a[href*=logout]", "button:has-text('خروج')", ".account-menu", "[data-user]"]
+            for sel in success_indicators:
+                try:
+                    if await page.locator(sel).first.count() > 0:
+                        return {"success": True, "method": "phone_otp", "login_url": login_url}
+                except Exception:
+                    continue
+            if "/account" in page.url or "/my-account" in page.url:
+                return {"success": True, "method": "phone_otp", "login_url": login_url}
+            return {"success": False, "error": "OTP submitted but login verification failed"}
+        except Exception as exc:
+            return {"success": False, "error": f"Phone login failed: {type(exc).__name__}"}
+    return {"success": False, "error": "No phone field found on login page"}
+
+async def _login_zid(page, base_url, store, credentials, phone_last4):
+    """Zid login handler — email+password first, OTP fallback."""
+    store_id = store["id"]
+    store_name = store["name"]
+    login_urls = [f"{base_url}/login", f"{base_url}/account/login"]
+    for url in login_urls:
+        try:
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            if resp and resp.status < 400:
+                break
+        except Exception:
+            continue
+    await page.wait_for_timeout(2000)
+    email_field = page.locator("input[type=email]").first
+    pw_field = page.locator("input[type=password]").first
+    if await email_field.count() > 0 and await pw_field.count() > 0 and credentials.get("email") and credentials.get("password"):
+        try:
+            await email_field.fill(credentials["email"])
+            await pw_field.fill(credentials["password"])
+            submit = page.locator("button[type=submit]").first
+            if await submit.count() > 0:
+                await submit.click()
+            await page.wait_for_timeout(5000)
+            if "/account" in page.url or "/my-account" in page.url:
+                return {"success": True, "method": "email_password", "login_url": page.url}
+            otp_field = page.locator("input[type=number], input[name=otp], input[inputmode=numeric]").first
+            if await otp_field.count() > 0:
+                phone_last4_val = phone_last4 or "****"
+                await _create_otp_request(store_id, store_name, phone_last4_val)
+                otp_code = await _wait_for_otp(store_id, timeout_secs=600)
+                if not otp_code:
+                    return {"success": False, "error": "OTP timeout"}
+                await otp_field.fill(otp_code)
+                submit2 = page.locator("button[type=submit]").first
+                if await submit2.count() > 0:
+                    await submit2.click()
+                await page.wait_for_timeout(5000)
+                if "/account" in page.url:
+                    return {"success": True, "method": "email_otp", "login_url": page.url}
+            return {"success": False, "error": "Email+password login failed"}
+        except Exception as exc:
+            return {"success": False, "error": f"Zid login error: {type(exc).__name__}"}
+    return await _login_salla(page, base_url, store, credentials, phone_last4)
+
+async def _login_shopify(page, base_url, store, credentials, phone_last4):
+    """Shopify login handler — email+password."""
+    store_id = store["id"]
+    store_name = store["name"]
+    login_url = f"{base_url}/account/login"
+    try:
+        await page.goto(login_url, wait_until="domcontentloaded", timeout=15000)
+    except Exception:
+        return {"success": False, "error": "Cannot reach Shopify login page"}
+    await page.wait_for_timeout(2000)
+    email_field = page.locator("input[type=email], input[name=customer\\[email\\]]").first
+    pw_field = page.locator("input[type=password], input[name=customer\\[password\\]]").first
+    if await email_field.count() > 0 and await pw_field.count() > 0 and credentials.get("email") and credentials.get("password"):
+        try:
+            await email_field.fill(credentials["email"])
+            await pw_field.fill(credentials["password"])
+            submit = page.locator("button[type=submit], input[type=submit]").first
+            if await submit.count() > 0:
+                await submit.click()
+            await page.wait_for_timeout(5000)
+            if "/account" in page.url and "/login" not in page.url:
+                return {"success": True, "method": "email_password", "login_url": login_url}
+            otp_field = page.locator("input[type=number], input[name=otp], input[inputmode=numeric]").first
+            if await otp_field.count() > 0:
+                phone_last4_val = phone_last4 or "****"
+                await _create_otp_request(store_id, store_name, phone_last4_val)
+                otp_code = await _wait_for_otp(store_id, timeout_secs=600)
+                if not otp_code:
+                    return {"success": False, "error": "OTP timeout"}
+                await otp_field.fill(otp_code)
+                submit2 = page.locator("button[type=submit]").first
+                if await submit2.count() > 0:
+                    await submit2.click()
+                await page.wait_for_timeout(5000)
+                if "/account" in page.url and "/login" not in page.url:
+                    return {"success": True, "method": "email_otp", "login_url": login_url}
+            return {"success": False, "error": "Shopify login failed"}
+        except Exception as exc:
+            return {"success": False, "error": f"Shopify login error: {type(exc).__name__}"}
+    return {"success": False, "error": "No email/password fields found"}
+
+
+# ── Update test-login to actually trigger login ─────────────
 def compute_product_metrics(snapshots_by_store, days):
     """Given {store_id: [snapshots sorted by crawled_at asc]}, compute market metrics."""
     all_latest_prices = []

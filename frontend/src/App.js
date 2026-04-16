@@ -14,6 +14,7 @@ import CompetitorProfilePage from "@/pages/CompetitorProfilePage";
 import DiscountsPage from "@/pages/DiscountsPage";
 import ScannerPage from "@/pages/ScannerPage";
 import SettingsPage from "@/pages/SettingsPage";
+import OtpBanner from "@/components/OtpBanner";
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -61,7 +62,9 @@ function AppLayout() {
   return (
     <div className="flex min-h-screen bg-[#F3F4F6]" data-testid="app-layout">
       <Sidebar />
-      <main className="flex-1 ms-[240px] min-h-screen">
+      <main className="flex-1 ms-[240px] min-h-screen flex flex-col">
+        <OtpBanner />
+        <div className="flex-1">
         <Routes>
           <Route path="/" element={<ProtectedRoute><MyProductsPage /></ProtectedRoute>} />
           <Route path="/insights" element={<ProtectedRoute><InsightsPage /></ProtectedRoute>} />
@@ -72,6 +75,7 @@ function AppLayout() {
           <Route path="/stores/:storeId" element={<ProtectedRoute><CompetitorProfilePage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
         </Routes>
+        </div>
       </main>
     </div>
   );

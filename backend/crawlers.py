@@ -621,17 +621,176 @@ async def crawl_tier3_html(db, store):
 
 # ── Waterfall Orchestrator ───────────────────────────────────
 async def crawl_store_waterfall(db, store):
-    """Run the 3-tier waterfall crawler for a store."""
+    """Run the 3-tier waterfall crawler for a store, with optional Tier 4 supplement."""
     platform = store.get("platform", "").lower()
     # Tier 1: JSON endpoints
     if platform in ("salla", "shopify", "zid"):
         result = await crawl_salla_tier1(db, store)
         if result.get("tier_used"):
+            # Tier 4: Authenticated supplement (runs after success if configured)
+            await _try_tier4_supplement(db, store, result)
             return result
     # Tier 2: XHR interception
     result = await crawl_tier2_xhr(db, store)
     if result.get("tier_used"):
+        await _try_tier4_supplement(db, store, result)
         return result
     # Tier 3: HTML scraping
     result = await crawl_tier3_html(db, store)
+    await _try_tier4_supplement(db, store, result)
     return result
+
+
+async def _try_tier4_supplement(db, store, base_result):
+    """Run Tier 4 authenticated crawl as a supplement if credentials are configured and session is active."""
+    store_id = store.get("id")
+    if not store_id:
+        return
+    # Refresh store data to get latest tier4 fields
+    s = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not s:
+        return
+    session_status = s.get("tier4_session_status", "not_configured")
+    if session_status != "active" or not s.get("tier4_session_cookies"):
+        return
+    # Check session expiry
+    session_expiry = s.get("tier4_session_expiry")
+    if session_expiry:
+        exp = session_expiry if isinstance(session_expiry, datetime) else datetime.fromisoformat(str(session_expiry))
+        if hasattr(exp, 'tzinfo') and exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if exp < datetime.now(timezone.utc):
+            await db.stores.update_one({"id": store_id}, {"$set": {"tier4_session_status": "expired"}})
+            return
+    try:
+        from server import decrypt_value
+        cookies_enc = s["tier4_session_cookies"]
+        cookies_str = decrypt_value(cookies_enc)
+        import ast
+        cookies = ast.literal_eval(cookies_str)
+    except Exception as exc:
+        logger.warning(f"[T4 Crawl] Cannot decrypt cookies for {store.get('name')}: {type(exc).__name__}")
+        return
+    try:
+        await crawl_tier4_authenticated(db, store, cookies)
+    except Exception as exc:
+        logger.warning(f"[T4 Crawl] Error for {store.get('name')}: {type(exc).__name__}: {exc}")
+
+
+async def crawl_tier4_authenticated(db, store, cookies):
+    """Tier 4: Authenticated crawl — captures extra data points available only when logged in."""
+    from playwright.async_api import async_playwright
+    store_id = store["id"]
+    store_name = store.get("name", "")
+    base_url = store.get("base_url") or f"https://{store['domain']}"
+    platform = store.get("platform", "").lower()
+    now = datetime.now(timezone.utc)
+    logger.info(f"[T4 Crawl] Starting authenticated crawl for {store_name}")
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            locale="ar-SA",
+        )
+        # Inject saved session cookies
+        for c in cookies:
+            try:
+                await context.add_cookies([c])
+            except Exception:
+                pass
+        page = await context.new_page()
+        t4_snapshots = []
+        # Navigate to product listing pages
+        product_urls = [f"{base_url}/products", f"{base_url}/shop", f"{base_url}/collection/all"]
+        for purl in product_urls:
+            try:
+                resp = await page.goto(purl, wait_until="domcontentloaded", timeout=15000)
+                if resp and resp.status < 400:
+                    break
+            except Exception:
+                continue
+        await page.wait_for_timeout(3000)
+        # Extract authenticated data from product cards on the page
+        cards = await page.query_selector_all(".product-card, .product-item, [data-product], .product-entry, .product")
+        for card in cards[:50]:
+            try:
+                snapshot = await _extract_tier4_data(card, page, platform)
+                if snapshot:
+                    snapshot["store_id"] = store_id
+                    snapshot["store_name"] = store_name
+                    snapshot["source_tier"] = 4
+                    snapshot["confidence_score"] = 96
+                    snapshot["tier4_authenticated"] = True
+                    snapshot["crawled_at"] = now
+                    snapshot["id"] = str(uuid.uuid4())
+                    t4_snapshots.append(snapshot)
+            except Exception:
+                continue
+        if t4_snapshots:
+            await db.product_snapshots.insert_many(t4_snapshots)
+            logger.info(f"[T4 Crawl] {store_name}: {len(t4_snapshots)} authenticated snapshots created")
+        await db.stores.update_one({"id": store_id}, {"$set": {"tier4_last_auth_crawl": now.isoformat()}})
+        await browser.close()
+    return {"tier4_snapshots": len(t4_snapshots)}
+
+
+async def _extract_tier4_data(card, page, platform):
+    """Extract authenticated-only data points from a product card element."""
+    data = {}
+    # Try to get product name/SKU for matching
+    name_el = await card.query_selector(".product-title, .product-name, h3, h4, [data-product-title]")
+    if name_el:
+        data["name"] = (await name_el.inner_text()).strip()
+    # Member price
+    member_el = await card.query_selector(".member-price, .loyalty-price, [data-member-price], .special-price")
+    if member_el:
+        text = await member_el.inner_text()
+        price = _extract_price_from_card_text(text)
+        if price:
+            data["tier4_member_price"] = price
+    # Regular price
+    price_el = await card.query_selector(".price, [data-price], .product-price")
+    if price_el:
+        text = await price_el.inner_text()
+        price = _extract_price_from_card_text(text)
+        if price:
+            data["price"] = price
+    # Flash sale
+    flash_el = await card.query_selector(".flash-sale, .countdown, [data-flash], .sale-badge")
+    if flash_el:
+        data["tier4_flash_sale"] = True
+        flash_price_el = await card.query_selector(".flash-price, .sale-price")
+        if flash_price_el:
+            text = await flash_price_el.inner_text()
+            fp = _extract_price_from_card_text(text)
+            if fp:
+                data["tier4_flash_price"] = fp
+    # Exact stock
+    stock_el = await card.query_selector(".stock-count, [data-quantity], .availability")
+    if stock_el:
+        text = await stock_el.inner_text()
+        import re as _re
+        nums = _re.findall(r'\d+', text)
+        if nums:
+            data["tier4_qty_exact"] = int(nums[0])
+    # In stock
+    data["in_stock"] = True
+    oos_el = await card.query_selector(".out-of-stock, .sold-out, [data-oos]")
+    if oos_el:
+        data["in_stock"] = False
+    if not data.get("name") and not data.get("price"):
+        return None
+    return data
+
+
+def _extract_price_from_card_text(text):
+    """Extract numeric price from text like '199.99 ر.س' or 'SAR 199'."""
+    import re as _re
+    nums = _re.findall(r'[\d,]+\.?\d*', text.replace(',', ''))
+    if nums:
+        try:
+            return float(nums[0])
+        except ValueError:
+            pass
+    return None

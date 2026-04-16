@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { toast } from "sonner";
-import { Plus, RefreshCw, Trash2, Globe, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Clock, XCircle } from "lucide-react";
+import { Plus, RefreshCw, Trash2, Globe, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Clock, XCircle, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -149,14 +149,15 @@ export default function StoreRegistryPage() {
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Tier</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_last_crawled")}</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Next Crawl</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Tier 4</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF] text-end">{t("col_actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-12 text-[#9CA3AF] text-sm">{t("loading")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="text-center py-12 text-[#9CA3AF] text-sm">{t("loading")}</TableCell></TableRow>
             ) : stores.length === 0 ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-12 text-[#9CA3AF] text-sm">{t("no_data")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="text-center py-12 text-[#9CA3AF] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : stores.map((s) => (
               <TableRow key={s.id} data-testid={`store-row-${s.id}`} className="hover:bg-[#F9FAFB] transition-colors group">
                 <TableCell>
@@ -195,6 +196,17 @@ export default function StoreRegistryPage() {
                     )}
                     {crawlPaused && <p className="text-[9px] text-red-400">Paused</p>}
                   </div>
+                </TableCell>
+                <TableCell>
+                  {s.tier4_session_status === "active" ? (
+                    <Badge variant="outline" className="text-[9px] gap-1 bg-emerald-50 text-emerald-700 border-emerald-200"><Shield className="w-3 h-3" />Authenticated</Badge>
+                  ) : s.tier4_session_status === "otp_required" ? (
+                    <Badge variant="outline" className="text-[9px] gap-1 bg-orange-50 text-orange-700 border-orange-200"><Shield className="w-3 h-3" />OTP Needed</Badge>
+                  ) : s.tier4_session_status === "expired" ? (
+                    <Badge variant="outline" className="text-[9px] gap-1 bg-red-50 text-red-500 border-red-200 cursor-pointer" onClick={() => navigate("/settings")}><Shield className="w-3 h-3" />Expired</Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[9px] gap-1 text-gray-400 cursor-pointer" onClick={() => navigate("/settings")}><Shield className="w-3 h-3" />Not Set Up</Badge>
+                  )}
                 </TableCell>
                 <TableCell className="text-end">
                   <div className="flex items-center gap-1 justify-end">
