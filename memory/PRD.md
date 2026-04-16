@@ -57,7 +57,13 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 - HTTP security headers middleware (CSP, nosniff, DENY, strict-origin)
 - PLATFORM_SUMMARY.md — complete API/page/crawler/DB reference
 
-### Code Quality Fixes (Done — Feb 2026)
+### Rebrand & Redesign (Done — Feb 2026)
+- Complete dark premium SaaS theme: #060B14 background, glassmorphism cards, teal #00D4B4 + amber #F59E0B accents
+- All pages redesigned: Login (split-screen hero), Dashboard, Stores, Insights, Scanner, Discounts, Alerts, Settings
+- Collapsible sidebar with teal glow active state
+- Fonts: Plus Jakarta Sans (EN), IBM Plex Arabic (AR), IBM Plex Mono (metrics)
+- Micro-animations: fadeIn, countUp, pulse-glow, hover lift
+- Reference: Linear.app meets Hex.tech meets Saudi fintech dashboard
 - Removed verify=False from SSL calls in health/detailed endpoint
 - Fixed hardcoded secrets in test file (now uses os.environ.get)
 - Clarified i18n.js has no API keys (pure local translation dictionary)
