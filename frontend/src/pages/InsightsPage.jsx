@@ -7,6 +7,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/components/SeasonalAnnotations";
+import DigestModal from "@/components/DigestModal";
+import { BarChart3, Bell, Eye } from "lucide-react";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
@@ -21,6 +24,8 @@ export default function InsightsPage() {
   const [priceWars, setPriceWars] = useState([]);
   const [restock, setRestock] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [digestOpen, setDigestOpen] = useState(false);
+  const seasonal = useSeasonalEvents();
 
   useEffect(() => {
     setLoading(true);
@@ -52,7 +57,11 @@ export default function InsightsPage() {
           <h1 className="text-2xl font-bold tracking-tight text-[#0A0A0A]">{t("nav_insights")}</h1>
           <p className="text-sm text-[#9CA3AF] mt-0.5">{t("subtitle")}</p>
         </div>
-        <div className="flex gap-1" data-testid="insights-date-range">
+        <div className="flex gap-2 items-center" data-testid="insights-date-range">
+          <Button variant="outline" size="sm" onClick={() => setDigestOpen(true)} className="rounded-md text-xs h-7" data-testid="digest-btn">
+            <BarChart3 className="w-3 h-3 me-1" />Last Digest
+          </Button>
+          <SeasonalToggle show={seasonal.show} toggle={seasonal.toggle} />
           {RANGE_OPTIONS.map((d) => (
             <Button key={d} size="sm" variant={days === d ? "default" : "outline"}
               onClick={() => setDays(d)}
@@ -196,6 +205,8 @@ export default function InsightsPage() {
           </div>
         </div>
       </div>
+
+      <DigestModal open={digestOpen} onClose={() => setDigestOpen(false)} />
     </div>
   );
 }

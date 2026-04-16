@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine, ReferenceArea } from "recharts";
+import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/components/SeasonalAnnotations";
 
 const STORE_COLORS = ["#002DF5", "#00C853", "#FF3B30", "#FFB300", "#8B5CF6", "#EC4899", "#06B6D4"];
 
@@ -30,6 +31,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
   const [history, setHistory] = useState({});
   const [velocity, setVelocity] = useState(null);
   const [loading, setLoading] = useState(false);
+  const seasonal = useSeasonalEvents();
 
   useEffect(() => {
     if (!sku) { setProduct(null); return; }
@@ -143,7 +145,10 @@ export default function ProductDetailPanel({ sku, onClose }) {
             {/* Price History Chart */}
             {historyData.length > 0 && (
               <div>
-                <h4 className="text-xs font-semibold text-[#0A0A0A] mb-2">{t("chart_price_history")}</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-semibold text-[#0A0A0A]">{t("chart_price_history")}</h4>
+                  <SeasonalToggle show={seasonal.show} toggle={seasonal.toggle} />
+                </div>
                 <div className="border border-[#E5E7EB] rounded-md p-3">
                   <ResponsiveContainer width="100%" height={180}>
                     <LineChart data={historyData}>
@@ -152,6 +157,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
                       <YAxis tick={{ fontSize: 9 }} />
                       <Tooltip contentStyle={{ fontSize: 11 }} />
                       <Legend wrapperStyle={{ fontSize: 10 }} />
+                      <SeasonalChartElements show={seasonal.show} />
                       {storeNames.map((store, i) => (
                         <Line key={store} type="monotone" dataKey={store} stroke={STORE_COLORS[i % STORE_COLORS.length]} strokeWidth={2} dot={false} connectNulls />
                       ))}

@@ -639,7 +639,7 @@ async def crawl_salla_tier1(store):
     logger.info(f"Crawl {store['name']}: tier={crawl_log['tier_used']}, endpoint={crawl_log.get('endpoint_used')}, found={crawl_log['products_found']}, new={crawl_log['products_new']}, error={crawl_log['error']}")
     return crawl_log
 
-async def _process_crawled_products(store, all_raw, now):
+async def _process_crawled_products(store, all_raw, now, tier=1, confidence=95):
     """Process raw product data from any crawler tier into products + snapshots."""
     new_count = 0
     snap_count = 0
@@ -690,12 +690,319 @@ async def _process_crawled_products(store, all_raw, now):
                 "store_name": store["name"], "sku": sku_raw,
                 "price": round(price, 2), "original_price": round(original_price, 2),
                 "discount_pct": max(0, disc_pct), "in_stock": bool(in_stock),
-                "qty_available": max(0, qty), "source_tier": 1, "confidence_score": 95,
+                "qty_available": max(0, qty), "source_tier": tier, "confidence_score": confidence,
                 "crawled_at": now,
             })
             snap_count += 1
 
     return new_count, snap_count
+
+# ── Tier 2 XHR Interception Crawler ─────────────────────────
+import os as _os
+_os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
+XHR_PATTERNS = ["/api/", "/products", "/collection", "product-list", "catalog", "items", "inventory"]
+STORE_PAGES = ["/products", "/shop", "/collection/all", "/store", "/"]
+
+async def crawl_tier2_xhr(store):
+    """Tier 2: Use Playwright to intercept XHR/fetch calls from storefront JS."""
+    import time
+    start_time = time.time()
+    domain = store["domain"]
+    base = f"https://{domain}"
+    cached_pattern = store.get("working_xhr_pattern")
+    crawl_log = {
+        "id": str(uuid.uuid4()), "store_id": store["id"], "store_name": store["name"],
+        "tier_attempted": 2, "tier_used": None, "http_status": None,
+        "products_found": 0, "products_new": 0, "products_updated": 0,
+        "snapshots_created": 0, "error": None, "endpoint_used": None,
+        "endpoints_tried": [], "duration_secs": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(), "completed_at": None,
+    }
+    captured_products = []
+    winning_pattern = None
+
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            ctx = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                locale="ar-SA",
+            )
+            page = await ctx.new_page()
+            intercepted = []
+
+            async def handle_response(response):
+                url = response.url
+                ct = response.headers.get("content-type", "")
+                if "json" not in ct:
+                    return
+                if not any(p in url.lower() for p in XHR_PATTERNS):
+                    return
+                try:
+                    body = await response.json()
+                    items = []
+                    if isinstance(body, list):
+                        items = body
+                    elif isinstance(body, dict):
+                        for key in ["data", "products", "items", "results", "collection"]:
+                            if key in body and isinstance(body[key], list):
+                                items = body[key]
+                                break
+                    if items and len(items) >= 1:
+                        intercepted.append({"url": url, "items": items, "count": len(items)})
+                except Exception:
+                    pass
+
+            page.on("response", handle_response)
+            page_loaded = False
+            for path in STORE_PAGES:
+                try:
+                    target = f"{base}{path}"
+                    resp = await page.goto(target, wait_until="networkidle", timeout=20000)
+                    if resp and resp.status < 400:
+                        page_loaded = True
+                        crawl_log["endpoints_tried"].append({"endpoint": path, "status": resp.status, "products": 0, "error": None})
+                        await page.wait_for_timeout(3000)
+                        for _ in range(3):
+                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                            await page.wait_for_timeout(1500)
+                        await page.wait_for_timeout(4000)
+                        break
+                    else:
+                        crawl_log["endpoints_tried"].append({"endpoint": path, "status": resp.status if resp else 0, "products": 0, "error": f"HTTP {resp.status if resp else 'none'}"})
+                except Exception as e:
+                    crawl_log["endpoints_tried"].append({"endpoint": path, "status": 0, "products": 0, "error": str(e)[:80]})
+
+            await browser.close()
+
+            if intercepted:
+                best = max(intercepted, key=lambda x: x["count"])
+                raw_items = best["items"]
+                winning_pattern = best["url"]
+                for ep in crawl_log["endpoints_tried"]:
+                    ep["products"] = best["count"]
+                captured_products = raw_items
+                crawl_log["endpoint_used"] = winning_pattern
+
+    except ImportError:
+        crawl_log["error"] = "Playwright not installed"
+    except Exception as e:
+        crawl_log["error"] = f"Tier 2 error: {str(e)[:200]}"
+
+    now = datetime.now(timezone.utc)
+    duration = round(time.time() - start_time, 1)
+    crawl_log["duration_secs"] = duration
+
+    if captured_products and len(captured_products) >= 5:
+        crawl_log["tier_used"] = 2
+        crawl_log["http_status"] = 200
+        crawl_log["products_found"] = len(captured_products)
+        new_c, snap_c = await _process_crawled_products(store, captured_products, now, tier=2, confidence=88)
+        crawl_log["products_new"] = new_c
+        crawl_log["products_updated"] = len(captured_products) - new_c
+        crawl_log["snapshots_created"] = snap_c
+        if winning_pattern:
+            await db.stores.update_one({"id": store["id"]}, {"$set": {"working_xhr_pattern": winning_pattern}})
+    else:
+        count = len(captured_products) if captured_products else 0
+        if not crawl_log["error"]:
+            crawl_log["error"] = f"Tier 2 insufficient — captured {count} products (need 5+). Escalating to Tier 3"
+
+    crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
+    await db.crawl_logs.insert_one(crawl_log)
+    await db.stores.update_one({"id": store["id"]}, {"$set": {
+        "last_crawled_at": crawl_log["completed_at"],
+        "last_crawl_tier": crawl_log["tier_used"],
+        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
+        "last_crawl_error": crawl_log["error"],
+        "last_crawl_products": crawl_log["products_found"],
+        "last_crawl_endpoint": crawl_log.get("endpoint_used"),
+    }})
+    logger.info(f"Tier2 {store['name']}: tier={crawl_log['tier_used']}, found={crawl_log['products_found']}, duration={duration}s, pattern={winning_pattern}")
+    return crawl_log
+
+# ── Tier 3 HTML Fallback Crawler ────────────────────────────
+SELECTOR_PROFILES = {
+    "salla": {
+        "card": [".product-card", ".product-item", "[data-product]", ".s-product-card-entry"],
+        "name": [".product-card__title", ".product-name", "h3", "h2", ".s-product-card-entry__title"],
+        "price": [".product-price", ".price", "[data-price]", ".s-product-card-entry__price"],
+        "orig": [".product-price--compare", ".compare-price", "s", "del"],
+        "image": ["img.product-card__image", ".product-image img", "img"],
+    },
+    "zid": {
+        "card": [".product-item", ".zid-product", ".product-card"],
+        "name": [".item-title", ".product-title", "h3"],
+        "price": [".item-price", ".product-price", ".price-current"],
+        "orig": [".item-price-old", ".price-old", "del"],
+        "image": [".item-image img", ".product-img img", "img"],
+    },
+    "shopify": {
+        "card": [".product-card", ".grid-product", "[data-product-card]"],
+        "name": [".product-card__title", ".grid-product__title", "h3"],
+        "price": [".product-card__price", ".grid-product__price", ".price"],
+        "orig": [".price--compare", "del", "s"],
+        "image": ["img.product-card__image", ".grid-product__image-wrap img", "img"],
+    },
+}
+
+def _extract_price_from_text(text):
+    if not text:
+        return 0
+    nums = re.findall(r'[\d,]+\.?\d*', text.replace(",", ""))
+    return float(nums[0]) if nums else 0
+
+async def crawl_tier3_html(store):
+    """Tier 3: Playwright renders page, BeautifulSoup extracts with CSS selectors."""
+    import time
+    from bs4 import BeautifulSoup
+    start_time = time.time()
+    domain = store["domain"]
+    base = f"https://{domain}"
+    platform = store.get("platform", "custom").lower()
+    crawl_log = {
+        "id": str(uuid.uuid4()), "store_id": store["id"], "store_name": store["name"],
+        "tier_attempted": 3, "tier_used": None, "http_status": None,
+        "products_found": 0, "products_new": 0, "products_updated": 0,
+        "snapshots_created": 0, "error": None, "endpoint_used": None,
+        "endpoints_tried": [], "duration_secs": 0,
+        "started_at": datetime.now(timezone.utc).isoformat(), "completed_at": None,
+    }
+    html_content = None
+
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            ctx = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", locale="ar-SA")
+            page = await ctx.new_page()
+            for path in STORE_PAGES:
+                try:
+                    resp = await page.goto(f"{base}{path}", wait_until="networkidle", timeout=20000)
+                    if resp and resp.status < 400:
+                        crawl_log["endpoints_tried"].append({"endpoint": path, "status": resp.status, "products": 0, "error": None})
+                        for _ in range(3):
+                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                            await page.wait_for_timeout(1500)
+                        await page.wait_for_timeout(2000)
+                        html_content = await page.content()
+                        crawl_log["endpoint_used"] = path
+                        break
+                    else:
+                        crawl_log["endpoints_tried"].append({"endpoint": path, "status": resp.status if resp else 0, "products": 0, "error": f"HTTP {resp.status if resp else 'none'}"})
+                except Exception as e:
+                    crawl_log["endpoints_tried"].append({"endpoint": path, "status": 0, "products": 0, "error": str(e)[:80]})
+            await browser.close()
+    except Exception as e:
+        crawl_log["error"] = f"Tier 3 browser error: {str(e)[:200]}"
+
+    products_extracted = []
+    if html_content:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html_content, "html.parser")
+        profiles_to_try = [SELECTOR_PROFILES.get(platform, {})] + [v for k, v in SELECTOR_PROFILES.items() if k != platform]
+        for profile in profiles_to_try:
+            if not profile.get("card"):
+                continue
+            for card_sel in profile["card"]:
+                cards = soup.select(card_sel)
+                if len(cards) < 3:
+                    continue
+                for card in cards:
+                    name = ""
+                    for ns in profile.get("name", ["h3"]):
+                        el = card.select_one(ns)
+                        if el:
+                            name = el.get_text(strip=True)
+                            break
+                    if not name:
+                        continue
+                    price = 0
+                    for ps in profile.get("price", [".price"]):
+                        el = card.select_one(ps)
+                        if el:
+                            price = _extract_price_from_text(el.get_text(strip=True))
+                            break
+                    orig_price = price
+                    for ops in profile.get("orig", ["del"]):
+                        el = card.select_one(ops)
+                        if el:
+                            op = _extract_price_from_text(el.get_text(strip=True))
+                            if op > price:
+                                orig_price = op
+                            break
+                    img = ""
+                    for ims in profile.get("image", ["img"]):
+                        el = card.select_one(ims)
+                        if el:
+                            img = el.get("src", el.get("data-src", ""))
+                            break
+                    products_extracted.append({"name": name, "price": price, "sale_price": price if price < orig_price else 0, "original_price": orig_price, "image": {"url": img}, "quantity": 0, "status": "sale"})
+                if products_extracted:
+                    break
+            if products_extracted:
+                break
+        # Try JSON-LD as fallback
+        if len(products_extracted) < 5:
+            for script in soup.select('script[type="application/ld+json"]'):
+                try:
+                    import json
+                    ld = json.loads(script.string)
+                    items = ld if isinstance(ld, list) else ld.get("itemListElement", [])
+                    for item in items:
+                        prod = item.get("item", item)
+                        if prod.get("@type") == "Product":
+                            offer = prod.get("offers", {})
+                            products_extracted.append({"name": prod.get("name", ""), "price": float(offer.get("price", 0)), "quantity": 0, "status": "sale", "image": {"url": prod.get("image", "")}})
+                except Exception:
+                    pass
+
+    now = datetime.now(timezone.utc)
+    duration = round(time.time() - start_time, 1)
+    crawl_log["duration_secs"] = duration
+
+    if products_extracted and len(products_extracted) >= 3:
+        crawl_log["tier_used"] = 3
+        crawl_log["http_status"] = 200
+        crawl_log["products_found"] = len(products_extracted)
+        new_c, snap_c = await _process_crawled_products(store, products_extracted, now, tier=3, confidence=75)
+        crawl_log["products_new"] = new_c
+        crawl_log["products_updated"] = len(products_extracted) - new_c
+        crawl_log["snapshots_created"] = snap_c
+    else:
+        if not crawl_log["error"]:
+            crawl_log["error"] = f"Tier 3 extracted {len(products_extracted)} products — all tiers exhausted"
+
+    crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
+    await db.crawl_logs.insert_one(crawl_log)
+    await db.stores.update_one({"id": store["id"]}, {"$set": {
+        "last_crawled_at": crawl_log["completed_at"],
+        "last_crawl_tier": crawl_log["tier_used"],
+        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
+        "last_crawl_error": crawl_log["error"],
+        "last_crawl_products": crawl_log["products_found"],
+        "last_crawl_endpoint": crawl_log.get("endpoint_used"),
+    }})
+    logger.info(f"Tier3 {store['name']}: tier={crawl_log['tier_used']}, found={crawl_log['products_found']}, duration={duration}s")
+    return crawl_log
+
+# ── Unified Crawl Orchestrator ──────────────────────────────
+async def crawl_store_waterfall(store):
+    """Run the 3-tier waterfall crawler for a store."""
+    platform = store.get("platform", "").lower()
+    # Tier 1: JSON endpoints (Salla only for now)
+    if platform in ("salla", "shopify", "zid"):
+        result = await crawl_salla_tier1(store)
+        if result.get("tier_used"):
+            return result
+    # Tier 2: XHR interception
+    result = await crawl_tier2_xhr(store)
+    if result.get("tier_used"):
+        return result
+    # Tier 3: HTML scraping
+    result = await crawl_tier3_html(store)
+    return result
 
 # ── Scheduler Helpers ────────────────────────────────────────
 async def scheduled_crawl_job(store_id: str):
@@ -708,10 +1015,7 @@ async def scheduled_crawl_job(store_id: str):
     if not store or not store.get("is_active", True):
         return
     platform = store.get("platform", "").lower()
-    if platform == "salla":
-        await crawl_salla_tier1(store)
-    else:
-        logger.info(f"Scheduler: Skipping {store['name']} — {platform} crawler not implemented")
+    await crawl_store_waterfall(store)
 
 def register_crawl_job(store_id, store_name, priority, offset_minutes=0):
     """Register a crawl job for a store in the scheduler."""
@@ -798,25 +1102,7 @@ async def trigger_crawl(store_id: str, user=Depends(get_user)):
     store = await db.stores.find_one({"id": store_id}, {"_id": 0})
     if not store:
         raise HTTPException(404, "Store not found")
-    platform = store.get("platform", "").lower()
-    if platform == "salla":
-        result = await crawl_salla_tier1(store)
-    else:
-        # For non-Salla stores, simulate crawl (Tier 1 not available)
-        now = datetime.now(timezone.utc).isoformat()
-        result = {
-            "id": str(uuid.uuid4()), "store_id": store_id, "store_name": store["name"],
-            "tier_attempted": 1, "tier_used": None, "http_status": 0,
-            "products_found": 0, "products_new": 0, "products_updated": 0,
-            "snapshots_created": 0, "error": f"Tier 1 crawler not implemented for {platform} platform yet",
-            "started_at": now, "completed_at": now,
-        }
-        await db.crawl_logs.insert_one(result)
-        await db.stores.update_one({"id": store_id}, {"$set": {
-            "last_crawled_at": now, "last_crawl_tier": None,
-            "last_crawl_status": "unsupported", "last_crawl_error": result["error"],
-            "last_crawl_products": 0,
-        }})
+    result = await crawl_store_waterfall(store)
     return {
         "message": f"Crawl {'completed' if result.get('tier_used') else 'attempted'} for {store['name']}",
         "store_id": store_id,
@@ -827,6 +1113,7 @@ async def trigger_crawl(store_id: str, user=Depends(get_user)):
         "snapshots_created": result.get("snapshots_created", 0),
         "error": result.get("error"),
         "last_crawled_at": result.get("completed_at"),
+        "duration_secs": result.get("duration_secs", 0),
     }
 
 @router.get("/stores/{store_id}/crawl-logs")
@@ -1747,6 +2034,115 @@ async def export_csv(days: int = Query(30), user=Depends(get_user)):
     output.seek(0)
     return StreamingResponse(io.BytesIO(output.getvalue().encode("utf-8-sig")), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=daleel_pets_export.csv"})
 
+# ── Weekly Market Digest ─────────────────────────────────────
+async def generate_market_digest():
+    """Generate the weekly market intelligence digest."""
+    now = datetime.now(timezone.utc)
+    week_end = now.date()
+    week_start = week_end - timedelta(days=7)
+    since = now - timedelta(days=7)
+    prev_start = since - timedelta(days=7)
+
+    # Section 1: Top 5 Price Drops
+    snaps_week = await db.product_snapshots.find({"crawled_at": {"$gte": since}}, {"_id": 0}).sort("crawled_at", 1).to_list(100000)
+    by_sku_store = {}
+    for s in snaps_week:
+        by_sku_store.setdefault((s["sku"], s["store_id"]), []).append(s)
+    price_drops = []
+    for (sku, sid), slist in by_sku_store.items():
+        if len(slist) < 2:
+            continue
+        first_p, last_p = slist[0]["price"], slist[-1]["price"]
+        if last_p < first_p:
+            drop_pct = round((1 - last_p / first_p) * 100, 1) if first_p > 0 else 0
+            if drop_pct >= 5:
+                p = await db.products.find_one({"sku": sku}, {"_id": 0, "name_ar": 1})
+                price_drops.append({"sku": sku, "name_ar": p.get("name_ar", sku) if p else sku, "store_name": slist[-1].get("store_name", ""), "old_price": first_p, "new_price": last_p, "drop_pct": drop_pct})
+    price_drops.sort(key=lambda x: x["drop_pct"], reverse=True)
+
+    # Section 2: New Products
+    new_prods = await db.products.find({"first_seen_at": {"$gte": since.isoformat()}}, {"_id": 0, "name_ar": 1, "sku": 1, "category": 1, "animal_type": 1}).sort("first_seen_at", -1).limit(10).to_list(10)
+
+    # Section 3: OOS Events
+    oos_events = []
+    for (sku, sid), slist in by_sku_store.items():
+        if len(slist) < 2:
+            continue
+        for i in range(1, len(slist)):
+            if slist[i-1].get("in_stock") and not slist[i].get("in_stock"):
+                p = await db.products.find_one({"sku": sku}, {"_id": 0, "name_ar": 1})
+                oos_events.append({"sku": sku, "name_ar": p.get("name_ar", sku) if p else sku, "store_name": slist[i].get("store_name", ""), "price": slist[i]["price"]})
+                break
+
+    # Section 4: Quick Wins (reuse scanner)
+    quick_wins = []
+    try:
+        from starlette.testclient import TestClient
+    except Exception:
+        pass
+
+    # Section 5: Market Summary
+    total_skus = await db.products.count_documents({})
+    total_rev_week = sum(s.get("price", 0) * max(0, by_sku_store.get((s["sku"], s["store_id"]), [{}])[0].get("qty_available", 0) - s.get("qty_available", 0)) for s in snaps_week[-100:] if s.get("qty_available", 0) >= 0)
+    prev_snaps = await db.product_snapshots.count_documents({"crawled_at": {"$gte": prev_start, "$lt": since}})
+
+    # Most active store
+    store_changes = {}
+    for (sku, sid), slist in by_sku_store.items():
+        if len(slist) >= 2:
+            sname = slist[-1].get("store_name", "")
+            store_changes[sname] = store_changes.get(sname, 0) + 1
+    most_active = max(store_changes, key=store_changes.get) if store_changes else "N/A"
+
+    digest = {
+        "id": str(uuid.uuid4()),
+        "generated_at": now.isoformat(),
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "delivery_status": "logged",
+        "delivered_at": now.isoformat(),
+        "content": {
+            "top_price_drops": price_drops[:5],
+            "new_products": new_prods[:3],
+            "oos_events": oos_events[:5],
+            "quick_wins": quick_wins[:3],
+            "market_summary": {
+                "total_skus": total_skus,
+                "total_price_drops": len(price_drops),
+                "total_new_products": len(new_prods),
+                "total_oos_events": len(oos_events),
+                "most_active_store": most_active,
+                "snapshots_this_week": len(snaps_week),
+            },
+        },
+    }
+    await db.market_digests.insert_one(digest)
+    digest.pop("_id", None)
+    logger.info(f"[DIGEST] Week {week_start} - {week_end}: {len(price_drops)} drops, {len(new_prods)} new, {len(oos_events)} OOS")
+    return digest
+
+def deliver_digest(digest):
+    """Deliver digest. Currently logs to console. Swap to Resend for real email."""
+    logger.info(f"[DIGEST EMAIL] Generated: {digest['generated_at']}, Week: {digest['week_start']} to {digest['week_end']}")
+    c = digest["content"]
+    logger.info(f"  Price Drops: {len(c['top_price_drops'])}, New: {len(c['new_products'])}, OOS: {len(c['oos_events'])}")
+
+@router.get("/digests")
+async def list_digests(user=Depends(get_user)):
+    digests = await db.market_digests.find({}, {"_id": 0}).sort("generated_at", -1).limit(12).to_list(12)
+    return digests
+
+@router.get("/digests/latest")
+async def latest_digest(user=Depends(get_user)):
+    digest = await db.market_digests.find_one({}, {"_id": 0}, sort=[("generated_at", -1)])
+    return digest or {}
+
+@router.post("/digests/generate")
+async def trigger_digest(user=Depends(get_user)):
+    digest = await generate_market_digest()
+    deliver_digest(digest)
+    return digest
+
 # ── Root ────────────────────────────────────────────────────
 @router.get("/")
 async def root():
@@ -1772,7 +2168,9 @@ async def startup():
         register_crawl_job(s["id"], s["name"], s.get("priority", 3), idx * 15)
     if not scheduler.running:
         scheduler.start()
-    logger.info(f"Scheduler started with {len(stores)} crawl jobs")
+    # Register weekly digest job — Sunday 05:00 UTC (08:00 Riyadh)
+    scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0, id="weekly_digest", replace_existing=True)
+    logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest")
 
 @app.on_event("shutdown")
 async def shutdown():

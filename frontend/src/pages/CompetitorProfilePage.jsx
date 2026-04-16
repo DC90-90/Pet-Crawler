@@ -6,7 +6,8 @@ import { ArrowLeft, Store } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, PieChart, Pie, Cell, Legend, ReferenceLine, ReferenceArea } from "recharts";
+import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/components/SeasonalAnnotations";
 
 const PIE_COLORS = ["#002DF5", "#00C853", "#FF3B30", "#FFB300", "#8B5CF6", "#EC4899", "#06B6D4", "#F97316", "#6366F1", "#84CC16"];
 
@@ -17,6 +18,7 @@ export default function CompetitorProfilePage() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [chartMode, setChartMode] = useState("weekly"); // weekly or daily
+  const seasonal = useSeasonalEvents();
 
   useEffect(() => {
     if (!storeId) return;
@@ -71,7 +73,8 @@ export default function CompetitorProfilePage() {
       <div className="bg-white border border-[#E5E7EB] rounded-md p-5">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-[#0A0A0A]">Revenue Trend (90 days)</h3>
-          <div className="flex gap-1">
+          <div className="flex gap-2 items-center">
+            <SeasonalToggle show={seasonal.show} toggle={seasonal.toggle} />
             {["weekly", "daily"].map((m) => (
               <Button key={m} size="sm" variant={chartMode === m ? "default" : "outline"}
                 onClick={() => setChartMode(m)}
@@ -87,6 +90,7 @@ export default function CompetitorProfilePage() {
               <XAxis dataKey={chartMode === "weekly" ? "week" : "date"} tick={{ fontSize: 9 }} tickFormatter={(v) => v.slice(-6)} />
               <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
               <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Revenue"]} />
+              <SeasonalChartElements show={seasonal.show} />
               <Bar dataKey="revenue" fill="#002DF5" radius={[2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>

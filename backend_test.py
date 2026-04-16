@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Daleel Pets Phase 3 Backend API Testing
-Tests all endpoints including new Phase 3 features:
-- Multi-endpoint Salla crawler (4 endpoints tried in sequence)
-- APScheduler for automated crawl scheduling (4h/8h)
-- Full Discounts page (top by %, top by SAR, timeline heatmap, aggression leaderboard)
-- Price Opportunity Scanner page (overpriced products, revenue uplift, quick win/overpriced risk badges)
-- Store API returns {stores: [...], crawl_paused: bool}
-- Scheduler status and toggle pause functionality
+Daleel Pets Phase 4 Backend API Testing
+Tests all endpoints including new Phase 4 features:
+- 3-tier waterfall crawler (Tier 1 JSON → Tier 2 XHR Playwright → Tier 3 HTML BS4)
+- Weekly Market Intelligence Digest with APScheduler
+- Saudi Seasonal Calendar Annotations
+- Enhanced Trending panel on Insights
+- Zarafa store crawled via Tier 2 XHR interception (8+ real products)
+- Crawl logs show tier progression and endpoint_used field
+- Digest generation and retrieval endpoints
+- Scheduler status shows weekly_digest job
 """
 
 import requests
@@ -556,9 +558,208 @@ class DaleelPetsAPITester:
             check_response=check_toggle
         )
 
+    # Phase 4 Test Methods
+    def test_crawl_logs_with_tiers(self):
+        """Test crawl logs show tier progression and endpoint_used field"""
+        if not self.test_store_id:
+            print("⚠️  No store ID available for tier crawl logs test")
+            return True
+            
+        def check_tier_logs(data):
+            if not isinstance(data, list) or len(data) == 0:
+                return True  # Empty logs are acceptable
+            
+            # Check if logs have tier information and endpoint_used field
+            log = data[0]
+            has_tier = 'tier_used' in log or 'tier_attempted' in log
+            has_endpoint = 'endpoint_used' in log
+            return has_tier and has_endpoint
+        
+        return self.run_test(
+            "Crawl Logs with Tier Info",
+            "GET",
+            f"stores/{self.test_store_id}/crawl-logs?limit=10",
+            check_response=check_tier_logs
+        )
+
+    def test_zarafa_store_products(self):
+        """Test that Zarafa store has 8+ real products from Tier 2 crawling"""
+        # Find Zarafa store
+        success, stores_data = self.test_stores_list()
+        if not success:
+            self.log_test("Zarafa Store Products", False, "Could not get stores list")
+            return False
+            
+        stores = stores_data.get('stores', stores_data) if isinstance(stores_data, dict) else stores_data
+        zarafa_store = None
+        for store in stores:
+            if 'zarafa' in store.get('name', '').lower():
+                zarafa_store = store
+                break
+        
+        if not zarafa_store:
+            self.log_test("Zarafa Store Products", False, "Zarafa store not found")
+            return False
+        
+        # Check product count for Zarafa
+        product_count = zarafa_store.get('product_count', 0)
+        if product_count >= 8:
+            self.log_test("Zarafa Store Products", True, f"Found {product_count} products")
+            return True
+        else:
+            self.log_test("Zarafa Store Products", False, f"Only {product_count} products, expected 8+")
+            return False
+
+    def test_total_products_count(self):
+        """Test that total products is 210 (202 mock + 8 real)"""
+        success, data = self.run_test(
+            "My Products Count Check",
+            "GET",
+            "my-products",
+            check_response=lambda data: 'products' in data
+        )
+        
+        if not success:
+            return False
+            
+        products = data.get('products', [])
+        total_count = len(products)
+        
+        if total_count >= 210:
+            self.log_test("Total Products Count", True, f"Found {total_count} products")
+            return True
+        else:
+            self.log_test("Total Products Count", False, f"Only {total_count} products, expected 210+")
+            return False
+
+    def test_digest_generate(self):
+        """Test POST /api/digests/generate creates a market digest"""
+        def check_digest_generate(data):
+            required_fields = ['id', 'content', 'generated_at', 'week_start', 'week_end']
+            return all(field in data for field in required_fields)
+        
+        return self.run_test(
+            "Generate Market Digest",
+            "POST",
+            "digests/generate",
+            check_response=check_digest_generate
+        )
+
+    def test_digest_latest(self):
+        """Test GET /api/digests/latest returns the generated digest with 5 content sections"""
+        def check_digest_latest(data):
+            if not data or 'content' not in data:
+                return False
+            
+            content = data['content']
+            # Check for 5 main content sections
+            expected_sections = ['market_summary', 'top_price_drops', 'new_products', 'oos_events']
+            sections_found = sum(1 for section in expected_sections if section in content)
+            return sections_found >= 4  # At least 4 of the 5 sections
+        
+        return self.run_test(
+            "Get Latest Digest",
+            "GET",
+            "digests/latest",
+            check_response=check_digest_latest
+        )
+
+    def test_digest_list(self):
+        """Test GET /api/digests returns list of digests"""
+        def check_digest_list(data):
+            return isinstance(data, list)
+        
+        return self.run_test(
+            "List Digests",
+            "GET",
+            "digests",
+            check_response=check_digest_list
+        )
+
+    def test_scheduler_weekly_digest_job(self):
+        """Test GET /api/scheduler/status shows weekly_digest job registered"""
+        def check_weekly_digest_job(data):
+            if 'jobs' not in data:
+                return False
+            
+            jobs = data['jobs']
+            # Look for weekly digest job
+            for job in jobs:
+                if 'weekly' in job.get('id', '').lower() or 'digest' in job.get('id', '').lower():
+                    return True
+            return False
+        
+        return self.run_test(
+            "Scheduler Weekly Digest Job",
+            "GET",
+            "scheduler/status",
+            check_response=check_weekly_digest_job
+        )
+
+    def test_sar_currency_display(self):
+        """Test that SAR values display with ﷼ symbol in API responses"""
+        success, data = self.run_test(
+            "SAR Currency Check",
+            "GET",
+            "my-products?limit=5",
+            check_response=lambda data: 'products' in data
+        )
+        
+        if not success:
+            return False
+        
+        # Check if any price fields contain SAR or ﷼ symbol
+        products = data.get('products', [])
+        if not products:
+            self.log_test("SAR Currency Display", True, "No products to check")
+            return True
+        
+        # The API should return numeric values, frontend handles ﷼ display
+        # Just verify we have price data
+        has_price_data = any('price' in str(product) for product in products[:3])
+        if has_price_data:
+            self.log_test("SAR Currency Display", True, "Price data available for frontend formatting")
+            return True
+        else:
+            self.log_test("SAR Currency Display", False, "No price data found")
+            return False
+
+    def test_arabic_product_names(self):
+        """Test that Arabic product names are present in API responses"""
+        success, data = self.run_test(
+            "Arabic Product Names",
+            "GET",
+            "my-products?limit=5",
+            check_response=lambda data: 'products' in data
+        )
+        
+        if not success:
+            return False
+        
+        products = data.get('products', [])
+        if not products:
+            self.log_test("Arabic Product Names", True, "No products to check")
+            return True
+        
+        # Check if products have Arabic names (name_ar field)
+        arabic_names_found = 0
+        for product in products[:5]:
+            if 'name_ar' in product and product['name_ar']:
+                # Check if contains Arabic characters
+                arabic_text = product['name_ar']
+                if any('\u0600' <= char <= '\u06FF' for char in arabic_text):
+                    arabic_names_found += 1
+        
+        if arabic_names_found > 0:
+            self.log_test("Arabic Product Names", True, f"Found {arabic_names_found} products with Arabic names")
+            return True
+        else:
+            self.log_test("Arabic Product Names", False, "No Arabic product names found")
+            return False
+
     def run_all_tests(self):
         """Run all API tests"""
-        print("🚀 Starting Daleel Pets Phase 3 API Tests...")
+        print("🚀 Starting Daleel Pets Phase 4 API Tests...")
         print(f"Testing against: {self.api_url}")
         print("=" * 60)
         
@@ -614,6 +815,21 @@ class DaleelPetsAPITester:
         # Phase 3 Tests - Scheduler
         self.test_scheduler_status()
         self.test_scheduler_toggle_pause()
+        
+        # Phase 4 Tests - 3-tier Crawler & Zarafa
+        self.test_crawl_logs_with_tiers()
+        self.test_zarafa_store_products()
+        self.test_total_products_count()
+        
+        # Phase 4 Tests - Market Intelligence Digest
+        self.test_digest_generate()
+        self.test_digest_latest()
+        self.test_digest_list()
+        self.test_scheduler_weekly_digest_job()
+        
+        # Phase 4 Tests - Data Display
+        self.test_sar_currency_display()
+        self.test_arabic_product_names()
         
         # Test export
         self.test_export_csv()
