@@ -1,40 +1,36 @@
-# Daleel Pets PRD - Phase 2 Complete
+# Daleel Pets PRD - Phase 3 Complete
 
 ## What's Been Implemented
 
-### Phase 1 (MVP) - April 15, 2026
-- JWT Auth (login/register/me)
-- My Products page (KPI cards, dense table, filters, sorting, date picker, CSV export)
-- Insights page (summary KPIs, revenue leaderboard, top sellers, trending, price wars, restock, gaps)
-- Product Detail side panel (price history chart, velocity chart, store prices, confidence badges)
-- Store Registry (CRUD, 7 seeded Saudi pet stores)
-- Arabic/English bilingual UI with RTL
-- 35 products, 1,746 snapshots
+### Phase 1 (MVP)
+- JWT Auth, My Products page, Insights page, Product Detail panel, Store Registry
+- Arabic/English bilingual UI with RTL, 35 products
 
-### Phase 2 - April 15, 2026
-1. **Tier 1 Live Salla Crawler**: Real HTTP calls to Salla stores (zarafaksa.com tested), graceful fallback on failure, crawl logging with tier/status/HTTP code, crawl history expansion in Store Registry
-2. **Alerts Page**: Full CRUD (create/toggle/delete), 5 alert types (price_drop, price_increase, out_of_stock, back_in_stock, low_stock), alert feed with 30d history, Check Now manual trigger, email logging (console, Resend-ready)
-3. **Competitor Profiles Page**: Per-store analytics with KPIs (catalog size, active SKUs, est monthly revenue, avg discount), revenue trend chart (weekly/daily toggle, 90 days), top 10 products, category distribution pie chart, new arrivals (7d), recently OOS
-4. **Expanded Mock Data**: 202 products across 14 categories (cat food dry/wet, cat litter, cat accessories, dog food dry/wet, dog accessories, bird, fish, reptile, grooming, healthcare, small animals, toys) distributed across 7 stores with 90 days of snapshot history (31,450 snapshots)
+### Phase 2
+- Tier 1 Salla Crawler (single endpoint), Alerts page, Competitor Profiles page
+- Expanded to 202 products, 31K snapshots, 90 days history
+
+### Phase 3 — April 15, 2026
+1. **Multi-Endpoint Salla Crawler**: Tries 4 endpoints in sequence (/api/v2/products, /products.json, /api/store/products, /api/product/list). Caches working endpoint per store. Shows all attempted endpoints in crawl logs. Auto-escalates to "Tier 2 stub" when all fail.
+2. **APScheduler**: Priority stores (P1) crawl every 4h, standard (P2) every 8h. 15min stagger. Auto-registers on startup. Registers/unregisters when stores added/deleted. Pause All Crawls toggle. Next crawl time shown per store.
+3. **Discounts Page**: Top discounts by % and SAR (filterable by store/category). Discount Timeline (90-day stacked bar chart by store/week). Aggression Leaderboard with composite score (avg depth 40%, frequency 35%, max discount 25%) + labels (Most Aggressive, Most Stable, Highest Single Discount).
+4. **Price Opportunity Scanner**: Summary cards (overpriced count, revenue uplift, zero-sales-overpriced). Main table sorted by revenue uplift with badges (Quick Win, Overpriced Risk, Overpriced). Well Positioned and Undercut Opportunity sections. Detail panel with price distribution chart and price recommendations. Date range filter (7/14/30D).
 
 ## Data Summary
-- 7 stores: Zarafa, Panda Store, Lana Pets, Cute Pets, Hamtaro, Caty Store, Petsy
-- 202 products with Arabic/English names
-- 31,450 price snapshots over 90 days
-- 14 product categories
-- ~48K units sold est, ~5M SAR revenue est
+- 202 products, 31,450+ snapshots, 90 days, 7 stores, 14 categories
+- 6 pages + competitor profiles + product detail panel
+- 34+ API endpoints, 100% backend test pass rate
 
 ## Backlog
 ### P1
-- [ ] Live Salla/Shopify/Zid crawler deployment (Tier 1 infra ready)
-- [ ] Tier 2 XHR interception crawler
-- [ ] Discounts page (timeline, aggression scoring)
-- [ ] Scheduled crawl jobs (Bull/Redis)
+- [ ] Tier 2 XHR interception crawler (Playwright)
+- [ ] Tier 3 HTML crawl
+- [ ] Real email alerts (Resend - one-line swap ready)
+- [ ] Saudi seasonal calendar annotations on charts
 
 ### P2
-- [ ] Tier 3 HTML crawl with Playwright
 - [ ] Tier 4 Buyer Account Layer
-- [ ] Real email alerts (Resend integration - one-line swap ready)
-- [ ] Saudi seasonal calendar annotations (Ramadan, Eid)
-- [ ] SKU deduplication across stores (Arabic name normalization)
-- [ ] Brand/weight regex extraction improvements
+- [ ] SKU deduplication across stores
+- [ ] Brand/weight regex improvements
+- [ ] Admin user management
+- [ ] Export functionality for all pages
