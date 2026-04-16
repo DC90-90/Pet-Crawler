@@ -1,61 +1,74 @@
-# Daleel Pets PRD - Phase 4 Complete
+# Daleel Pets (دليل بيتس) — Product Requirements Document
 
-## Platform Summary
+## Problem Statement
+SaaS web application for Saudi pet store owners to track and monitor competitor stores in the Saudi pet market (Zarafa, Petsy, Panda Store, etc.). Monitors product prices, stock/quantity, best sellers, categories, discounts, and out-of-stock alerts.
 
-### Pages (8 total + sub-pages)
-1. My Products — KPI dashboard + dense product table + Product Detail panel
-2. Insights — Summary KPIs, Revenue Leaderboard, Top Sellers, Trending, Price Wars, Restock, Gaps + Digest modal
-3. Price Scanner — Overpriced products, revenue uplift, Quick Win/Overpriced Risk badges, detail panel
-4. Discounts — Top by %, Top by SAR, 90-day Timeline, Aggression Leaderboard
-5. Alerts — CRUD, 5 alert types, alert feed, Check Now
-6. Stores — Registry, CRUD, crawl triggers, crawl logs, scheduler status + Competitor Profiles (sub-page)
-7. Login — JWT auth
-8. Competitor Profiles — Per-store: revenue trend (weekly/daily), top 10, category pie, new arrivals, OOS
+## Tech Stack
+- **Frontend**: React 18, Tailwind CSS, Shadcn/UI, Recharts, Zustand, react-i18next
+- **Backend**: FastAPI, Motor (async MongoDB), APScheduler, slowapi, Playwright, BeautifulSoup4
+- **Database**: MongoDB 7
+- **Auth**: PyJWT + bcrypt, httpOnly cookies
+- **Deployment**: Docker Compose, Nginx reverse proxy
 
-### API Endpoints (45+)
-Auth (5): register, login, me, logout, protected
-Stores (7): list, create, update, delete, crawl, crawl-logs, profile
-Products (5): list, my-products, detail, history, velocity
-Insights (7): summary, leaderboard, top-sellers, trending, gaps, price-wars, restock
-Discounts (4): top-pct, top-amount, timeline, aggression
-Scanner (1): opportunities
-Alerts (6): list, create, toggle, delete, feed, check
-Digests (3): list, latest, generate
-Scheduler (2): status, toggle-pause
-Filters (2): list, create
-Export (1): CSV
-Root (1)
+## Architecture
+- 3-Tier Waterfall Crawler: API JSON → Playwright XHR → HTML Parsing
+- JWT auth via httpOnly cookies (SameSite=Lax)
+- Rate limiting: 5/min/IP on auth endpoints (slowapi)
+- Security headers: CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy
 
-### Crawler Architecture
-- Tier 1: 4 JSON endpoints (Salla/Shopify/Zid) — all returning 410 for zarafaksa
-- Tier 2: Playwright XHR interception — WORKING, captured real products from Zarafa via api.salla.dev
-- Tier 3: Playwright + BeautifulSoup HTML parsing with platform-specific CSS selectors
-- Waterfall orchestrator: Tier 1 → Tier 2 → Tier 3 automatic cascade
-- APScheduler: P1 every 4h, P2 every 8h, staggered 15min, weekly digest Sunday 08:00 Riyadh
+## Completed Features
 
-### Data
-- 218 products (202 mock + 16 real crawled from Zarafa)
-- 31,450+ snapshots over 90 days
-- 7 Saudi pet stores, 14+ categories
-- Saudi Seasonal Events: Ramadan, Eid Al-Fitr, Eid Al-Adha, National Day, Founding Day, White Friday
+### Phase 1-2: Foundation (Done)
+- FastAPI + MongoDB + React project structure
+- JWT authentication with httpOnly cookie storage
+- Admin seed account (admin@daleelpets.com)
+- 200+ product seed data with 90-day snapshot history
+- Arabic/English localization (RTL support)
 
-### Phase 4 Features (April 16, 2026)
-1. Tier 2 XHR Crawler — Live, captured 172 Zarafa products via Playwright interception
-2. Tier 3 HTML Crawler — BeautifulSoup with Salla/Zid/Shopify/custom selector profiles
-3. Weekly Market Digest — APScheduler + MongoDB, 5 sections, console delivery (Resend-ready)
-4. Saudi Seasonal Calendar — ReferenceLine/ReferenceArea on all charts, toggle, 7 events config
-5. Digest Modal — Insights page integration, Generate Now button
+### Phase 3: Crawler & Analytics (Done)
+- Tier 1 multi-endpoint JSON crawler for Salla stores
+- APScheduler-based job system (P1: 4h, P2: 8h intervals)
+- MyProductsPage dashboard with KPIs, filters, sorting
+- Discounts page (top %, top SAR, timeline heatmap, aggression leaderboard)
+- Price Opportunity Scanner (overpriced, quick wins, undercut analysis)
+- Product detail panel with price history charts
+
+### Phase 4: Advanced Crawling & Intelligence (Done)
+- Tier 2 Playwright XHR interception crawler
+- Tier 3 BeautifulSoup HTML parsing crawler
+- 3-tier waterfall orchestrator with crawl logging
+- Weekly Market Intelligence Digest (auto-generated Sunday 05:00 UTC)
+- Saudi seasonal calendar annotations on charts
+- Enhanced trending category analysis
+
+### Code Quality (Done)
+- Extracted crawlers.py for maintainability
+- JWT secret generation via `secrets` module
+- Migrated JWT storage from localStorage to httpOnly cookies
+- Fixed React hook dependency warnings
+
+### Deployment Readiness (Done — Feb 2026)
+- Docker deployment package: Dockerfiles, docker-compose.yml, nginx.conf, .env.example
+- Deployment guide for AWS Bahrain / Ubuntu VPS
+- start.sh launcher script with validation
+- GET /api/health endpoint (MongoDB, scheduler, Playwright, uptime)
+- Rate limiting on auth endpoints (5/min/IP, 429 response)
+- HTTP security headers middleware (CSP, nosniff, DENY, strict-origin)
+- PLATFORM_SUMMARY.md — complete API/page/crawler/DB reference
+
+## What's MOCKED
+- Email alerts → logged to console (Resend not yet integrated)
+- Weekly digest delivery → logged to console
 
 ## Backlog
-### P1
-- [ ] Saudi IP deployment for better store endpoint access
-- [ ] Real email delivery (Resend — one-line swap)
-- [ ] Tier 4 Buyer Account Layer
-- [ ] Admin user management + multi-tenancy
-- [ ] Export PDF reports
 
-### P2
-- [ ] SKU deduplication (Arabic name normalization across stores)
-- [ ] Auto-Repricer engine
-- [ ] Webhook notifications
-- [ ] Mobile-responsive optimization
+| Priority | Feature |
+|----------|---------|
+| P0 | Resend email integration for alerts + digest |
+| P1 | Tier 4 Crawler (buyer account layer) |
+| P2 | Multi-tenant role-based access |
+| P2 | Webhook notifications (Slack/Telegram) |
+
+## Test Credentials
+- Admin: admin@daleelpets.com / admin123
+- Auth: POST /api/auth/login
