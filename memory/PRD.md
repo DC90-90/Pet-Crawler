@@ -76,6 +76,13 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 - Gear icon in sidebar footer
 - Security: credentials never returned in plaintext, only masked versions
 
+### Tier 4 Parts 2-6: OTP + Login Flows + Authenticated Crawl (Done — Feb 2026)
+- Part 2: OTP handling — persistent orange banner, 6-digit modal with countdown timer, 5s polling, submit/retry/status endpoints, rate-limited (10/hr)
+- Part 3: Platform login handlers — Salla (phone+OTP), Zid (email+password+OTP fallback), Shopify (email+password+2FA) via Playwright
+- Part 4: Authenticated crawl — Tier 4 captures tier4_qty_exact, tier4_member_price, tier4_flash_sale, tier4_flash_price, source_tier=4, confidence=96
+- Part 5: Store Registry UI — Tier 4 column with Authenticated/OTP Needed/Expired/Not Set Up badges. ProductDetailPanel shows member price, flash sale, exact stock
+- Part 6: Waterfall updated — T1→T2→T3, then T4 supplement runs if session active (does NOT replace earlier tiers)
+
 ## What's MOCKED
 - Email alerts → logged to console (Resend not yet integrated)
 - Weekly digest delivery → logged to console
@@ -84,9 +91,6 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 
 | Priority | Feature |
 |----------|---------|
-| P0 | Tier 4 Part 2: OTP Handling Interface (banner + modal + polling) |
-| P0 | Tier 4 Part 3: Platform Login Flows (Salla/Zid/Shopify Playwright handlers) |
-| P0 | Tier 4 Parts 4+5+6: Authenticated Crawl + UI Updates + Waterfall Update |
 | P1 | Resend email integration for alerts + digest |
 | P2 | Multi-tenant role-based access |
 | P2 | Webhook notifications (Slack/Telegram) |
