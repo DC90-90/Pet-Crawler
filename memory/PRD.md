@@ -65,6 +65,17 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 - Replaced all index-as-key patterns with stable unique IDs (6 instances across 4 files)
 - Fixed missing /stores/:storeId route for CompetitorProfilePage in App.js
 
+### Tier 4 Part 1: Encrypted Credential Vault (Done — Feb 2026)
+- Fernet symmetric encryption for all stored credentials (ENCRYPTION_KEY from .env)
+- Startup validation — crashes with clear error if ENCRYPTION_KEY missing/invalid
+- Settings page (/settings) with Store Accounts (Tier 4) section
+- Per-store credential management: email, password (masked), phone (last 4 only)
+- Session status badges: Active/OTP Required/Expired/Not Configured
+- Test Login + Clear Session buttons per store
+- Verify Encryption button with green/red status banner
+- Gear icon in sidebar footer
+- Security: credentials never returned in plaintext, only masked versions
+
 ## What's MOCKED
 - Email alerts → logged to console (Resend not yet integrated)
 - Weekly digest delivery → logged to console
@@ -73,8 +84,10 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 
 | Priority | Feature |
 |----------|---------|
-| P0 | Resend email integration for alerts + digest |
-| P1 | Tier 4 Crawler (buyer account layer) |
+| P0 | Tier 4 Part 2: OTP Handling Interface (banner + modal + polling) |
+| P0 | Tier 4 Part 3: Platform Login Flows (Salla/Zid/Shopify Playwright handlers) |
+| P0 | Tier 4 Parts 4+5+6: Authenticated Crawl + UI Updates + Waterfall Update |
+| P1 | Resend email integration for alerts + digest |
 | P2 | Multi-tenant role-based access |
 | P2 | Webhook notifications (Slack/Telegram) |
 
