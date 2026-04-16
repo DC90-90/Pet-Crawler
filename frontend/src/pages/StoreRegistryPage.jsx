@@ -119,7 +119,7 @@ export default function StoreRegistryPage() {
     <div className="p-6 space-y-5" data-testid="store-registry-page">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[#0A0A0A]">{t("nav_stores")}</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_stores")}</h1>
           <p className="text-sm text-[#9CA3AF] mt-0.5">Manage tracked competitor stores</p>
         </div>
         <div className="flex gap-2">
@@ -131,16 +131,16 @@ export default function StoreRegistryPage() {
             className="rounded-md text-xs" data-testid="pause-crawls-btn">
             {crawlPaused ? "Resume All Crawls" : "Pause All Crawls"}
           </Button>
-          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#002DF5] hover:bg-blue-700 text-white rounded-md text-xs" data-testid="add-store-btn">
+          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md text-xs" data-testid="add-store-btn">
             <Plus className="w-3.5 h-3.5 me-1.5" />{t("btn_add_store")}
           </Button>
         </div>
       </div>
 
-      <div className="bg-white border border-[#E5E7EB] rounded-md overflow-hidden">
+      <div className="glass-card rounded-md overflow-hidden">
         <Table className="dense-table">
           <TableHeader>
-            <TableRow className="bg-[#F9FAFB]">
+            <TableRow className="bg-[#111827]/80/5">
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("store_name")}</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_domain")}</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_platform")}</TableHead>
@@ -159,12 +159,12 @@ export default function StoreRegistryPage() {
             ) : stores.length === 0 ? (
               <TableRow><TableCell colSpan={10} className="text-center py-12 text-[#9CA3AF] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : stores.map((s) => (
-              <TableRow key={s.id} data-testid={`store-row-${s.id}`} className="hover:bg-[#F9FAFB] transition-colors group">
+              <TableRow key={s.id} data-testid={`store-row-${s.id}`} className="hover:bg-[#111827]/80/5 transition-colors group">
                 <TableCell>
                   <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 bg-[#002DF5] text-white text-[10px] font-bold rounded flex items-center justify-center">{s.name?.[0]?.toUpperCase()}</div>
+                    <div className="w-7 h-7 bg-[#00D4B4] text-[#0A0F1E] text-[10px] font-bold rounded flex items-center justify-center">{s.name?.[0]?.toUpperCase()}</div>
                     <div>
-                      <span className="text-sm font-medium text-[#002DF5] cursor-pointer hover:underline" onClick={() => navigate(`/stores/${s.id}`)}>{s.name}</span>
+                      <span className="text-sm font-medium text-[#00D4B4] cursor-pointer hover:underline" onClick={() => navigate(`/stores/${s.id}`)}>{s.name}</span>
                       {s.last_crawl_error && (
                         <p className="text-[10px] text-red-400 truncate max-w-[180px]" title={s.last_crawl_error}>{s.last_crawl_error}</p>
                       )}
@@ -172,7 +172,7 @@ export default function StoreRegistryPage() {
                   </div>
                 </TableCell>
                 <TableCell>
-                  <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer" className="text-xs text-[#002DF5] hover:underline flex items-center gap-1">
+                  <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer" className="text-xs text-[#00D4B4] hover:underline flex items-center gap-1">
                     <Globe className="w-3 h-3" />{s.domain}
                   </a>
                 </TableCell>
@@ -190,7 +190,7 @@ export default function StoreRegistryPage() {
                 <TableCell><span className="text-xs text-[#9CA3AF]">{formatDate(s.last_crawled_at)}</span></TableCell>
                 <TableCell>
                   <div>
-                    <span className="text-xs text-[#4B5563]">{s.crawl_frequency_label}</span>
+                    <span className="text-xs text-[#9CA3AF]">{s.crawl_frequency_label}</span>
                     {s.next_crawl_at && !crawlPaused && (
                       <p className="text-[9px] text-[#9CA3AF]">{formatDate(s.next_crawl_at)}</p>
                     )}
@@ -228,22 +228,22 @@ export default function StoreRegistryPage() {
 
         {/* Crawl Log Expansion */}
         {expandedStore && crawlLogs[expandedStore] && (
-          <div className="border-t border-[#E5E7EB] bg-[#F9FAFB] px-6 py-4" data-testid="crawl-log-panel">
-            <h4 className="text-xs font-semibold text-[#0A0A0A] mb-2">Recent Crawl History</h4>
+          <div className="border-t border-white/10 bg-[#111827]/80/5 px-6 py-4" data-testid="crawl-log-panel">
+            <h4 className="text-xs font-semibold text-white mb-2">Recent Crawl History</h4>
             <div className="space-y-2">
               {crawlLogs[expandedStore].length === 0 && <p className="text-xs text-[#9CA3AF]">No crawl history yet</p>}
               {crawlLogs[expandedStore].map((log) => (
-                <div key={log.id} className="bg-white border border-[#E5E7EB] rounded-md px-3 py-2 space-y-1">
+                <div key={log.id} className="glass-card rounded-md px-3 py-2 space-y-1">
                   <div className="flex items-center gap-4 text-xs">
                     <span className="text-[#9CA3AF] w-[110px] shrink-0">{formatDate(log.completed_at)}</span>
                     <TierBadge tier={log.tier_used} />
                     <span className={`font-medium ${log.tier_used ? "text-green-600" : "text-red-500"}`}>
                       {log.tier_used ? "Success" : "Failed"}
                     </span>
-                    {log.endpoint_used && <span className="text-[10px] font-mono text-[#002DF5]">{log.endpoint_used}</span>}
-                    <span className="text-[#4B5563]">{log.products_found} found</span>
+                    {log.endpoint_used && <span className="text-[10px] font-mono text-[#00D4B4]">{log.endpoint_used}</span>}
+                    <span className="text-[#9CA3AF]">{log.products_found} found</span>
                     {log.products_new > 0 && <span className="text-green-600">+{log.products_new} new</span>}
-                    {log.snapshots_created > 0 && <span className="text-[#002DF5]">{log.snapshots_created} snapshots</span>}
+                    {log.snapshots_created > 0 && <span className="text-[#00D4B4]">{log.snapshots_created} snapshots</span>}
                   </div>
                   {log.endpoints_tried && log.endpoints_tried.length > 0 && (
                     <div className="flex flex-wrap gap-2 ps-[110px]">
@@ -271,28 +271,28 @@ export default function StoreRegistryPage() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
-              <label className="text-xs font-medium text-[#0A0A0A] mb-1 block">{t("store_name")}</label>
+              <label className="text-xs font-medium text-white mb-1 block">{t("store_name")}</label>
               <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Zarafa" className="rounded-md" data-testid="store-name-input" />
             </div>
             <div>
-              <label className="text-xs font-medium text-[#0A0A0A] mb-1 block">{t("col_domain")}</label>
+              <label className="text-xs font-medium text-white mb-1 block">{t("col_domain")}</label>
               <Input value={form.domain} onChange={(e) => setForm((f) => ({ ...f, domain: e.target.value }))} placeholder="e.g. zarafaksa.com" className="rounded-md" data-testid="store-domain-input" />
             </div>
             <div>
-              <label className="text-xs font-medium text-[#0A0A0A] mb-1 block">{t("col_platform")}</label>
+              <label className="text-xs font-medium text-white mb-1 block">{t("col_platform")}</label>
               <Select value={form.platform} onValueChange={(v) => setForm((f) => ({ ...f, platform: v }))}>
                 <SelectTrigger className="rounded-md" data-testid="store-platform-select"><SelectValue /></SelectTrigger>
                 <SelectContent>{PLATFORMS.map((p) => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div>
-              <label className="text-xs font-medium text-[#0A0A0A] mb-1 block">{t("crawl_frequency")}</label>
+              <label className="text-xs font-medium text-white mb-1 block">{t("crawl_frequency")}</label>
               <Input type="number" value={form.crawl_frequency_hrs} onChange={(e) => setForm((f) => ({ ...f, crawl_frequency_hrs: parseInt(e.target.value) || 24 }))} className="rounded-md" data-testid="store-freq-input" />
             </div>
           </div>
           <DialogFooter className="relative z-[60]">
             <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="rounded-md" type="button">{t("btn_cancel")}</Button>
-            <Button size="sm" onClick={handleSave} className="bg-[#002DF5] hover:bg-blue-700 text-white rounded-md" data-testid="store-save-btn" type="button">{t("btn_save")}</Button>
+            <Button size="sm" onClick={handleSave} className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md" data-testid="store-save-btn" type="button">{t("btn_save")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

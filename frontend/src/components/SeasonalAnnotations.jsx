@@ -16,7 +16,7 @@ export function useSeasonalEvents() {
 
 export function SeasonalToggle({ show, toggle }) {
   return (
-    <label className="flex items-center gap-1.5 text-[10px] text-[#4B5563] cursor-pointer select-none" data-testid="seasonal-toggle">
+    <label className="flex items-center gap-1.5 text-[10px] text-[#9CA3AF] cursor-pointer select-none" data-testid="seasonal-toggle">
       <input type="checkbox" checked={show} onChange={toggle} className="w-3 h-3 rounded accent-[#002DF5]" />
       <span>Seasonal Events</span>
     </label>

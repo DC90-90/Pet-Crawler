@@ -1,30 +1,118 @@
+@import "@fontsource/plus-jakarta-sans/400.css";
+@import "@fontsource/plus-jakarta-sans/500.css";
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
+
+/* IBM Plex Arabic + Mono loaded via Google Fonts in public/index.html */
+
+/* ── Daleel Pets Dark Theme ─────────────────── */
+:root {
+  --dp-bg: #060B14;
+  --dp-surface: #111827;
+  --dp-surface-hover: #1F2937;
+  --dp-sidebar: #0D1321;
+  --dp-navy: #0A0F1E;
+  --dp-teal: #00D4B4;
+  --dp-teal-glow: rgba(0, 212, 180, 0.2);
+  --dp-amber: #F59E0B;
+  --dp-amber-glow: rgba(245, 158, 11, 0.2);
+  --dp-text: #FFFFFF;
+  --dp-muted: #9CA3AF;
+  --dp-border: rgba(255, 255, 255, 0.06);
+  --dp-border-hover: rgba(255, 255, 255, 0.12);
+  --dp-success: #10B981;
+  --dp-warning: #F59E0B;
+  --dp-danger: #EF4444;
+}
+
+html {
+  font-family: 'Plus Jakarta Sans', 'IBM Plex Arabic', sans-serif;
+}
+html[lang="ar"] {
+  font-family: 'IBM Plex Arabic', 'Plus Jakarta Sans', sans-serif;
+}
+
+body {
+  background: var(--dp-bg);
+  color: var(--dp-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Scrollbars ─────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
 
-.dense-table th, .dense-table td { padding: 8px 12px; font-size: 13px; }
+/* ── Glass Card ─────────────────────────────── */
+.glass-card {
+  background: rgba(17, 24, 39, 0.8);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--dp-border);
+  border-radius: 16px;
+  transition: all 300ms ease;
+}
+.glass-card:hover {
+  border-color: var(--dp-border-hover);
+  box-shadow: 0 8px 30px rgba(0, 212, 180, 0.05);
+}
 
+/* ── KPI Card ───────────────────────────────── */
+.kpi-card {
+  background: rgba(17, 24, 39, 0.8);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--dp-border);
+  border-radius: 16px;
+  padding: 20px 24px;
+  transition: all 300ms ease;
+}
+.kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--dp-border-hover);
+  box-shadow: 0 8px 30px rgba(0, 212, 180, 0.08);
+}
+
+/* ── Dense Table ────────────────────────────── */
+.dense-table th, .dense-table td { padding: 10px 14px; font-size: 13px; }
+.dense-table tr { border-bottom: 1px solid var(--dp-border); }
+.dense-table tr:hover { background: rgba(31, 41, 55, 0.5); }
+.dense-table thead tr { background: rgba(17, 24, 39, 0.6) !important; border-bottom: 1px solid var(--dp-border); }
+.dense-table thead th { color: var(--dp-muted) !important; }
+
+/* ── Status badges ──────────────────────────── */
+.stock-high { color: var(--dp-success); }
+.stock-medium { color: var(--dp-amber); }
+.stock-low { color: #FF6D00; }
+.stock-oos { color: var(--dp-danger); }
+
+.tier-1 { background: rgba(16, 185, 129, 0.15); color: var(--dp-success); }
+.tier-2 { background: rgba(0, 212, 180, 0.15); color: var(--dp-teal); }
+.tier-3 { background: rgba(245, 158, 11, 0.15); color: var(--dp-amber); }
+
+/* ── Animations ─────────────────────────────── */
 @keyframes sync-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .animate-sync { animation: sync-spin 1s linear infinite; }
 
-.stock-high { color: #00C853; }
-.stock-medium { color: #FFB300; }
-.stock-low { color: #FF6D00; }
-.stock-oos { color: #FF3B30; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fadeIn { animation: fadeIn 0.4s ease-out forwards; }
 
-.tier-1 { background: #DCFCE7; color: #166534; }
-.tier-2 { background: #FEF9C3; color: #854D0E; }
-.tier-3 { background: #FEE2E2; color: #991B1B; }
+@keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(0, 212, 180, 0); } 50% { box-shadow: 0 0 20px 4px rgba(0, 212, 180, 0.15); } }
+.animate-pulse-glow { animation: pulse-glow 3s ease-in-out infinite; }
 
-.kpi-card {
-  background: #FFFFFF;
-  border: 1px solid #E5E7EB;
-  border-radius: 6px;
-  padding: 16px 20px;
-  transition: all 200ms ease-in-out;
+@keyframes countUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate-countUp { animation: countUp 0.6s ease-out forwards; }
+
+/* ── Metric Numbers ─────────────────────────── */
+.metric-number {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
-.kpi-card:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+
+/* ── Reduce motion ──────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .glass-card:hover, .kpi-card:hover { transform: none; }
+  .animate-fadeIn, .animate-countUp, .animate-pulse-glow { animation: none; }
 }

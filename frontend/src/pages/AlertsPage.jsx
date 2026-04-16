@@ -102,14 +102,14 @@ export default function AlertsPage() {
     <div className="p-6 space-y-5" data-testid="alerts-page">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[#0A0A0A]">Alerts</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-white">Alerts</h1>
           <p className="text-sm text-[#9CA3AF] mt-0.5">Monitor price changes and stock events</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={handleCheck} disabled={checking} className="rounded-md text-xs" data-testid="check-alerts-btn">
             <RefreshCw className={`w-3.5 h-3.5 me-1.5 ${checking ? "animate-sync" : ""}`} />Check Now
           </Button>
-          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#002DF5] hover:bg-blue-700 text-white rounded-md text-xs" data-testid="create-alert-btn">
+          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md text-xs" data-testid="create-alert-btn">
             <Plus className="w-3.5 h-3.5 me-1.5" />Create Alert
           </Button>
         </div>
@@ -117,22 +117,22 @@ export default function AlertsPage() {
 
       {/* KPI Row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Active Alerts</p><p className="text-2xl font-bold text-[#0A0A0A] mt-1">{alerts.filter((a) => a.is_active).length}</p></div>
-        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Events (30d)</p><p className="text-2xl font-bold text-[#0A0A0A] mt-1">{feed.length}</p></div>
-        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Total Alerts</p><p className="text-2xl font-bold text-[#0A0A0A] mt-1">{alerts.length}</p></div>
+        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Active Alerts</p><p className="text-2xl font-bold text-white mt-1">{alerts.filter((a) => a.is_active).length}</p></div>
+        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Events (30d)</p><p className="text-2xl font-bold text-white mt-1">{feed.length}</p></div>
+        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Total Alerts</p><p className="text-2xl font-bold text-white mt-1">{alerts.length}</p></div>
       </div>
 
       <Tabs defaultValue="alerts" className="w-full">
-        <TabsList className="bg-[#F3F4F6] p-1 rounded-md">
-          <TabsTrigger value="alerts" className="text-xs rounded-md data-[state=active]:bg-white data-[state=active]:shadow-sm">My Alerts ({alerts.length})</TabsTrigger>
-          <TabsTrigger value="feed" className="text-xs rounded-md data-[state=active]:bg-white data-[state=active]:shadow-sm">Alert Feed ({feed.length})</TabsTrigger>
+        <TabsList className="bg-[#111827]/80/5 p-1 rounded-md">
+          <TabsTrigger value="alerts" className="text-xs rounded-md data-[state=active]:bg-[#111827]/80 data-[state=active]:shadow-sm">My Alerts ({alerts.length})</TabsTrigger>
+          <TabsTrigger value="feed" className="text-xs rounded-md data-[state=active]:bg-[#111827]/80 data-[state=active]:shadow-sm">Alert Feed ({feed.length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="alerts" className="mt-3">
-          <div className="bg-white border border-[#E5E7EB] rounded-md overflow-hidden">
+          <div className="glass-card rounded-md overflow-hidden">
             <Table className="dense-table">
               <TableHeader>
-                <TableRow className="bg-[#F9FAFB]">
+                <TableRow className="bg-[#111827]/80/5">
                   <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Type</TableHead>
                   <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Product</TableHead>
                   <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Threshold</TableHead>
@@ -149,11 +149,11 @@ export default function AlertsPage() {
                   <TableRow key={a.id} data-testid={`alert-row-${a.id}`}>
                     <TableCell><div className="flex items-center gap-1.5"><AlertTypeIcon type={a.alert_type} /><span className="text-xs capitalize">{a.alert_type.replace("_", " ")}</span></div></TableCell>
                     <TableCell>
-                      <div><p className="text-xs font-medium text-[#0A0A0A]">{a.product_name_ar || a.product_sku}</p><p className="text-[10px] text-[#9CA3AF] font-mono">{a.product_sku}</p></div>
+                      <div><p className="text-xs font-medium text-white">{a.product_name_ar || a.product_sku}</p><p className="text-[10px] text-[#9CA3AF] font-mono">{a.product_sku}</p></div>
                     </TableCell>
                     <TableCell><span className="text-xs">{a.threshold ? `${a.threshold}%` : "-"}</span></TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px] capitalize">{a.channel}</Badge></TableCell>
-                    <TableCell><span className="text-xs text-[#4B5563]">{a.triggered_count || 0}x</span></TableCell>
+                    <TableCell><span className="text-xs text-[#9CA3AF]">{a.triggered_count || 0}x</span></TableCell>
                     <TableCell>
                       <Badge variant="outline" className={`text-[10px] ${a.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
                         {a.is_active ? "Active" : "Paused"}
@@ -177,20 +177,20 @@ export default function AlertsPage() {
         </TabsContent>
 
         <TabsContent value="feed" className="mt-3">
-          <div className="bg-white border border-[#E5E7EB] rounded-md overflow-hidden">
+          <div className="glass-card rounded-md overflow-hidden">
             {feed.length === 0 ? (
               <div className="text-center py-12 text-[#9CA3AF] text-sm">No alert events in the last 30 days</div>
             ) : (
               <div className="divide-y divide-[#E5E7EB]">
                 {feed.map((ev) => (
-                  <div key={ev.id} className="flex items-center gap-4 px-4 py-3 hover:bg-[#F9FAFB] transition-colors" data-testid={`feed-event-${ev.id}`}>
+                  <div key={ev.id} className="flex items-center gap-4 px-4 py-3 hover:bg-[#111827]/80/5 transition-colors" data-testid={`feed-event-${ev.id}`}>
                     <AlertTypeIcon type={ev.alert_type} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-[#0A0A0A]">
+                      <p className="text-xs font-medium text-white">
                         <span className="capitalize">{ev.alert_type?.replace("_", " ")}</span> - <span className="font-mono">{ev.sku}</span>
                         {ev.store_name && <span className="text-[#9CA3AF]"> at {ev.store_name}</span>}
                       </p>
-                      <p className="text-[10px] text-[#4B5563]">{ev.old_value} &rarr; {ev.new_value}</p>
+                      <p className="text-[10px] text-[#9CA3AF]">{ev.old_value} &rarr; {ev.new_value}</p>
                     </div>
                     <span className="text-[10px] text-[#9CA3AF] shrink-0">{formatDate(ev.triggered_at)}</span>
                   </div>
@@ -210,7 +210,7 @@ export default function AlertsPage() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
-              <label className="text-xs font-medium text-[#0A0A0A] mb-1 block">Product (SKU)</label>
+              <label className="text-xs font-medium text-white mb-1 block">Product (SKU)</label>
               <Select value={form.product_sku} onValueChange={(v) => setForm((f) => ({ ...f, product_sku: v }))}>
                 <SelectTrigger className="rounded-md" data-testid="alert-sku-select"><SelectValue placeholder="Select product" /></SelectTrigger>
                 <SelectContent className="max-h-[200px]">
@@ -219,7 +219,7 @@ export default function AlertsPage() {
               </Select>
             </div>
             <div>
-              <label className="text-xs font-medium text-[#0A0A0A] mb-1 block">Alert Type</label>
+              <label className="text-xs font-medium text-white mb-1 block">Alert Type</label>
               <Select value={form.alert_type} onValueChange={(v) => setForm((f) => ({ ...f, alert_type: v }))}>
                 <SelectTrigger className="rounded-md" data-testid="alert-type-select"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -228,11 +228,11 @@ export default function AlertsPage() {
               </Select>
             </div>
             <div>
-              <label className="text-xs font-medium text-[#0A0A0A] mb-1 block">Threshold (%)</label>
+              <label className="text-xs font-medium text-white mb-1 block">Threshold (%)</label>
               <Input type="number" value={form.threshold} onChange={(e) => setForm((f) => ({ ...f, threshold: parseFloat(e.target.value) || 0 }))} className="rounded-md" data-testid="alert-threshold-input" />
             </div>
             <div>
-              <label className="text-xs font-medium text-[#0A0A0A] mb-1 block">Channel</label>
+              <label className="text-xs font-medium text-white mb-1 block">Channel</label>
               <Select value={form.channel} onValueChange={(v) => setForm((f) => ({ ...f, channel: v }))}>
                 <SelectTrigger className="rounded-md" data-testid="alert-channel-select"><SelectValue /></SelectTrigger>
                 <SelectContent>{CHANNELS.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}</SelectContent>
@@ -241,7 +241,7 @@ export default function AlertsPage() {
           </div>
           <DialogFooter className="relative z-[60]">
             <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="rounded-md" type="button">{t("btn_cancel")}</Button>
-            <Button size="sm" onClick={handleCreate} className="bg-[#002DF5] hover:bg-blue-700 text-white rounded-md" data-testid="alert-save-btn" type="button">Create Alert</Button>
+            <Button size="sm" onClick={handleCreate} className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md" data-testid="alert-save-btn" type="button">Create Alert</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

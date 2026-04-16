@@ -67,8 +67,8 @@ export default function ProductDetailPanel({ sku, onClose }) {
   return (
     <Sheet open={!!sku} onOpenChange={(open) => { if (!open) onClose(); }}>
       <SheetContent className="w-[520px] sm:max-w-[520px] overflow-y-auto p-0" data-testid="product-detail-panel">
-        <SheetHeader className="px-5 py-4 border-b border-[#E5E7EB] sticky top-0 bg-white z-10">
-          <SheetTitle className="text-base font-bold text-[#0A0A0A]">
+        <SheetHeader className="px-5 py-4 border-b border-white/10 sticky top-0 bg-[#111827]/80 z-10">
+          <SheetTitle className="text-base font-bold text-white">
             {product?.name_ar || t("loading")}
           </SheetTitle>
         </SheetHeader>
@@ -79,7 +79,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
           <div className="p-5 space-y-5">
             {/* Product Header */}
             <div>
-              <p className="text-sm text-[#4B5563]">{product.name_en}</p>
+              <p className="text-sm text-[#9CA3AF]">{product.name_en}</p>
               <div className="flex items-center gap-2 mt-1.5">
                 <Badge variant="outline" className="text-[10px] font-mono">{product.sku}</Badge>
                 <Badge variant="secondary" className="text-[10px] capitalize">{product.category}</Badge>
@@ -92,15 +92,15 @@ export default function ProductDetailPanel({ sku, onClose }) {
               <div className="grid grid-cols-3 gap-3">
                 <div className="kpi-card !p-3">
                   <p className="text-[9px] uppercase tracking-[0.15em] text-[#9CA3AF]">{t("price_range")}</p>
-                  <p className="text-sm font-bold text-[#0A0A0A] mt-0.5">{product.price_range.min}-{product.price_range.max} SAR</p>
+                  <p className="text-sm font-bold text-white mt-0.5">{product.price_range.min}-{product.price_range.max} SAR</p>
                 </div>
                 <div className="kpi-card !p-3">
                   <p className="text-[9px] uppercase tracking-[0.15em] text-[#9CA3AF]">{t("market_avg")}</p>
-                  <p className="text-sm font-bold text-[#0A0A0A] mt-0.5">{product.price_range.avg} SAR</p>
+                  <p className="text-sm font-bold text-white mt-0.5">{product.price_range.avg} SAR</p>
                 </div>
                 <div className="kpi-card !p-3">
                   <p className="text-[9px] uppercase tracking-[0.15em] text-[#9CA3AF]">{t("total_volume")}</p>
-                  <p className="text-sm font-bold text-[#0A0A0A] mt-0.5">{product.total_volume}</p>
+                  <p className="text-sm font-bold text-white mt-0.5">{product.total_volume}</p>
                 </div>
               </div>
             )}
@@ -114,11 +114,11 @@ export default function ProductDetailPanel({ sku, onClose }) {
 
             {/* Price by Store Table */}
             <div>
-              <h4 className="text-xs font-semibold text-[#0A0A0A] mb-2">{t("stores_carrying")}</h4>
-              <div className="border border-[#E5E7EB] rounded-md overflow-hidden">
+              <h4 className="text-xs font-semibold text-white mb-2">{t("stores_carrying")}</h4>
+              <div className="border border-white/10 rounded-md overflow-hidden">
                 <Table className="dense-table">
                   <TableHeader>
-                    <TableRow className="bg-[#F9FAFB]">
+                    <TableRow className="bg-[#111827]/80/5">
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#9CA3AF]">Store</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#9CA3AF]">Price</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#9CA3AF]">Stock</TableHead>
@@ -157,10 +157,10 @@ export default function ProductDetailPanel({ sku, onClose }) {
             {historyData.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-xs font-semibold text-[#0A0A0A]">{t("chart_price_history")}</h4>
+                  <h4 className="text-xs font-semibold text-white">{t("chart_price_history")}</h4>
                   <SeasonalToggle show={seasonal.show} toggle={seasonal.toggle} />
                 </div>
-                <div className="border border-[#E5E7EB] rounded-md p-3">
+                <div className="border border-white/10 rounded-md p-3">
                   <ResponsiveContainer width="100%" height={180}>
                     <LineChart data={historyData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
@@ -181,10 +181,10 @@ export default function ProductDetailPanel({ sku, onClose }) {
             {/* Velocity Chart */}
             {velocity && velocity.velocity?.length > 0 && (
               <div>
-                <h4 className="text-xs font-semibold text-[#0A0A0A] mb-2">
+                <h4 className="text-xs font-semibold text-white mb-2">
                   {t("chart_velocity")} <span className="font-normal text-[#9CA3AF]">({velocity.avg_daily} {t("units_day")} avg)</span>
                 </h4>
-                <div className="border border-[#E5E7EB] rounded-md p-3">
+                <div className="border border-white/10 rounded-md p-3">
                   <ResponsiveContainer width="100%" height={140}>
                     <BarChart data={velocity.velocity}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />

@@ -47,7 +47,7 @@ export default function ScannerPage() {
     <div className="p-6 space-y-5" data-testid="scanner-page">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[#0A0A0A]">Price Opportunity Scanner</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-white">Price Opportunity Scanner</h1>
           <p className="text-sm text-[#9CA3AF] mt-0.5">Find revenue you're leaving on the table</p>
         </div>
         <div className="flex gap-2 items-center">
@@ -55,7 +55,7 @@ export default function ScannerPage() {
             {RANGE_OPTIONS.map((d) => (
               <Button key={d} size="sm" variant={days === d ? "default" : "outline"}
                 onClick={() => setDays(d)}
-                className={`text-xs rounded-md h-7 px-3 ${days === d ? "bg-[#002DF5] text-white" : ""}`}>{d}D</Button>
+                className={`text-xs rounded-md h-7 px-3 ${days === d ? "bg-[#00D4B4] text-white" : ""}`}>{d}D</Button>
             ))}
           </div>
           <Button variant="outline" size="sm" onClick={fetchData} className="rounded-md text-xs h-7" data-testid="scanner-refresh">
@@ -68,7 +68,7 @@ export default function ScannerPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="kpi-card border-s-4 border-s-red-500">
           <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Overpriced Products (10%+)</p>
-          <p className="text-2xl font-bold text-[#0A0A0A] mt-1">{summary.overpriced_count}</p>
+          <p className="text-2xl font-bold text-white mt-1">{summary.overpriced_count}</p>
           <p className="text-[10px] text-[#9CA3AF] mt-0.5">products priced above market</p>
         </div>
         <div className="kpi-card border-s-4 border-s-green-500">
@@ -84,13 +84,13 @@ export default function ScannerPage() {
       </div>
 
       {/* Opportunities Table */}
-      <div className="bg-white border border-[#E5E7EB] rounded-md overflow-hidden">
-        <div className="px-4 py-3 border-b border-[#E5E7EB] bg-[#F9FAFB]">
-          <h3 className="text-sm font-semibold text-[#0A0A0A]">Overpriced Products — Sorted by Revenue Uplift</h3>
+      <div className="glass-card rounded-md overflow-hidden">
+        <div className="px-4 py-3 border-b border-white/10 bg-[#111827]/80/5">
+          <h3 className="text-sm font-semibold text-white">Overpriced Products — Sorted by Revenue Uplift</h3>
         </div>
         <Table className="dense-table">
           <TableHeader>
-            <TableRow className="bg-[#F9FAFB]">
+            <TableRow className="bg-[#111827]/80/5">
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Product</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Store</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">My Price</TableHead>
@@ -108,8 +108,8 @@ export default function ScannerPage() {
               const bcfg = BADGE_CFG[o.badge] || BADGE_CFG.overpriced;
               const BIcon = bcfg.icon;
               return (
-                <TableRow key={`${o.sku}-${o.store_id}-${i}`} className="cursor-pointer hover:bg-[#F9FAFB]" onClick={() => setSelectedOpp(o)} data-testid={`opp-row-${i}`}>
-                  <TableCell><div><p className="text-xs font-medium text-[#0A0A0A]">{o.name_ar}</p><p className="text-[10px] text-[#9CA3AF] font-mono">{o.sku}</p></div></TableCell>
+                <TableRow key={`${o.sku}-${o.store_id}-${i}`} className="cursor-pointer hover:bg-[#111827]/80/5" onClick={() => setSelectedOpp(o)} data-testid={`opp-row-${i}`}>
+                  <TableCell><div><p className="text-xs font-medium text-white">{o.name_ar}</p><p className="text-[10px] text-[#9CA3AF] font-mono">{o.sku}</p></div></TableCell>
                   <TableCell><span className="text-xs">{o.store_name}</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-red-500">{o.my_price} ﷼</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-green-600">{o.market_lowest} ﷼</span></TableCell>
@@ -126,25 +126,25 @@ export default function ScannerPage() {
 
       {/* Well Positioned + Undercut */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="bg-white border border-[#E5E7EB] rounded-md p-5">
-          <h3 className="text-sm font-semibold text-[#0A0A0A] mb-3 flex items-center gap-1.5"><Shield className="w-4 h-4 text-green-500" />Well Positioned ({well_positioned.length})</h3>
+        <div className="glass-card rounded-md p-5">
+          <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-1.5"><Shield className="w-4 h-4 text-green-500" />Well Positioned ({well_positioned.length})</h3>
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
             {well_positioned.slice(0, 10).map((w) => (
-              <div key={`wp-${w.sku}-${w.store_name}`} className="flex items-center justify-between py-1.5 border-b border-[#F3F4F6] last:border-0">
-                <div><p className="text-xs font-medium text-[#0A0A0A]">{w.name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{w.store_name}</p></div>
+              <div key={`wp-${w.sku}-${w.store_name}`} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
+                <div><p className="text-xs font-medium text-white">{w.name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{w.store_name}</p></div>
                 <div className="text-end"><p className="text-xs font-semibold">{w.price} ﷼</p><p className="text-[10px] text-[#9CA3AF]">avg {w.market_avg} ﷼</p></div>
               </div>
             ))}
             {well_positioned.length === 0 && <p className="text-xs text-[#9CA3AF]">{t("no_data")}</p>}
           </div>
         </div>
-        <div className="bg-white border border-[#E5E7EB] rounded-md p-5">
-          <h3 className="text-sm font-semibold text-[#0A0A0A] mb-3 flex items-center gap-1.5"><Zap className="w-4 h-4 text-[#002DF5]" />Undercut Opportunities ({undercut.length})</h3>
+        <div className="glass-card rounded-md p-5">
+          <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-1.5"><Zap className="w-4 h-4 text-[#00D4B4]" />Undercut Opportunities ({undercut.length})</h3>
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
             {undercut.slice(0, 10).map((u) => (
-              <div key={`uc-${u.sku}-${u.store_name}`} className="flex items-center justify-between py-1.5 border-b border-[#F3F4F6] last:border-0">
-                <div><p className="text-xs font-medium text-[#0A0A0A]">{u.name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{u.store_name} — lowest price</p></div>
-                <div className="text-end"><p className="text-xs font-semibold text-[#002DF5]">{u.price} ﷼</p><p className="text-[10px] text-[#9CA3AF]">mkt avg {u.market_avg} ﷼</p></div>
+              <div key={`uc-${u.sku}-${u.store_name}`} className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
+                <div><p className="text-xs font-medium text-white">{u.name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{u.store_name} — lowest price</p></div>
+                <div className="text-end"><p className="text-xs font-semibold text-[#00D4B4]">{u.price} ﷼</p><p className="text-[10px] text-[#9CA3AF]">mkt avg {u.market_avg} ﷼</p></div>
               </div>
             ))}
             {undercut.length === 0 && <p className="text-xs text-[#9CA3AF]">{t("no_data")}</p>}
@@ -155,7 +155,7 @@ export default function ScannerPage() {
       {/* Detail Sheet */}
       <Sheet open={!!selectedOpp} onOpenChange={(o) => { if (!o) setSelectedOpp(null); }}>
         <SheetContent className="w-[480px] sm:max-w-[480px] overflow-y-auto p-0" data-testid="opp-detail-panel">
-          <SheetHeader className="px-5 py-4 border-b border-[#E5E7EB] sticky top-0 bg-white z-10">
+          <SheetHeader className="px-5 py-4 border-b border-white/10 sticky top-0 bg-[#111827]/80 z-10">
             <SheetTitle className="text-base font-bold">{selectedOpp?.name_ar}</SheetTitle>
           </SheetHeader>
           {selectedOpp && (
@@ -165,9 +165,9 @@ export default function ScannerPage() {
                 <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#9CA3AF]">Your Price</p><p className="text-lg font-bold text-red-500">{selectedOpp.my_price} ﷼</p></div>
                 <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#9CA3AF]">Market Lowest</p><p className="text-lg font-bold text-green-600">{selectedOpp.market_lowest} ﷼</p></div>
               </div>
-              <div className="bg-[#F9FAFB] rounded-md p-3 space-y-2 text-xs">
+              <div className="bg-[#111827]/80/5 rounded-md p-3 space-y-2 text-xs">
                 <p>Lower to <span className="font-bold text-green-600">{selectedOpp.market_lowest} ﷼</span> to become the cheapest seller</p>
-                <p>Lower to <span className="font-bold text-[#002DF5]">{selectedOpp.market_avg} ﷼</span> to match market average</p>
+                <p>Lower to <span className="font-bold text-[#00D4B4]">{selectedOpp.market_avg} ﷼</span> to match market average</p>
                 <p>Estimated uplift: <span className="font-bold text-green-600">{selectedOpp.revenue_uplift.toLocaleString()} ﷼</span> per period</p>
               </div>
               {/* Price Distribution */}

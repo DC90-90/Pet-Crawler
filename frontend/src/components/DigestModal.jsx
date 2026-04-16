@@ -43,7 +43,7 @@ export default function DigestModal({ open, onClose }) {
         {loading ? <p className="text-sm text-[#9CA3AF] py-4">Loading...</p> : !digest?.content ? (
           <div className="text-center py-8">
             <p className="text-sm text-[#9CA3AF] mb-3">No digest generated yet</p>
-            <Button size="sm" onClick={handleGenerate} disabled={generating} className="bg-[#002DF5] text-white rounded-md text-xs" data-testid="generate-digest-btn">
+            <Button size="sm" onClick={handleGenerate} disabled={generating} className="bg-[#00D4B4] text-[#0A0F1E] rounded-md text-xs" data-testid="generate-digest-btn">
               <RefreshCw className={`w-3 h-3 me-1 ${generating ? "animate-spin" : ""}`} />Generate Now
             </Button>
           </div>
@@ -59,9 +59,9 @@ export default function DigestModal({ open, onClose }) {
                 { label: "Most Active", val: ms.most_active_store },
                 { label: "Snapshots", val: ms.snapshots_this_week },
               ].map((k) => (
-                <div key={k.label} className="bg-[#F9FAFB] rounded-md p-2.5">
+                <div key={k.label} className="bg-[#111827]/80/5 rounded-md p-2.5">
                   <p className="text-[9px] uppercase tracking-wider text-[#9CA3AF]">{k.label}</p>
-                  <p className="text-sm font-bold text-[#0A0A0A] mt-0.5">{k.val ?? "-"}</p>
+                  <p className="text-sm font-bold text-white mt-0.5">{k.val ?? "-"}</p>
                 </div>
               ))}
             </div>
@@ -106,8 +106,8 @@ function Section({ title, items, renderItem }) {
   if (!items || items.length === 0) return null;
   return (
     <div>
-      <h4 className="text-xs font-semibold text-[#0A0A0A] mb-2">{title}</h4>
-      <div className="space-y-2 border border-[#E5E7EB] rounded-md divide-y divide-[#F3F4F6]">
+      <h4 className="text-xs font-semibold text-white mb-2">{title}</h4>
+      <div className="space-y-2 border border-white/10 rounded-md divide-y divide-[#F3F4F6]">
         {items.map((item, i) => <div key={item.sku || item.name_ar || `digest-item-${i}`} className="px-3 py-2">{renderItem(item)}</div>)}
       </div>
     </div>

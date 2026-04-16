@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "@fontsource/plus-jakarta-sans": "^5.2.8",
     "@hookform/resolvers": "^5.0.1",
     "@phosphor-icons/react": "^2.1.10",
     "@radix-ui/react-accordion": "^1.2.8",
