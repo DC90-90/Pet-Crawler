@@ -75,7 +75,7 @@ export default function StoreRegistryPage() {
       await api.delete(`/stores/${store.id}`);
       toast.success("Store removed");
       fetchStores();
-    } catch { toast.error("Failed to delete"); }
+    } catch (err) { console.error(err); toast.error("Failed to delete"); }
   };
 
   const handleCrawl = async (store) => {
@@ -98,7 +98,7 @@ export default function StoreRegistryPage() {
     try {
       const r = await api.get(`/stores/${storeId}/crawl-logs?limit=5`);
       setCrawlLogs((prev) => ({ ...prev, [storeId]: r.data }));
-    } catch { /* ignore */ }
+    } catch (err) { /* crawl log fetch */  }
   };
 
   const toggleExpand = (storeId) => {

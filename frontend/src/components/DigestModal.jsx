@@ -21,7 +21,7 @@ export default function DigestModal({ open, onClose }) {
     try {
       const r = await api.post("/digests/generate");
       setDigest(r.data);
-    } catch {}
+    } catch (err) { console.error("Failed to load digest:", err); }
     finally { setGenerating(false); }
   };
 

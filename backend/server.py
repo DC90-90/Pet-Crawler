@@ -3,10 +3,10 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends
+from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends, Response
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, random, uuid, bcrypt, jwt as pyjwt, statistics, csv, io, httpx, re
+import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
@@ -14,6 +14,10 @@ from bson import ObjectId
 from starlette.responses import StreamingResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from crawlers import (
+    crawl_store_waterfall, process_crawled_products,
+    extract_brand, guess_category, guess_animal, extract_weight,
+)
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -37,16 +41,21 @@ def check_pw(pw, h):
 
 def make_token(uid, email):
     return pyjwt.encode(
-        {"sub": uid, "email": email, "exp": datetime.now(timezone.utc) + timedelta(hours=24)},
+        {"sub": uid, "email": email, "exp": datetime.now(timezone.utc) + timedelta(hours=24), "jti": secrets.token_hex(8)},
         JWT_SECRET, algorithm=JWT_ALG
     )
 
 async def get_user(request: Request):
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
+    # Try httpOnly cookie first, then Bearer token header
+    token = request.cookies.get("daleel_token")
+    if not token:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
+    if not token:
         raise HTTPException(401, "Not authenticated")
     try:
-        p = pyjwt.decode(auth[7:], JWT_SECRET, algorithms=[JWT_ALG])
+        p = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
         u = await db.users.find_one({"_id": ObjectId(p["sub"])})
         if not u:
             raise HTTPException(401, "User not found")
@@ -439,7 +448,7 @@ async def seed_database():
 
 # ── Auth Routes ─────────────────────────────────────────────
 @router.post("/auth/register")
-async def register(data: AuthIn):
+async def register(data: AuthIn, response: Response):
     email = data.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(400, "Email already registered")
@@ -447,16 +456,18 @@ async def register(data: AuthIn):
     result = await db.users.insert_one(doc)
     uid = str(result.inserted_id)
     token = make_token(uid, email)
+    response.set_cookie("daleel_token", token, httponly=True, samesite="lax", max_age=86400, path="/")
     return {"token": token, "user": {"id": uid, "email": email, "name": doc["name"], "role": "user"}}
 
 @router.post("/auth/login")
-async def login(data: AuthIn):
+async def login(data: AuthIn, response: Response):
     email = data.email.lower().strip()
     user = await db.users.find_one({"email": email})
     if not user or not check_pw(data.password, user["password_hash"]):
         raise HTTPException(401, "Invalid credentials")
     uid = str(user["_id"])
     token = make_token(uid, email)
+    response.set_cookie("daleel_token", token, httponly=True, samesite="lax", max_age=86400, path="/")
     return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", ""), "role": user.get("role", "user")}}
 
 @router.get("/auth/me")
@@ -464,545 +475,17 @@ async def me(user=Depends(get_user)):
     return user
 
 @router.post("/auth/logout")
-async def logout():
+async def logout(response: Response):
+    response.delete_cookie("daleel_token", path="/")
     return {"message": "Logged out"}
 
 @router.get("/protected")
 async def protected(user=Depends(get_user)):
     return {"message": "Authenticated", "user": user}
 
-# ── Tier 1 Crawler ──────────────────────────────────────────
-KNOWN_BRANDS = ["Royal Canin", "رويال كانين", "Whiskas", "ويسكاس", "Pedigree", "بيدقري",
-    "Purina", "بورينا", "Hills", "هيلز", "N&D", "Orijen", "اوريجن", "Acana", "اكانا",
-    "Friskies", "فريسكيز", "Me-O", "مي-او", "Kong", "كونغ", "FURminator", "فرمينيتور",
-    "Frontline", "فرونت لاين", "Versele-Laga", "فيرسيل", "Catit", "Oxbow", "Tetra",
-    "Virbac", "Ever Clean", "Josera", "Brit", "Schesir", "Gimcat", "Trixie", "Beaphar"]
-
-def extract_brand(name):
-    for b in KNOWN_BRANDS:
-        if b.lower() in name.lower():
-            return b
-    return ""
-
-def guess_category(name):
-    n = name.lower()
-    if any(w in n for w in ["طعام", "غذاء", "food", "دراي", "ويت", "علف", "كيبل", "معلب"]):
-        if any(w in n for w in ["قط", "كات", "cat"]): return "cat_food"
-        if any(w in n for w in ["كلب", "كلاب", "dog"]): return "dog_food"
-        if any(w in n for w in ["طير", "طيور", "ببغاء", "bird"]): return "bird_food"
-        if any(w in n for w in ["سمك", "أسماك", "fish"]): return "fish_food"
-        return "pet_food"
-    if any(w in n for w in ["رمل", "لتر", "litter", "فضلات", "تراب"]): return "litter"
-    if any(w in n for w in ["لعب", "toy", "ألعاب", "كونغ"]): return "toys"
-    if any(w in n for w in ["شامبو", "فرشاة", "shampoo", "brush", "groom", "عناية", "مقص", "تنظيف"]): return "grooming"
-    if any(w in n for w in ["بيطر", "vet", "دواء", "علاج", "فيتامين", "مكمل", "برغوث"]): return "healthcare"
-    return "accessories"
-
-def guess_animal(name):
-    n = name.lower()
-    if any(w in n for w in ["قط", "كات", "cat", "هر"]): return "cat"
-    if any(w in n for w in ["كلب", "كلاب", "dog"]): return "dog"
-    if any(w in n for w in ["طير", "طيور", "ببغاء", "bird", "كناري"]): return "bird"
-    if any(w in n for w in ["سمك", "أسماك", "fish"]): return "fish"
-    if any(w in n for w in ["زواحف", "reptile"]): return "reptile"
-    if any(w in n for w in ["أرنب", "هامستر", "rabbit", "hamster"]): return "small"
-    return "other"
-
-def extract_weight(name):
-    m = re.search(r'(\d+(?:\.\d+)?)\s*(?:كجم|كيلو|kg)', name.lower())
-    if m: return float(m.group(1))
-    m = re.search(r'(\d+(?:\.\d+)?)\s*(?:جرام|غرام|g)\b', name.lower())
-    if m: return float(m.group(1)) / 1000
-    return 0
-
-async def crawl_salla_tier1(store):
-    """Tier 1: Try multiple Salla public JSON endpoints in sequence. Cache working endpoint."""
-    domain = store["domain"]
-    base = f"https://{domain}"
-    cached_endpoint = store.get("working_endpoint")
-
-    SALLA_ENDPOINTS = [
-        {"url": f"{base}/api/v2/products", "params": {"per_page": 50, "page": 1}, "tag": "/api/v2/products"},
-        {"url": f"{base}/products.json", "params": {"limit": 250, "page": 1}, "tag": "/products.json"},
-        {"url": f"{base}/api/store/products", "params": {"limit": 50, "page": 1}, "tag": "/api/store/products"},
-        {"url": f"{base}/api/product/list", "params": {"per_page": 50, "page": 1}, "tag": "/api/product/list"},
-    ]
-
-    # If we have a cached working endpoint, try it first
-    if cached_endpoint:
-        matching = [e for e in SALLA_ENDPOINTS if e["tag"] == cached_endpoint]
-        others = [e for e in SALLA_ENDPOINTS if e["tag"] != cached_endpoint]
-        SALLA_ENDPOINTS = matching + others
-
-    crawl_log = {
-        "id": str(uuid.uuid4()), "store_id": store["id"], "store_name": store["name"],
-        "tier_attempted": 1, "tier_used": None, "http_status": None,
-        "products_found": 0, "products_new": 0, "products_updated": 0,
-        "snapshots_created": 0, "error": None, "endpoint_used": None,
-        "endpoints_tried": [],
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "completed_at": None,
-    }
-
-    all_raw = []
-    winning_endpoint = None
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/html, */*",
-        }) as http:
-            for ep in SALLA_ENDPOINTS:
-                attempt = {"endpoint": ep["tag"], "status": None, "products": 0, "error": None}
-                try:
-                    resp = await http.get(ep["url"], params=ep["params"])
-                    attempt["status"] = resp.status_code
-                    if resp.status_code == 200:
-                        try:
-                            body = resp.json()
-                        except Exception:
-                            attempt["error"] = "Non-JSON response"
-                            crawl_log["endpoints_tried"].append(attempt)
-                            continue
-                        items = body.get("data", body.get("products", []))
-                        if isinstance(items, list) and len(items) >= 5:
-                            all_raw = items
-                            winning_endpoint = ep
-                            attempt["products"] = len(items)
-                            crawl_log["endpoints_tried"].append(attempt)
-                            # Paginate through remaining pages
-                            page = 2
-                            page_key = "page"
-                            limit_key = list(ep["params"].keys())[0]
-                            limit_val = ep["params"][limit_key]
-                            while page <= 20:
-                                params = {limit_key: limit_val, page_key: page}
-                                r2 = await http.get(ep["url"], params=params)
-                                if r2.status_code != 200:
-                                    break
-                                try:
-                                    more = r2.json().get("data", r2.json().get("products", []))
-                                except Exception:
-                                    break
-                                if not more:
-                                    break
-                                all_raw.extend(more)
-                                page += 1
-                                if len(more) < limit_val:
-                                    break
-                            break  # Found working endpoint
-                        else:
-                            attempt["products"] = len(items) if isinstance(items, list) else 0
-                            attempt["error"] = f"Only {attempt['products']} products (need 5+)"
-                    else:
-                        attempt["error"] = f"HTTP {resp.status_code}"
-                except httpx.TimeoutException:
-                    attempt["status"] = 0
-                    attempt["error"] = "Timeout"
-                except Exception as e:
-                    attempt["status"] = 0
-                    attempt["error"] = str(e)[:100]
-                crawl_log["endpoints_tried"].append(attempt)
-
-    except Exception as e:
-        crawl_log["error"] = str(e)[:300]
-
-    now = datetime.now(timezone.utc)
-    if all_raw and winning_endpoint:
-        crawl_log["tier_used"] = 1
-        crawl_log["http_status"] = 200
-        crawl_log["endpoint_used"] = winning_endpoint["tag"]
-        crawl_log["products_found"] = len(all_raw)
-        # Cache the working endpoint
-        await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
-        # Process products
-        new_count, snap_count = await _process_crawled_products(store, all_raw, now)
-        crawl_log["products_new"] = new_count
-        crawl_log["products_updated"] = len(all_raw) - new_count
-        crawl_log["snapshots_created"] = snap_count
-    else:
-        last_attempt = crawl_log["endpoints_tried"][-1] if crawl_log["endpoints_tried"] else {}
-        crawl_log["http_status"] = last_attempt.get("status", 0)
-        crawl_log["error"] = f"Tier 1 exhausted — all {len(SALLA_ENDPOINTS)} endpoints failed. Escalating to Tier 2. Last: {last_attempt.get('error', 'unknown')}"
-        crawl_log["endpoint_used"] = "none — tier 2 stub"
-
-    crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
-    await db.crawl_logs.insert_one(crawl_log)
-    await db.stores.update_one({"id": store["id"]}, {"$set": {
-        "last_crawled_at": crawl_log["completed_at"],
-        "last_crawl_tier": crawl_log["tier_used"],
-        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
-        "last_crawl_error": crawl_log["error"],
-        "last_crawl_products": crawl_log["products_found"],
-        "last_crawl_endpoint": crawl_log["endpoint_used"],
-    }})
-    logger.info(f"Crawl {store['name']}: tier={crawl_log['tier_used']}, endpoint={crawl_log.get('endpoint_used')}, found={crawl_log['products_found']}, new={crawl_log['products_new']}, error={crawl_log['error']}")
-    return crawl_log
-
-async def _process_crawled_products(store, all_raw, now, tier=1, confidence=95):
-    """Process raw product data from any crawler tier into products + snapshots."""
-    new_count = 0
-    snap_count = 0
-    for raw in all_raw:
-            name_ar = raw.get("name", raw.get("title", ""))
-            sku_raw = raw.get("sku") or raw.get("mpn") or f"S-{store['name'][:2].upper()}-{raw.get('id', uuid.uuid4().hex[:6])}"
-            price_field = raw.get("price", 0)
-            if isinstance(price_field, dict):
-                price = float(price_field.get("amount", 0))
-            else:
-                price = float(price_field or 0)
-            sale_field = raw.get("sale_price", raw.get("promotion", {}).get("price", 0))
-            if isinstance(sale_field, dict):
-                sale_price = float(sale_field.get("amount", 0))
-            else:
-                sale_price = float(sale_field or 0)
-            original_price = price
-            if 0 < sale_price < price:
-                original_price = price
-                price = sale_price
-            qty = int(raw.get("quantity", raw.get("stock_quantity", raw.get("qty", 0))) or 0)
-            in_stock = raw.get("status") in ("sale", "active") or raw.get("is_available", raw.get("availability", qty > 0))
-            imgs = raw.get("images", raw.get("image", []))
-            img_url = ""
-            if isinstance(imgs, list) and imgs:
-                img_url = imgs[0].get("url", imgs[0].get("src", "")) if isinstance(imgs[0], dict) else str(imgs[0])
-            elif isinstance(imgs, dict):
-                img_url = imgs.get("url", imgs.get("src", ""))
-
-            existing = await db.products.find_one({"sku": sku_raw})
-            if not existing:
-                pid = str(uuid.uuid4())
-                await db.products.insert_one({
-                    "id": pid, "sku": sku_raw, "name_ar": name_ar, "name_en": name_ar,
-                    "brand": extract_brand(name_ar), "category": guess_category(name_ar),
-                    "animal_type": guess_animal(name_ar), "weight_kg": extract_weight(name_ar),
-                    "image_url": img_url, "first_seen_at": now.isoformat(),
-                })
-                new_count += 1
-            else:
-                pid = existing["id"]
-                if img_url and not existing.get("image_url"):
-                    await db.products.update_one({"id": pid}, {"$set": {"image_url": img_url}})
-
-            disc_pct = round((1 - price / original_price) * 100) if original_price > price > 0 else 0
-            await db.product_snapshots.insert_one({
-                "id": str(uuid.uuid4()), "product_id": pid, "store_id": store["id"],
-                "store_name": store["name"], "sku": sku_raw,
-                "price": round(price, 2), "original_price": round(original_price, 2),
-                "discount_pct": max(0, disc_pct), "in_stock": bool(in_stock),
-                "qty_available": max(0, qty), "source_tier": tier, "confidence_score": confidence,
-                "crawled_at": now,
-            })
-            snap_count += 1
-
-    return new_count, snap_count
-
-# ── Tier 2 XHR Interception Crawler ─────────────────────────
-import os as _os
-_os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
-XHR_PATTERNS = ["/api/", "/products", "/collection", "product-list", "catalog", "items", "inventory"]
-STORE_PAGES = ["/products", "/shop", "/collection/all", "/store", "/"]
-
-async def crawl_tier2_xhr(store):
-    """Tier 2: Use Playwright to intercept XHR/fetch calls from storefront JS."""
-    import time
-    start_time = time.time()
-    domain = store["domain"]
-    base = f"https://{domain}"
-    cached_pattern = store.get("working_xhr_pattern")
-    crawl_log = {
-        "id": str(uuid.uuid4()), "store_id": store["id"], "store_name": store["name"],
-        "tier_attempted": 2, "tier_used": None, "http_status": None,
-        "products_found": 0, "products_new": 0, "products_updated": 0,
-        "snapshots_created": 0, "error": None, "endpoint_used": None,
-        "endpoints_tried": [], "duration_secs": 0,
-        "started_at": datetime.now(timezone.utc).isoformat(), "completed_at": None,
-    }
-    captured_products = []
-    winning_pattern = None
-
-    try:
-        from playwright.async_api import async_playwright
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            ctx = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                locale="ar-SA",
-            )
-            page = await ctx.new_page()
-            intercepted = []
-
-            async def handle_response(response):
-                url = response.url
-                ct = response.headers.get("content-type", "")
-                if "json" not in ct:
-                    return
-                if not any(p in url.lower() for p in XHR_PATTERNS):
-                    return
-                try:
-                    body = await response.json()
-                    items = []
-                    if isinstance(body, list):
-                        items = body
-                    elif isinstance(body, dict):
-                        for key in ["data", "products", "items", "results", "collection"]:
-                            if key in body and isinstance(body[key], list):
-                                items = body[key]
-                                break
-                    if items and len(items) >= 1:
-                        intercepted.append({"url": url, "items": items, "count": len(items)})
-                except Exception:
-                    pass
-
-            page.on("response", handle_response)
-            page_loaded = False
-            for path in STORE_PAGES:
-                try:
-                    target = f"{base}{path}"
-                    resp = await page.goto(target, wait_until="networkidle", timeout=20000)
-                    if resp and resp.status < 400:
-                        page_loaded = True
-                        crawl_log["endpoints_tried"].append({"endpoint": path, "status": resp.status, "products": 0, "error": None})
-                        await page.wait_for_timeout(3000)
-                        for _ in range(3):
-                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                            await page.wait_for_timeout(1500)
-                        await page.wait_for_timeout(4000)
-                        break
-                    else:
-                        crawl_log["endpoints_tried"].append({"endpoint": path, "status": resp.status if resp else 0, "products": 0, "error": f"HTTP {resp.status if resp else 'none'}"})
-                except Exception as e:
-                    crawl_log["endpoints_tried"].append({"endpoint": path, "status": 0, "products": 0, "error": str(e)[:80]})
-
-            await browser.close()
-
-            if intercepted:
-                best = max(intercepted, key=lambda x: x["count"])
-                raw_items = best["items"]
-                winning_pattern = best["url"]
-                for ep in crawl_log["endpoints_tried"]:
-                    ep["products"] = best["count"]
-                captured_products = raw_items
-                crawl_log["endpoint_used"] = winning_pattern
-
-    except ImportError:
-        crawl_log["error"] = "Playwright not installed"
-    except Exception as e:
-        crawl_log["error"] = f"Tier 2 error: {str(e)[:200]}"
-
-    now = datetime.now(timezone.utc)
-    duration = round(time.time() - start_time, 1)
-    crawl_log["duration_secs"] = duration
-
-    if captured_products and len(captured_products) >= 5:
-        crawl_log["tier_used"] = 2
-        crawl_log["http_status"] = 200
-        crawl_log["products_found"] = len(captured_products)
-        new_c, snap_c = await _process_crawled_products(store, captured_products, now, tier=2, confidence=88)
-        crawl_log["products_new"] = new_c
-        crawl_log["products_updated"] = len(captured_products) - new_c
-        crawl_log["snapshots_created"] = snap_c
-        if winning_pattern:
-            await db.stores.update_one({"id": store["id"]}, {"$set": {"working_xhr_pattern": winning_pattern}})
-    else:
-        count = len(captured_products) if captured_products else 0
-        if not crawl_log["error"]:
-            crawl_log["error"] = f"Tier 2 insufficient — captured {count} products (need 5+). Escalating to Tier 3"
-
-    crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
-    await db.crawl_logs.insert_one(crawl_log)
-    await db.stores.update_one({"id": store["id"]}, {"$set": {
-        "last_crawled_at": crawl_log["completed_at"],
-        "last_crawl_tier": crawl_log["tier_used"],
-        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
-        "last_crawl_error": crawl_log["error"],
-        "last_crawl_products": crawl_log["products_found"],
-        "last_crawl_endpoint": crawl_log.get("endpoint_used"),
-    }})
-    logger.info(f"Tier2 {store['name']}: tier={crawl_log['tier_used']}, found={crawl_log['products_found']}, duration={duration}s, pattern={winning_pattern}")
-    return crawl_log
-
-# ── Tier 3 HTML Fallback Crawler ────────────────────────────
-SELECTOR_PROFILES = {
-    "salla": {
-        "card": [".product-card", ".product-item", "[data-product]", ".s-product-card-entry"],
-        "name": [".product-card__title", ".product-name", "h3", "h2", ".s-product-card-entry__title"],
-        "price": [".product-price", ".price", "[data-price]", ".s-product-card-entry__price"],
-        "orig": [".product-price--compare", ".compare-price", "s", "del"],
-        "image": ["img.product-card__image", ".product-image img", "img"],
-    },
-    "zid": {
-        "card": [".product-item", ".zid-product", ".product-card"],
-        "name": [".item-title", ".product-title", "h3"],
-        "price": [".item-price", ".product-price", ".price-current"],
-        "orig": [".item-price-old", ".price-old", "del"],
-        "image": [".item-image img", ".product-img img", "img"],
-    },
-    "shopify": {
-        "card": [".product-card", ".grid-product", "[data-product-card]"],
-        "name": [".product-card__title", ".grid-product__title", "h3"],
-        "price": [".product-card__price", ".grid-product__price", ".price"],
-        "orig": [".price--compare", "del", "s"],
-        "image": ["img.product-card__image", ".grid-product__image-wrap img", "img"],
-    },
-}
-
-def _extract_price_from_text(text):
-    if not text:
-        return 0
-    nums = re.findall(r'[\d,]+\.?\d*', text.replace(",", ""))
-    return float(nums[0]) if nums else 0
-
-async def crawl_tier3_html(store):
-    """Tier 3: Playwright renders page, BeautifulSoup extracts with CSS selectors."""
-    import time
-    from bs4 import BeautifulSoup
-    start_time = time.time()
-    domain = store["domain"]
-    base = f"https://{domain}"
-    platform = store.get("platform", "custom").lower()
-    crawl_log = {
-        "id": str(uuid.uuid4()), "store_id": store["id"], "store_name": store["name"],
-        "tier_attempted": 3, "tier_used": None, "http_status": None,
-        "products_found": 0, "products_new": 0, "products_updated": 0,
-        "snapshots_created": 0, "error": None, "endpoint_used": None,
-        "endpoints_tried": [], "duration_secs": 0,
-        "started_at": datetime.now(timezone.utc).isoformat(), "completed_at": None,
-    }
-    html_content = None
-
-    try:
-        from playwright.async_api import async_playwright
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            ctx = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", locale="ar-SA")
-            page = await ctx.new_page()
-            for path in STORE_PAGES:
-                try:
-                    resp = await page.goto(f"{base}{path}", wait_until="networkidle", timeout=20000)
-                    if resp and resp.status < 400:
-                        crawl_log["endpoints_tried"].append({"endpoint": path, "status": resp.status, "products": 0, "error": None})
-                        for _ in range(3):
-                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                            await page.wait_for_timeout(1500)
-                        await page.wait_for_timeout(2000)
-                        html_content = await page.content()
-                        crawl_log["endpoint_used"] = path
-                        break
-                    else:
-                        crawl_log["endpoints_tried"].append({"endpoint": path, "status": resp.status if resp else 0, "products": 0, "error": f"HTTP {resp.status if resp else 'none'}"})
-                except Exception as e:
-                    crawl_log["endpoints_tried"].append({"endpoint": path, "status": 0, "products": 0, "error": str(e)[:80]})
-            await browser.close()
-    except Exception as e:
-        crawl_log["error"] = f"Tier 3 browser error: {str(e)[:200]}"
-
-    products_extracted = []
-    if html_content:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(html_content, "html.parser")
-        profiles_to_try = [SELECTOR_PROFILES.get(platform, {})] + [v for k, v in SELECTOR_PROFILES.items() if k != platform]
-        for profile in profiles_to_try:
-            if not profile.get("card"):
-                continue
-            for card_sel in profile["card"]:
-                cards = soup.select(card_sel)
-                if len(cards) < 3:
-                    continue
-                for card in cards:
-                    name = ""
-                    for ns in profile.get("name", ["h3"]):
-                        el = card.select_one(ns)
-                        if el:
-                            name = el.get_text(strip=True)
-                            break
-                    if not name:
-                        continue
-                    price = 0
-                    for ps in profile.get("price", [".price"]):
-                        el = card.select_one(ps)
-                        if el:
-                            price = _extract_price_from_text(el.get_text(strip=True))
-                            break
-                    orig_price = price
-                    for ops in profile.get("orig", ["del"]):
-                        el = card.select_one(ops)
-                        if el:
-                            op = _extract_price_from_text(el.get_text(strip=True))
-                            if op > price:
-                                orig_price = op
-                            break
-                    img = ""
-                    for ims in profile.get("image", ["img"]):
-                        el = card.select_one(ims)
-                        if el:
-                            img = el.get("src", el.get("data-src", ""))
-                            break
-                    products_extracted.append({"name": name, "price": price, "sale_price": price if price < orig_price else 0, "original_price": orig_price, "image": {"url": img}, "quantity": 0, "status": "sale"})
-                if products_extracted:
-                    break
-            if products_extracted:
-                break
-        # Try JSON-LD as fallback
-        if len(products_extracted) < 5:
-            for script in soup.select('script[type="application/ld+json"]'):
-                try:
-                    import json
-                    ld = json.loads(script.string)
-                    items = ld if isinstance(ld, list) else ld.get("itemListElement", [])
-                    for item in items:
-                        prod = item.get("item", item)
-                        if prod.get("@type") == "Product":
-                            offer = prod.get("offers", {})
-                            products_extracted.append({"name": prod.get("name", ""), "price": float(offer.get("price", 0)), "quantity": 0, "status": "sale", "image": {"url": prod.get("image", "")}})
-                except Exception:
-                    pass
-
-    now = datetime.now(timezone.utc)
-    duration = round(time.time() - start_time, 1)
-    crawl_log["duration_secs"] = duration
-
-    if products_extracted and len(products_extracted) >= 3:
-        crawl_log["tier_used"] = 3
-        crawl_log["http_status"] = 200
-        crawl_log["products_found"] = len(products_extracted)
-        new_c, snap_c = await _process_crawled_products(store, products_extracted, now, tier=3, confidence=75)
-        crawl_log["products_new"] = new_c
-        crawl_log["products_updated"] = len(products_extracted) - new_c
-        crawl_log["snapshots_created"] = snap_c
-    else:
-        if not crawl_log["error"]:
-            crawl_log["error"] = f"Tier 3 extracted {len(products_extracted)} products — all tiers exhausted"
-
-    crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
-    await db.crawl_logs.insert_one(crawl_log)
-    await db.stores.update_one({"id": store["id"]}, {"$set": {
-        "last_crawled_at": crawl_log["completed_at"],
-        "last_crawl_tier": crawl_log["tier_used"],
-        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
-        "last_crawl_error": crawl_log["error"],
-        "last_crawl_products": crawl_log["products_found"],
-        "last_crawl_endpoint": crawl_log.get("endpoint_used"),
-    }})
-    logger.info(f"Tier3 {store['name']}: tier={crawl_log['tier_used']}, found={crawl_log['products_found']}, duration={duration}s")
-    return crawl_log
-
-# ── Unified Crawl Orchestrator ──────────────────────────────
-async def crawl_store_waterfall(store):
-    """Run the 3-tier waterfall crawler for a store."""
-    platform = store.get("platform", "").lower()
-    # Tier 1: JSON endpoints (Salla only for now)
-    if platform in ("salla", "shopify", "zid"):
-        result = await crawl_salla_tier1(store)
-        if result.get("tier_used"):
-            return result
-    # Tier 2: XHR interception
-    result = await crawl_tier2_xhr(store)
-    if result.get("tier_used"):
-        return result
-    # Tier 3: HTML scraping
-    result = await crawl_tier3_html(store)
-    return result
+# ── Crawlers imported from crawlers.py ───────────────────────
+# crawl_store_waterfall, process_crawled_products, extract_brand,
+# guess_category, guess_animal, extract_weight — all imported at top
 
 # ── Scheduler Helpers ────────────────────────────────────────
 async def scheduled_crawl_job(store_id: str):
@@ -1015,7 +498,7 @@ async def scheduled_crawl_job(store_id: str):
     if not store or not store.get("is_active", True):
         return
     platform = store.get("platform", "").lower()
-    await crawl_store_waterfall(store)
+    await crawl_store_waterfall(db, store)
 
 def register_crawl_job(store_id, store_name, priority, offset_minutes=0):
     """Register a crawl job for a store in the scheduler."""
@@ -1102,7 +585,7 @@ async def trigger_crawl(store_id: str, user=Depends(get_user)):
     store = await db.stores.find_one({"id": store_id}, {"_id": 0})
     if not store:
         raise HTTPException(404, "Store not found")
-    result = await crawl_store_waterfall(store)
+    result = await crawl_store_waterfall(db, store)
     return {
         "message": f"Crawl {'completed' if result.get('tier_used') else 'attempted'} for {store['name']}",
         "store_id": store_id,
@@ -2151,10 +1634,18 @@ async def root():
 # ── App Setup ───────────────────────────────────────────────
 app.include_router(router)
 
+cors_origins = os.environ.get('CORS_ORIGINS', '*')
+if cors_origins == '*':
+    cors_origins_list = ["*"]
+    allow_creds = False
+else:
+    cors_origins_list = [o.strip() for o in cors_origins.split(',')]
+    allow_creds = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_credentials=allow_creds,
+    allow_origins=cors_origins_list,
     allow_methods=["*"],
     allow_headers=["*"],
 )

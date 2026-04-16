@@ -71,14 +71,14 @@ export default function AlertsPage() {
       await api.delete(`/alerts/${id}`);
       toast.success("Alert deleted");
       fetchAll();
-    } catch { toast.error("Failed"); }
+    } catch (err) { console.error(err); toast.error("Failed"); }
   };
 
   const handleToggle = async (id) => {
     try {
       await api.put(`/alerts/${id}/toggle`);
       fetchAll();
-    } catch { toast.error("Failed"); }
+    } catch (err) { console.error(err); toast.error("Failed"); }
   };
 
   const handleCheck = async () => {
@@ -87,7 +87,7 @@ export default function AlertsPage() {
       const r = await api.post("/alerts/check");
       toast.success(r.data.message);
       fetchAll();
-    } catch { toast.error("Check failed"); }
+    } catch (err) { console.error(err); toast.error("Check failed"); }
     finally { setChecking(false); }
   };
 
