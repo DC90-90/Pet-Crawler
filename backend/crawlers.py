@@ -311,12 +311,20 @@ async def _paginate_endpoint(http, ep, initial_items):
     pagination = ep.get("pagination", "page")
 
     if pagination == "cursor":
-        # Salla cursor-based: follow cursor.next URL
+        # Salla cursor-based: GET cursor.next directly as a complete URL until null
+        # Fix: Salla cursor.next may drop /en/ prefix, causing 400 "deprecated" errors.
+        # Detect and re-insert the /en/ prefix when the initial request used it.
+        initial_path = ep.get("tag", "")
+        needs_en_prefix = initial_path.startswith("/en/")
         next_url = ep.get("_cursor_next")
         pages_fetched = 1
-        while next_url and pages_fetched < 30:
+        while next_url and pages_fetched < 200:
             try:
-                r = await http.get(next_url)
+                # Fix cursor URL: re-insert /en/ if the working endpoint used it
+                fetch_url = next_url
+                if needs_en_prefix and "/en/api/" not in next_url and "/api/" in next_url:
+                    fetch_url = next_url.replace("/api/", "/en/api/", 1)
+                r = await http.get(fetch_url)
                 if r.status_code != 200:
                     break
                 body = r.json()
@@ -327,12 +335,15 @@ async def _paginate_endpoint(http, ep, initial_items):
                 pages_fetched += 1
                 cursor = body.get("cursor")
                 next_url = cursor.get("next") if cursor and isinstance(cursor, dict) else None
-            except Exception:
+                logger.info(f"[Pagination] Page {pages_fetched}: +{len(more)} items (total: {len(all_items)}), has_next={next_url is not None}")
+            except Exception as exc:
+                logger.warning(f"[Pagination] Exception on page {pages_fetched+1}: {exc}")
                 break
+        logger.info(f"[Pagination] Done: {len(all_items)} total across {pages_fetched} pages")
     else:
         # Zid page-number pagination
         page = 2
-        while page <= 30:
+        while page <= 200:
             params = dict(ep.get("params", {}))
             params["page"] = page
             try:

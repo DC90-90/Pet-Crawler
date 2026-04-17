@@ -59,9 +59,11 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 
 ### Crawler Endpoint Fix (Done — Feb 2026)
 - Fixed Salla Tier 1: correct endpoint /en/api/v1/products with cursor.next pagination
+- Fixed cursor.next /en/ prefix bug: Salla cursor.next drops /en/ prefix, leading to deprecated API (400). Re-insert /en/ automatically.
 - Fixed Zid Tier 1: correct endpoint /api/v1/products with page-number pagination
 - Added `results` key detection for Zid-style API responses
-- Stores that were falling to Tier 2/3 now hit Tier 1 directly (Zarafa: 15, Petsy: 720, Panda: 720 products)
+- Pagination follows cursor.next as complete URL until null (up to 200 pages)
+- Results: Zarafa 1110 products (was 15), Petsy 720 (was 11), Panda 720 (was 8)
 - Complete dark premium SaaS theme: #060B14 background, glassmorphism cards, teal #00D4B4 + amber #F59E0B accents
 - All pages redesigned: Login (split-screen hero), Dashboard, Stores, Insights, Scanner, Discounts, Alerts, Settings
 - Collapsible sidebar with teal glow active state
