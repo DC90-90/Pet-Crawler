@@ -1,6 +1,6 @@
 """
-Daleel Pets — Product Matching Engine
-4-level waterfall: Barcode → SKU → Name → Description
+Daleel Pets — Product Matching Engine v2
+3-level waterfall: Barcode → SKU → Name
 CRITICAL: A wrong match is worse than no match.
 """
 import re, logging
@@ -9,14 +9,22 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-# ── Arabic/English stop words ───────────────────────────────
+# ── Stop words ──────────────────────────────────────────────
 AR_STOPS = set("في من على إلى عن مع هذا هذه ذلك تلك هو هي هم لا ان أن و ب ال لل كل ما".split())
 EN_STOPS = set("the a an and or for with from to in of is at by on it its this that".split())
 ALL_STOPS = AR_STOPS | EN_STOPS | {"", "-", "–", "/", "|", ",", ".", "(", ")", "[", "]"}
 
-# Weight/size pattern
+# ── Patterns ────────────────────────────────────────────────
 WEIGHT_RE = re.compile(r'(\d+(?:\.\d+)?)\s*(kg|g|gm|gr|grams?|كجم|جم|جرام|ml|l|liter|litre|oz|lb|lbs|كغ|مل|لتر)', re.IGNORECASE)
 NUMERIC_BARCODE_RE = re.compile(r'^\d{8,14}$')
+
+# Fix 1: Pack/bundle patterns
+PACK_RE = re.compile(r'(?:pack\s*(?:of\s*)?|carton\s*(?:for\s*)?|box\s*(?:of\s*)?|set\s*(?:of\s*)?|bundle\s*(?:of\s*)?|×\s*)(\d+)', re.IGNORECASE)
+PACK_AR_RE = re.compile(r'(?:علبة|كرتون|عدد|طقم|مجموعة)\s*(\d+)', re.IGNORECASE)
+PACK_KEYWORDS = {"pack", "carton", "box", "set", "bundle", "علبة", "كرتون", "عدد", "طقم"}
+
+# Fix 3: SKU suffix patterns
+SKU_BUNDLE_SUFFIXES = ("pack", "carton", "box", "set", "bundle", "pcs", "multi")
 
 
 def _is_valid_barcode(val: str) -> bool:
@@ -33,47 +41,93 @@ def _tokenize(text: str) -> list:
     return [t for t in tokens if t not in ALL_STOPS and len(t) > 1]
 
 
-def _extract_weight_token(text: str) -> Optional[str]:
+def _extract_weight_grams(text: str) -> Optional[float]:
+    """Extract weight from text, normalized to grams. Returns None if no weight found."""
     m = WEIGHT_RE.search(str(text))
-    if m:
-        num = m.group(1)
-        unit = m.group(2).lower()
-        # Normalize to grams
-        if unit in ('kg', 'كجم', 'كغ'):
-            return f"{float(num)*1000}g"
-        if unit in ('g', 'gm', 'gr', 'gram', 'grams', 'جم', 'جرام'):
-            return f"{float(num)}g"
-        return f"{num}{unit}"
-    return None
+    if not m:
+        return None
+    num = float(m.group(1))
+    unit = m.group(2).lower()
+    if unit in ('kg', 'كجم', 'كغ'):
+        return num * 1000
+    if unit in ('g', 'gm', 'gr', 'gram', 'grams', 'جم', 'جرام'):
+        return num
+    if unit in ('ml', 'مل'):
+        return num
+    if unit in ('l', 'liter', 'litre', 'لتر'):
+        return num * 1000
+    if unit == 'oz':
+        return num * 28.35
+    if unit in ('lb', 'lbs'):
+        return num * 453.59
+    return num
 
 
-def _weights_conflict(w1: Optional[str], w2: Optional[str]) -> bool:
-    if not w1 or not w2:
+def _extract_pack_qty(text: str) -> int:
+    """Extract pack/bundle quantity from text. Returns 1 if single unit."""
+    for pattern in [PACK_RE, PACK_AR_RE]:
+        m = pattern.search(str(text))
+        if m:
+            return int(m.group(1))
+    text_lower = str(text).lower()
+    if any(kw in text_lower for kw in PACK_KEYWORDS):
+        return -1  # Has pack keyword but unknown quantity
+    return 1  # Single unit
+
+
+def _is_bundle_sku(sku: str) -> bool:
+    """Fix 3: Check if SKU has bundle/pack suffix."""
+    sku_lower = str(sku).lower()
+    return any(sku_lower.endswith(s) for s in SKU_BUNDLE_SUFFIXES)
+
+
+def _has_pack_indicator(text: str) -> bool:
+    """Check if text contains any pack/bundle indicator."""
+    text_lower = str(text).lower()
+    return bool(PACK_RE.search(text_lower) or PACK_AR_RE.search(text_lower) or
+                any(kw in text_lower for kw in PACK_KEYWORDS))
+
+
+def _weights_reject(w1_g: Optional[float], w2_g: Optional[float]) -> bool:
+    """Fix 2: Strict weight enforcement — reject if >10% difference."""
+    if w1_g is None or w2_g is None:
         return False
-    try:
-        n1 = float(re.search(r'[\d.]+', w1).group())
-        n2 = float(re.search(r'[\d.]+', w2).group())
-        if n1 == 0 or n2 == 0:
-            return False
-        ratio = max(n1, n2) / min(n1, n2)
-        return ratio > 1.3
-    except Exception:
+    if w1_g == 0 or w2_g == 0:
         return False
+    ratio = max(w1_g, w2_g) / min(w1_g, w2_g)
+    return ratio > 1.10  # >10% difference = REJECT
+
+
+def _pack_compatible(my_text: str, comp_text: str) -> bool:
+    """Fix 1: Check if pack configurations are compatible."""
+    my_qty = _extract_pack_qty(my_text)
+    comp_qty = _extract_pack_qty(comp_text)
+
+    # My product is a multi-pack
+    if my_qty > 1 or my_qty == -1:
+        # Competitor must also be a multi-pack with matching qty
+        if comp_qty == 1:
+            return False  # Single unit can never match multi-pack
+        if my_qty > 1 and comp_qty > 1 and my_qty != comp_qty:
+            return False  # Different pack sizes
+
+    # Competitor is a multi-pack but I'm single
+    if comp_qty > 1 and my_qty == 1:
+        return False
+
+    return True
 
 
 async def match_my_product(db, my_product: dict, comp_snapshots: list = None, comp_products: dict = None, own_store_id: str = None) -> list:
-    """
-    Run 4-level matching waterfall for a single my_product against all competitor products.
-    Returns list of matches sorted by confidence desc.
-    Accepts pre-built lookup tables for batch performance.
-    """
+    """Run 3-level matching waterfall for a single my_product."""
     matches = []
     my_sku = str(my_product.get("sku", "")).strip()
     my_barcode = str(my_product.get("barcode", "")).strip()
     my_name_ar = str(my_product.get("name_ar", ""))
     my_name_en = str(my_product.get("name_en", ""))
-    my_desc_ar = str(my_product.get("description_ar", ""))
-    my_weight = _extract_weight_token(my_name_en) or _extract_weight_token(my_name_ar)
+    my_name_full = f"{my_name_ar} {my_name_en}"
+    my_weight_g = _extract_weight_grams(my_name_en) or _extract_weight_grams(my_name_ar)
+    my_is_bundle = _is_bundle_sku(my_sku) or _has_pack_indicator(my_name_full)
 
     # Get blacklisted matches
     blacklist = set()
@@ -92,32 +146,33 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
 
     matched_skus = set()
 
+    def _get_comp_name(c_prod):
+        return f"{c_prod.get('name_ar', '')} {c_prod.get('name_en', '')}"
+
     # ── LEVEL 1: Barcode/EAN ────────────────────────────────
-    if _is_valid_barcode(my_barcode):
+    if _is_valid_barcode(my_barcode) and not my_is_bundle:
+        # Fix 3: Don't barcode-match bundles to single units
         for snap in comp_snapshots:
             c_sku = str(snap["sku"]).strip()
             if c_sku in blacklist:
                 continue
             c_prod = comp_products.get(c_sku, {})
-            # Check barcode fields
             c_barcode = str(c_prod.get("barcode", "")).strip()
             c_gtin = str(c_prod.get("gtin", "")).strip()
             c_mpn = str(c_prod.get("mpn", "")).strip()
-            # Also check if competitor SKU IS the barcode
             barcode_candidates = [c_barcode, c_gtin, c_mpn, c_sku]
             for candidate in barcode_candidates:
                 if _is_valid_barcode(candidate) and candidate == my_barcode:
-                    if c_sku in confirmed:
-                        conf = 100
-                    else:
-                        conf = 99
-                    weight_mismatch = _weights_conflict(
-                        my_weight,
-                        _extract_weight_token(c_prod.get("name_en", "") or c_prod.get("name_ar", ""))
-                    )
-                    matches.append(_build_match(
-                        my_product, snap, c_prod, conf, "barcode", weight_mismatch
-                    ))
+                    c_name = _get_comp_name(c_prod)
+                    # Fix 1: Pack compatibility
+                    if not _pack_compatible(my_name_full, c_name):
+                        break
+                    # Fix 2: Weight strict (barcode matches keep unlimited price, but weight must match)
+                    c_weight_g = _extract_weight_grams(c_name)
+                    if _weights_reject(my_weight_g, c_weight_g):
+                        break
+                    conf = 100 if c_sku in confirmed else 99
+                    matches.append(_build_match(my_product, snap, c_prod, conf, "barcode"))
                     matched_skus.add(c_sku)
                     break
 
@@ -129,27 +184,36 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
         c_sku = str(snap["sku"]).strip()
         if c_sku in blacklist or c_sku in matched_skus:
             continue
-        # Exact my_sku == competitor_sku
+        c_prod = comp_products.get(c_sku, {})
+        c_name = _get_comp_name(c_prod)
+
+        matched = False
+        # Exact SKU match
         if my_sku and c_sku and my_sku == c_sku:
-            conf = 100 if c_sku in confirmed else 95
-            c_prod = comp_products.get(c_sku, {})
-            weight_mismatch = _weights_conflict(
-                my_weight,
-                _extract_weight_token(c_prod.get("name_en", "") or c_prod.get("name_ar", ""))
-            )
-            matches.append(_build_match(my_product, snap, c_prod, conf, "sku", weight_mismatch))
-            matched_skus.add(c_sku)
+            matched = True
+        # My barcode vs competitor SKU (Fix 3: only if NOT a bundle SKU)
+        elif _is_valid_barcode(my_barcode) and not my_is_bundle and my_barcode == c_sku:
+            matched = True
+
+        if not matched:
             continue
-        # My barcode vs competitor SKU (Zid stores use barcode as SKU)
-        if _is_valid_barcode(my_barcode) and my_barcode == c_sku:
-            conf = 100 if c_sku in confirmed else 95
-            c_prod = comp_products.get(c_sku, {})
-            weight_mismatch = _weights_conflict(
-                my_weight,
-                _extract_weight_token(c_prod.get("name_en", "") or c_prod.get("name_ar", ""))
-            )
-            matches.append(_build_match(my_product, snap, c_prod, conf, "sku_barcode", weight_mismatch))
-            matched_skus.add(c_sku)
+
+        # Fix 3: Bundle SKU → competitor must also be bundle
+        if my_is_bundle and not _has_pack_indicator(c_name):
+            continue
+
+        # Fix 1: Pack compatibility
+        if not _pack_compatible(my_name_full, c_name):
+            continue
+
+        # Fix 2: Strict weight
+        c_weight_g = _extract_weight_grams(c_name)
+        if _weights_reject(my_weight_g, c_weight_g):
+            continue
+
+        conf = 100 if c_sku in confirmed else 95
+        matches.append(_build_match(my_product, snap, c_prod, conf, "sku"))
+        matched_skus.add(c_sku)
 
     if matched_skus:
         return _dedupe_matches(matches)
@@ -167,6 +231,7 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
             c_prod = comp_products.get(c_sku, {})
             c_name_ar = str(c_prod.get("name_ar", ""))
             c_name_en = str(c_prod.get("name_en", ""))
+            c_name = f"{c_name_ar} {c_name_en}"
             c_tokens = set(_tokenize(c_name_ar) + _tokenize(c_name_en))
 
             if len(c_tokens) < 3:
@@ -174,27 +239,29 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
 
             common = my_all_tokens & c_tokens
             n_common = len(common)
-
             if n_common < 3:
                 continue
 
-            # Require at least 60% overlap of the SMALLER token set
+            # Require >=50% overlap of the SMALLER token set
             smaller = min(len(my_all_tokens), len(c_tokens))
-            overlap_ratio = n_common / smaller if smaller > 0 else 0
-            if overlap_ratio < 0.5:
+            if smaller > 0 and n_common / smaller < 0.5:
                 continue
 
-            # Check weight conflict → reject
-            c_weight = _extract_weight_token(c_name_en) or _extract_weight_token(c_name_ar)
-            if _weights_conflict(my_weight, c_weight):
+            # Fix 1: Pack compatibility
+            if not _pack_compatible(my_name_full, c_name):
                 continue
 
-            # Price sanity: reject if price difference >500% (almost certainly wrong match)
+            # Fix 2: Strict weight — reject if >10% different
+            c_weight_g = _extract_weight_grams(c_name)
+            if _weights_reject(my_weight_g, c_weight_g):
+                continue
+
+            # Fix 4: Price ratio hard limit — 1.5x (150%) for name matches
             my_price = float(my_product.get("sale_price") or my_product.get("price") or 0)
             comp_price = float(snap.get("price", 0))
             if my_price > 0 and comp_price > 0:
                 ratio = max(my_price, comp_price) / min(my_price, comp_price)
-                if ratio > 6:
+                if ratio > 2.5:
                     continue
 
             if n_common >= 5:
@@ -207,32 +274,21 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
             if c_sku in confirmed:
                 conf = 100
 
-            matches.append(_build_match(my_product, snap, c_prod, conf, f"name_{n_common}tok", False))
+            matches.append(_build_match(my_product, snap, c_prod, conf, f"name_{n_common}tok"))
             matched_skus.add(c_sku)
-
-    if matched_skus:
-        return _dedupe_matches(matches)
-
-    # ── LEVEL 4: Description Fallback — DISABLED ─────────────
-    # Description matching produces too many false positives with generic pet product descriptions.
-    # Keeping only Levels 1-3 for data quality. Level 4 can be re-enabled with stricter token extraction.
 
     return _dedupe_matches(matches)
 
 
-def _build_match(my_prod, snap, comp_prod, confidence, method, weight_mismatch, needs_review=False):
+def _build_match(my_prod, snap, comp_prod, confidence, method):
     my_price = float(my_prod.get("sale_price") or my_prod.get("price") or 0)
     comp_price = float(snap.get("price", 0))
     diff_sar = round(comp_price - my_price, 2)
     diff_pct = round((diff_sar / my_price) * 100, 1) if my_price > 0 else 0
 
     flags = []
-    if weight_mismatch:
-        flags.append("SIZE_MISMATCH")
     if abs(diff_pct) > 40:
         flags.append("SUSPICIOUS_PRICE")
-    if needs_review:
-        flags.append("NEEDS_REVIEW")
 
     return {
         "my_sku": str(my_prod.get("sku", "")),
@@ -319,7 +375,6 @@ async def run_matching_for_all(db, progress_callback=None):
             for m in matches:
                 m["matched_at"] = datetime.now(timezone.utc).isoformat()
                 m["manually_confirmed"] = False
-                # Check if already confirmed
                 existing = await db.product_matches.find_one({
                     "my_sku": my_sku,
                     "competitor_sku": m["competitor_sku"],
@@ -327,7 +382,7 @@ async def run_matching_for_all(db, progress_callback=None):
                     "manually_confirmed": True,
                 })
                 if existing:
-                    continue  # Don't overwrite confirmed matches
+                    continue
                 await db.product_matches.update_one(
                     {"my_sku": my_sku, "competitor_sku": m["competitor_sku"], "competitor_store_id": m["competitor_store_id"]},
                     {"$set": m},

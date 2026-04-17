@@ -83,6 +83,7 @@ export default function PriceIntelPage() {
     { id: "action", label: isRTL ? "إجراء مطلوب" : "Action Required", count: data.action_required.length, icon: AlertTriangle },
     { id: "advantage", label: isRTL ? "مزاياي" : "My Advantages", count: data.my_advantages.length, icon: Award },
     { id: "full", label: isRTL ? "المقارنة الكاملة" : "Full Comparison", count: data.full_table.length, icon: ShoppingCart },
+    { id: "unverified", label: isRTL ? "غير مؤكد" : "Unverified", count: (data.unverified || []).length, icon: AlertCircle },
   ];
 
   return (
@@ -207,6 +208,41 @@ export default function PriceIntelPage() {
                   <TableCell><Badge className="bg-white/10 border-0 text-[#9CA3AF] text-xs">{r.sellers}</Badge></TableCell>
                   <TableCell><ConfidenceBadge confidence={r.confidence} method={r.match_method} /></TableCell>
                   <TableCell><FlagBadges flags={r.flags} /></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {/* Section: Unverified Matches (<75% confidence) */}
+      {tab === "unverified" && (
+        <div className="glass-card overflow-hidden">
+          <div className="px-4 py-3 border-b border-white/5 bg-[#F59E0B]/5">
+            <p className="text-xs text-[#F59E0B]">{isRTL ? "هذه المطابقات بثقة أقل من 75% — تحتاج مراجعة يدوية" : "These matches have <75% confidence — manual review required"}</p>
+          </div>
+          <Table className="dense-table">
+            <TableHeader><TableRow>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">My Product</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">My Price</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Competitor</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Price</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Confidence</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Actions</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {(data.unverified || []).length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="text-center py-12 text-[#9CA3AF]">No unverified matches</TableCell></TableRow>
+              ) : (data.unverified || []).slice(0, 50).map((r) => (
+                <TableRow key={r.my_sku}>
+                  <TableCell><p className="text-sm text-white truncate max-w-[200px]">{r.my_name_en || r.my_name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{r.my_sku}</p></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-white metric-number">{r.my_price} SAR</span></TableCell>
+                  <TableCell><span className="text-xs text-[#9CA3AF]">{r.cheapest_competitor}</span><br/><span className="text-sm metric-number text-white">{r.cheapest_price} SAR</span></TableCell>
+                  <TableCell><span className={`text-sm font-bold ${r.diff_pct > 5 ? "text-[#EF4444]" : "text-[#9CA3AF]"}`}>{r.diff_pct > 0 ? "+" : ""}{r.diff_pct}%</span></TableCell>
+                  <TableCell><ConfidenceBadge confidence={r.confidence} method={r.match_method} /></TableCell>
+                  <TableCell>
+                    <Button size="sm" variant="ghost" onClick={() => openDetail(r.my_sku)} className="text-[10px] text-[#00D4B4] h-7">Review</Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

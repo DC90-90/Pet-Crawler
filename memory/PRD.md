@@ -75,13 +75,18 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 
 ### Price Intelligence System (Done — Feb 2026)
 - Part 1: Excel import — 2,370 products imported from Zid export, stored in my_products collection with is_own_store: true
-- Part 2: 3-level matching engine — Barcode (99%), SKU (95%), Name tokens (70-85%) with strict waterfall. Level 4 disabled (unreliable descriptions). Price sanity >6x ratio rejected, 50%+ token overlap required.
-- Part 3: Comparison data — my price vs competitor, diff SAR/%, position, stock status, opportunity/alert/suspicious flags
-- Part 4: Price Intelligence dashboard — Action Required (RED/YELLOW), My Advantages (cheapest/OOS), Full Comparison table, Product Detail drill-down with price history charts
-- Part 5: Match quality controls — confirm (→100%), reject (→blacklist), SUSPICIOUS_PRICE flags for >40% diff, SIZE_MISMATCH flags
-- Part 6: Import page with drag-and-drop Excel upload, instant matching trigger
-- New pages: /import, /price-intel with sidebar navigation
-- Results: 1,600 matched products, 401 overpriced (RED), 392 cheapest, 52 OOS opportunities
+- Part 2: 3-level matching engine v2 — Barcode (99%), SKU (95%), Name tokens (70-85%). Level 4 disabled.
+  - Fix 1: Pack/bundle rejection — multi-pack SKUs never match single-unit competitor products
+  - Fix 2: Weight strict — >10% weight difference = REJECT (not flag, reject)
+  - Fix 3: SKU suffix rejection — "pack"/"carton" suffixed SKUs only match pack products
+  - Fix 4: Price ratio 2.5x hard limit for name matches (barcode/SKU unlimited)
+  - Fix 5: Confidence >=75% shown in main table, <75% in "Unverified" tab for manual review
+  - 50% token overlap required, price sanity checks throughout
+- Part 3: Comparison data — price diff SAR/%, position, stock, SUSPICIOUS_PRICE flags (>40%)
+- Part 4: Dashboard — 4 tabs: Action Required, My Advantages, Full Comparison, Unverified
+- Part 5: Confirm (→100%), Reject (→blacklist), quality controls
+- Part 6: Import page with drag-and-drop + background matching
+- Results: 1,031 high-confidence matches, 738 unverified for review, 272 overpriced RED
 - Complete dark premium SaaS theme: #060B14 background, glassmorphism cards, teal #00D4B4 + amber #F59E0B accents
 - All pages redesigned: Login (split-screen hero), Dashboard, Stores, Insights, Scanner, Discounts, Alerts, Settings
 - Collapsible sidebar with teal glow active state

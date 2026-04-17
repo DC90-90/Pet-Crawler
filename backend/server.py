@@ -2485,14 +2485,24 @@ async def price_intel_dashboard(user=Depends(get_user)):
     matches = await db.product_matches.find({}, {"_id": 0}).to_list(50000)
     my_products = {p["sku"]: p async for p in db.my_products.find({}, {"_id": 0})}
 
-    # Group matches by my_sku
+    # Fix 5: Separate high-confidence (>=75) from unverified (<75)
+    high_conf_matches = [m for m in matches if m.get("confidence", 0) >= 75]
+    low_conf_matches = [m for m in matches if 0 < m.get("confidence", 0) < 75]
+
+    # Group high-confidence matches by my_sku
     by_sku = {}
-    for m in matches:
+    for m in high_conf_matches:
         by_sku.setdefault(m["my_sku"], []).append(m)
+
+    # Group low-confidence matches separately
+    unverified_by_sku = {}
+    for m in low_conf_matches:
+        unverified_by_sku.setdefault(m["my_sku"], []).append(m)
 
     action_required = []  # Section A
     my_advantages = []    # Section B
     full_table = []       # Section C
+    unverified = []       # Separate tab
 
     now = datetime.now(timezone.utc)
 
@@ -2547,18 +2557,45 @@ async def price_intel_dashboard(user=Depends(get_user)):
 
         full_table.append(row)
 
+    # Build unverified matches list
+    for my_sku, ms in unverified_by_sku.items():
+        mp = my_products.get(my_sku)
+        if not mp:
+            continue
+        my_price = float(mp.get("sale_price") or mp.get("price") or 0)
+        if my_price <= 0:
+            continue
+        cheapest = min(ms, key=lambda x: x["competitor_price"]) if ms else None
+        if not cheapest:
+            continue
+        unverified.append({
+            "my_sku": my_sku,
+            "my_name_ar": mp.get("name_ar", ""),
+            "my_name_en": mp.get("name_en", ""),
+            "my_price": my_price,
+            "cheapest_competitor": cheapest["competitor_store_name"],
+            "cheapest_price": cheapest["competitor_price"],
+            "diff_pct": round(((my_price - cheapest["competitor_price"]) / cheapest["competitor_price"]) * 100, 1) if cheapest["competitor_price"] > 0 else 0,
+            "confidence": cheapest["confidence"],
+            "match_method": cheapest["match_method"],
+            "flags": cheapest.get("flags", []),
+        })
+
     # Sort
     action_required.sort(key=lambda x: -x["diff_pct"])
     my_advantages.sort(key=lambda x: -(x.get("saving_sar", 0)))
     full_table.sort(key=lambda x: -abs(x["diff_pct"]))
+    unverified.sort(key=lambda x: -abs(x.get("diff_pct", 0)))
 
     return {
         "action_required": action_required,
         "my_advantages": my_advantages,
         "full_table": full_table,
+        "unverified": unverified,
         "summary": {
             "total_products": len(my_products),
             "matched_products": len(by_sku),
+            "unverified_products": len(unverified_by_sku),
             "overpriced_red": len([a for a in action_required if a["severity"] == "red"]),
             "overpriced_yellow": len([a for a in action_required if a["severity"] == "yellow"]),
             "cheapest_count": len([a for a in my_advantages if a.get("advantage") == "cheapest"]),
