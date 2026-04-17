@@ -59,6 +59,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Daleel Pets API")
 router = APIRouter(prefix="/api")
+
+@router.get("/debug/token")
+async def debug_token():
+    return {
+        "crawler_token_length": len(CRAWLER_TOKEN),
+        "first_5_chars": CRAWLER_TOKEN[:5],
+        "source": "env" if os.environ.get("CRAWLER_TOKEN") else "hardcoded",
+    }
 scheduler = AsyncIOScheduler()
 crawl_paused = False
 
