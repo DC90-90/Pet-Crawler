@@ -53,6 +53,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
+CRAWLER_TOKEN = os.environ.get('CRAWLER_TOKEN', '')
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -2861,10 +2862,9 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
     """Secure bulk ingest endpoint for external crawler running on Saudi IP."""
     # Bearer token auth
     auth_header = request.headers.get("authorization", "")
-    expected_token = os.environ.get("CRAWLER_TOKEN", "")
-    if not expected_token:
+    if not CRAWLER_TOKEN:
         raise HTTPException(500, "CRAWLER_TOKEN not configured")
-    if not auth_header.startswith("Bearer ") or auth_header[7:] != expected_token:
+    if not auth_header.startswith("Bearer ") or auth_header[7:] != CRAWLER_TOKEN:
         raise HTTPException(401, "Invalid or missing crawler token")
 
     store = await db.stores.find_one({"id": payload.store_id})
