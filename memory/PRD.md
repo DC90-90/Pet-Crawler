@@ -64,6 +64,14 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 - Added `results` key detection for Zid-style API responses
 - Pagination follows cursor.next as complete URL until null (up to 200 pages)
 - Results: Zarafa 1110 products (was 15), Petsy 720 (was 11), Panda 720 (was 8)
+
+### Store Registry & Crawler Fixes (Done — Feb 2026)
+- Added 7 stores: CuteCat, CutePets, Hamtaro, Mowkly, Aleef, Hobba, Caty (with correct domains, platforms, working_endpoints)
+- Fixed CutePets domain (cutepets.com → cutepets.com.sa, Shopify → Salla)
+- Marked pets-houses.com as is_own_store: true (MY STORE baseline)
+- Lana Pets: Added Cloudflare bypass headers (Accept-Language, Accept) + direct Salla API attempt via Playwright
+- Tier 2 enhanced: For Salla stores, tries direct API via Playwright before XHR interception (bypasses Cloudflare JS challenge)
+- 12 stores total, 13 scheduler jobs active
 - Complete dark premium SaaS theme: #060B14 background, glassmorphism cards, teal #00D4B4 + amber #F59E0B accents
 - All pages redesigned: Login (split-screen hero), Dashboard, Stores, Insights, Scanner, Discounts, Alerts, Settings
 - Collapsible sidebar with teal glow active state

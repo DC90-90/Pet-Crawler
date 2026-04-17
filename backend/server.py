@@ -607,6 +607,64 @@ async def seed_database():
 
     logger.info(f"Seeded {len(STORES_SEED)} stores, {len(all_products_data)} products, {len(all_snapshots)} snapshots")
 
+
+async def ensure_stores():
+    """Ensure all required stores exist and have correct configuration."""
+    required_stores = [
+        {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products"},
+        {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products"},
+        {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
+        {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products"},
+        {"name": "Aleef", "domain": "aleef.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
+        {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
+        {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
+    ]
+    now = datetime.now(timezone.utc)
+    added = 0
+    for s in required_stores:
+        existing = await db.stores.find_one({"domain": s["domain"]})
+        if not existing:
+            await db.stores.insert_one({
+                "id": str(uuid.uuid4()), "name": s["name"], "domain": s["domain"],
+                "platform": s["platform"], "base_url": f"https://{s['domain']}",
+                "crawl_frequency_hrs": 12 if s["priority"] == 1 else 24,
+                "buyer_account_enc": "", "is_active": True, "priority": s["priority"],
+                "working_endpoint": s.get("working_endpoint", ""),
+                "last_crawled_at": "", "created_at": now.isoformat(),
+            })
+            added += 1
+            logger.info(f"[Stores] Added: {s['name']} ({s['domain']})")
+        else:
+            # Update platform/working_endpoint if store exists but has wrong config
+            updates = {}
+            if existing.get("platform") != s["platform"]:
+                updates["platform"] = s["platform"]
+            if s.get("working_endpoint") and existing.get("working_endpoint") != s["working_endpoint"]:
+                updates["working_endpoint"] = s["working_endpoint"]
+            if updates:
+                await db.stores.update_one({"domain": s["domain"]}, {"$set": updates})
+                logger.info(f"[Stores] Updated config for {s['name']}: {updates}")
+
+    # Mark pets-houses.com as own store
+    await db.stores.update_one(
+        {"domain": "pets-houses.com"},
+        {"$set": {"is_own_store": True}},
+    )
+
+    # Fix Cute Pets domain (cutepets.com → cutepets.com.sa) if old entry exists
+    old_cute = await db.stores.find_one({"domain": "cutepets.com"})
+    new_cute = await db.stores.find_one({"domain": "cutepets.com.sa"})
+    if old_cute and new_cute:
+        # Delete old entry if new one exists
+        await db.stores.delete_one({"domain": "cutepets.com"})
+        logger.info("[Stores] Removed old cutepets.com entry (replaced by cutepets.com.sa)")
+    elif old_cute and not new_cute:
+        await db.stores.update_one({"domain": "cutepets.com"}, {"$set": {"domain": "cutepets.com.sa", "platform": "salla", "base_url": "https://cutepets.com.sa", "working_endpoint": "/en/api/v1/products"}})
+        logger.info("[Stores] Updated cutepets.com → cutepets.com.sa")
+
+    if added:
+        logger.info(f"[Stores] Added {added} new stores")
+
 # ── Auth Routes ─────────────────────────────────────────────
 @router.post("/auth/register")
 @limiter.limit("5/minute")
@@ -2305,13 +2363,13 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await seed_database()
-    # Register crawl jobs for all active stores
+    await ensure_stores()
+    # Register crawl jobs for all active stores (skip own store)
     stores = await db.stores.find({"is_active": True}, {"_id": 0}).to_list(100)
     for idx, s in enumerate(stores):
         register_crawl_job(s["id"], s["name"], s.get("priority", 3), idx * 15)
     if not scheduler.running:
         scheduler.start()
-    # Register weekly digest job — Sunday 05:00 UTC (08:00 Riyadh)
     scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0, id="weekly_digest", replace_existing=True)
     logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest")
 

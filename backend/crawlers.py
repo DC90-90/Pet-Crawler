@@ -474,22 +474,79 @@ async def crawl_tier2_xhr(db, store):
             ctx = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="ar-SA",
+                extra_http_headers={
+                    "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
+                    "Accept": "application/json, text/html, */*",
+                },
             )
             page = await ctx.new_page()
             intercepted = []
             page.on("response", _build_xhr_response_handler(intercepted))
 
-            attempts, page_loaded = await _playwright_navigate_and_scroll(page, base)
-            crawl_log["endpoints_tried"] = attempts
-            await browser.close()
+            # For Salla stores, try direct API via Playwright (bypasses Cloudflare JS challenge)
+            platform = store.get("platform", "").lower()
+            if platform == "salla":
+                salla_api_urls = [f"{base}/en/api/v1/products", f"{base}/api/v1/products"]
+                for api_url in salla_api_urls:
+                    try:
+                        resp = await page.goto(api_url, wait_until="domcontentloaded", timeout=20000)
+                        if resp and resp.status == 200:
+                            content = await page.content()
+                            if '"data"' in content and '"cursor"' in content:
+                                import json as _json
+                                # Extract JSON from page body
+                                body_text = await page.inner_text("body")
+                                body = _json.loads(body_text)
+                                items = body.get("data", [])
+                                if items and len(items) >= 1:
+                                    # Follow cursor pagination within Playwright context
+                                    all_items = list(items)
+                                    cursor = body.get("cursor", {})
+                                    next_url = cursor.get("next") if cursor else None
+                                    initial_tag = "/en/api/v1/products" if "/en/" in api_url else "/api/v1/products"
+                                    needs_en = "/en/" in api_url
+                                    pages = 1
+                                    while next_url and pages < 200:
+                                        fetch_url = next_url
+                                        if needs_en and "/en/api/" not in next_url and "/api/" in next_url:
+                                            fetch_url = next_url.replace("/api/", "/en/api/", 1)
+                                        try:
+                                            resp2 = await page.goto(fetch_url, wait_until="domcontentloaded", timeout=15000)
+                                            if not resp2 or resp2.status != 200:
+                                                break
+                                            body_text2 = await page.inner_text("body")
+                                            body2 = _json.loads(body_text2)
+                                            more = body2.get("data", [])
+                                            if not more:
+                                                break
+                                            all_items.extend(more)
+                                            pages += 1
+                                            cursor2 = body2.get("cursor", {})
+                                            next_url = cursor2.get("next") if cursor2 else None
+                                        except Exception:
+                                            break
+                                    captured_products = all_items
+                                    winning_pattern = api_url
+                                    crawl_log["endpoints_tried"].append({"endpoint": initial_tag, "status": 200, "products": len(all_items), "error": None})
+                                    logger.info(f"Tier2 {store['name']}: Salla API via Playwright — {len(all_items)} products across {pages} pages")
+                                    break
+                    except Exception:
+                        continue
 
-            if intercepted:
-                best = max(intercepted, key=lambda x: x["count"])
-                captured_products = best["items"]
-                winning_pattern = best["url"]
-                for ep in crawl_log["endpoints_tried"]:
-                    ep["products"] = best["count"]
-                crawl_log["endpoint_used"] = winning_pattern
+            # Fall back to standard XHR interception if no products yet
+            if not captured_products:
+                attempts, page_loaded = await _playwright_navigate_and_scroll(page, base)
+                crawl_log["endpoints_tried"].extend(attempts)
+
+                if intercepted:
+                    best = max(intercepted, key=lambda x: x["count"])
+                    captured_products = best["items"]
+                    winning_pattern = best["url"]
+                    for ep in crawl_log["endpoints_tried"]:
+                        ep["products"] = best["count"]
+                    crawl_log["endpoint_used"] = winning_pattern
+
+            await browser.close()
 
     except ImportError:
         crawl_log["error"] = "Playwright not installed"
@@ -499,7 +556,7 @@ async def crawl_tier2_xhr(db, store):
     now = datetime.now(timezone.utc)
     crawl_log["duration_secs"] = round(time.time() - start_time, 1)
 
-    if captured_products and len(captured_products) >= 5:
+    if captured_products and len(captured_products) >= 1:
         crawl_log["tier_used"] = 2
         crawl_log["http_status"] = 200
         crawl_log["products_found"] = len(captured_products)
