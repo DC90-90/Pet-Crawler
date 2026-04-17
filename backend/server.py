@@ -2867,6 +2867,207 @@ async def get_raw_products(store_id: str, page: int = 1, limit: int = 50, user=D
     return {"store": store, "items": items, "total": total, "page": page}
 
 
+# ── MySKUwatch Baseline Import ───────────────────────────────
+@router.post("/baseline/import")
+async def import_baseline(user=Depends(get_user)):
+    """Import MySKUwatch baseline data from pre-downloaded Excel file."""
+    import openpyxl
+
+    filepath = "/tmp/daleel_baseline.xlsx"
+    try:
+        wb = openpyxl.load_workbook(filepath, read_only=True)
+    except Exception as exc:
+        raise HTTPException(400, f"Cannot open baseline file: {exc}")
+
+    TAGS = {
+        "data_source": "myskuwatch_baseline",
+        "baseline_period": "last_14_days",
+        "import_date": "2026-04-17",
+        "expires": "2026-05-17",
+    }
+    now = datetime.now(timezone.utc)
+    results = {}
+
+    # ── Step 2A: My_Store_Baseline Section A → market_intelligence_baseline ──
+    ws = wb['My_Store_Baseline']
+    rows = list(ws.iter_rows(values_only=True))
+    baseline_doc = {
+        "store_domain": "pets-houses.com",
+        "total_products": 1292,
+        "est_units_sold": 1458,
+        "est_revenue_sar": 42489,
+        "on_discount": 272,
+        "market_rank": 12,
+        "market_total_stores": 13,
+        "median_price_spread_pct": 41.9,
+        "market_price_drops": 442,
+        "imported_at": now.isoformat(),
+        **TAGS,
+    }
+    await db.market_intelligence_baseline.update_one(
+        {"store_domain": "pets-houses.com", "data_source": "myskuwatch_baseline"},
+        {"$set": baseline_doc}, upsert=True
+    )
+    results["baseline_stats"] = 1
+
+    # ── Step 2B: My_Store_Baseline Section B → product_baseline_stats ──
+    product_stats = []
+    for r in rows[14:]:  # Data rows after Section B header
+        if not r[0] or not str(r[0]).strip().isdigit():
+            continue
+        vs_lowest = r[8]
+        if isinstance(vs_lowest, str):
+            vs_lowest = float(vs_lowest.replace('%', '').replace('+', '')) if vs_lowest.replace('%','').replace('+','').replace('-','').replace('.','').isdigit() else 0
+        vs_median = r[9]
+        if isinstance(vs_median, str):
+            vs_median = float(vs_median.replace('%', '').replace('+', '')) if vs_median.replace('%','').replace('+','').replace('-','').replace('.','').isdigit() else 0
+        market_share = r[7]
+        if isinstance(market_share, str):
+            market_share = float(market_share.replace('%', '')) if market_share.replace('%','').replace('.','').isdigit() else 0
+
+        doc = {
+            "barcode": str(r[1] or "").strip(),
+            "name_ar": str(r[2] or "").strip(),
+            "my_price_sar": float(r[3] or 0),
+            "est_units_sold": int(r[4] or 0),
+            "est_revenue_sar": float(r[5] or 0),
+            "est_market_size_sar": float(r[6] or 0),
+            "est_market_share_pct": float(market_share) if isinstance(market_share, (int, float)) else market_share,
+            "vs_lowest_pct": float(vs_lowest) if isinstance(vs_lowest, (int, float)) else vs_lowest,
+            "vs_median_pct": float(vs_median) if isinstance(vs_median, (int, float)) else vs_median,
+            "sellers_count": int(r[10] or 0),
+            "rank": int(r[0]),
+            "imported_at": now.isoformat(),
+            **TAGS,
+        }
+        await db.product_baseline_stats.update_one(
+            {"barcode": doc["barcode"], "data_source": "myskuwatch_baseline"},
+            {"$set": doc}, upsert=True
+        )
+        product_stats.append(doc)
+    results["product_stats"] = len(product_stats)
+
+    # ── Step 3: Market_Leaderboard → market_leaderboard ──
+    ws = wb['Market_Leaderboard']
+    rows = list(ws.iter_rows(values_only=True))
+    leaderboard = []
+    for r in rows[2:]:
+        if not r[0] or not (isinstance(r[0], (int, float)) or str(r[0]).strip().isdigit()):
+            continue
+        entry = {
+            "rank": int(r[0]),
+            "store_domain": str(r[1] or "").strip(),
+            "relative_size": str(r[2] or "").strip(),
+            "notes": str(r[3] or "").strip(),
+            "is_my_store": str(r[4] or "").strip().upper() == "YES",
+            "snapshot_date": "2026-04-17",
+            "imported_at": now.isoformat(),
+            **TAGS,
+        }
+        leaderboard.append(entry)
+    await db.market_leaderboard.delete_many({"data_source": "myskuwatch_baseline"})
+    if leaderboard:
+        await db.market_leaderboard.insert_many(leaderboard)
+    results["leaderboard_entries"] = len(leaderboard)
+
+    # ── Step 4: Catalog_Gaps → market_opportunities ──
+    ws = wb['Catalog_Gaps']
+    rows = list(ws.iter_rows(values_only=True))
+    gaps = []
+    for r in rows[2:]:
+        if not r[0] or not r[1]:
+            continue
+        doc = {
+            "priority": str(r[0] or "").strip(),
+            "barcode": str(r[1] or "").strip(),
+            "product_name": str(r[2] or "").strip(),
+            "est_units_sold": int(r[3] or 0),
+            "est_revenue_sar": float(r[4] or 0),
+            "sellers_count": int(r[5] or 0),
+            "avg_price_sar": float(r[6] or 0),
+            "action": str(r[7] or "").strip(),
+            "imported_at": now.isoformat(),
+            **TAGS,
+        }
+        gaps.append(doc)
+    await db.market_opportunities.delete_many({"data_source": "myskuwatch_baseline"})
+    if gaps:
+        await db.market_opportunities.insert_many(gaps)
+    results["catalog_gaps"] = len(gaps)
+
+    # ── Step 5: Price_Comparisons → product_snapshots (source_tier=5, confidence=80) ──
+    ws = wb['Price_Comparisons']
+    rows = list(ws.iter_rows(values_only=True))
+    comp_count = 0
+    for r in rows[2:]:
+        if not r[0]:
+            continue
+        barcode = str(r[0] or "").strip()
+        product_name = str(r[1] or "").strip()
+        my_store = str(r[2] or "").strip()
+        my_price = float(r[3] or 0) if r[3] else 0
+        my_status = str(r[4] or "").strip()
+        comp_store = str(r[5] or "").strip()
+        comp_price = float(r[6] or 0) if r[6] else 0
+        comp_status = str(r[7] or "").strip()
+        diff_pct_str = str(r[8] or "0%").replace('%', '').replace('+', '').strip()
+        position = str(r[9] or "").strip()
+
+        if not comp_store or comp_price <= 0:
+            continue
+
+        # Find store_id from domain
+        comp_domain = comp_store
+        store_doc = await db.stores.find_one({"$or": [{"domain": comp_domain}, {"name": comp_domain}]}, {"_id": 0, "id": 1, "name": 1})
+        store_id = store_doc["id"] if store_doc else comp_store
+        store_name = store_doc["name"] if store_doc else comp_store
+
+        await db.product_snapshots.insert_one({
+            "id": str(uuid.uuid4()),
+            "product_id": "",
+            "store_id": store_id,
+            "store_name": store_name,
+            "sku": barcode,
+            "price": round(comp_price, 2),
+            "original_price": round(comp_price, 2),
+            "discount_pct": 0,
+            "in_stock": comp_status.lower() == "in stock",
+            "qty_available": 0,
+            "source_tier": 5,
+            "confidence_score": 80,
+            "crawled_at": now,
+            **TAGS,
+        })
+        comp_count += 1
+    results["price_comparisons"] = comp_count
+
+    wb.close()
+    results["status"] = "complete"
+    results["tags"] = TAGS
+    return results
+
+
+@router.get("/baseline/leaderboard")
+async def get_leaderboard(user=Depends(get_user)):
+    items = await db.market_leaderboard.find({}, {"_id": 0}).sort("rank", 1).to_list(20)
+    baseline = await db.market_intelligence_baseline.find_one(
+        {"store_domain": "pets-houses.com"}, {"_id": 0}
+    )
+    return {"leaderboard": items, "my_store_baseline": baseline}
+
+
+@router.get("/baseline/catalog-gaps")
+async def get_catalog_gaps(user=Depends(get_user)):
+    items = await db.market_opportunities.find({}, {"_id": 0}).sort("est_revenue_sar", -1).to_list(50)
+    return items
+
+
+@router.get("/baseline/product-stats")
+async def get_product_stats(user=Depends(get_user)):
+    items = await db.product_baseline_stats.find({}, {"_id": 0}).sort("est_revenue_sar", -1).to_list(50)
+    return items
+
+
 # ── Root ────────────────────────────────────────────────────
 @router.get("/")
 async def root():

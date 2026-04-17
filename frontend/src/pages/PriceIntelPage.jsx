@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { toast } from "sonner";
-import { AlertTriangle, TrendingDown, TrendingUp, Award, ShoppingCart, CheckCircle2, XCircle, AlertCircle, ChevronRight, Shield } from "lucide-react";
+import { AlertTriangle, TrendingDown, TrendingUp, Award, ShoppingCart, CheckCircle2, XCircle, AlertCircle, ChevronRight, Shield, Trophy, PackageSearch } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -32,12 +32,20 @@ export default function PriceIntelPage() {
   const [selectedSku, setSelectedSku] = useState(null);
   const [detail, setDetail] = useState(null);
   const [tab, setTab] = useState("action");
+  const [leaderboard, setLeaderboard] = useState(null);
+  const [catalogGaps, setCatalogGaps] = useState([]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api.get("/price-intel/dashboard");
+      const [r, lb, gaps] = await Promise.all([
+        api.get("/price-intel/dashboard"),
+        api.get("/baseline/leaderboard").catch(() => ({ data: null })),
+        api.get("/baseline/catalog-gaps").catch(() => ({ data: [] })),
+      ]);
       setData(r.data);
+      setLeaderboard(lb.data);
+      setCatalogGaps(gaps.data || []);
     } catch {
       toast.error("Failed to load price intelligence");
     } finally {
@@ -84,6 +92,7 @@ export default function PriceIntelPage() {
     { id: "advantage", label: isRTL ? "مزاياي" : "My Advantages", count: data.my_advantages.length, icon: Award },
     { id: "full", label: isRTL ? "المقارنة الكاملة" : "Full Comparison", count: data.full_table.length, icon: ShoppingCart },
     { id: "unverified", label: isRTL ? "غير مؤكد" : "Unverified", count: (data.unverified || []).length, icon: AlertCircle },
+    { id: "gaps", label: isRTL ? "فجوات الكتالوج" : "Catalog Gaps", count: catalogGaps.length, icon: PackageSearch },
   ];
 
   return (
@@ -109,6 +118,46 @@ export default function PriceIntelPage() {
           </div>
         ))}
       </div>
+
+      {/* Market Position Widget */}
+      {leaderboard && leaderboard.my_store_baseline && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="glass-card p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Trophy className="w-5 h-5 text-[#F59E0B]" />
+              <h3 className="text-sm font-semibold text-white">{isRTL ? "ترتيبك في السوق" : "Market Position"}</h3>
+              <Badge className="text-[8px] bg-[#F59E0B]/10 text-[#F59E0B] border-0 ms-auto">Baseline data (expires May 17)</Badge>
+            </div>
+            <div className="flex items-end gap-1 mb-3">
+              <span className="text-4xl font-bold text-[#F59E0B] metric-number">#{leaderboard.my_store_baseline.market_rank}</span>
+              <span className="text-[#9CA3AF] text-sm mb-1">of {leaderboard.my_store_baseline.market_total_stores} stores</span>
+            </div>
+            <div className="space-y-1.5">
+              {leaderboard.leaderboard?.slice(0, 7).map((e) => (
+                <div key={e.rank} className={`flex items-center gap-2 text-xs py-1 px-2 rounded-lg ${e.is_my_store ? "bg-[#00D4B4]/10 border border-[#00D4B4]/20" : ""}`}>
+                  <span className="text-[#9CA3AF] w-5 text-right">#{e.rank}</span>
+                  <span className={`flex-1 ${e.is_my_store ? "text-[#00D4B4] font-semibold" : "text-white"}`}>{e.store_domain}</span>
+                  <span className="text-[#9CA3AF]">{e.relative_size}</span>
+                </div>
+              ))}
+              {leaderboard.leaderboard?.length > 7 && (
+                <div className="text-[10px] text-[#9CA3AF] text-center pt-1">
+                  ... + {leaderboard.leaderboard.length - 7} more stores (you are #{leaderboard.my_store_baseline.market_rank})
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="glass-card p-5">
+            <h3 className="text-sm font-semibold text-white mb-3">{isRTL ? "أداء متجرك" : "Your Store Performance"}</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div><p className="text-[9px] uppercase text-[#9CA3AF] tracking-wider">Est. Revenue (14d)</p><p className="text-xl font-bold text-[#00D4B4] metric-number">{leaderboard.my_store_baseline.est_revenue_sar?.toLocaleString()} SAR</p></div>
+              <div><p className="text-[9px] uppercase text-[#9CA3AF] tracking-wider">Est. Units Sold</p><p className="text-xl font-bold text-white metric-number">{leaderboard.my_store_baseline.est_units_sold?.toLocaleString()}</p></div>
+              <div><p className="text-[9px] uppercase text-[#9CA3AF] tracking-wider">Active Products</p><p className="text-xl font-bold text-white metric-number">{leaderboard.my_store_baseline.total_products?.toLocaleString()}</p></div>
+              <div><p className="text-[9px] uppercase text-[#9CA3AF] tracking-wider">Price Spread</p><p className="text-xl font-bold text-[#F59E0B] metric-number">{leaderboard.my_store_baseline.median_price_spread_pct}%</p></div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Tab Bar */}
       <div className="flex gap-1 glass-card p-1.5">
@@ -243,6 +292,46 @@ export default function PriceIntelPage() {
                   <TableCell>
                     <Button size="sm" variant="ghost" onClick={() => openDetail(r.my_sku)} className="text-[10px] text-[#00D4B4] h-7">Review</Button>
                   </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {/* Catalog Gaps — Products I Don't Sell */}
+      {tab === "gaps" && (
+        <div className="glass-card overflow-hidden">
+          <div className="px-4 py-3 border-b border-white/5 bg-[#00D4B4]/5">
+            <p className="text-xs text-[#00D4B4]">{isRTL ? "منتجات رائجة لا تبيعها — فرص إيرادات فورية" : "Trending products you DON'T sell — immediate revenue opportunities"}</p>
+            <Badge className="text-[8px] bg-[#F59E0B]/10 text-[#F59E0B] border-0 mt-1">Includes baseline data (expires May 17)</Badge>
+          </div>
+          <Table className="dense-table">
+            <TableHeader><TableRow>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Priority</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Product</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Barcode</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Est. Revenue (14d)</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Units Sold</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Sellers</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Avg Price</TableHead>
+              <TableHead className="text-[10px] uppercase text-[#9CA3AF]">Action</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {catalogGaps.length === 0 ? (
+                <TableRow><TableCell colSpan={8} className="text-center py-12 text-[#9CA3AF]">No catalog gaps found</TableCell></TableRow>
+              ) : catalogGaps.map((g) => (
+                <TableRow key={g.barcode}>
+                  <TableCell>
+                    <Badge className={`text-[10px] border-0 ${g.priority?.includes("🔴") ? "bg-[#EF4444]/15 text-[#EF4444]" : "bg-[#F59E0B]/15 text-[#F59E0B]"}`}>{g.priority}</Badge>
+                  </TableCell>
+                  <TableCell><p className="text-sm text-white font-medium max-w-[250px] truncate">{g.product_name}</p></TableCell>
+                  <TableCell><span className="text-xs font-mono text-[#9CA3AF]">{g.barcode}</span></TableCell>
+                  <TableCell><span className="text-sm font-bold text-[#00D4B4] metric-number">{g.est_revenue_sar?.toLocaleString()} SAR</span></TableCell>
+                  <TableCell><span className="text-sm metric-number text-white">{g.est_units_sold}</span></TableCell>
+                  <TableCell><Badge className="bg-white/10 border-0 text-[#9CA3AF] text-xs">{g.sellers_count}</Badge></TableCell>
+                  <TableCell><span className="text-sm metric-number text-white">{g.avg_price_sar} SAR</span></TableCell>
+                  <TableCell><span className="text-[10px] text-[#F59E0B] font-medium">{g.action}</span></TableCell>
                 </TableRow>
               ))}
             </TableBody>
