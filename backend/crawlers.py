@@ -249,13 +249,18 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
 
 
 # ── Tier 1: JSON API Endpoints ───────────────────────────────
-def _build_salla_endpoints(base, cached_endpoint):
-    endpoints = [
-        {"url": f"{base}/api/v2/products", "params": {"per_page": 50, "page": 1}, "tag": "/api/v2/products"},
-        {"url": f"{base}/products.json", "params": {"limit": 250, "page": 1}, "tag": "/products.json"},
-        {"url": f"{base}/api/store/products", "params": {"limit": 50, "page": 1}, "tag": "/api/store/products"},
-        {"url": f"{base}/api/product/list", "params": {"per_page": 50, "page": 1}, "tag": "/api/product/list"},
-    ]
+def _build_salla_endpoints(base, cached_endpoint, platform="salla"):
+    if platform == "zid":
+        endpoints = [
+            {"url": f"{base}/api/v1/products", "params": {"page": 1}, "tag": "/api/v1/products", "pagination": "page"},
+        ]
+    else:
+        # Salla stores use /en/api/v1/products with cursor pagination
+        # Also try Zid-style page pagination as fallback (some stores are misclassified)
+        endpoints = [
+            {"url": f"{base}/en/api/v1/products", "params": {}, "tag": "/en/api/v1/products", "pagination": "cursor"},
+            {"url": f"{base}/api/v1/products", "params": {"page": 1}, "tag": "/api/v1/products", "pagination": "page"},
+        ]
     if cached_endpoint:
         matching = [e for e in endpoints if e["tag"] == cached_endpoint]
         others = [e for e in endpoints if e["tag"] != cached_endpoint]
@@ -267,7 +272,7 @@ async def _try_single_endpoint(http, ep, crawl_log):
     """Try a single JSON endpoint. Returns (items_list, endpoint_dict) or ([], None)."""
     attempt = {"endpoint": ep["tag"], "status": None, "products": 0, "error": None}
     try:
-        resp = await http.get(ep["url"], params=ep["params"])
+        resp = await http.get(ep["url"], params=ep.get("params"))
         attempt["status"] = resp.status_code
         if resp.status_code != 200:
             attempt["error"] = f"HTTP {resp.status_code}"
@@ -279,13 +284,17 @@ async def _try_single_endpoint(http, ep, crawl_log):
             attempt["error"] = "Non-JSON response"
             crawl_log["endpoints_tried"].append(attempt)
             return [], None
-        items = body.get("data", body.get("products", []))
-        if isinstance(items, list) and len(items) >= 5:
+        items = body.get("data", body.get("products", body.get("results", [])))
+        if isinstance(items, list) and len(items) >= 3:
             attempt["products"] = len(items)
+            # Store cursor info for Salla cursor pagination
+            cursor = body.get("cursor")
+            if cursor and isinstance(cursor, dict):
+                ep["_cursor_next"] = cursor.get("next")
             crawl_log["endpoints_tried"].append(attempt)
             return items, ep
         attempt["products"] = len(items) if isinstance(items, list) else 0
-        attempt["error"] = f"Only {attempt['products']} products (need 5+)"
+        attempt["error"] = f"Only {attempt['products']} products (need 3+)"
     except httpx.TimeoutException:
         attempt["status"] = 0
         attempt["error"] = "Timeout"
@@ -297,34 +306,58 @@ async def _try_single_endpoint(http, ep, crawl_log):
 
 
 async def _paginate_endpoint(http, ep, initial_items):
-    """Paginate through remaining pages of a working endpoint."""
+    """Paginate through remaining pages. Supports Salla cursor and Zid page-number pagination."""
     all_items = list(initial_items)
-    page = 2
-    limit_key = list(ep["params"].keys())[0]
-    limit_val = ep["params"][limit_key]
-    while page <= 20:
-        params = {limit_key: limit_val, "page": page}
-        r2 = await http.get(ep["url"], params=params)
-        if r2.status_code != 200:
-            break
-        try:
-            body2 = r2.json()
-            more = body2.get("data", body2.get("products", []))
-        except Exception:
-            break
-        if not more:
-            break
-        all_items.extend(more)
-        page += 1
-        if len(more) < limit_val:
-            break
+    pagination = ep.get("pagination", "page")
+
+    if pagination == "cursor":
+        # Salla cursor-based: follow cursor.next URL
+        next_url = ep.get("_cursor_next")
+        pages_fetched = 1
+        while next_url and pages_fetched < 30:
+            try:
+                r = await http.get(next_url)
+                if r.status_code != 200:
+                    break
+                body = r.json()
+                more = body.get("data", body.get("products", body.get("results", [])))
+                if not more:
+                    break
+                all_items.extend(more)
+                pages_fetched += 1
+                cursor = body.get("cursor")
+                next_url = cursor.get("next") if cursor and isinstance(cursor, dict) else None
+            except Exception:
+                break
+    else:
+        # Zid page-number pagination
+        page = 2
+        while page <= 30:
+            params = dict(ep.get("params", {}))
+            params["page"] = page
+            try:
+                r = await http.get(ep["url"], params=params)
+                if r.status_code != 200:
+                    break
+                body = r.json()
+                more = body.get("data", body.get("products", body.get("results", [])))
+                if not more:
+                    break
+                all_items.extend(more)
+                page += 1
+                if len(more) < 20:
+                    break
+            except Exception:
+                break
+
     return all_items
 
 
 async def crawl_salla_tier1(db, store):
-    """Tier 1: Try multiple Salla public JSON endpoints in sequence. Cache working endpoint."""
+    """Tier 1: Try Salla/Zid public JSON endpoints. Cache working endpoint."""
     base = f"https://{store['domain']}"
-    endpoints = _build_salla_endpoints(base, store.get("working_endpoint"))
+    platform = store.get("platform", "salla").lower()
+    endpoints = _build_salla_endpoints(base, store.get("working_endpoint"), platform=platform)
     crawl_log = _make_crawl_log(store, tier_attempted=1)
 
     all_raw = []
