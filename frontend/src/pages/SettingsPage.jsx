@@ -9,18 +9,18 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 
 const STATUS_CFG = {
-  active: { label: "Active", labelAr: "نشط", color: "bg-green-50 text-green-700 border-green-200", icon: ShieldCheck },
-  otp_required: { label: "OTP Required", labelAr: "مطلوب رمز", color: "bg-orange-50 text-orange-700 border-orange-200", icon: ShieldAlert },
-  expired: { label: "Expired", labelAr: "منتهي", color: "bg-red-50 text-red-700 border-red-200", icon: ShieldX },
-  not_configured: { label: "Not Configured", labelAr: "غير مهيأ", color: "bg-gray-50 text-gray-500 border-gray-200", icon: Shield },
+  active: { label: "Active", labelAr: "نشط", color: "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20", icon: ShieldCheck },
+  otp_required: { label: "OTP Required", labelAr: "مطلوب رمز", color: "bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20", icon: ShieldAlert },
+  expired: { label: "Expired", labelAr: "منتهي", color: "bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20", icon: ShieldX },
+  not_configured: { label: "Not Configured", labelAr: "غير مهيأ", color: "bg-white/5 text-[#9CA3AF] border-white/10", icon: Shield },
 };
 
 const PLATFORM_COLORS = {
-  salla: "bg-purple-50 text-purple-700 border-purple-200",
-  zid: "bg-blue-50 text-blue-700 border-blue-200",
-  shopify: "bg-green-50 text-green-700 border-green-200",
-  woocommerce: "bg-indigo-50 text-indigo-700 border-indigo-200",
-  custom: "bg-gray-50 text-gray-600 border-gray-200",
+  salla: "bg-[#A855F7]/10 text-[#A855F7] border-[#A855F7]/20",
+  zid: "bg-[#0EA5E9]/10 text-[#0EA5E9] border-[#0EA5E9]/20",
+  shopify: "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20",
+  woocommerce: "bg-[#818CF8]/10 text-[#818CF8] border-[#818CF8]/20",
+  custom: "bg-white/5 text-[#9CA3AF] border-white/10",
 };
 
 export default function SettingsPage() {
@@ -133,8 +133,8 @@ export default function SettingsPage() {
         <div
           className={`flex items-center gap-2 px-4 py-2.5 rounded-md text-sm font-medium ${
             encryptionOk
-              ? "bg-green-50 text-green-700 border border-green-200"
-              : "bg-red-50 text-red-700 border border-red-200"
+              ? "bg-[#10B981]/10 text-[#10B981] border border-[#10B981]/20"
+              : "bg-[#EF4444]/10 text-[#EF4444] border border-[#EF4444]/20"
           }`}
           data-testid="encryption-status-banner"
         >

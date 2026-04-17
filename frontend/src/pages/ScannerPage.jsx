@@ -10,8 +10,8 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 
 const RANGE_OPTIONS = [7, 14, 30];
 const BADGE_CFG = {
-  quick_win: { label: "Quick Win", icon: Trophy, cls: "bg-green-50 text-green-700 border-green-200" },
-  overpriced_risk: { label: "Overpriced Risk", icon: AlertTriangle, cls: "bg-red-50 text-red-700 border-red-200" },
+  quick_win: { label: "Quick Win", icon: Trophy, cls: "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20" },
+  overpriced_risk: { label: "Overpriced Risk", icon: AlertTriangle, cls: "bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20" },
   overpriced: { label: "Overpriced", icon: TrendingDown, cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
 };
 
@@ -177,8 +177,8 @@ export default function ScannerPage() {
                   <ResponsiveContainer width="100%" height={140}>
                     <BarChart data={buildPriceDist()}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                      <XAxis dataKey="store" tick={{ fontSize: 9 }} />
-                      <YAxis tick={{ fontSize: 9 }} />
+                      <XAxis dataKey="store" tick={{ fontSize: 9, fill: "#9CA3AF" }} />
+                      <YAxis tick={{ fontSize: 9, fill: "#9CA3AF" }} />
                       <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v) => [`${v} ﷼`, "Price"]} />
                       <Bar dataKey="price" radius={[2, 2, 0, 0]}>
                         {buildPriceDist().map((entry) => (

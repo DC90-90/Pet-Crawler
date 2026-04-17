@@ -87,9 +87,9 @@ export default function CompetitorProfilePage() {
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis dataKey={chartMode === "weekly" ? "week" : "date"} tick={{ fontSize: 9 }} tickFormatter={(v) => v.slice(-6)} />
-              <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
-              <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Revenue"]} />
+              <XAxis dataKey={chartMode === "weekly" ? "week" : "date"} tick={{ fontSize: 9, fill: "#9CA3AF" }} tickFormatter={(v) => v.slice(-6)} />
+              <YAxis tick={{ fontSize: 9, fill: "#9CA3AF" }} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
+              <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Revenue"]} contentStyle={{ background: "#1F2937", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#9CA3AF" }} />
               <SeasonalChartElements show={seasonal.show} />
               <Bar dataKey="revenue" fill="#00D4B4" radius={[2, 2, 0, 0]} />
             </BarChart>
@@ -125,7 +125,7 @@ export default function CompetitorProfilePage() {
                 <Pie data={category_distribution} dataKey="count" nameKey="category" cx="50%" cy="50%" outerRadius={80} label={({ category, percent }) => `${category} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
                   {category_distribution.map((cat) => <Cell key={cat.category} fill={PIE_COLORS[category_distribution.indexOf(cat) % PIE_COLORS.length]} />)}
                 </Pie>
-                <Tooltip />
+                <Tooltip contentStyle={{ background: "#1F2937", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#9CA3AF" }} />
               </PieChart>
             </ResponsiveContainer>
           ) : <p className="text-xs text-[#9CA3AF] py-8 text-center">{t("no_data")}</p>}

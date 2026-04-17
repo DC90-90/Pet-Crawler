@@ -16,8 +16,8 @@ const PLATFORMS = ["salla", "zid", "shopify", "woocommerce", "custom"];
 function CrawlStatusBadge({ status }) {
   if (!status) return <Badge variant="outline" className="text-[10px] text-gray-400">No crawl</Badge>;
   const map = {
-    success: { icon: CheckCircle2, cls: "bg-green-50 text-green-700 border-green-200" },
-    failed: { icon: XCircle, cls: "bg-red-50 text-red-700 border-red-200" },
+    success: { icon: CheckCircle2, cls: "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20" },
+    failed: { icon: XCircle, cls: "bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20" },
     unsupported: { icon: AlertCircle, cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
   };
   const cfg = map[status] || map.failed;
@@ -199,11 +199,11 @@ export default function StoreRegistryPage() {
                 </TableCell>
                 <TableCell>
                   {s.tier4_session_status === "active" ? (
-                    <Badge variant="outline" className="text-[9px] gap-1 bg-emerald-50 text-emerald-700 border-emerald-200"><Shield className="w-3 h-3" />Authenticated</Badge>
+                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20"><Shield className="w-3 h-3" />Authenticated</Badge>
                   ) : s.tier4_session_status === "otp_required" ? (
-                    <Badge variant="outline" className="text-[9px] gap-1 bg-orange-50 text-orange-700 border-orange-200"><Shield className="w-3 h-3" />OTP Needed</Badge>
+                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20"><Shield className="w-3 h-3" />OTP Needed</Badge>
                   ) : s.tier4_session_status === "expired" ? (
-                    <Badge variant="outline" className="text-[9px] gap-1 bg-red-50 text-red-500 border-red-200 cursor-pointer" onClick={() => navigate("/settings")}><Shield className="w-3 h-3" />Expired</Badge>
+                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20 cursor-pointer" onClick={() => navigate("/settings")}><Shield className="w-3 h-3" />Expired</Badge>
                   ) : (
                     <Badge variant="outline" className="text-[9px] gap-1 text-gray-400 cursor-pointer" onClick={() => navigate("/settings")}><Shield className="w-3 h-3" />Not Set Up</Badge>
                   )}
@@ -216,7 +216,7 @@ export default function StoreRegistryPage() {
                     <Button variant="ghost" size="sm" onClick={() => handleCrawl(s)} disabled={crawling[s.id]} className="h-7 w-7 p-0" data-testid={`crawl-btn-${s.id}`}>
                       <RefreshCw className={`w-3.5 h-3.5 ${crawling[s.id] ? "animate-sync" : ""}`} />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleDelete(s)} className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-50" data-testid={`delete-store-${s.id}`}>
+                    <Button variant="ghost" size="sm" onClick={() => handleDelete(s)} className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-[#EF4444]/10" data-testid={`delete-store-${s.id}`}>
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   </div>
@@ -248,7 +248,7 @@ export default function StoreRegistryPage() {
                   {log.endpoints_tried && log.endpoints_tried.length > 0 && (
                     <div className="flex flex-wrap gap-2 ps-[110px]">
                       {log.endpoints_tried.map((ep) => (
-                        <span key={`${ep.endpoint}-${ep.status}`} className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ep.products > 0 ? "bg-green-50 text-green-700" : "bg-red-50 text-red-500"}`} title={ep.error || ""}>
+                        <span key={`${ep.endpoint}-${ep.status}`} className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${ep.products > 0 ? "bg-[#10B981]/10 text-[#10B981]" : "bg-[#EF4444]/10 text-[#EF4444]"}`} title={ep.error || ""}>
                           {ep.endpoint} → {ep.status || "err"} {ep.products > 0 ? `(${ep.products})` : ""}
                         </span>
                       ))}

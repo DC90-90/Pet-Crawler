@@ -69,7 +69,7 @@ export default function DiscountsPage() {
                 </div>
                 <span className={`text-lg font-bold ${a.score > 30 ? "text-red-500" : a.score > 15 ? "text-yellow-600" : "text-green-600"}`}>{a.score}</span>
               </div>
-              {a.label && <Badge variant="outline" className={`text-[9px] mb-2 ${a.label === "Most Aggressive" ? "bg-red-50 text-red-600 border-red-200" : a.label === "Most Stable Pricing" ? "bg-green-50 text-green-600 border-green-200" : "bg-yellow-50 text-yellow-600 border-yellow-200"}`}>{a.label}</Badge>}
+              {a.label && <Badge variant="outline" className={`text-[9px] mb-2 ${a.label === "Most Aggressive" ? "bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20" : a.label === "Most Stable Pricing" ? "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20" : "bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20"}`}>{a.label}</Badge>}
               <div className="space-y-1 text-[10px] text-[#9CA3AF]">
                 <div className="flex justify-between"><span>Avg Depth</span><span className="font-semibold">{a.avg_depth}%</span></div>
                 <div className="flex justify-between"><span>Frequency</span><span className="font-semibold">{a.frequency}%</span></div>
@@ -127,9 +127,9 @@ export default function DiscountsPage() {
           <ResponsiveContainer width="100%" height={Math.max(180, timeline.stores.length * 35 + 40)}>
             <BarChart data={timeline.timeline} layout="vertical" margin={{ left: 80 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-              <XAxis type="number" tick={{ fontSize: 9 }} />
-              <YAxis type="category" dataKey="week" tick={{ fontSize: 8 }} width={70} tickFormatter={(w) => w.slice(-3)} />
-              <Tooltip contentStyle={{ fontSize: 11 }} />
+              <XAxis type="number" tick={{ fontSize: 9, fill: "#9CA3AF" }} />
+              <YAxis type="category" dataKey="week" tick={{ fontSize: 8, fill: "#9CA3AF" }} width={70} tickFormatter={(w) => w.slice(-3)} />
+              <Tooltip contentStyle={{ fontSize: 11, background: "#1F2937", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} labelStyle={{ color: "#9CA3AF" }} />
               {timeline.stores.map((s, i) => (
                 <Bar key={s} dataKey={s} stackId="a" fill={SCORE_COLORS[i % SCORE_COLORS.length]} />
               ))}

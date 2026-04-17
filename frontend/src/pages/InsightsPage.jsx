@@ -29,22 +29,23 @@ export default function InsightsPage() {
 
   useEffect(() => {
     setLoading(true);
+    const safe = (p) => p.catch(() => ({ data: [] }));
     Promise.all([
-      api.get("/insights/summary", { params: { days } }),
-      api.get("/insights/leaderboard", { params: { days } }),
-      api.get("/insights/top-sellers", { params: { days } }),
-      api.get("/insights/trending", { params: { days } }),
-      api.get("/insights/gaps"),
-      api.get("/insights/price-wars"),
-      api.get("/insights/restock-opportunities"),
+      api.get("/insights/summary", { params: { days } }).catch(() => ({ data: null })),
+      safe(api.get("/insights/leaderboard", { params: { days } })),
+      safe(api.get("/insights/top-sellers", { params: { days } })),
+      safe(api.get("/insights/trending", { params: { days } })),
+      safe(api.get("/insights/gaps")),
+      safe(api.get("/insights/price-wars")),
+      safe(api.get("/insights/restock-opportunities")),
     ]).then(([s, l, ts, tr, g, pw, rs]) => {
       setSummary(s.data);
-      setLeaderboard(l.data);
-      setTopSellers(ts.data);
-      setTrending(tr.data);
-      setGaps(g.data);
-      setPriceWars(pw.data);
-      setRestock(rs.data);
+      setLeaderboard(l.data || []);
+      setTopSellers(ts.data || []);
+      setTrending(tr.data || []);
+      setGaps(g.data || []);
+      setPriceWars(pw.data || []);
+      setRestock(rs.data || []);
     }).catch(console.error).finally(() => setLoading(false));
   }, [days]);
 
@@ -94,9 +95,9 @@ export default function InsightsPage() {
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={leaderboard} layout="vertical" margin={{ left: 0, right: 20 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-            <XAxis type="number" tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11 }} />
-            <YAxis type="category" dataKey="store" width={100} tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Revenue"]} />
+            <XAxis type="number" tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
+            <YAxis type="category" dataKey="store" width={100} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
+            <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Revenue"]} contentStyle={{ background: "#1F2937", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#9CA3AF" }} itemStyle={{ color: "#00D4B4" }} />
             <Bar dataKey="revenue_est" fill="#00D4B4" radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
@@ -110,7 +111,7 @@ export default function InsightsPage() {
           <div className="space-y-2 max-h-[300px] overflow-y-auto">
             {topSellers.slice(0, 10).map((s, i) => (
               <div key={s.sku} className="flex items-center gap-3 py-1.5 border-b border-white/5 last:border-0" data-testid={`top-seller-${i}`}>
-                <span className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#00D4B4] text-[#0A0F1E]" : "bg-[#111827]/80/5 text-[#9CA3AF]"}`}>{i + 1}</span>
+                <span className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#00D4B4] text-[#0A0F1E]" : "bg-white/5 text-[#9CA3AF]"}`}>{i + 1}</span>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-white truncate">{s.name_ar}</p>
                   <p className="text-[10px] text-[#9CA3AF]">{s.brand} - {s.category}</p>
@@ -130,7 +131,7 @@ export default function InsightsPage() {
           <Tabs defaultValue={trending[0]?.category || "cat_food"} className="w-full">
             <TabsList className="flex flex-wrap gap-1 bg-transparent h-auto p-0 mb-3">
               {trending.slice(0, 6).map((c) => (
-                <TabsTrigger key={c.category} value={c.category} className="text-[10px] px-2 py-1 rounded-md data-[state=active]:bg-[#00D4B4] data-[state=active]:text-white">
+                <TabsTrigger key={c.category} value={c.category} className="text-[10px] px-2 py-1 rounded-md data-[state=active]:bg-[#00D4B4] data-[state=active]:text-[#0A0F1E]">
                   {c.category_label}
                 </TabsTrigger>
               ))}
@@ -140,8 +141,8 @@ export default function InsightsPage() {
                 <p className="text-xs text-[#9CA3AF] mb-2">Total: {c.total_sales} units sold</p>
                 <div className="space-y-1.5">
                   {c.top_products.map((p) => (
-                    <div key={p.sku} className="flex items-center justify-between text-xs py-1 border-b border-[#F9FAFB]">
-                      <span className="text-white truncate flex-1">{p.name_ar}</span>
+                    <div key={p.sku} className="flex items-center justify-between text-xs py-1 border-b border-white/5">
+                      <span className="text-[#9CA3AF] truncate flex-1">{p.name_ar}</span>
                       <span className="font-bold text-white ms-2">{p.units_sold}</span>
                     </div>
                   ))}
@@ -162,7 +163,7 @@ export default function InsightsPage() {
               <div key={w.sku} className="py-2 border-b border-white/5 last:border-0">
                 <p className="text-xs font-medium text-white truncate">{w.name_ar}</p>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge variant="outline" className="text-[10px] border-red-200 text-red-600">{w.spread_sar} SAR spread</Badge>
+                  <Badge variant="outline" className="text-[10px] border-[#EF4444]/30 text-[#EF4444] bg-[#EF4444]/10">{w.spread_sar} SAR spread</Badge>
                   <span className="text-[10px] text-[#9CA3AF]">{w.spread_pct}%</span>
                 </div>
               </div>
@@ -196,7 +197,7 @@ export default function InsightsPage() {
                   <p className="text-xs font-medium text-white truncate">{g.name_ar}</p>
                   <p className="text-[10px] text-[#9CA3AF]">{g.num_stores} stores / {g.missing_count} missing</p>
                 </div>
-                <Badge className="text-[10px] bg-amber-50 text-amber-700 border-amber-200" variant="outline">
+                <Badge className="text-[10px] bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30" variant="outline">
                   {g.opportunity_score}%
                 </Badge>
               </div>

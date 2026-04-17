@@ -1746,10 +1746,11 @@ async def insights_gaps(user=Depends(get_user)):
 @router.get("/insights/price-wars")
 async def insights_price_wars(user=Depends(get_user)):
     pipeline = [
+        {"$match": {"price": {"$gt": 0}}},
         {"$sort": {"crawled_at": -1}},
         {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "store_name": {"$first": "$store_name"}}},
         {"$group": {"_id": "$_id.sku", "prices": {"$push": {"store": "$store_name", "price": "$price"}}, "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}, "count": {"$sum": 1}}},
-        {"$match": {"count": {"$gte": 3}}},
+        {"$match": {"count": {"$gte": 3}, "min_p": {"$gt": 0}}},
         {"$project": {"sku": "$_id", "prices": 1, "spread": {"$subtract": ["$max_p", "$min_p"]}, "spread_pct": {"$multiply": [{"$divide": [{"$subtract": ["$max_p", "$min_p"]}, "$min_p"]}, 100]}}},
         {"$sort": {"spread_pct": -1}},
         {"$limit": 10},
