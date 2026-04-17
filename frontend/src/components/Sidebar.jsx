@@ -1,16 +1,18 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight } from "lucide-react";
+import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Target } from "lucide-react";
 import { useState } from "react";
 
 const navItems = [
   { to: "/", icon: Package, labelKey: "nav_products", label: "Dashboard" },
+  { to: "/price-intel", icon: Target, labelKey: "nav_priceintel", label: "Price Intel" },
   { to: "/insights", icon: BarChart3, labelKey: "nav_insights", label: "Insights" },
   { to: "/scanner", icon: Zap, labelKey: "nav_scanner", label: "Scanner" },
   { to: "/discounts", icon: Percent, labelKey: "nav_discounts", label: "Discounts" },
   { to: "/alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },
   { to: "/stores", icon: Store, labelKey: "nav_stores", label: "Stores" },
+  { to: "/import", icon: Upload, labelKey: "nav_import", label: "Import" },
 ];
 
 export default function Sidebar() {

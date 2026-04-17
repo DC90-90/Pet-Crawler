@@ -72,6 +72,16 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 - Lana Pets: Added Cloudflare bypass headers (Accept-Language, Accept) + direct Salla API attempt via Playwright
 - Tier 2 enhanced: For Salla stores, tries direct API via Playwright before XHR interception (bypasses Cloudflare JS challenge)
 - 12 stores total, 13 scheduler jobs active
+
+### Price Intelligence System (Done — Feb 2026)
+- Part 1: Excel import — 2,370 products imported from Zid export, stored in my_products collection with is_own_store: true
+- Part 2: 3-level matching engine — Barcode (99%), SKU (95%), Name tokens (70-85%) with strict waterfall. Level 4 disabled (unreliable descriptions). Price sanity >6x ratio rejected, 50%+ token overlap required.
+- Part 3: Comparison data — my price vs competitor, diff SAR/%, position, stock status, opportunity/alert/suspicious flags
+- Part 4: Price Intelligence dashboard — Action Required (RED/YELLOW), My Advantages (cheapest/OOS), Full Comparison table, Product Detail drill-down with price history charts
+- Part 5: Match quality controls — confirm (→100%), reject (→blacklist), SUSPICIOUS_PRICE flags for >40% diff, SIZE_MISMATCH flags
+- Part 6: Import page with drag-and-drop Excel upload, instant matching trigger
+- New pages: /import, /price-intel with sidebar navigation
+- Results: 1,600 matched products, 401 overpriced (RED), 392 cheapest, 52 OOS opportunities
 - Complete dark premium SaaS theme: #060B14 background, glassmorphism cards, teal #00D4B4 + amber #F59E0B accents
 - All pages redesigned: Login (split-screen hero), Dashboard, Stores, Insights, Scanner, Discounts, Alerts, Settings
 - Collapsible sidebar with teal glow active state
@@ -111,6 +121,7 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 
 | Priority | Feature |
 |----------|---------|
+| P0 | Tighten name matching further (some 3-token matches are false positives) |
 | P1 | Resend email integration for alerts + digest |
 | P2 | Multi-tenant role-based access |
 | P2 | Webhook notifications (Slack/Telegram) |

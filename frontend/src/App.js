@@ -14,6 +14,8 @@ import CompetitorProfilePage from "@/pages/CompetitorProfilePage";
 import DiscountsPage from "@/pages/DiscountsPage";
 import ScannerPage from "@/pages/ScannerPage";
 import SettingsPage from "@/pages/SettingsPage";
+import ImportPage from "@/pages/ImportPage";
+import PriceIntelPage from "@/pages/PriceIntelPage";
 import OtpBanner from "@/components/OtpBanner";
 
 const AuthContext = createContext(null);
@@ -74,6 +76,8 @@ function AppLayout() {
           <Route path="/stores" element={<ProtectedRoute><StoreRegistryPage /></ProtectedRoute>} />
           <Route path="/stores/:storeId" element={<ProtectedRoute><CompetitorProfilePage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+          <Route path="/import" element={<ProtectedRoute><ImportPage /></ProtectedRoute>} />
+          <Route path="/price-intel" element={<ProtectedRoute><PriceIntelPage /></ProtectedRoute>} />
         </Routes>
         </div>
       </main>

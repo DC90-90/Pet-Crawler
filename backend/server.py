@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends, Response
+from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends, Response, UploadFile, File
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -2333,6 +2333,333 @@ async def trigger_digest(user=Depends(get_user)):
     digest = await generate_market_digest()
     deliver_digest(digest)
     return digest
+
+# ── My Products Import & Price Intelligence ─────────────────
+from matcher import match_my_product, run_matching_for_all
+
+class MatchActionIn(BaseModel):
+    my_sku: str
+    competitor_sku: str
+    competitor_store_id: str
+
+@router.post("/import/products")
+async def import_products(file: UploadFile = File(...), user=Depends(get_user)):
+    """Import Zid Excel export as My Products."""
+    import openpyxl
+    content = await file.read()
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+    except Exception as exc:
+        raise HTTPException(400, f"Cannot parse Excel file: {exc}")
+
+    if len(rows) < 2:
+        raise HTTPException(400, "File has no data rows")
+
+    headers = [str(h or "").strip().lower() for h in rows[0]]
+    col_map = {h: i for i, h in enumerate(headers)}
+    required = ["sku", "name_ar", "price"]
+    for r in required:
+        if r not in col_map:
+            raise HTTPException(400, f"Missing required column: {r}")
+
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1})
+    store_id = own_store["id"] if own_store else "own"
+    now = datetime.now(timezone.utc)
+    imported = 0
+    skipped = 0
+
+    for row in rows[1:]:
+        def g(col):
+            idx = col_map.get(col)
+            return row[idx] if idx is not None and idx < len(row) else None
+
+        sku = str(g("sku") or "").strip()
+        if not sku:
+            skipped += 1
+            continue
+
+        price = float(g("price") or 0)
+        if price <= 0:
+            skipped += 1
+            continue
+
+        sale_price = float(g("sale_price") or 0) if g("sale_price") else None
+        barcode = str(g("barcode") or "").strip() if g("barcode") else ""
+        name_ar = str(g("name_ar") or "").strip()
+        name_en = str(g("name_en") or "").strip()
+        desc_ar = str(g("description_ar") or "").strip() if g("description_ar") else ""
+        desc_en = str(g("description_en") or "").strip() if g("description_en") else ""
+        qty_raw = g("quantity")
+        try:
+            qty = int(float(str(qty_raw or 0)))
+        except (ValueError, TypeError):
+            qty = 0
+        cats_ar = str(g("categories_ar") or "")
+        cats_en = str(g("categories_en") or "")
+        weight_raw = g("weight")
+        try:
+            weight_val = float(weight_raw) if weight_raw else None
+        except (ValueError, TypeError):
+            weight_val = None
+        weight_unit = str(g("weight_unit") or "").strip()
+        cost_raw = g("cost")
+        try:
+            cost = round(float(cost_raw), 2) if cost_raw else None
+        except (ValueError, TypeError):
+            cost = None
+        images = str(g("images") or "")
+        img_url = images.split(",")[0].strip() if images else ""
+
+        doc = {
+            "sku": sku, "barcode": barcode, "name_ar": name_ar, "name_en": name_en,
+            "description_ar": desc_ar, "description_en": desc_en,
+            "price": round(price, 2), "sale_price": round(sale_price, 2) if sale_price else None,
+            "cost": round(cost, 2) if cost else None,
+            "quantity": max(0, qty), "categories_ar": cats_ar, "categories_en": cats_en,
+            "weight": weight_val, "weight_unit": weight_unit,
+            "image_url": img_url, "is_own_store": True, "store_id": store_id,
+            "imported_at": now.isoformat(),
+        }
+        await db.my_products.update_one({"sku": sku}, {"$set": doc}, upsert=True)
+        imported += 1
+
+    # Create indexes
+    await db.my_products.create_index("sku", unique=True)
+    await db.my_products.create_index("barcode")
+    await db.product_matches.create_index([("my_sku", 1), ("competitor_sku", 1), ("competitor_store_id", 1)])
+    await db.match_blacklist.create_index([("my_sku", 1), ("competitor_sku", 1)])
+
+    return {"imported": imported, "skipped": skipped, "total_rows": len(rows) - 1}
+
+
+@router.post("/import/run-matching")
+async def trigger_matching(user=Depends(get_user)):
+    """Run the matching engine for all imported my_products (background)."""
+    count = await db.my_products.count_documents({})
+    if count == 0:
+        raise HTTPException(400, "No products imported yet")
+    # Run in background
+    asyncio.create_task(_background_matching())
+    return {"message": f"Matching started for {count} products", "status": "running"}
+
+async def _background_matching():
+    try:
+        stats = await run_matching_for_all(db)
+        await db.matching_jobs.update_one(
+            {"job": "latest"},
+            {"$set": {"status": "complete", "stats": stats, "completed_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+        logger.info(f"[Matching] Complete: {stats}")
+    except Exception as exc:
+        logger.error(f"[Matching] Error: {exc}")
+        await db.matching_jobs.update_one(
+            {"job": "latest"},
+            {"$set": {"status": "error", "error": str(exc), "completed_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+
+
+@router.get("/import/status")
+async def import_status(user=Depends(get_user)):
+    my_count = await db.my_products.count_documents({})
+    match_count = await db.product_matches.count_documents({})
+    confirmed_count = await db.product_matches.count_documents({"manually_confirmed": True})
+    blacklist_count = await db.match_blacklist.count_documents({})
+    job = await db.matching_jobs.find_one({"job": "latest"}, {"_id": 0})
+    return {
+        "my_products": my_count,
+        "total_matches": match_count,
+        "confirmed_matches": confirmed_count,
+        "blacklisted": blacklist_count,
+        "matching_job": job,
+    }
+
+
+@router.get("/price-intel/dashboard")
+async def price_intel_dashboard(user=Depends(get_user)):
+    """Price Intelligence Dashboard — all sections."""
+    matches = await db.product_matches.find({}, {"_id": 0}).to_list(50000)
+    my_products = {p["sku"]: p async for p in db.my_products.find({}, {"_id": 0})}
+
+    # Group matches by my_sku
+    by_sku = {}
+    for m in matches:
+        by_sku.setdefault(m["my_sku"], []).append(m)
+
+    action_required = []  # Section A
+    my_advantages = []    # Section B
+    full_table = []       # Section C
+
+    now = datetime.now(timezone.utc)
+
+    for my_sku, ms in by_sku.items():
+        mp = my_products.get(my_sku)
+        if not mp:
+            continue
+        my_price = float(mp.get("sale_price") or mp.get("price") or 0)
+        my_qty = int(mp.get("quantity", 0))
+        if my_price <= 0:
+            continue
+
+        cheapest = min(ms, key=lambda x: x["competitor_price"]) if ms else None
+        if not cheapest:
+            continue
+
+        cheapest_price = cheapest["competitor_price"]
+        diff_pct = round(((my_price - cheapest_price) / cheapest_price) * 100, 1) if cheapest_price > 0 else 0
+        sellers = len(set(m["competitor_store_id"] for m in ms))
+        any_oos = any(not m["competitor_in_stock"] for m in ms)
+        all_oos = all(not m["competitor_in_stock"] for m in ms)
+
+        row = {
+            "my_sku": my_sku,
+            "my_name_ar": mp.get("name_ar", ""),
+            "my_name_en": mp.get("name_en", ""),
+            "my_price": my_price,
+            "my_qty": my_qty,
+            "cheapest_competitor": cheapest["competitor_store_name"],
+            "cheapest_price": cheapest_price,
+            "diff_pct": diff_pct,
+            "sellers": sellers,
+            "confidence": cheapest["confidence"],
+            "match_method": cheapest["match_method"],
+            "flags": cheapest.get("flags", []),
+            "image_url": mp.get("image_url", ""),
+        }
+
+        # Section A: Action Required
+        if diff_pct > 15:
+            action_required.append({**row, "severity": "red", "reason": f"Overpriced by {diff_pct}%"})
+        elif diff_pct > 5:
+            action_required.append({**row, "severity": "yellow", "reason": f"Overpriced by {diff_pct}%"})
+
+        # Section B: My Advantages
+        is_cheapest = my_price <= cheapest_price
+        if is_cheapest:
+            saving = round(cheapest_price - my_price, 2)
+            my_advantages.append({**row, "advantage": "cheapest", "saving_sar": saving})
+        if all_oos and my_qty > 0:
+            my_advantages.append({**row, "advantage": "competitor_oos", "my_stock": my_qty})
+
+        full_table.append(row)
+
+    # Sort
+    action_required.sort(key=lambda x: -x["diff_pct"])
+    my_advantages.sort(key=lambda x: -(x.get("saving_sar", 0)))
+    full_table.sort(key=lambda x: -abs(x["diff_pct"]))
+
+    return {
+        "action_required": action_required,
+        "my_advantages": my_advantages,
+        "full_table": full_table,
+        "summary": {
+            "total_products": len(my_products),
+            "matched_products": len(by_sku),
+            "overpriced_red": len([a for a in action_required if a["severity"] == "red"]),
+            "overpriced_yellow": len([a for a in action_required if a["severity"] == "yellow"]),
+            "cheapest_count": len([a for a in my_advantages if a.get("advantage") == "cheapest"]),
+            "oos_opportunities": len([a for a in my_advantages if a.get("advantage") == "competitor_oos"]),
+        },
+    }
+
+
+@router.get("/price-intel/product/{sku}")
+async def price_intel_product_detail(sku: str, user=Depends(get_user)):
+    """Section D — drill-down for a single product."""
+    mp = await db.my_products.find_one({"sku": sku}, {"_id": 0})
+    if not mp:
+        raise HTTPException(404, "Product not found")
+
+    matches = await db.product_matches.find({"my_sku": sku}, {"_id": 0}).to_list(100)
+
+    # Get price history for each matched competitor (last 90 days)
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=90)
+    competitors = []
+    for m in matches:
+        history = await db.product_snapshots.find(
+            {"sku": m["competitor_sku"], "store_id": m["competitor_store_id"], "crawled_at": {"$gte": cutoff}},
+            {"_id": 0, "price": 1, "in_stock": 1, "qty_available": 1, "crawled_at": 1},
+        ).sort("crawled_at", 1).to_list(500)
+
+        # Compute price trend
+        prices = [h["price"] for h in history if h.get("price")]
+        trend = "stable"
+        if len(prices) >= 2:
+            recent = prices[-3:] if len(prices) >= 3 else prices
+            older = prices[:3]
+            avg_recent = sum(recent) / len(recent)
+            avg_older = sum(older) / len(older)
+            if avg_recent > avg_older * 1.03:
+                trend = "rising"
+            elif avg_recent < avg_older * 0.97:
+                trend = "falling"
+
+        competitors.append({
+            **m,
+            "price_history": [{"price": h["price"], "in_stock": h.get("in_stock"), "date": h["crawled_at"].isoformat() if hasattr(h["crawled_at"], 'isoformat') else str(h["crawled_at"])} for h in history[-60:]],
+            "price_trend": trend,
+        })
+
+    all_prices = [c["competitor_price"] for c in competitors if c["competitor_price"] > 0]
+    return {
+        "my_product": mp,
+        "competitors": competitors,
+        "market_summary": {
+            "lowest_price": min(all_prices) if all_prices else 0,
+            "highest_price": max(all_prices) if all_prices else 0,
+            "sellers_count": len(competitors),
+            "my_price": float(mp.get("sale_price") or mp.get("price") or 0),
+        },
+    }
+
+
+@router.post("/price-intel/confirm-match")
+async def confirm_match(data: MatchActionIn, user=Depends(get_user)):
+    result = await db.product_matches.update_one(
+        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id},
+        {"$set": {"manually_confirmed": True, "confidence": 100, "confirmed_at": datetime.now(timezone.utc).isoformat(), "confirmed_by": user.get("email", "")}},
+    )
+    if result.modified_count == 0:
+        raise HTTPException(404, "Match not found")
+    return {"message": "Match confirmed with confidence 100"}
+
+
+@router.post("/price-intel/reject-match")
+async def reject_match(data: MatchActionIn, user=Depends(get_user)):
+    await db.product_matches.delete_one(
+        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id}
+    )
+    await db.match_blacklist.update_one(
+        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku},
+        {"$set": {
+            "my_sku": data.my_sku, "competitor_sku": data.competitor_sku,
+            "competitor_store_id": data.competitor_store_id,
+            "rejected_at": datetime.now(timezone.utc).isoformat(),
+            "rejected_by": user.get("email", ""),
+        }},
+        upsert=True,
+    )
+    return {"message": "Match rejected and blacklisted permanently"}
+
+
+@router.get("/my-products-list")
+async def list_my_products(page: int = 1, limit: int = 50, search: str = "", user=Depends(get_user)):
+    query = {}
+    if search:
+        query["$or"] = [
+            {"name_ar": {"$regex": search, "$options": "i"}},
+            {"name_en": {"$regex": search, "$options": "i"}},
+            {"sku": {"$regex": search, "$options": "i"}},
+        ]
+    total = await db.my_products.count_documents(query)
+    items = await db.my_products.find(query, {"_id": 0}).skip((page - 1) * limit).limit(limit).to_list(limit)
+    return {"items": items, "total": total, "page": page, "pages": (total + limit - 1) // limit}
+
 
 # ── Root ────────────────────────────────────────────────────
 @router.get("/")

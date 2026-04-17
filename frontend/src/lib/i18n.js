@@ -6,7 +6,7 @@ import { createContext, useContext, useState, useCallback } from "react";
 const translations = {
   en: {
     app_name: "Daleel Pets", app_name_ar: "دليل بيتس", subtitle: "KSA Pet Market Intelligence",
-    nav_products: "My Products", nav_insights: "Insights", nav_scanner: "Price Scanner", nav_discounts: "Discounts", nav_alerts: "Alerts", nav_stores: "Stores", nav_login: "Login",
+    nav_products: "My Products", nav_insights: "Insights", nav_scanner: "Price Scanner", nav_discounts: "Discounts", nav_alerts: "Alerts", nav_stores: "Stores", nav_import: "Import", nav_priceintel: "Price Intel", nav_login: "Login",
     kpi_products: "Products Tracked", kpi_units_sold: "Units Sold (Est.)", kpi_revenue: "Revenue (Est.)", kpi_market_share: "Avg. Market Share",
     kpi_skus: "SKUs Tracked", kpi_drops: "Price Drops", kpi_gaps: "Product Gaps", kpi_confidence: "Avg. Confidence", kpi_spread: "Median Spread",
     col_product: "Product", col_sku: "SKU", col_price: "Price", col_vs_low: "vs Lowest", col_vs_med: "vs Median",
@@ -33,7 +33,7 @@ const translations = {
   },
   ar: {
     app_name: "دليل بيتس", app_name_ar: "Daleel Pets", subtitle: "استخبارات سوق الحيوانات الأليفة السعودي",
-    nav_products: "منتجاتي", nav_insights: "الرؤى", nav_scanner: "ماسح الأسعار", nav_discounts: "التخفيضات", nav_alerts: "التنبيهات", nav_stores: "المتاجر", nav_login: "دخول",
+    nav_products: "منتجاتي", nav_insights: "الرؤى", nav_scanner: "ماسح الأسعار", nav_discounts: "التخفيضات", nav_alerts: "التنبيهات", nav_stores: "المتاجر", nav_import: "استيراد", nav_priceintel: "استخبارات الأسعار", nav_login: "دخول",
     kpi_products: "المنتجات المتتبعة", kpi_units_sold: "الوحدات المباعة (تقدير)", kpi_revenue: "الإيرادات (تقدير)", kpi_market_share: "متوسط حصة السوق",
     kpi_skus: "المنتجات المتتبعة", kpi_drops: "انخفاض الأسعار", kpi_gaps: "فجوات المنتجات", kpi_confidence: "متوسط الثقة", kpi_spread: "الانتشار الوسيط",
     col_product: "المنتج", col_sku: "رمز المنتج", col_price: "السعر", col_vs_low: "مقابل الأقل", col_vs_med: "مقابل الوسيط",
