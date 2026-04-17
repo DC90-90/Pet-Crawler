@@ -2123,6 +2123,118 @@ async def check_alerts_now(user=Depends(get_user)):
 
     return {"message": f"Checked {len(alerts)} alerts, created {events_created} events"}
 
+
+@router.post("/alerts/auto-generate")
+async def auto_generate_alerts(user=Depends(get_user)):
+    """Auto-generate alerts from Price Intel data."""
+    now = datetime.now(timezone.utc)
+    created = {"price_drop": 0, "out_of_stock": 0, "catalog_gap": 0}
+
+    # Delete previously auto-generated alerts to avoid duplicates
+    await db.alerts.delete_many({"user_id": user["id"], "auto_generated": True})
+
+    # 1) Price drop alerts for RED overpriced products (>15%)
+    matches = await db.product_matches.find({"confidence": {"$gte": 75}}, {"_id": 0}).to_list(50000)
+    my_products = {p["sku"]: p async for p in db.my_products.find({}, {"_id": 0})}
+    by_sku = {}
+    for m in matches:
+        by_sku.setdefault(m["my_sku"], []).append(m)
+
+    for my_sku, ms in by_sku.items():
+        mp = my_products.get(my_sku)
+        if not mp:
+            continue
+        my_price = float(mp.get("sale_price") or mp.get("price") or 0)
+        if my_price <= 0:
+            continue
+        cheapest = min(ms, key=lambda x: x["competitor_price"])
+        diff_pct = round(((my_price - cheapest["competitor_price"]) / cheapest["competitor_price"]) * 100, 1) if cheapest["competitor_price"] > 0 else 0
+        if diff_pct > 15:
+            await db.alerts.insert_one({
+                "id": str(uuid.uuid4()), "user_id": user["id"],
+                "product_sku": my_sku, "category": "",
+                "store_id": cheapest["competitor_store_id"],
+                "alert_type": "price_drop", "threshold": 5,
+                "channel": "in_app", "is_active": True,
+                "auto_generated": True,
+                "description": f"Competitor {cheapest['competitor_store_name']} is {diff_pct}% cheaper. Alert if they drop further.",
+                "created_at": now.isoformat(), "triggered_count": 0, "last_triggered_at": None,
+            })
+            created["price_drop"] += 1
+
+    # 2) OOS alerts for products I carry
+    for my_sku, ms in by_sku.items():
+        mp = my_products.get(my_sku)
+        if not mp or (mp.get("quantity", 0) <= 0):
+            continue
+        for m in ms:
+            if m["competitor_in_stock"]:
+                await db.alerts.insert_one({
+                    "id": str(uuid.uuid4()), "user_id": user["id"],
+                    "product_sku": my_sku, "category": "",
+                    "store_id": m["competitor_store_id"],
+                    "alert_type": "out_of_stock", "threshold": 0,
+                    "channel": "in_app", "is_active": True,
+                    "auto_generated": True,
+                    "description": f"Alert if {m['competitor_store_name']} goes OOS — sales opportunity for you.",
+                    "created_at": now.isoformat(), "triggered_count": 0, "last_triggered_at": None,
+                })
+                created["out_of_stock"] += 1
+                break  # One OOS alert per my_sku is enough
+
+    # 3) Catalog gap alerts (revenue >10K SAR)
+    gaps = await db.market_opportunities.find({"est_revenue_sar": {"$gte": 10000}}, {"_id": 0}).to_list(20)
+    for g in gaps:
+        await db.alerts.insert_one({
+            "id": str(uuid.uuid4()), "user_id": user["id"],
+            "product_sku": g.get("barcode", ""), "category": "catalog_gap",
+            "store_id": "", "alert_type": "back_in_stock",
+            "threshold": 0, "channel": "in_app", "is_active": True,
+            "auto_generated": True,
+            "description": f"Catalog Gap: {g['product_name'][:50]} — est. {g['est_revenue_sar']:,.0f} SAR/14d revenue. Source this product!",
+            "created_at": now.isoformat(), "triggered_count": 0, "last_triggered_at": None,
+        })
+        created["catalog_gap"] += 1
+
+    total = sum(created.values())
+    return {"message": f"Auto-generated {total} alerts", "created": created}
+
+
+@router.get("/notifications")
+async def list_notifications(user=Depends(get_user)):
+    """Get notification bell data — unread alerts + recent events."""
+    alerts = await db.alerts.find({"user_id": user["id"], "is_active": True}, {"_id": 0}).to_list(500)
+    events = await db.alert_events.find(
+        {"user_id": user["id"]}, {"_id": 0}
+    ).sort("triggered_at", -1).limit(20).to_list(20)
+
+    # Count unread (events from last 24h)
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    unread = sum(1 for e in events if e.get("triggered_at", "") > cutoff)
+
+    # Build notification items from auto-generated alerts (for immediate display)
+    auto_alerts = [a for a in alerts if a.get("auto_generated")]
+    notifications = []
+    for a in auto_alerts[:30]:
+        mp = await db.my_products.find_one({"sku": a.get("product_sku", "")}, {"_id": 0, "name_ar": 1, "name_en": 1})
+        notifications.append({
+            "id": a["id"],
+            "type": a["alert_type"],
+            "description": a.get("description", ""),
+            "product_name": (mp or {}).get("name_en", "") or (mp or {}).get("name_ar", a.get("product_sku", "")),
+            "created_at": a.get("created_at", ""),
+            "is_active": a.get("is_active", True),
+        })
+
+    return {
+        "total_alerts": len(alerts),
+        "auto_generated": len(auto_alerts),
+        "unread_events": unread,
+        "recent_events": events[:10],
+        "notifications": notifications,
+    }
+
+
 # ── Competitor Profile Routes ────────────────────────────────
 @router.get("/stores/{store_id}/profile")
 async def store_profile(store_id: str, user=Depends(get_user)):

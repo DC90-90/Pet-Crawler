@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { toast } from "sonner";
-import { Plus, RefreshCw, Trash2, Globe, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Clock, XCircle, Shield } from "lucide-react";
+import { Plus, RefreshCw, Trash2, Globe, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -149,7 +149,7 @@ export default function StoreRegistryPage() {
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Tier</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_last_crawled")}</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Next Crawl</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Tier 4</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Type</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF] text-end">{t("col_actions")}</TableHead>
             </TableRow>
           </TableHeader>
@@ -198,14 +198,10 @@ export default function StoreRegistryPage() {
                   </div>
                 </TableCell>
                 <TableCell>
-                  {s.tier4_session_status === "active" ? (
-                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20"><Shield className="w-3 h-3" />Authenticated</Badge>
-                  ) : s.tier4_session_status === "otp_required" ? (
-                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/20"><Shield className="w-3 h-3" />OTP Needed</Badge>
-                  ) : s.tier4_session_status === "expired" ? (
-                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20 cursor-pointer" onClick={() => navigate("/settings")}><Shield className="w-3 h-3" />Expired</Badge>
+                  {s.is_own_store ? (
+                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#00D4B4]/10 text-[#00D4B4] border-[#00D4B4]/20">My Store</Badge>
                   ) : (
-                    <Badge variant="outline" className="text-[9px] gap-1 text-gray-400 cursor-pointer" onClick={() => navigate("/settings")}><Shield className="w-3 h-3" />Not Set Up</Badge>
+                    <Badge variant="outline" className="text-[9px] text-[#9CA3AF]">Competitor</Badge>
                   )}
                 </TableCell>
                 <TableCell className="text-end">

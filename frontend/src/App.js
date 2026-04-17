@@ -16,7 +16,7 @@ import ScannerPage from "@/pages/ScannerPage";
 import SettingsPage from "@/pages/SettingsPage";
 import ImportPage from "@/pages/ImportPage";
 import PriceIntelPage from "@/pages/PriceIntelPage";
-import OtpBanner from "@/components/OtpBanner";
+import NotificationBell from "@/components/NotificationBell";
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -65,7 +65,10 @@ function AppLayout() {
     <div className="flex min-h-screen" style={{ background: "radial-gradient(circle at top center, #0A0F1E 0%, #060B14 100%)" }} data-testid="app-layout">
       <Sidebar />
       <main className="flex-1 ms-[240px] min-h-screen flex flex-col">
-        <OtpBanner />
+        {/* Top Bar */}
+        <div className="flex items-center justify-end px-6 py-3 border-b border-white/5">
+          <NotificationBell />
+        </div>
         <div className="flex-1">
         <Routes>
           <Route path="/" element={<ProtectedRoute><MyProductsPage /></ProtectedRoute>} />
