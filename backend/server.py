@@ -2698,6 +2698,175 @@ async def list_my_products(page: int = 1, limit: int = 50, search: str = "", use
     return {"items": items, "total": total, "page": page, "pages": (total + limit - 1) // limit}
 
 
+# ── External Crawler Ingest API ──────────────────────────────
+class IngestPayload(BaseModel):
+    store_id: str
+    store_name: str
+    domain: str
+    platform: str
+    products: list
+
+@router.post("/crawler/ingest")
+async def crawler_ingest(request: Request, payload: IngestPayload):
+    """Secure bulk ingest endpoint for external crawler running on Saudi IP."""
+    # Bearer token auth
+    auth_header = request.headers.get("authorization", "")
+    expected_token = os.environ.get("CRAWLER_TOKEN", "")
+    if not expected_token:
+        raise HTTPException(500, "CRAWLER_TOKEN not configured")
+    if not auth_header.startswith("Bearer ") or auth_header[7:] != expected_token:
+        raise HTTPException(401, "Invalid or missing crawler token")
+
+    store = await db.stores.find_one({"id": payload.store_id})
+    if not store:
+        # Auto-create store if it doesn't exist
+        await db.stores.insert_one({
+            "id": payload.store_id, "name": payload.store_name,
+            "domain": payload.domain, "platform": payload.platform,
+            "base_url": f"https://{payload.domain}",
+            "is_active": True, "priority": 1,
+            "crawl_frequency_hrs": 12,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    now = datetime.now(timezone.utc)
+    inserted = 0
+    updated = 0
+
+    for raw in payload.products:
+        sku = str(raw.get("sku", "")).strip()
+        if not sku:
+            continue
+
+        name_ar = str(raw.get("name_ar", "")).strip()
+        name_en = str(raw.get("name_en", "")).strip()
+        barcode = str(raw.get("barcode", "")).strip()
+        price = float(raw.get("price", 0) or 0)
+        sale_price = float(raw.get("sale_price", 0) or 0)
+        quantity = int(raw.get("quantity", 0) or 0)
+        in_stock = raw.get("in_stock", quantity > 0)
+        sold_count = int(raw.get("sold_count", 0) or 0)
+
+        if price <= 0:
+            continue
+
+        original_price = price
+        effective_price = price
+        if 0 < sale_price < price:
+            original_price = price
+            effective_price = sale_price
+
+        disc_pct = round((1 - effective_price / original_price) * 100) if original_price > effective_price > 0 else 0
+
+        # Upsert product
+        existing = await db.products.find_one({"sku": sku})
+        if not existing:
+            pid = str(uuid.uuid4())
+            await db.products.insert_one({
+                "id": pid, "sku": sku,
+                "name_ar": name_ar, "name_en": name_en,
+                "barcode": barcode,
+                "brand": "", "category": "", "animal_type": "",
+                "weight_kg": 0, "image_url": "",
+                "first_seen_at": now.isoformat(),
+            })
+            inserted += 1
+        else:
+            pid = existing["id"]
+            update_fields = {}
+            if name_ar and not existing.get("name_ar"):
+                update_fields["name_ar"] = name_ar
+            if name_en and not existing.get("name_en"):
+                update_fields["name_en"] = name_en
+            if barcode and not existing.get("barcode"):
+                update_fields["barcode"] = barcode
+            if update_fields:
+                await db.products.update_one({"id": pid}, {"$set": update_fields})
+            updated += 1
+
+        # Insert snapshot
+        await db.product_snapshots.insert_one({
+            "id": str(uuid.uuid4()),
+            "product_id": pid,
+            "store_id": payload.store_id,
+            "store_name": payload.store_name,
+            "sku": sku,
+            "price": round(effective_price, 2),
+            "original_price": round(original_price, 2),
+            "discount_pct": max(0, disc_pct),
+            "in_stock": bool(in_stock),
+            "qty_available": max(0, quantity),
+            "sold_count": sold_count,
+            "source_tier": 0,
+            "confidence_score": 99,
+            "crawled_at": now,
+        })
+
+    # Update store last crawl
+    await db.stores.update_one({"id": payload.store_id}, {"$set": {
+        "last_crawled_at": now.isoformat(),
+        "last_crawl_tier": 0,
+        "last_crawl_status": "success",
+        "last_crawl_products": inserted + updated,
+        "last_crawl_endpoint": "external_ingest",
+    }})
+
+    return {
+        "received": len(payload.products),
+        "inserted": inserted,
+        "updated": updated,
+        "token_valid": True,
+        "store_id": payload.store_id,
+        "crawled_at": now.isoformat(),
+    }
+
+
+@router.get("/stores/{store_id}/raw-products")
+async def get_raw_products(store_id: str, page: int = 1, limit: int = 50, user=Depends(get_user)):
+    """Show raw crawled products for a store — for data quality verification."""
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0, "id": 1, "name": 1})
+    if not store:
+        raise HTTPException(404, "Store not found")
+    pipeline = [
+        {"$match": {"store_id": store_id}},
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {
+            "_id": "$sku",
+            "sku": {"$first": "$sku"},
+            "price": {"$first": "$price"},
+            "original_price": {"$first": "$original_price"},
+            "in_stock": {"$first": "$in_stock"},
+            "qty_available": {"$first": "$qty_available"},
+            "crawled_at": {"$first": "$crawled_at"},
+            "source_tier": {"$first": "$source_tier"},
+        }},
+        {"$sort": {"price": 1}},
+        {"$skip": (page - 1) * limit},
+        {"$limit": limit},
+    ]
+    items = await db.product_snapshots.aggregate(pipeline).to_list(limit)
+    # Enrich with product names
+    for item in items:
+        prod = await db.products.find_one({"sku": item["sku"]}, {"_id": 0, "name_ar": 1, "name_en": 1, "barcode": 1})
+        if prod:
+            item["name_ar"] = prod.get("name_ar", "")
+            item["name_en"] = prod.get("name_en", "")
+            item["barcode"] = prod.get("barcode", "")
+        item.pop("_id", None)
+        if hasattr(item.get("crawled_at"), "isoformat"):
+            item["crawled_at"] = item["crawled_at"].isoformat()
+
+    total_pipeline = [
+        {"$match": {"store_id": store_id}},
+        {"$group": {"_id": "$sku"}},
+        {"$count": "total"},
+    ]
+    total_result = await db.product_snapshots.aggregate(total_pipeline).to_list(1)
+    total = total_result[0]["total"] if total_result else 0
+
+    return {"store": store, "items": items, "total": total, "page": page}
+
+
 # ── Root ────────────────────────────────────────────────────
 @router.get("/")
 async def root():

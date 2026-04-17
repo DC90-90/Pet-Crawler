@@ -66,11 +66,12 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 - Results: Zarafa 1110 products (was 15), Petsy 720 (was 11), Panda 720 (was 8)
 
 ### Store Registry & Crawler Fixes (Done — Feb 2026)
-- Added 7 stores: CuteCat, CutePets, Hamtaro, Mowkly, Aleef, Hobba, Caty (with correct domains, platforms, working_endpoints)
-- Fixed CutePets domain (cutepets.com → cutepets.com.sa, Shopify → Salla)
-- Marked pets-houses.com as is_own_store: true (MY STORE baseline)
-- Lana Pets: Added Cloudflare bypass headers (Accept-Language, Accept) + direct Salla API attempt via Playwright
-- Tier 2 enhanced: For Salla stores, tries direct API via Playwright before XHR interception (bypasses Cloudflare JS challenge)
+- Added 7 stores: CuteCat, CutePets, Hamtaro, Mowkly, Aleef, Hobba, Caty
+- Marked pets-houses.com as is_own_store: true
+- Panda Store: cleaned all snapshots & re-crawled — 3,155 unique products
+- Tier 2 enhanced: Salla API direct attempt via Playwright for Cloudflare bypass
+- External ingest API: POST /api/crawler/ingest (Bearer token auth via CRAWLER_TOKEN)
+- Raw products endpoint: GET /api/stores/{id}/raw-products for data quality verification
 - 12 stores total, 13 scheduler jobs active
 
 ### Price Intelligence System (Done — Feb 2026)
