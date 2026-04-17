@@ -2587,6 +2587,26 @@ async def price_intel_dashboard(user=Depends(get_user)):
     full_table.sort(key=lambda x: -abs(x["diff_pct"]))
     unverified.sort(key=lambda x: -abs(x.get("diff_pct", 0)))
 
+    # Confidence distribution across all matches
+    conf_dist = {"barcode_99": 0, "sku_95": 0, "name_85": 0, "name_80": 0, "name_70": 0, "baseline_80": 0, "confirmed_100": 0}
+    for m in matches:
+        c = m.get("confidence", 0)
+        method = m.get("match_method", "")
+        if m.get("manually_confirmed"):
+            conf_dist["confirmed_100"] += 1
+        elif c == 99 and "barcode" in method:
+            conf_dist["barcode_99"] += 1
+        elif c == 95 and "sku" in method:
+            conf_dist["sku_95"] += 1
+        elif c == 85:
+            conf_dist["name_85"] += 1
+        elif c == 80 and "name" in method:
+            conf_dist["name_80"] += 1
+        elif c == 80 and m.get("data_source") == "myskuwatch_baseline":
+            conf_dist["baseline_80"] += 1
+        elif c == 70:
+            conf_dist["name_70"] += 1
+
     return {
         "action_required": action_required,
         "my_advantages": my_advantages,
@@ -2601,6 +2621,7 @@ async def price_intel_dashboard(user=Depends(get_user)):
             "cheapest_count": len([a for a in my_advantages if a.get("advantage") == "cheapest"]),
             "oos_opportunities": len([a for a in my_advantages if a.get("advantage") == "competitor_oos"]),
         },
+        "confidence_distribution": conf_dist,
     }
 
 

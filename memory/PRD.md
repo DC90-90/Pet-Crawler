@@ -92,12 +92,11 @@ SaaS web application for Saudi pet store owners to track and monitor competitor 
 ### MySKUwatch Baseline Import (Done — Feb 2026)
 - Imported 14-day market baseline from MySKUwatch (Apr 3-17, 2026) — additive only, no overwrites
 - All records tagged: data_source=myskuwatch_baseline, baseline_period=last_14_days, expires=2026-05-17
-- Sheet 2: My Store KPIs stored in market_intelligence_baseline (1,292 SKUs, ~42,489 SAR, rank #12)
-- Sheet 2B: 15 top products stored in product_baseline_stats with est_ prefixed fields
-- Sheet 3: Market leaderboard stored (12 stores ranked), Market Position widget added to Price Intel
-- Sheet 4: 5 catalog gaps stored as market_opportunities, Catalog Gaps tab added to Price Intel
-- Sheet 5: 6 price comparisons stored as snapshots (source_tier=5, confidence=80)
-- Rule compliance: No match creation from baseline, live data overrides, 30-day expiry tracked
+- Market Position widget: rank #12 of 13 with star-rated leaderboard
+- Catalog Gaps tab: 5 products sorted by est_revenue
+- Confidence distribution bar: visual stacked bar showing match method breakdown
+- Data Confidence Guide: expandable panel with 7 levels (100% Confirmed → 70% Weak Name) with icons, descriptions, progress bars
+- Matching rules displayed: <75% to Unverified tab, >150% price auto-reject, >10% weight reject, multi-pack never matches single
 - Complete dark premium SaaS theme: #060B14 background, glassmorphism cards, teal #00D4B4 + amber #F59E0B accents
 - All pages redesigned: Login (split-screen hero), Dashboard, Stores, Insights, Scanner, Discounts, Alerts, Settings
 - Collapsible sidebar with teal glow active state

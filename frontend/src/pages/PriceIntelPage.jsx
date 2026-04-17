@@ -2,16 +2,40 @@ import { useEffect, useState, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { toast } from "sonner";
-import { AlertTriangle, TrendingDown, TrendingUp, Award, ShoppingCart, CheckCircle2, XCircle, AlertCircle, ChevronRight, Shield, Trophy, PackageSearch } from "lucide-react";
+import { AlertTriangle, TrendingDown, TrendingUp, Award, ShoppingCart, CheckCircle2, XCircle, AlertCircle, ChevronRight, Shield, Trophy, PackageSearch, Info, Lock, Fingerprint, Type, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 
+const CONFIDENCE_LEVELS = [
+  { min: 100, label: "Confirmed", labelAr: "مؤكد يدوياً", icon: CheckCircle2, color: "#10B981", bg: "bg-[#10B981]/15 text-[#10B981]", desc: "Manually verified by you — 100% reliable", descAr: "تم التحقق يدوياً — موثوق 100%" },
+  { min: 99, label: "Barcode Match", labelAr: "مطابقة باركود", icon: Fingerprint, color: "#10B981", bg: "bg-[#10B981]/15 text-[#10B981]", desc: "Exact barcode/EAN match (8-14 digits) — highest automated confidence", descAr: "مطابقة باركود/EAN بالضبط — أعلى ثقة تلقائية" },
+  { min: 95, label: "SKU Match", labelAr: "مطابقة SKU", icon: Lock, color: "#00D4B4", bg: "bg-[#00D4B4]/15 text-[#00D4B4]", desc: "Exact SKU identifier match between stores", descAr: "مطابقة معرف SKU بالضبط بين المتاجر" },
+  { min: 85, label: "Strong Name", labelAr: "اسم قوي", icon: Type, color: "#00D4B4", bg: "bg-[#00D4B4]/15 text-[#00D4B4]", desc: "5+ name tokens match with weight/pack verification", descAr: "5+ كلمات مطابقة مع تحقق من الوزن والتعبئة" },
+  { min: 80, label: "Good Name", labelAr: "اسم جيد", icon: Type, color: "#F59E0B", bg: "bg-[#F59E0B]/15 text-[#F59E0B]", desc: "4 name tokens match — review recommended", descAr: "4 كلمات مطابقة — يُنصح بالمراجعة" },
+  { min: 75, label: "Baseline", labelAr: "بيانات أساسية", icon: FileText, color: "#F59E0B", bg: "bg-[#F59E0B]/15 text-[#F59E0B]", desc: "MySKUwatch estimated data — expires May 17", descAr: "بيانات MySKUwatch تقديرية — تنتهي 17 مايو" },
+  { min: 70, label: "Weak Name", labelAr: "اسم ضعيف", icon: AlertCircle, color: "#EF4444", bg: "bg-[#EF4444]/15 text-[#EF4444]", desc: "3 tokens match only — likely needs manual review", descAr: "3 كلمات فقط — يحتاج مراجعة يدوية غالباً" },
+];
+
+function getConfLevel(confidence, method) {
+  if (confidence === 100) return CONFIDENCE_LEVELS[0];
+  for (const lvl of CONFIDENCE_LEVELS) {
+    if (confidence >= lvl.min) return lvl;
+  }
+  return CONFIDENCE_LEVELS[CONFIDENCE_LEVELS.length - 1];
+}
+
 function ConfidenceBadge({ confidence, method }) {
-  const cls = confidence >= 95 ? "bg-[#10B981]/15 text-[#10B981]" : confidence >= 80 ? "bg-[#00D4B4]/15 text-[#00D4B4]" : confidence >= 60 ? "bg-[#F59E0B]/15 text-[#F59E0B]" : "bg-[#EF4444]/15 text-[#EF4444]";
-  return <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${cls}`}>{confidence}% {method}</span>;
+  const lvl = getConfLevel(confidence, method);
+  const Icon = lvl.icon;
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${lvl.bg}`} title={lvl.desc}>
+      <Icon className="w-3 h-3" />
+      {confidence}% {lvl.label}
+    </span>
+  );
 }
 
 function FlagBadges({ flags }) {
@@ -34,6 +58,7 @@ export default function PriceIntelPage() {
   const [tab, setTab] = useState("action");
   const [leaderboard, setLeaderboard] = useState(null);
   const [catalogGaps, setCatalogGaps] = useState([]);
+  const [showGuide, setShowGuide] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -118,6 +143,87 @@ export default function PriceIntelPage() {
           </div>
         ))}
       </div>
+
+      {/* Confidence Distribution Bar + Guide Toggle */}
+      {data.confidence_distribution && (() => {
+        const cd = data.confidence_distribution;
+        const total = Object.values(cd).reduce((a, b) => a + b, 0) || 1;
+        const segments = [
+          { key: "confirmed_100", label: "Confirmed", count: cd.confirmed_100, color: "#10B981" },
+          { key: "barcode_99", label: "Barcode", count: cd.barcode_99, color: "#059669" },
+          { key: "sku_95", label: "SKU", count: cd.sku_95, color: "#00D4B4" },
+          { key: "name_85", label: "Name 5+", count: cd.name_85, color: "#0EA5E9" },
+          { key: "name_80", label: "Name 4", count: cd.name_80, color: "#F59E0B" },
+          { key: "baseline_80", label: "Baseline", count: cd.baseline_80, color: "#D97706" },
+          { key: "name_70", label: "Name 3", count: cd.name_70, color: "#EF4444" },
+        ].filter(s => s.count > 0);
+        return (
+          <div className="glass-card p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Shield className="w-4 h-4 text-[#00D4B4]" />
+                <h3 className="text-sm font-semibold text-white">{isRTL ? "توزيع الثقة" : "Match Confidence Distribution"}</h3>
+                <span className="text-[10px] text-[#9CA3AF]">{total.toLocaleString()} total matches</span>
+              </div>
+              <button onClick={() => setShowGuide(!showGuide)} className="flex items-center gap-1 text-[10px] text-[#00D4B4] hover:text-[#00E5C3] transition-colors" data-testid="toggle-guide">
+                <Info className="w-3.5 h-3.5" />{showGuide ? "Hide" : "Show"} Confidence Guide
+              </button>
+            </div>
+            {/* Stacked bar */}
+            <div className="flex h-4 rounded-full overflow-hidden mb-2">
+              {segments.map(seg => (
+                <div key={seg.key} style={{ width: `${(seg.count / total) * 100}%`, backgroundColor: seg.color }} className="transition-all duration-500" title={`${seg.label}: ${seg.count}`} />
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {segments.map(seg => (
+                <div key={seg.key} className="flex items-center gap-1.5 text-[10px]">
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: seg.color }} />
+                  <span className="text-[#9CA3AF]">{seg.label}</span>
+                  <span className="text-white font-semibold metric-number">{seg.count}</span>
+                  <span className="text-[#9CA3AF]">({Math.round((seg.count / total) * 100)}%)</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Confidence Guide Panel */}
+      {showGuide && (
+        <div className="glass-card p-5 border border-[#00D4B4]/20 animate-fadeIn" data-testid="confidence-guide">
+          <div className="flex items-center gap-2 mb-4">
+            <Shield className="w-5 h-5 text-[#00D4B4]" />
+            <h3 className="text-base font-semibold text-white">{isRTL ? "دليل مستويات الثقة" : "Data Confidence Guide"}</h3>
+          </div>
+          <div className="space-y-2">
+            {CONFIDENCE_LEVELS.map((lvl) => {
+              const Icon = lvl.icon;
+              return (
+                <div key={lvl.min} className="flex items-start gap-3 py-2.5 px-3 rounded-xl hover:bg-white/3 transition-colors">
+                  <div className={`flex items-center justify-center w-10 h-10 rounded-xl ${lvl.bg}`}><Icon className="w-5 h-5" /></div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-white">{lvl.min}%</span>
+                      <span className="text-sm font-medium" style={{ color: lvl.color }}>{isRTL ? lvl.labelAr : lvl.label}</span>
+                    </div>
+                    <p className="text-[11px] text-[#9CA3AF] mt-0.5">{isRTL ? lvl.descAr : lvl.desc}</p>
+                  </div>
+                  <div className="w-24 h-2 rounded-full bg-white/5 mt-2 overflow-hidden">
+                    <div className="h-full rounded-full transition-all" style={{ width: `${lvl.min}%`, backgroundColor: lvl.color }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-4 pt-3 border-t border-white/5 text-[10px] text-[#9CA3AF] space-y-1">
+            <p><strong className="text-white">Rule:</strong> {isRTL ? "المقارنات بثقة أقل من 75% تظهر فقط في تبويب 'غير مؤكد' للمراجعة اليدوية" : "Comparisons below 75% confidence appear ONLY in the 'Unverified' tab for manual review"}</p>
+            <p><strong className="text-white">Rule:</strong> {isRTL ? "الفرق بالسعر أكثر من 150% يتم رفضه تلقائياً لتطابقات الأسماء" : "Price differences >150% are auto-rejected for name-based matches"}</p>
+            <p><strong className="text-white">Rule:</strong> {isRTL ? "فرق الوزن أكثر من 10% = رفض المطابقة" : "Weight difference >10% = match rejected entirely"}</p>
+            <p><strong className="text-white">Rule:</strong> {isRTL ? "المنتجات المتعددة (باك) لا تطابق مع المنتجات المفردة أبداً" : "Multi-pack products NEVER match single units"}</p>
+          </div>
+        </div>
+      )}
 
       {/* Market Position Widget */}
       {leaderboard && leaderboard.my_store_baseline && (
