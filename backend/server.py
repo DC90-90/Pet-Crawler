@@ -53,7 +53,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
-CRAWLER_TOKEN = os.environ.get('CRAWLER_TOKEN', '')
+CRAWLER_TOKEN = os.environ.get('CRAWLER_TOKEN') or 'zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
