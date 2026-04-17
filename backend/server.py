@@ -1615,31 +1615,47 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
 @router.get("/insights/leaderboard")
 async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    snapshots = await db.product_snapshots.find(
-        {"crawled_at": {"$gte": since}}, {"_id": 0, "store_id": 1, "store_name": 1, "price": 1, "qty_available": 1, "crawled_at": 1}
-    ).sort("crawled_at", 1).to_list(50000)
 
+    # Get store name lookup
+    store_names = {}
+    own_store_id = None
+    async for s in db.stores.find({}, {"_id": 0, "id": 1, "name": 1, "is_own_store": 1}):
+        store_names[s["id"]] = s["name"]
+        if s.get("is_own_store"):
+            own_store_id = s["id"]
+
+    snapshots = await db.product_snapshots.find(
+        {"crawled_at": {"$gte": since}, "price": {"$gt": 0}},
+        {"_id": 0, "store_id": 1, "sku": 1, "price": 1, "qty_available": 1, "crawled_at": 1}
+    ).sort("crawled_at", 1).to_list(100000)
+
+    # Group by store_id → sku → chronological snapshots
     by_store = {}
     for s in snapshots:
-        by_store.setdefault(s["store_name"], {"snapshots": []})["snapshots"].append(s)
+        sid = s.get("store_id", "")
+        if sid == own_store_id:
+            continue
+        by_store.setdefault(sid, {}).setdefault(s["sku"], []).append(s)
 
     leaderboard = []
-    for store_name, data in by_store.items():
-        snaps = data["snapshots"]
-        # Group by sku within store
-        by_sku = {}
-        for s in snaps:
-            by_sku.setdefault(s.get("store_id", ""), []).append(s)
-
-        # Estimate revenue from depletion
+    for store_id, sku_data in by_store.items():
         total_rev = 0
-        for snap_list in by_sku.values():
+        total_products = len(sku_data)
+        for sku, snap_list in sku_data.items():
             for i in range(1, len(snap_list)):
-                delta = snap_list[i - 1].get("qty_available", 0) - snap_list[i].get("qty_available", 0)
-                if delta > 0:
+                prev_qty = snap_list[i - 1].get("qty_available", 0) or 0
+                curr_qty = snap_list[i].get("qty_available", 0) or 0
+                delta = prev_qty - curr_qty
+                if 0 < delta < 500:  # Cap at 500 to avoid data errors
                     total_rev += delta * snap_list[i]["price"]
 
-        leaderboard.append({"store": store_name, "revenue_est": round(total_rev, 2)})
+        store_name = store_names.get(store_id, store_id)
+        leaderboard.append({
+            "store": store_name,
+            "store_id": store_id,
+            "revenue_est": round(total_rev, 2),
+            "products": total_products,
+        })
 
     leaderboard.sort(key=lambda x: x["revenue_est"], reverse=True)
     return leaderboard

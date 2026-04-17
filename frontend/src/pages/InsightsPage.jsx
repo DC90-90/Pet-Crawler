@@ -92,12 +92,12 @@ export default function InsightsPage() {
       {/* Revenue Leaderboard Chart */}
       <div className="glass-card rounded-md p-5">
         <h3 className="text-sm font-semibold text-white mb-4">{t("chart_leaderboard")}</h3>
-        <ResponsiveContainer width="100%" height={220}>
-          <BarChart data={leaderboard} layout="vertical" margin={{ left: 0, right: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-            <XAxis type="number" tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
-            <YAxis type="category" dataKey="store" width={100} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
-            <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Revenue"]} contentStyle={{ background: "#1F2937", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#9CA3AF" }} itemStyle={{ color: "#00D4B4" }} />
+        <ResponsiveContainer width="100%" height={Math.max(280, (leaderboard?.length || 0) * 36)}>
+          <BarChart data={leaderboard} layout="vertical" margin={{ left: 10, right: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
+            <XAxis type="number" tickFormatter={(v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} tick={{ fontSize: 10, fill: "#9CA3AF" }} />
+            <YAxis type="category" dataKey="store" width={120} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
+            <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Est. Revenue"]} contentStyle={{ background: "#1F2937", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#9CA3AF" }} itemStyle={{ color: "#00D4B4" }} />
             <Bar dataKey="revenue_est" fill="#00D4B4" radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
