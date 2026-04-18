@@ -2872,6 +2872,31 @@ class IngestPayload(BaseModel):
     platform: str
     products: list
 
+def _coerce_num(v, default=0.0):
+    """Defensively coerce a value that may be None / int / float / str with currency or commas to float."""
+    if v is None or v == "":
+        return float(default)
+    if isinstance(v, bool):
+        return float(default)
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        # Strip currency symbols, Arabic separators, commas, spaces
+        s = re.sub(r"[^0-9.\-]", "", str(v))
+        if s in ("", "-", ".", "-."):
+            return float(default)
+        return float(s)
+    except (ValueError, TypeError):
+        return float(default)
+
+
+def _coerce_int(v, default=0):
+    try:
+        return int(_coerce_num(v, default))
+    except (ValueError, TypeError):
+        return int(default)
+
+
 @router.post("/crawler/ingest")
 async def crawler_ingest(request: Request, payload: IngestPayload):
     """Secure bulk ingest endpoint for external crawler running on Saudi IP."""
@@ -2882,108 +2907,128 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
     if not auth_header.startswith("Bearer ") or auth_header[7:] != CRAWLER_TOKEN:
         raise HTTPException(401, "Invalid or missing crawler token")
 
-    store = await db.stores.find_one({"id": payload.store_id})
-    if not store:
-        # Auto-create store if it doesn't exist
-        await db.stores.insert_one({
-            "id": payload.store_id, "name": payload.store_name,
-            "domain": payload.domain, "platform": payload.platform,
-            "base_url": f"https://{payload.domain}",
-            "is_active": True, "priority": 1,
-            "crawl_frequency_hrs": 12,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-
-    now = datetime.now(timezone.utc)
-    inserted = 0
-    updated = 0
-
-    for raw in payload.products:
-        sku = str(raw.get("sku", "")).strip()
-        if not sku:
-            continue
-
-        name_ar = str(raw.get("name_ar", "")).strip()
-        name_en = str(raw.get("name_en", "")).strip()
-        barcode = str(raw.get("barcode", "")).strip()
-        price = float(raw.get("price", 0) or 0)
-        sale_price = float(raw.get("sale_price", 0) or 0)
-        quantity = int(raw.get("quantity", 0) or 0)
-        in_stock = raw.get("in_stock", quantity > 0)
-        sold_count = int(raw.get("sold_count", 0) or 0)
-
-        if price <= 0:
-            continue
-
-        original_price = price
-        effective_price = price
-        if 0 < sale_price < price:
-            original_price = price
-            effective_price = sale_price
-
-        disc_pct = round((1 - effective_price / original_price) * 100) if original_price > effective_price > 0 else 0
-
-        # Upsert product
-        existing = await db.products.find_one({"sku": sku})
-        if not existing:
-            pid = str(uuid.uuid4())
-            await db.products.insert_one({
-                "id": pid, "sku": sku,
-                "name_ar": name_ar, "name_en": name_en,
-                "barcode": barcode,
-                "brand": "", "category": "", "animal_type": "",
-                "weight_kg": 0, "image_url": "",
-                "first_seen_at": now.isoformat(),
+    try:
+        store = await db.stores.find_one({"id": payload.store_id})
+        if not store:
+            await db.stores.insert_one({
+                "id": payload.store_id, "name": payload.store_name,
+                "domain": payload.domain, "platform": payload.platform,
+                "base_url": f"https://{payload.domain}",
+                "is_active": True, "priority": 1,
+                "crawl_frequency_hrs": 12,
+                "created_at": datetime.now(timezone.utc).isoformat(),
             })
-            inserted += 1
-        else:
-            pid = existing["id"]
-            update_fields = {}
-            if name_ar and not existing.get("name_ar"):
-                update_fields["name_ar"] = name_ar
-            if name_en and not existing.get("name_en"):
-                update_fields["name_en"] = name_en
-            if barcode and not existing.get("barcode"):
-                update_fields["barcode"] = barcode
-            if update_fields:
-                await db.products.update_one({"id": pid}, {"$set": update_fields})
-            updated += 1
 
-        # Insert snapshot
-        await db.product_snapshots.insert_one({
-            "id": str(uuid.uuid4()),
-            "product_id": pid,
+        now = datetime.now(timezone.utc)
+        inserted = 0
+        updated = 0
+        skipped = 0
+        errors = []  # keep first 5 row-level error samples for debugging
+
+        for idx, raw in enumerate(payload.products):
+            try:
+                if not isinstance(raw, dict):
+                    skipped += 1
+                    if len(errors) < 5:
+                        errors.append({"index": idx, "error": f"row is {type(raw).__name__}, expected object"})
+                    continue
+
+                sku = str(raw.get("sku") or "").strip()
+                if not sku:
+                    skipped += 1
+                    continue
+
+                name_ar = str(raw.get("name_ar") or "").strip()
+                name_en = str(raw.get("name_en") or "").strip()
+                barcode = str(raw.get("barcode") or "").strip()
+                price = _coerce_num(raw.get("price"), 0)
+                sale_price = _coerce_num(raw.get("sale_price"), 0)
+                quantity = _coerce_int(raw.get("quantity"), 0)
+                sold_count = _coerce_int(raw.get("sold_count"), 0)
+                in_stock_raw = raw.get("in_stock")
+                in_stock = bool(in_stock_raw) if in_stock_raw is not None else (quantity > 0)
+
+                if price <= 0:
+                    skipped += 1
+                    continue
+
+                original_price = price
+                effective_price = price
+                if 0 < sale_price < price:
+                    effective_price = sale_price
+
+                disc_pct = round((1 - effective_price / original_price) * 100) if original_price > effective_price > 0 else 0
+
+                existing = await db.products.find_one({"sku": sku}, {"_id": 0})
+                if not existing:
+                    pid = str(uuid.uuid4())
+                    await db.products.insert_one({
+                        "id": pid, "sku": sku,
+                        "name_ar": name_ar, "name_en": name_en,
+                        "barcode": barcode,
+                        "brand": "", "category": "", "animal_type": "",
+                        "weight_kg": 0, "image_url": "",
+                        "first_seen_at": now.isoformat(),
+                    })
+                    inserted += 1
+                else:
+                    pid = existing["id"]
+                    update_fields = {}
+                    if name_ar and not existing.get("name_ar"):
+                        update_fields["name_ar"] = name_ar
+                    if name_en and not existing.get("name_en"):
+                        update_fields["name_en"] = name_en
+                    if barcode and not existing.get("barcode"):
+                        update_fields["barcode"] = barcode
+                    if update_fields:
+                        await db.products.update_one({"id": pid}, {"$set": update_fields})
+                    updated += 1
+
+                await db.product_snapshots.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "product_id": pid,
+                    "store_id": payload.store_id,
+                    "store_name": payload.store_name,
+                    "sku": sku,
+                    "price": round(effective_price, 2),
+                    "original_price": round(original_price, 2),
+                    "discount_pct": max(0, disc_pct),
+                    "in_stock": in_stock,
+                    "qty_available": max(0, quantity),
+                    "sold_count": sold_count,
+                    "source_tier": 0,
+                    "confidence_score": 99,
+                    "crawled_at": now,
+                })
+            except Exception as row_err:
+                skipped += 1
+                logger.exception("ingest row %s failed: %s", idx, row_err)
+                if len(errors) < 5:
+                    errors.append({"index": idx, "sku": str(raw.get("sku"))[:50] if isinstance(raw, dict) else None, "error": f"{type(row_err).__name__}: {row_err}"})
+
+        await db.stores.update_one({"id": payload.store_id}, {"$set": {
+            "last_crawled_at": now.isoformat(),
+            "last_crawl_tier": 0,
+            "last_crawl_status": "success",
+            "last_crawl_products": inserted + updated,
+            "last_crawl_endpoint": "external_ingest",
+        }})
+
+        return {
+            "received": len(payload.products),
+            "inserted": inserted,
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+            "token_valid": True,
             "store_id": payload.store_id,
-            "store_name": payload.store_name,
-            "sku": sku,
-            "price": round(effective_price, 2),
-            "original_price": round(original_price, 2),
-            "discount_pct": max(0, disc_pct),
-            "in_stock": bool(in_stock),
-            "qty_available": max(0, quantity),
-            "sold_count": sold_count,
-            "source_tier": 0,
-            "confidence_score": 99,
-            "crawled_at": now,
-        })
-
-    # Update store last crawl
-    await db.stores.update_one({"id": payload.store_id}, {"$set": {
-        "last_crawled_at": now.isoformat(),
-        "last_crawl_tier": 0,
-        "last_crawl_status": "success",
-        "last_crawl_products": inserted + updated,
-        "last_crawl_endpoint": "external_ingest",
-    }})
-
-    return {
-        "received": len(payload.products),
-        "inserted": inserted,
-        "updated": updated,
-        "token_valid": True,
-        "store_id": payload.store_id,
-        "crawled_at": now.isoformat(),
-    }
+            "crawled_at": now.isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("crawler_ingest failed for store=%s: %s", payload.store_id, e)
+        raise HTTPException(500, f"ingest_failed: {type(e).__name__}: {e}")
 
 
 @router.get("/stores/{store_id}/raw-products")
