@@ -2908,16 +2908,27 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
         raise HTTPException(401, "Invalid or missing crawler token")
 
     try:
-        store = await db.stores.find_one({"id": payload.store_id})
-        if not store:
-            await db.stores.insert_one({
-                "id": payload.store_id, "name": payload.store_name,
-                "domain": payload.domain, "platform": payload.platform,
+        # Upsert by domain (unique index). Handles both:
+        #  - Brand-new store: insert full record
+        #  - Existing store (possibly with different id): leave as-is, do NOT overwrite
+        await db.stores.update_one(
+            {"domain": payload.domain},
+            {"$setOnInsert": {
+                "id": payload.store_id,
+                "name": payload.store_name,
+                "domain": payload.domain,
+                "platform": payload.platform,
                 "base_url": f"https://{payload.domain}",
-                "is_active": True, "priority": 1,
+                "is_active": True,
+                "priority": 1,
                 "crawl_frequency_hrs": 12,
                 "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            }},
+            upsert=True,
+        )
+        # Re-read canonical store_id from DB (source of truth after upsert)
+        store_doc = await db.stores.find_one({"domain": payload.domain}, {"_id": 0, "id": 1})
+        canonical_store_id = store_doc["id"] if store_doc else payload.store_id
 
         now = datetime.now(timezone.utc)
         inserted = 0
@@ -2987,7 +2998,7 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                 await db.product_snapshots.insert_one({
                     "id": str(uuid.uuid4()),
                     "product_id": pid,
-                    "store_id": payload.store_id,
+                    "store_id": canonical_store_id,
                     "store_name": payload.store_name,
                     "sku": sku,
                     "price": round(effective_price, 2),
@@ -3006,7 +3017,7 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                 if len(errors) < 5:
                     errors.append({"index": idx, "sku": str(raw.get("sku"))[:50] if isinstance(raw, dict) else None, "error": f"{type(row_err).__name__}: {row_err}"})
 
-        await db.stores.update_one({"id": payload.store_id}, {"$set": {
+        await db.stores.update_one({"id": canonical_store_id}, {"$set": {
             "last_crawled_at": now.isoformat(),
             "last_crawl_tier": 0,
             "last_crawl_status": "success",
@@ -3021,7 +3032,7 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
             "skipped": skipped,
             "errors": errors,
             "token_valid": True,
-            "store_id": payload.store_id,
+            "store_id": canonical_store_id,
             "crawled_at": now.isoformat(),
         }
     except HTTPException:
