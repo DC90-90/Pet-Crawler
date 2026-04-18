@@ -724,12 +724,17 @@ async def crawl_tier3_html(db, store):
 async def crawl_store_waterfall(db, store):
     """Run the 3-tier waterfall crawler for a store, with optional Tier 4 supplement."""
     platform = store.get("platform", "").lower()
+    tier1_only = bool(store.get("tier1_only"))
     # Tier 1: JSON endpoints
     if platform in ("salla", "shopify", "zid"):
         result = await crawl_salla_tier1(db, store)
         if result.get("tier_used"):
             # Tier 4: Authenticated supplement (runs after success if configured)
             await _try_tier4_supplement(db, store, result)
+            return result
+        if tier1_only:
+            # Skip Playwright-based Tiers 2/3 (e.g., on hosts without Chromium)
+            result["error"] = (result.get("error") or "") + " | tier1_only=True: Tier 2/3 browser tiers skipped."
             return result
     # Tier 2: XHR interception
     result = await crawl_tier2_xhr(db, store)

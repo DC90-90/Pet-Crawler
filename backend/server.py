@@ -627,10 +627,10 @@ async def seed_database():
 async def ensure_stores():
     """Ensure all required stores exist and have correct configuration."""
     required_stores = [
-        {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products"},
-        {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products"},
-        {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
-        {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products"},
+        {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products", "tier1_only": True},
+        {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products", "tier1_only": True},
+        {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "working_endpoint": "/api/v1/products", "tier1_only": True},
+        {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products", "tier1_only": True},
         {"name": "Aleef", "domain": "aleef.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
@@ -646,17 +646,21 @@ async def ensure_stores():
                 "crawl_frequency_hrs": 12 if s["priority"] == 1 else 24,
                 "buyer_account_enc": "", "is_active": True, "priority": s["priority"],
                 "working_endpoint": s.get("working_endpoint", ""),
+                "tier1_only": bool(s.get("tier1_only", False)),
                 "last_crawled_at": "", "created_at": now.isoformat(),
             })
             added += 1
             logger.info(f"[Stores] Added: {s['name']} ({s['domain']})")
         else:
-            # Update platform/working_endpoint if store exists but has wrong config
+            # Update platform/working_endpoint/tier1_only if store exists but has wrong config
             updates = {}
             if existing.get("platform") != s["platform"]:
                 updates["platform"] = s["platform"]
             if s.get("working_endpoint") and existing.get("working_endpoint") != s["working_endpoint"]:
                 updates["working_endpoint"] = s["working_endpoint"]
+            desired_tier1_only = bool(s.get("tier1_only", False))
+            if bool(existing.get("tier1_only", False)) != desired_tier1_only:
+                updates["tier1_only"] = desired_tier1_only
             if updates:
                 await db.stores.update_one({"domain": s["domain"]}, {"$set": updates})
                 logger.info(f"[Stores] Updated config for {s['name']}: {updates}")
