@@ -53,7 +53,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
-CRAWLER_TOKEN = os.environ.get('CRAWLER_TOKEN') or 'zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO'
+CRAWLER_TOKEN = "zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ async def debug_token():
     return {
         "crawler_token_length": len(CRAWLER_TOKEN),
         "first_5_chars": CRAWLER_TOKEN[:5],
-        "source": "env" if os.environ.get("CRAWLER_TOKEN") else "hardcoded",
+        "source": "hardcoded",
     }
 scheduler = AsyncIOScheduler()
 crawl_paused = False
@@ -593,13 +593,20 @@ async def seed_database():
 
     # Seed admin user
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@daleelpets.com")
-    admin_pw = os.environ.get("ADMIN_PASSWORD", "admin123")
-    if not await db.users.find_one({"email": admin_email}):
+    admin_pw = os.environ.get("ADMIN_PASSWORD", "BGv8ZcRYrBTPlJFHHhZQ3Q")
+    existing_admin = await db.users.find_one({"email": admin_email})
+    if not existing_admin:
         await db.users.insert_one({
             "email": admin_email, "password_hash": hash_pw(admin_pw),
             "name": "Admin", "role": "admin",
             "created_at": datetime.now(timezone.utc),
         })
+    else:
+        # Always update password to match current ADMIN_PASSWORD
+        await db.users.update_one(
+            {"email": admin_email},
+            {"$set": {"password_hash": hash_pw(admin_pw)}},
+        )
 
     # Create indexes
     await db.users.create_index("email", unique=True)
