@@ -4,7 +4,45 @@ import { useAuth } from "@/App";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { Input } from "@/components/ui/input";
-import { ArrowRight, BarChart3, Store, Activity, Layers } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+
+const HaramLogo = () => (
+  <svg
+    viewBox="0 0 300 340"
+    xmlns="http://www.w3.org/2000/svg"
+    style={{ width: 80, height: 90 }}
+    data-testid="haram-logo"
+  >
+    <defs>
+      <filter id="topglow" x="-80%" y="-80%" width="260%" height="260%">
+        <feGaussianBlur stdDeviation="10" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+      <filter id="midglow" x="-40%" y="-40%" width="180%" height="180%">
+        <feGaussianBlur stdDeviation="4" result="blur" />
+        <feMerge>
+          <feMergeNode in="blur" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </defs>
+    <line x1="150" y1="88" x2="112" y2="158" stroke="#DAF8F4" strokeWidth="1" opacity="0.5" />
+    <line x1="150" y1="88" x2="196" y2="158" stroke="#DAF8F4" strokeWidth="1" opacity="0.5" />
+    <line x1="112" y1="171" x2="196" y2="171" stroke="#DAF8F4" strokeWidth="1" opacity="0.5" />
+    <line x1="118" y1="184" x2="88" y2="232" stroke="#DAF8F4" strokeWidth="1" opacity="0.4" />
+    <line x1="196" y1="184" x2="212" y2="232" stroke="#DAF8F4" strokeWidth="1" opacity="0.4" />
+    <line x1="88" y1="244" x2="212" y2="244" stroke="#DAF8F4" strokeWidth="1" opacity="0.4" />
+    <rect x="133" y="68" width="34" height="34" rx="3" fill="#A1E4DB" filter="url(#topglow)" />
+    <rect x="94" y="158" width="34" height="26" rx="2" fill="#1E988E" filter="url(#midglow)" />
+    <rect x="178" y="158" width="34" height="26" rx="2" fill="#104745" />
+    <rect x="72" y="228" width="28" height="22" rx="2" fill="#0A2728" />
+    <rect x="136" y="228" width="28" height="22" rx="2" fill="#0A2728" />
+    <rect x="200" y="228" width="28" height="22" rx="2" fill="#0A2728" />
+  </svg>
+);
 
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
@@ -14,7 +52,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
-  const { t, toggleLang, isRTL } = useI18n();
+  const { t } = useI18n();
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -37,87 +75,76 @@ export default function LoginPage() {
     }
   };
 
-  const stats = [
-    { icon: Layers, value: "200+", label: isRTL ? "منتج متتبع" : "Products Tracked" },
-    { icon: Store, value: "9", label: isRTL ? "متاجر مراقبة" : "Stores Monitored" },
-    { icon: BarChart3, value: "90d", label: isRTL ? "بيانات تاريخية" : "Historical Data" },
-    { icon: Activity, value: "4-Tier", label: isRTL ? "زحف ذكي" : "Smart Crawler" },
-  ];
-
-  const headingClass = `text-5xl font-bold mb-2 ${isRTL ? "" : "uppercase tracking-[0.05em]"}`;
+  const labelStyle = {
+    color: "#A1E4DB",
+    fontFamily: "'JetBrains Mono', monospace",
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+  };
+  const inputStyle = {
+    background: "#090E1C",
+    border: "1px solid #13625F",
+    color: "#FFFFFF",
+    borderRadius: 4,
+  };
 
   return (
-    <div className="min-h-screen flex" style={{ background: "#090E1C" }} data-testid="login-page">
-      {/* Left — Brand Hero (flat dark, no gradients) */}
-      <div
-        className="hidden lg:flex flex-1 flex-col justify-center items-center p-12 relative"
-        style={{ background: "#090E1C", borderInlineEnd: "1px solid #13625F" }}
-      >
-        <div className="relative z-10 max-w-md text-center">
-          <h1 className={headingClass} style={{ color: "#FFFFFF" }} data-testid="login-brand-heading">
-            {t("app_name")}
-          </h1>
+    <div
+      className="min-h-screen flex flex-col items-center justify-center px-6 py-10"
+      style={{ background: "#090E1C" }}
+      data-testid="login-page"
+    >
+      <div style={{ width: "100%", maxWidth: 420, margin: "0 auto" }}>
+        {/* Logo + tagline */}
+        <div className="flex flex-col items-center mb-8">
+          <HaramLogo />
           <p
-            className="text-xl font-medium tracking-wide mb-1"
-            style={{ color: "#6AC1B5", fontFamily: isRTL ? undefined : "'Space Grotesk', sans-serif", letterSpacing: isRTL ? 0 : "0.05em", textTransform: isRTL ? "none" : "uppercase" }}
+            style={{
+              fontFamily: "'Space Grotesk', sans-serif",
+              fontSize: 11,
+              color: "#1E988E",
+              letterSpacing: "0.2em",
+              textAlign: "center",
+              marginTop: 8,
+            }}
+            data-testid="login-tagline"
           >
-            {t("app_name_ar")}
+            BUILD. SCALE. GROW.
           </p>
-          <p className="text-sm mt-4 leading-relaxed" style={{ color: "#A1E4DB" }}>
-            {t("tagline")}
-          </p>
-          <div className="grid grid-cols-2 gap-4 mt-10">
-            {stats.map((s) => (
-              <div
-                key={s.label}
-                className="p-4 text-center"
-                style={{ background: "#0A2728", border: "1px solid #13625F", borderRadius: 8 }}
-              >
-                <s.icon className="w-5 h-5 mx-auto mb-2" style={{ color: "#1E988E" }} />
-                <p className="text-2xl font-bold metric-number" style={{ color: "#FFFFFF" }}>{s.value}</p>
-                <p className="text-[10px] uppercase tracking-[0.12em] mt-1" style={{ color: "#A1E4DB", fontFamily: "'JetBrains Mono', monospace" }}>{s.label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Right — Login Form */}
-      <div className="flex-1 lg:max-w-[480px] flex flex-col justify-center px-8 lg:px-16" style={{ background: "#090E1C" }}>
-        <div className="flex justify-end mb-8">
-          <button
-            onClick={toggleLang}
-            className="text-xs px-3 py-1.5 rounded transition-colors"
-            style={{ color: "#A1E4DB", border: "1px solid #13625F", background: "transparent", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.08em" }}
-            data-testid="login-lang-toggle"
-          >
-            {t("lang_switch")}
-          </button>
         </div>
 
-        <div className="lg:hidden text-center mb-8">
-          <h1 className={headingClass} style={{ color: "#FFFFFF" }}>{t("app_name")}</h1>
-          <p className="text-sm mt-1" style={{ color: "#6AC1B5" }}>{t("tagline_short")}</p>
-        </div>
-
-        <div className="p-8" style={{ background: "#0A2728", border: "1px solid #13625F", borderRadius: 8 }}>
+        {/* Login Card */}
+        <div
+          style={{
+            background: "#0A2728",
+            border: "1px solid #13625F",
+            borderRadius: 8,
+            padding: 40,
+          }}
+          data-testid="login-card"
+        >
           <h2
             className="text-xl mb-6"
             style={{
               color: "#FFFFFF",
-              fontFamily: isRTL ? undefined : "'Space Grotesk', sans-serif",
+              fontFamily: "'Space Grotesk', sans-serif",
               fontWeight: 700,
-              letterSpacing: isRTL ? 0 : "0.05em",
-              textTransform: isRTL ? "none" : "uppercase",
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
             }}
           >
-            {isLogin ? (isRTL ? "تسجيل الدخول" : "Sign In") : (isRTL ? "إنشاء حساب" : "Create Account")}
+            {isLogin ? "Sign In" : "Create Account"}
           </h2>
 
           {error && (
             <div
               className="text-xs p-3 mb-4"
-              style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#EF4444", borderRadius: 4 }}
+              style={{
+                background: "rgba(239,68,68,0.1)",
+                border: "1px solid rgba(239,68,68,0.3)",
+                color: "#EF4444",
+                borderRadius: 4,
+              }}
               data-testid="auth-error"
             >
               {error}
@@ -127,39 +154,45 @@ export default function LoginPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             {!isLogin && (
               <div>
-                <label className="text-xs mb-1.5 block" style={{ color: "#A1E4DB", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.08em" }}>{t("name")}</label>
+                <label className="text-xs mb-1.5 block" style={labelStyle}>
+                  {t("name")}
+                </label>
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder={isRTL ? "اسمك" : "Your name"}
-                  className="hrm-input h-11 rounded"
-                  style={{ background: "#0A2728", border: "1px solid #13625F", color: "#FFFFFF", borderRadius: 4 }}
+                  placeholder="Your name"
+                  className="hrm-input h-11"
+                  style={inputStyle}
                   data-testid="auth-name-input"
                 />
               </div>
             )}
             <div>
-              <label className="text-xs mb-1.5 block" style={{ color: "#A1E4DB", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.08em" }}>{t("email")}</label>
+              <label className="text-xs mb-1.5 block" style={labelStyle}>
+                {t("email")}
+              </label>
               <Input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="email@example.com"
-                className="hrm-input h-11 rounded"
-                style={{ background: "#0A2728", border: "1px solid #13625F", color: "#FFFFFF", borderRadius: 4 }}
+                className="hrm-input h-11"
+                style={inputStyle}
                 required
                 data-testid="auth-email-input"
               />
             </div>
             <div>
-              <label className="text-xs mb-1.5 block" style={{ color: "#A1E4DB", fontFamily: "'JetBrains Mono', monospace", textTransform: "uppercase", letterSpacing: "0.08em" }}>{t("password")}</label>
+              <label className="text-xs mb-1.5 block" style={labelStyle}>
+                {t("password")}
+              </label>
               <Input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="********"
-                className="hrm-input h-11 rounded"
-                style={{ background: "#0A2728", border: "1px solid #13625F", color: "#FFFFFF", borderRadius: 4 }}
+                className="hrm-input h-11"
+                style={inputStyle}
                 required
                 data-testid="auth-password-input"
               />
@@ -170,8 +203,12 @@ export default function LoginPage() {
               className="hrm-btn-primary w-full h-11 flex items-center justify-center gap-2"
               data-testid="auth-submit-btn"
             >
-              {loading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : (
-                <>{isLogin ? t("btn_login") : t("btn_register")} <ArrowRight className="w-4 h-4" /></>
+              {loading ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <>
+                  {isLogin ? t("btn_login") : t("btn_register")} <ArrowRight className="w-4 h-4" />
+                </>
               )}
             </button>
           </form>
@@ -180,7 +217,10 @@ export default function LoginPage() {
             {isLogin ? t("no_account") : t("has_account")}{" "}
             <button
               type="button"
-              onClick={() => { setIsLogin(!isLogin); setError(""); }}
+              onClick={() => {
+                setIsLogin(!isLogin);
+                setError("");
+              }}
               style={{ color: "#6AC1B5", fontWeight: 500 }}
               className="hover:underline"
               data-testid="auth-toggle-btn"
