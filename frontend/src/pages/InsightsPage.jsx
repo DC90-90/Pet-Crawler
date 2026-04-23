@@ -49,14 +49,14 @@ export default function InsightsPage() {
     }).catch(console.error).finally(() => setLoading(false));
   }, [days]);
 
-  if (loading) return <div className="p-6 text-sm text-[#9CA3AF]" data-testid="insights-loading">{t("loading")}</div>;
+  if (loading) return <div className="p-6 text-sm text-[#A1E4DB]" data-testid="insights-loading">{t("loading")}</div>;
 
   return (
     <div className="p-6 space-y-5" data-testid="insights-page">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_insights")}</h1>
-          <p className="text-sm text-[#9CA3AF] mt-0.5">{t("subtitle")}</p>
+          <p className="text-sm text-[#A1E4DB] mt-0.5">{t("subtitle")}</p>
         </div>
         <div className="flex gap-2 items-center" data-testid="insights-date-range">
           <Button variant="outline" size="sm" onClick={() => setDigestOpen(true)} className="rounded-md text-xs h-7" data-testid="digest-btn">
@@ -66,7 +66,7 @@ export default function InsightsPage() {
           {RANGE_OPTIONS.map((d) => (
             <Button key={d} size="sm" variant={days === d ? "default" : "outline"}
               onClick={() => setDays(d)}
-              className={`text-xs rounded-md h-7 px-3 ${days === d ? "bg-[#00D4B4] text-[#0A0F1E]" : ""}`}>{t(`d${d}`)}</Button>
+              className={`text-xs rounded-md h-7 px-3 ${days === d ? "bg-[#1E988E] text-[#090E1C]" : ""}`}>{t(`d${d}`)}</Button>
           ))}
         </div>
       </div>
@@ -82,7 +82,7 @@ export default function InsightsPage() {
             { key: "kpi_confidence", val: `${summary.avg_confidence}%` },
           ].map((k) => (
             <div key={k.key} className="kpi-card" data-testid={`insight-${k.key}`}>
-              <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">{t(k.key)}</p>
+              <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">{t(k.key)}</p>
               <p className="text-xl font-bold tracking-tighter text-white mt-1">{k.val}</p>
             </div>
           ))}
@@ -95,10 +95,10 @@ export default function InsightsPage() {
         <ResponsiveContainer width="100%" height={Math.max(280, (leaderboard?.length || 0) * 36)}>
           <BarChart data={leaderboard} layout="vertical" margin={{ left: 10, right: 20 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
-            <XAxis type="number" tickFormatter={(v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} tick={{ fontSize: 10, fill: "#9CA3AF" }} />
-            <YAxis type="category" dataKey="store" width={120} tick={{ fontSize: 11, fill: "#9CA3AF" }} />
-            <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Est. Revenue"]} contentStyle={{ background: "#1F2937", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#9CA3AF" }} itemStyle={{ color: "#00D4B4" }} />
-            <Bar dataKey="revenue_est" fill="#00D4B4" radius={[0, 4, 4, 0]} />
+            <XAxis type="number" tickFormatter={(v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} tick={{ fontSize: 10, fill: "#A1E4DB" }} />
+            <YAxis type="category" dataKey="store" width={120} tick={{ fontSize: 11, fill: "#A1E4DB" }} />
+            <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Est. Revenue"]} contentStyle={{ background: "#104745", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#A1E4DB" }} itemStyle={{ color: "#1E988E" }} />
+            <Bar dataKey="revenue_est" fill="#1E988E" radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>
@@ -111,14 +111,14 @@ export default function InsightsPage() {
           <div className="space-y-2 max-h-[300px] overflow-y-auto">
             {topSellers.slice(0, 10).map((s, i) => (
               <div key={s.sku} className="flex items-center gap-3 py-1.5 border-b border-white/5 last:border-0" data-testid={`top-seller-${i}`}>
-                <span className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#00D4B4] text-[#0A0F1E]" : "bg-white/5 text-[#9CA3AF]"}`}>{i + 1}</span>
+                <span className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#1E988E] text-[#090E1C]" : "bg-white/5 text-[#A1E4DB]"}`}>{i + 1}</span>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-white truncate">{s.name_ar}</p>
-                  <p className="text-[10px] text-[#9CA3AF]">{s.brand} - {s.category}</p>
+                  <p className="text-[10px] text-[#A1E4DB]">{s.brand} - {s.category}</p>
                 </div>
                 <div className="text-end">
                   <p className="text-xs font-bold text-white">{s.units_sold} units</p>
-                  <p className="text-[10px] text-[#9CA3AF]">{s.revenue_est.toLocaleString()} SAR</p>
+                  <p className="text-[10px] text-[#A1E4DB]">{s.revenue_est.toLocaleString()} SAR</p>
                 </div>
               </div>
             ))}
@@ -131,18 +131,18 @@ export default function InsightsPage() {
           <Tabs defaultValue={trending[0]?.category || "cat_food"} className="w-full">
             <TabsList className="flex flex-wrap gap-1 bg-transparent h-auto p-0 mb-3">
               {trending.slice(0, 6).map((c) => (
-                <TabsTrigger key={c.category} value={c.category} className="text-[10px] px-2 py-1 rounded-md data-[state=active]:bg-[#00D4B4] data-[state=active]:text-[#0A0F1E]">
+                <TabsTrigger key={c.category} value={c.category} className="text-[10px] px-2 py-1 rounded-md data-[state=active]:bg-[#1E988E] data-[state=active]:text-[#090E1C]">
                   {c.category_label}
                 </TabsTrigger>
               ))}
             </TabsList>
             {trending.slice(0, 6).map((c) => (
               <TabsContent key={c.category} value={c.category} className="mt-0">
-                <p className="text-xs text-[#9CA3AF] mb-2">Total: {c.total_sales} units sold</p>
+                <p className="text-xs text-[#A1E4DB] mb-2">Total: {c.total_sales} units sold</p>
                 <div className="space-y-1.5">
                   {c.top_products.map((p) => (
                     <div key={p.sku} className="flex items-center justify-between text-xs py-1 border-b border-white/5">
-                      <span className="text-[#9CA3AF] truncate flex-1">{p.name_ar}</span>
+                      <span className="text-[#A1E4DB] truncate flex-1">{p.name_ar}</span>
                       <span className="font-bold text-white ms-2">{p.units_sold}</span>
                     </div>
                   ))}
@@ -164,11 +164,11 @@ export default function InsightsPage() {
                 <p className="text-xs font-medium text-white truncate">{w.name_ar}</p>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge variant="outline" className="text-[10px] border-[#EF4444]/30 text-[#EF4444] bg-[#EF4444]/10">{w.spread_sar} SAR spread</Badge>
-                  <span className="text-[10px] text-[#9CA3AF]">{w.spread_pct}%</span>
+                  <span className="text-[10px] text-[#A1E4DB]">{w.spread_pct}%</span>
                 </div>
               </div>
             ))}
-            {priceWars.length === 0 && <p className="text-xs text-[#9CA3AF]">{t("no_data")}</p>}
+            {priceWars.length === 0 && <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p>}
           </div>
         </div>
 
@@ -183,7 +183,7 @@ export default function InsightsPage() {
                 <p className="text-[10px] text-green-600">In stock at: {r.in_stock_stores.map((s) => s.store).join(", ")}</p>
               </div>
             ))}
-            {restock.length === 0 && <p className="text-xs text-[#9CA3AF]">{t("no_data")}</p>}
+            {restock.length === 0 && <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p>}
           </div>
         </div>
 
@@ -195,14 +195,14 @@ export default function InsightsPage() {
               <div key={g.sku} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium text-white truncate">{g.name_ar}</p>
-                  <p className="text-[10px] text-[#9CA3AF]">{g.num_stores} stores / {g.missing_count} missing</p>
+                  <p className="text-[10px] text-[#A1E4DB]">{g.num_stores} stores / {g.missing_count} missing</p>
                 </div>
                 <Badge className="text-[10px] bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30" variant="outline">
                   {g.opportunity_score}%
                 </Badge>
               </div>
             ))}
-            {gaps.length === 0 && <p className="text-xs text-[#9CA3AF]">{t("no_data")}</p>}
+            {gaps.length === 0 && <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p>}
           </div>
         </div>
       </div>

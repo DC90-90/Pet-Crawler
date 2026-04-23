@@ -43,18 +43,18 @@ export default function SettingsPage() {
     <div className="p-6 space-y-5" data-testid="settings-page">
       <div>
         <h1 className="text-2xl font-semibold text-white">{isRTL ? "الإعدادات" : "Settings"}</h1>
-        <p className="text-sm text-[#9CA3AF] mt-0.5">{isRTL ? "إدارة النظام والتشفير" : "System management and encryption"}</p>
+        <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "إدارة النظام والتشفير" : "System management and encryption"}</p>
       </div>
 
       {/* Encryption Status */}
       <div className="glass-card p-5">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-[#00D4B4]" />
+            <Shield className="w-5 h-5 text-[#1E988E]" />
             <h3 className="text-sm font-semibold text-white">{isRTL ? "حالة التشفير" : "Encryption Status"}</h3>
           </div>
           <Button variant="outline" size="sm" onClick={verifyEncryption}
-            className="rounded-full text-xs gap-1.5 border-white/10 text-[#9CA3AF] hover:text-white hover:border-white/20"
+            className="rounded-full text-xs gap-1.5 border-white/10 text-[#A1E4DB] hover:text-white hover:border-white/20"
             data-testid="verify-encryption-btn">
             <KeyRound className="w-3.5 h-3.5" />
             {isRTL ? "تحقق" : "Verify"}
@@ -75,20 +75,20 @@ export default function SettingsPage() {
       {/* External Crawler API */}
       <div className="glass-card p-5">
         <div className="flex items-center gap-2 mb-4">
-          <Server className="w-5 h-5 text-[#00D4B4]" />
+          <Server className="w-5 h-5 text-[#1E988E]" />
           <h3 className="text-sm font-semibold text-white">{isRTL ? "واجهة الزاحف الخارجي" : "External Crawler API"}</h3>
         </div>
         <div className="space-y-3 text-sm">
           <div className="flex items-center justify-between py-2 border-b border-white/5">
-            <span className="text-[#9CA3AF]">Endpoint</span>
-            <code className="text-xs text-[#00D4B4] bg-white/5 px-2 py-1 rounded font-mono">POST /api/crawler/ingest</code>
+            <span className="text-[#A1E4DB]">Endpoint</span>
+            <code className="text-xs text-[#1E988E] bg-white/5 px-2 py-1 rounded font-mono">POST /api/crawler/ingest</code>
           </div>
           <div className="flex items-center justify-between py-2 border-b border-white/5">
-            <span className="text-[#9CA3AF]">Authentication</span>
+            <span className="text-[#A1E4DB]">Authentication</span>
             <code className="text-xs text-white bg-white/5 px-2 py-1 rounded font-mono">Bearer CRAWLER_TOKEN</code>
           </div>
           <div className="flex items-center justify-between py-2">
-            <span className="text-[#9CA3AF]">Data Source</span>
+            <span className="text-[#A1E4DB]">Data Source</span>
             <span className="text-xs text-white">Saudi IP Python Crawler</span>
           </div>
         </div>
@@ -99,10 +99,10 @@ export default function SettingsPage() {
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold text-white">{isRTL ? "إنشاء تنبيهات تلقائية" : "Auto-Generate Alerts"}</h3>
-            <p className="text-xs text-[#9CA3AF] mt-0.5">Create alerts from Price Intel data: overpriced products, OOS opportunities, catalog gaps</p>
+            <p className="text-xs text-[#A1E4DB] mt-0.5">Create alerts from Price Intel data: overpriced products, OOS opportunities, catalog gaps</p>
           </div>
           <Button onClick={autoGenerateAlerts}
-            className="rounded-full bg-[#F59E0B] text-[#0A0F1E] font-semibold hover:bg-[#FBBF24]"
+            className="rounded-full bg-[#F59E0B] text-[#090E1C] font-semibold hover:bg-[#FBBF24]"
             data-testid="auto-generate-alerts-btn">
             {isRTL ? "إنشاء التنبيهات" : "Generate Alerts"}
           </Button>
@@ -114,10 +114,10 @@ export default function SettingsPage() {
         <div className="glass-card p-5">
           <h3 className="text-sm font-semibold text-white mb-3">{isRTL ? "حالة النظام" : "System Status"}</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div><p className="text-[9px] uppercase text-[#9CA3AF]">My Products</p><p className="text-lg font-bold text-white metric-number">{importStatus.my_products?.toLocaleString()}</p></div>
-            <div><p className="text-[9px] uppercase text-[#9CA3AF]">Matches</p><p className="text-lg font-bold text-[#00D4B4] metric-number">{importStatus.total_matches?.toLocaleString()}</p></div>
-            <div><p className="text-[9px] uppercase text-[#9CA3AF]">Confirmed</p><p className="text-lg font-bold text-[#10B981] metric-number">{importStatus.confirmed_matches}</p></div>
-            <div><p className="text-[9px] uppercase text-[#9CA3AF]">Blacklisted</p><p className="text-lg font-bold text-[#EF4444] metric-number">{importStatus.blacklisted}</p></div>
+            <div><p className="text-[9px] uppercase text-[#A1E4DB]">My Products</p><p className="text-lg font-bold text-white metric-number">{importStatus.my_products?.toLocaleString()}</p></div>
+            <div><p className="text-[9px] uppercase text-[#A1E4DB]">Matches</p><p className="text-lg font-bold text-[#1E988E] metric-number">{importStatus.total_matches?.toLocaleString()}</p></div>
+            <div><p className="text-[9px] uppercase text-[#A1E4DB]">Confirmed</p><p className="text-lg font-bold text-[#10B981] metric-number">{importStatus.confirmed_matches}</p></div>
+            <div><p className="text-[9px] uppercase text-[#A1E4DB]">Blacklisted</p><p className="text-lg font-bold text-[#EF4444] metric-number">{importStatus.blacklisted}</p></div>
           </div>
         </div>
       )}

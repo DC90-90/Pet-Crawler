@@ -1,5 +1,5 @@
 """
-Daleel Pets — Product Matching Engine v2
+Daleel — Product Matching Engine v2
 3-level waterfall: Barcode → SKU → Name
 CRITICAL: A wrong match is worse than no match.
 """

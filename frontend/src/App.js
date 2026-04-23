@@ -55,14 +55,14 @@ function AuthProvider({ children }) {
 
 function ProtectedRoute({ children }) {
   const { user, checking } = useAuth();
-  if (checking) return <div className="flex items-center justify-center min-h-screen bg-[#060B14]"><div className="w-8 h-8 rounded-full border-2 border-[#00D4B4] border-t-transparent animate-spin" /></div>;
+  if (checking) return <div className="flex items-center justify-center min-h-screen bg-[#090E1C]"><div className="w-8 h-8 rounded-full border-2 border-[#1E988E] border-t-transparent animate-spin" /></div>;
   if (!user) return <Navigate to="/login" replace />;
   return children;
 }
 
 function AppLayout() {
   return (
-    <div className="flex min-h-screen" style={{ background: "radial-gradient(circle at top center, #0A0F1E 0%, #060B14 100%)" }} data-testid="app-layout">
+    <div className="flex min-h-screen" style={{ background: "radial-gradient(circle at top center, #090E1C 0%, #090E1C 100%)" }} data-testid="app-layout">
       <Sidebar />
       <main className="flex-1 ms-[240px] min-h-screen flex flex-col">
         {/* Top Bar */}

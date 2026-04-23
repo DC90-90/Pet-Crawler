@@ -1,5 +1,5 @@
 """
-Daleel Pets — Multi-tier Crawler Module
+Daleel — Multi-tier Crawler Module
 Tier 1: JSON API endpoints (Salla/Shopify/Zid)
 Tier 2: Playwright XHR interception
 Tier 3: Playwright + BeautifulSoup HTML extraction

@@ -120,7 +120,7 @@ export default function StoreRegistryPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_stores")}</h1>
-          <p className="text-sm text-[#9CA3AF] mt-0.5">Manage tracked competitor stores</p>
+          <p className="text-sm text-[#A1E4DB] mt-0.5">Manage tracked competitor stores</p>
         </div>
         <div className="flex gap-2">
           <Button variant={crawlPaused ? "destructive" : "outline"} size="sm"
@@ -131,7 +131,7 @@ export default function StoreRegistryPage() {
             className="rounded-md text-xs" data-testid="pause-crawls-btn">
             {crawlPaused ? "Resume All Crawls" : "Pause All Crawls"}
           </Button>
-          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md text-xs" data-testid="add-store-btn">
+          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md text-xs" data-testid="add-store-btn">
             <Plus className="w-3.5 h-3.5 me-1.5" />{t("btn_add_store")}
           </Button>
         </div>
@@ -140,31 +140,31 @@ export default function StoreRegistryPage() {
       <div className="glass-card rounded-md overflow-hidden">
         <Table className="dense-table">
           <TableHeader>
-            <TableRow className="bg-[#111827]/80/5">
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("store_name")}</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_domain")}</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_platform")}</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_products_count")}</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Crawl Status</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Tier</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">{t("col_last_crawled")}</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Next Crawl</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Type</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF] text-end">{t("col_actions")}</TableHead>
+            <TableRow className="bg-[#0A2728]/80/5">
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{t("store_name")}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{t("col_domain")}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{t("col_platform")}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{t("col_products_count")}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Crawl Status</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Tier</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{t("col_last_crawled")}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Next Crawl</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Type</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB] text-end">{t("col_actions")}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={10} className="text-center py-12 text-[#9CA3AF] text-sm">{t("loading")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="text-center py-12 text-[#A1E4DB] text-sm">{t("loading")}</TableCell></TableRow>
             ) : stores.length === 0 ? (
-              <TableRow><TableCell colSpan={10} className="text-center py-12 text-[#9CA3AF] text-sm">{t("no_data")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="text-center py-12 text-[#A1E4DB] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : stores.map((s) => (
-              <TableRow key={s.id} data-testid={`store-row-${s.id}`} className="hover:bg-[#111827]/80/5 transition-colors group">
+              <TableRow key={s.id} data-testid={`store-row-${s.id}`} className="hover:bg-[#0A2728]/80/5 transition-colors group">
                 <TableCell>
                   <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 bg-[#00D4B4] text-[#0A0F1E] text-[10px] font-bold rounded flex items-center justify-center">{s.name?.[0]?.toUpperCase()}</div>
+                    <div className="w-7 h-7 bg-[#1E988E] text-[#090E1C] text-[10px] font-bold rounded flex items-center justify-center">{s.name?.[0]?.toUpperCase()}</div>
                     <div>
-                      <span className="text-sm font-medium text-[#00D4B4] cursor-pointer hover:underline" onClick={() => navigate(`/stores/${s.id}`)}>{s.name}</span>
+                      <span className="text-sm font-medium text-[#1E988E] cursor-pointer hover:underline" onClick={() => navigate(`/stores/${s.id}`)}>{s.name}</span>
                       {s.last_crawl_error && (
                         <p className="text-[10px] text-red-400 truncate max-w-[180px]" title={s.last_crawl_error}>{s.last_crawl_error}</p>
                       )}
@@ -172,7 +172,7 @@ export default function StoreRegistryPage() {
                   </div>
                 </TableCell>
                 <TableCell>
-                  <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer" className="text-xs text-[#00D4B4] hover:underline flex items-center gap-1">
+                  <a href={`https://${s.domain}`} target="_blank" rel="noopener noreferrer" className="text-xs text-[#1E988E] hover:underline flex items-center gap-1">
                     <Globe className="w-3 h-3" />{s.domain}
                   </a>
                 </TableCell>
@@ -183,25 +183,25 @@ export default function StoreRegistryPage() {
                   <div>
                     <TierBadge tier={s.last_crawl_tier} />
                     {s.last_crawl_endpoint && s.last_crawl_endpoint !== "none — tier 2 stub" && (
-                      <p className="text-[9px] text-[#9CA3AF] mt-0.5 font-mono truncate max-w-[100px]" title={s.last_crawl_endpoint}>{s.last_crawl_endpoint}</p>
+                      <p className="text-[9px] text-[#A1E4DB] mt-0.5 font-mono truncate max-w-[100px]" title={s.last_crawl_endpoint}>{s.last_crawl_endpoint}</p>
                     )}
                   </div>
                 </TableCell>
-                <TableCell><span className="text-xs text-[#9CA3AF]">{formatDate(s.last_crawled_at)}</span></TableCell>
+                <TableCell><span className="text-xs text-[#A1E4DB]">{formatDate(s.last_crawled_at)}</span></TableCell>
                 <TableCell>
                   <div>
-                    <span className="text-xs text-[#9CA3AF]">{s.crawl_frequency_label}</span>
+                    <span className="text-xs text-[#A1E4DB]">{s.crawl_frequency_label}</span>
                     {s.next_crawl_at && !crawlPaused && (
-                      <p className="text-[9px] text-[#9CA3AF]">{formatDate(s.next_crawl_at)}</p>
+                      <p className="text-[9px] text-[#A1E4DB]">{formatDate(s.next_crawl_at)}</p>
                     )}
                     {crawlPaused && <p className="text-[9px] text-red-400">Paused</p>}
                   </div>
                 </TableCell>
                 <TableCell>
                   {s.is_own_store ? (
-                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#00D4B4]/10 text-[#00D4B4] border-[#00D4B4]/20">My Store</Badge>
+                    <Badge variant="outline" className="text-[9px] gap-1 bg-[#1E988E]/10 text-[#1E988E] border-[#1E988E]/20">My Store</Badge>
                   ) : (
-                    <Badge variant="outline" className="text-[9px] text-[#9CA3AF]">Competitor</Badge>
+                    <Badge variant="outline" className="text-[9px] text-[#A1E4DB]">Competitor</Badge>
                   )}
                 </TableCell>
                 <TableCell className="text-end">
@@ -224,22 +224,22 @@ export default function StoreRegistryPage() {
 
         {/* Crawl Log Expansion */}
         {expandedStore && crawlLogs[expandedStore] && (
-          <div className="border-t border-white/10 bg-[#111827]/80/5 px-6 py-4" data-testid="crawl-log-panel">
+          <div className="border-t border-white/10 bg-[#0A2728]/80/5 px-6 py-4" data-testid="crawl-log-panel">
             <h4 className="text-xs font-semibold text-white mb-2">Recent Crawl History</h4>
             <div className="space-y-2">
-              {crawlLogs[expandedStore].length === 0 && <p className="text-xs text-[#9CA3AF]">No crawl history yet</p>}
+              {crawlLogs[expandedStore].length === 0 && <p className="text-xs text-[#A1E4DB]">No crawl history yet</p>}
               {crawlLogs[expandedStore].map((log) => (
                 <div key={log.id} className="glass-card rounded-md px-3 py-2 space-y-1">
                   <div className="flex items-center gap-4 text-xs">
-                    <span className="text-[#9CA3AF] w-[110px] shrink-0">{formatDate(log.completed_at)}</span>
+                    <span className="text-[#A1E4DB] w-[110px] shrink-0">{formatDate(log.completed_at)}</span>
                     <TierBadge tier={log.tier_used} />
                     <span className={`font-medium ${log.tier_used ? "text-green-600" : "text-red-500"}`}>
                       {log.tier_used ? "Success" : "Failed"}
                     </span>
-                    {log.endpoint_used && <span className="text-[10px] font-mono text-[#00D4B4]">{log.endpoint_used}</span>}
-                    <span className="text-[#9CA3AF]">{log.products_found} found</span>
+                    {log.endpoint_used && <span className="text-[10px] font-mono text-[#1E988E]">{log.endpoint_used}</span>}
+                    <span className="text-[#A1E4DB]">{log.products_found} found</span>
                     {log.products_new > 0 && <span className="text-green-600">+{log.products_new} new</span>}
-                    {log.snapshots_created > 0 && <span className="text-[#00D4B4]">{log.snapshots_created} snapshots</span>}
+                    {log.snapshots_created > 0 && <span className="text-[#1E988E]">{log.snapshots_created} snapshots</span>}
                   </div>
                   {log.endpoints_tried && log.endpoints_tried.length > 0 && (
                     <div className="flex flex-wrap gap-2 ps-[110px]">
@@ -263,7 +263,7 @@ export default function StoreRegistryPage() {
         <DialogContent className="sm:max-w-md rounded-md" data-testid="add-store-dialog">
           <DialogHeader>
             <DialogTitle className="font-bold">{t("btn_add_store")}</DialogTitle>
-            <DialogDescription>Add a new Saudi pet store to track</DialogDescription>
+            <DialogDescription>Add a new Saudi online store to track</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div>
@@ -288,7 +288,7 @@ export default function StoreRegistryPage() {
           </div>
           <DialogFooter className="relative z-[60]">
             <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="rounded-md" type="button">{t("btn_cancel")}</Button>
-            <Button size="sm" onClick={handleSave} className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md" data-testid="store-save-btn" type="button">{t("btn_save")}</Button>
+            <Button size="sm" onClick={handleSave} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md" data-testid="store-save-btn" type="button">{t("btn_save")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

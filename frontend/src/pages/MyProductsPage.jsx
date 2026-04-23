@@ -16,7 +16,7 @@ function StockBadge({ signal }) {
 }
 
 function ConfBadge({ tier, score }) {
-  const cls = { 1: "tier-1", 2: "tier-2", 3: "tier-3", 4: "bg-[#00D4B4]/15 text-[#00D4B4]" };
+  const cls = { 1: "tier-1", 2: "tier-2", 3: "tier-3", 4: "bg-[#1E988E]/15 text-[#1E988E]" };
   return (
     <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${cls[tier] || "tier-2"}`}>
       T{tier} {score}%
@@ -26,7 +26,7 @@ function ConfBadge({ tier, score }) {
 
 function SortIcon({ field, sortBy, sortOrder }) {
   if (sortBy !== field) return <ArrowUpDown className="w-3 h-3 ms-1 opacity-30" />;
-  return sortOrder === "asc" ? <ArrowUp className="w-3 h-3 ms-1 text-[#00D4B4]" /> : <ArrowDown className="w-3 h-3 ms-1 text-[#00D4B4]" />;
+  return sortOrder === "asc" ? <ArrowUp className="w-3 h-3 ms-1 text-[#1E988E]" /> : <ArrowDown className="w-3 h-3 ms-1 text-[#1E988E]" />;
 }
 
 export default function MyProductsPage() {
@@ -69,7 +69,7 @@ export default function MyProductsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-white">{t("nav_products")}</h1>
-          <p className="text-sm text-[#9CA3AF] mt-0.5">{isRTL ? "سوق الحيوانات الأليفة السعودي" : "Saudi Pet Market, Decoded"}</p>
+          <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "السوق السعودي، مفكّك" : "Saudi Market, Decoded"}</p>
         </div>
         <button onClick={handleExport} className="rounded-full bg-transparent border border-white/10 text-white hover:bg-white/5 transition-all px-4 py-2 text-xs font-medium flex items-center gap-1.5" data-testid="export-csv-btn">
           <Download className="w-3.5 h-3.5" />{t("btn_export")}
@@ -79,14 +79,14 @@ export default function MyProductsPage() {
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { key: "kpi_products", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#00D4B4" },
+          { key: "kpi_products", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_units_sold", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_revenue", val: `${(kpis.total_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#00D4B4" },
+          { key: "kpi_revenue", val: `${(kpis.total_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, icon: TrendingDown, accent: "#F59E0B" },
         ].map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">{t(k.key)}</p>
+              <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">{t(k.key)}</p>
               <k.icon className="w-4 h-4" style={{ color: k.accent }} />
             </div>
             <p className="text-2xl font-bold tracking-tighter text-white metric-number animate-countUp">{k.val}</p>
@@ -100,20 +100,20 @@ export default function MyProductsPage() {
           {RANGE_OPTIONS.map((d) => (
             <button key={d}
               onClick={() => setDays(d)}
-              className={`text-xs rounded-full h-7 px-3 font-medium transition-all ${days === d ? "bg-[#00D4B4] text-[#0A0F1E]" : "text-[#9CA3AF] hover:text-white hover:bg-white/5"}`}
+              className={`text-xs rounded-full h-7 px-3 font-medium transition-all ${days === d ? "bg-[#1E988E] text-[#090E1C]" : "text-[#A1E4DB] hover:text-white hover:bg-white/5"}`}
               data-testid={`range-${d}d`}>{t(`d${d}`)}</button>
           ))}
         </div>
         <div className="relative flex-1 min-w-[180px]">
-          <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#9CA3AF]" />
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#A1E4DB]" />
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("search")}
-            className="ps-9 h-8 text-sm rounded-xl bg-white/5 border-white/10 text-white placeholder:text-[#9CA3AF]/50 focus:border-[#00D4B4]/50" data-testid="product-search-input" />
+            className="ps-9 h-8 text-sm rounded-xl bg-white/5 border-white/10 text-white placeholder:text-[#A1E4DB]/50 focus:border-[#1E988E]/50" data-testid="product-search-input" />
         </div>
         <Select value={category} onValueChange={setCategory}>
           <SelectTrigger className="w-[150px] h-8 text-xs rounded-xl bg-white/5 border-white/10 text-white" data-testid="filter-category">
             <SelectValue placeholder={t("all_categories")} />
           </SelectTrigger>
-          <SelectContent className="bg-[#1F2937] border-white/10 text-white">
+          <SelectContent className="bg-[#104745] border-white/10 text-white">
             <SelectItem value="all">{t("all_categories")}</SelectItem>
             {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
           </SelectContent>
@@ -137,7 +137,7 @@ export default function MyProductsPage() {
                 { key: "confidence_score", label: "col_confidence", sortable: true },
               ].map((col) => (
                 <TableHead key={col.key}
-                  className={`text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF] ${col.sortable ? "cursor-pointer select-none hover:text-white" : ""}`}
+                  className={`text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB] ${col.sortable ? "cursor-pointer select-none hover:text-white" : ""}`}
                   onClick={() => col.sortable && handleSort(col.key)}>
                   <span className="flex items-center">
                     {t(col.label)}
@@ -149,24 +149,24 @@ export default function MyProductsPage() {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#9CA3AF] text-sm">{t("loading")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#A1E4DB] text-sm">{t("loading")}</TableCell></TableRow>
             ) : data.products.length === 0 ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#9CA3AF] text-sm">{t("no_data")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#A1E4DB] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : (
               data.products.map((p) => (
                 <TableRow key={p.sku} className="cursor-pointer" onClick={() => setSelectedSku(p.sku)} data-testid={`product-row-${p.sku}`}>
                   <TableCell>
                     <div>
                       <p className="text-sm font-medium text-white leading-tight">{p.name_ar}</p>
-                      <p className="text-[11px] text-[#9CA3AF]">{p.name_en}</p>
+                      <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
                     </div>
                   </TableCell>
-                  <TableCell><span className="text-xs font-mono text-[#9CA3AF]">{p.sku}</span></TableCell>
+                  <TableCell><span className="text-xs font-mono text-[#A1E4DB]">{p.sku}</span></TableCell>
                   <TableCell>
                     <div>
                       <span className="text-sm font-semibold text-white metric-number">{p.price} {t("sar")}</span>
                       {p.min_price !== p.max_price && (
-                        <p className="text-[10px] text-[#9CA3AF]">{p.min_price}-{p.max_price}</p>
+                        <p className="text-[10px] text-[#A1E4DB]">{p.min_price}-{p.max_price}</p>
                       )}
                     </div>
                   </TableCell>
@@ -177,7 +177,7 @@ export default function MyProductsPage() {
                   </TableCell>
                   <TableCell><span className="text-sm font-semibold text-white metric-number">{p.qty_sold_est.toLocaleString()}</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-white metric-number">{p.revenue_est.toLocaleString()} {t("sar")}</span></TableCell>
-                  <TableCell><Badge className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#9CA3AF]">{p.num_sellers}</Badge></TableCell>
+                  <TableCell><Badge className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]">{p.num_sellers}</Badge></TableCell>
                   <TableCell><StockBadge signal={p.stock_signal} /></TableCell>
                   <TableCell><ConfBadge tier={p.source_tier} score={p.confidence_score} /></TableCell>
                 </TableRow>

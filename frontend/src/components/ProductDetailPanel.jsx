@@ -67,19 +67,19 @@ export default function ProductDetailPanel({ sku, onClose }) {
   return (
     <Sheet open={!!sku} onOpenChange={(open) => { if (!open) onClose(); }}>
       <SheetContent className="w-[520px] sm:max-w-[520px] overflow-y-auto p-0" data-testid="product-detail-panel">
-        <SheetHeader className="px-5 py-4 border-b border-white/10 sticky top-0 bg-[#111827]/80 z-10">
+        <SheetHeader className="px-5 py-4 border-b border-white/10 sticky top-0 bg-[#0A2728]/80 z-10">
           <SheetTitle className="text-base font-bold text-white">
             {product?.name_ar || t("loading")}
           </SheetTitle>
         </SheetHeader>
 
         {loading ? (
-          <div className="p-5 text-sm text-[#9CA3AF]">{t("loading")}</div>
+          <div className="p-5 text-sm text-[#A1E4DB]">{t("loading")}</div>
         ) : product ? (
           <div className="p-5 space-y-5">
             {/* Product Header */}
             <div>
-              <p className="text-sm text-[#9CA3AF]">{product.name_en}</p>
+              <p className="text-sm text-[#A1E4DB]">{product.name_en}</p>
               <div className="flex items-center gap-2 mt-1.5">
                 <Badge variant="outline" className="text-[10px] font-mono">{product.sku}</Badge>
                 <Badge variant="secondary" className="text-[10px] capitalize">{product.category}</Badge>
@@ -91,15 +91,15 @@ export default function ProductDetailPanel({ sku, onClose }) {
             {product.price_range && (
               <div className="grid grid-cols-3 gap-3">
                 <div className="kpi-card !p-3">
-                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#9CA3AF]">{t("price_range")}</p>
+                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("price_range")}</p>
                   <p className="text-sm font-bold text-white mt-0.5">{product.price_range.min}-{product.price_range.max} SAR</p>
                 </div>
                 <div className="kpi-card !p-3">
-                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#9CA3AF]">{t("market_avg")}</p>
+                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("market_avg")}</p>
                   <p className="text-sm font-bold text-white mt-0.5">{product.price_range.avg} SAR</p>
                 </div>
                 <div className="kpi-card !p-3">
-                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#9CA3AF]">{t("total_volume")}</p>
+                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("total_volume")}</p>
                   <p className="text-sm font-bold text-white mt-0.5">{product.total_volume}</p>
                 </div>
               </div>
@@ -118,11 +118,11 @@ export default function ProductDetailPanel({ sku, onClose }) {
               <div className="border border-white/10 rounded-md overflow-hidden">
                 <Table className="dense-table">
                   <TableHeader>
-                    <TableRow className="bg-[#111827]/80/5">
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#9CA3AF]">Store</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#9CA3AF]">Price</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#9CA3AF]">Stock</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#9CA3AF]">Tier</TableHead>
+                    <TableRow className="bg-[#0A2728]/80/5">
+                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Store</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Price</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Stock</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Tier</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -182,7 +182,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
             {velocity && velocity.velocity?.length > 0 && (
               <div>
                 <h4 className="text-xs font-semibold text-white mb-2">
-                  {t("chart_velocity")} <span className="font-normal text-[#9CA3AF]">({velocity.avg_daily} {t("units_day")} avg)</span>
+                  {t("chart_velocity")} <span className="font-normal text-[#A1E4DB]">({velocity.avg_daily} {t("units_day")} avg)</span>
                 </h4>
                 <div className="border border-white/10 rounded-md p-3">
                   <ResponsiveContainer width="100%" height={140}>

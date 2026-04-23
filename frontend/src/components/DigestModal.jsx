@@ -40,10 +40,10 @@ export default function DigestModal({ open, onClose }) {
           )}
         </DialogHeader>
 
-        {loading ? <p className="text-sm text-[#9CA3AF] py-4">Loading...</p> : !digest?.content ? (
+        {loading ? <p className="text-sm text-[#A1E4DB] py-4">Loading...</p> : !digest?.content ? (
           <div className="text-center py-8">
-            <p className="text-sm text-[#9CA3AF] mb-3">No digest generated yet</p>
-            <Button size="sm" onClick={handleGenerate} disabled={generating} className="bg-[#00D4B4] text-[#0A0F1E] rounded-md text-xs" data-testid="generate-digest-btn">
+            <p className="text-sm text-[#A1E4DB] mb-3">No digest generated yet</p>
+            <Button size="sm" onClick={handleGenerate} disabled={generating} className="bg-[#1E988E] text-[#090E1C] rounded-md text-xs" data-testid="generate-digest-btn">
               <RefreshCw className={`w-3 h-3 me-1 ${generating ? "animate-spin" : ""}`} />Generate Now
             </Button>
           </div>
@@ -59,8 +59,8 @@ export default function DigestModal({ open, onClose }) {
                 { label: "Most Active", val: ms.most_active_store },
                 { label: "Snapshots", val: ms.snapshots_this_week },
               ].map((k) => (
-                <div key={k.label} className="bg-[#111827]/80/5 rounded-md p-2.5">
-                  <p className="text-[9px] uppercase tracking-wider text-[#9CA3AF]">{k.label}</p>
+                <div key={k.label} className="bg-[#0A2728]/80/5 rounded-md p-2.5">
+                  <p className="text-[9px] uppercase tracking-wider text-[#A1E4DB]">{k.label}</p>
                   <p className="text-sm font-bold text-white mt-0.5">{k.val ?? "-"}</p>
                 </div>
               ))}
@@ -69,8 +69,8 @@ export default function DigestModal({ open, onClose }) {
             {/* Price Drops */}
             <Section title="Top Price Drops" items={c.top_price_drops} renderItem={(d) => (
               <div className="flex items-center justify-between">
-                <div><p className="text-xs font-medium">{d.name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{d.store_name}</p></div>
-                <div className="text-end"><span className="text-xs line-through text-[#9CA3AF]">{d.old_price} ﷼</span> <span className="text-xs font-bold text-green-600">{d.new_price} ﷼</span><Badge variant="outline" className="text-[9px] ms-1.5 bg-green-50 text-green-700 border-green-200">-{d.drop_pct}%</Badge></div>
+                <div><p className="text-xs font-medium">{d.name_ar}</p><p className="text-[10px] text-[#A1E4DB]">{d.store_name}</p></div>
+                <div className="text-end"><span className="text-xs line-through text-[#A1E4DB]">{d.old_price} ﷼</span> <span className="text-xs font-bold text-green-600">{d.new_price} ﷼</span><Badge variant="outline" className="text-[9px] ms-1.5 bg-green-50 text-green-700 border-green-200">-{d.drop_pct}%</Badge></div>
               </div>
             )} />
 
@@ -85,7 +85,7 @@ export default function DigestModal({ open, onClose }) {
             {/* OOS Events */}
             <Section title="Competitor Out-of-Stock" items={c.oos_events} renderItem={(e) => (
               <div className="flex items-center justify-between">
-                <div><p className="text-xs font-medium">{e.name_ar}</p><p className="text-[10px] text-[#9CA3AF]">{e.store_name}</p></div>
+                <div><p className="text-xs font-medium">{e.name_ar}</p><p className="text-[10px] text-[#A1E4DB]">{e.store_name}</p></div>
                 <Badge variant="outline" className="text-[9px] bg-red-50 text-red-600 border-red-200">OOS</Badge>
               </div>
             )} />

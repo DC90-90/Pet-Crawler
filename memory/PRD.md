@@ -1,29 +1,49 @@
-# Daleel Pets (دليل بيتس) — PRD
+# Daleel — PRD
 
 ## Original Problem Statement
-SaaS web application for Saudi pet store owners to track & monitor competitor stores in the Saudi pet market (Salla, Zid platforms). Monitor product prices, stock/quantity, best sellers, categories, and discounts.
+SaaS platform for Saudi online store owners to track competitors' prices, inventory, best sellers, categories, and discounts across all Saudi stores (initially Salla & Zid). Real-time market intelligence.
 
 ## Core Requirements
 - Multi-tier crawler (Tier 1/2/3 fallback + external Saudi-IP ingest)
-- Product matching engine: Barcode > SKU > Name, max 150% price diff, max 10% weight diff
-- Premium Dark SaaS UI (glassmorphism, Recharts, dark-mode first, Arabic RTL, SAR ﷼)
+- Product matching: Barcode > SKU > Name, max 150% price diff, max 10% weight diff
+- HRM-SA brand identity (flat dark `#090E1C`, teal accent `#1E988E`, Space Grotesk + Inter + JetBrains Mono + DIN Next LT Arabic)
 - FastAPI + MongoDB + JWT (httpOnly cookies) + APScheduler
-- External Ingest API with Bearer token auth
+- External ingest API (bearer token)
+- Arabic RTL support, SAR currency
+
+## Brand Identity (HRM-SA)
+| Usage | Hex |
+|---|---|
+| Page bg | `#090E1C` |
+| Card bg | `#0A2728` |
+| Elevated | `#104745` |
+| Borders | `#13625F` |
+| Primary accent | `#1E988E` |
+| Accent light (hover) | `#6AC1B5` |
+| Muted text | `#A1E4DB` |
+| Near-white teal | `#DAF8F4` |
+| Text | `#FFFFFF` |
+
+Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` (EN body), `JetBrains Mono` (badges/numbers), `DIN Next LT Arabic` with `IBM Plex Sans Arabic` fallback (AR, no uppercase, letter-spacing 0).
 
 ## What's Implemented
-- Multi-tier crawler + external ingest endpoint
+- Multi-tier crawler + external ingest endpoint (hardened for bad payloads, idempotent store upsert-by-domain)
+- `tier1_only` flag skipping Playwright tiers for Salla stores (CuteCat, CutePets, Hamtaro, Mowkly)
 - Product matcher with strict rules
-- Excel baseline import (MySKUwatch)
-- Price Intelligence + Insights dashboards with charts
+- Excel baseline import
+- Price Intel + Insights dashboards
 - Fernet-encrypted credentials vault
-- Auto-generated price alerts from matched data
+- Auto-generated price alerts
 - Docker deployment package
-- Premium dark UI rebrand
+- **Full rebrand** from "Daleel Pets" → "Daleel" (English + Arabic, all files)
+- **Full HRM-SA visual identity applied** (flat `#090E1C` bg, teal palette, Space Grotesk/Inter/JetBrains Mono, HRM-SA button/card/input/table/badge/scrollbar styles)
 
-## Recent Fixes (Feb 2026)
-- `seed_database()` now force-updates admin password hash on every startup
-- `CRAWLER_TOKEN` fully hardcoded in `server.py` (no env var fallback) to prevent stale env overrides causing 401s on production
-- `/api/debug/token` reports `source: "hardcoded"`
+## Recent Changes (Feb 2026)
+- Crawler token hardcoded in `server.py` (no env var fallback)
+- `seed_database()` force-updates admin password hash on startup
+- `/api/crawler/ingest`: per-row try/except, currency/null coercion, `upsert` stores by domain
+- Brand rebrand: all "Daleel Pets" → "Daleel", removed pet-specific copy
+- HRM-SA theme: `App.css` + `index.css` rewritten, Login & Sidebar refactored, 69 stale teal refs swept across all pages via global sed
 
 ## Backlog
 - **P1** Resend email integration (alerts + weekly digest)
@@ -32,5 +52,8 @@ SaaS web application for Saudi pet store owners to track & monitor competitor st
 - **Refactor** Split large pages (`PriceIntelPage.jsx`, `InsightsPage.jsx`); organize backend into `routes/` and `models/`
 
 ## Credentials
-- Admin: `admin@daleelpets.com` / `BGv8ZcRYrBTPlJFHHhZQ3Q`
+- Admin: `admin@daleelpets.com` / `BGv8ZcRYrBTPlJFHHhZQ3Q` (kept unchanged — live auth credential)
 - Crawler token (hardcoded): `zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO`
+
+## Preview URL
+https://saudi-pets-monitor.preview.emergentagent.com

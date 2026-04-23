@@ -132,7 +132,7 @@ export default function OtpBanner() {
                 dir="ltr"
                 data-testid="otp-code-input"
               />
-              <div className={`text-sm font-mono ${countdown <= 60 ? "text-red-500" : "text-[#9CA3AF]"}`}>
+              <div className={`text-sm font-mono ${countdown <= 60 ? "text-red-500" : "text-[#A1E4DB]"}`}>
                 {countdown > 0
                   ? formatTime(countdown)
                   : (isRTL ? "انتهت صلاحية الرمز — اضغط لإعادة المحاولة" : "OTP Expired — click to retry")}
@@ -155,7 +155,7 @@ export default function OtpBanner() {
               size="sm"
               onClick={handleSubmit}
               disabled={submitting || code.length < 4 || countdown <= 0}
-              className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md"
+              className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md"
               data-testid="otp-submit-btn"
             >
               {submitting ? "..." : (isRTL ? "إرسال" : "Submit OTP")}

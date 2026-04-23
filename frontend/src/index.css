@@ -4,31 +4,32 @@
 
 @layer base {
     :root {
-        --background: 222 47% 4%;
-        --foreground: 0 0% 100%;
-        --card: 220 26% 9%;
+        /* HRM-SA palette mapped to shadcn HSL tokens */
+        --background: 224 52% 8%;        /* #090E1C */
+        --foreground: 0 0% 100%;          /* #FFFFFF */
+        --card: 182 52% 10%;              /* #0A2728 */
         --card-foreground: 0 0% 100%;
-        --popover: 220 26% 9%;
+        --popover: 182 52% 10%;
         --popover-foreground: 0 0% 100%;
-        --primary: 168 100% 42%;
-        --primary-foreground: 222 47% 6%;
-        --secondary: 217 19% 16%;
-        --secondary-foreground: 0 0% 100%;
-        --muted: 217 19% 16%;
-        --muted-foreground: 218 11% 65%;
-        --accent: 217 19% 16%;
-        --accent-foreground: 0 0% 100%;
+        --primary: 175 67% 36%;           /* #1E988E */
+        --primary-foreground: 0 0% 100%;
+        --secondary: 177 64% 17%;         /* #104745 */
+        --secondary-foreground: 173 75% 92%;
+        --muted: 177 64% 17%;             /* #104745 */
+        --muted-foreground: 172 59% 76%;  /* #A1E4DB */
+        --accent: 177 64% 17%;            /* #104745 */
+        --accent-foreground: 173 75% 92%;
         --destructive: 0 84% 60%;
         --destructive-foreground: 0 0% 100%;
-        --border: 0 0% 100% / 0.06;
-        --input: 0 0% 100% / 0.06;
-        --ring: 168 100% 42%;
-        --chart-1: 168 100% 42%;
-        --chart-2: 160 60% 45%;
-        --chart-3: 38 92% 50%;
-        --chart-4: 280 65% 60%;
-        --chart-5: 340 75% 55%;
-        --radius: 0.75rem;
+        --border: 176 65% 23%;            /* #13625F */
+        --input: 176 65% 23%;
+        --ring: 175 67% 36%;              /* #1E988E */
+        --chart-1: 175 67% 36%;           /* #1E988E primary */
+        --chart-2: 170 40% 59%;           /* #6AC1B5 secondary */
+        --chart-3: 177 64% 17%;           /* #104745 tertiary */
+        --chart-4: 172 59% 76%;           /* #A1E4DB */
+        --chart-5: 173 75% 92%;           /* #DAF8F4 */
+        --radius: 0.5rem;
     }
 }
 
@@ -36,14 +37,21 @@
     * { @apply border-border; }
     body {
         @apply bg-background text-foreground;
-        font-family: 'Plus Jakarta Sans', 'IBM Plex Arabic', sans-serif;
+        font-family: 'Inter', 'IBM Plex Sans Arabic', sans-serif;
         -webkit-font-smoothing: antialiased;
     }
     h1, h2, h3, h4, h5, h6 {
-        font-family: 'Plus Jakarta Sans', 'IBM Plex Arabic', sans-serif;
+        font-family: 'Space Grotesk', 'IBM Plex Sans Arabic', sans-serif;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
     }
-    html[lang="ar"] body, html[lang="ar"] h1, html[lang="ar"] h2, html[lang="ar"] h3 {
-        font-family: 'IBM Plex Arabic', 'Plus Jakarta Sans', sans-serif;
+    html[lang="ar"] body,
+    html[lang="ar"] h1, html[lang="ar"] h2, html[lang="ar"] h3,
+    html[lang="ar"] h4, html[lang="ar"] h5, html[lang="ar"] h6 {
+        font-family: 'DIN Next LT Arabic', 'IBM Plex Sans Arabic', sans-serif;
+        letter-spacing: 0;
+        text-transform: none;
     }
 }
 

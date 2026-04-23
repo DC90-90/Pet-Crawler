@@ -96,20 +96,20 @@ export default function AlertsPage() {
     return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
   };
 
-  if (loading) return <div className="p-6 text-sm text-[#9CA3AF]">{t("loading")}</div>;
+  if (loading) return <div className="p-6 text-sm text-[#A1E4DB]">{t("loading")}</div>;
 
   return (
     <div className="p-6 space-y-5" data-testid="alerts-page">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">Alerts</h1>
-          <p className="text-sm text-[#9CA3AF] mt-0.5">Monitor price changes and stock events</p>
+          <p className="text-sm text-[#A1E4DB] mt-0.5">Monitor price changes and stock events</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={handleCheck} disabled={checking} className="rounded-md text-xs" data-testid="check-alerts-btn">
             <RefreshCw className={`w-3.5 h-3.5 me-1.5 ${checking ? "animate-sync" : ""}`} />Check Now
           </Button>
-          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md text-xs" data-testid="create-alert-btn">
+          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md text-xs" data-testid="create-alert-btn">
             <Plus className="w-3.5 h-3.5 me-1.5" />Create Alert
           </Button>
         </div>
@@ -117,43 +117,43 @@ export default function AlertsPage() {
 
       {/* KPI Row */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Active Alerts</p><p className="text-2xl font-bold text-white mt-1">{alerts.filter((a) => a.is_active).length}</p></div>
-        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Events (30d)</p><p className="text-2xl font-bold text-white mt-1">{feed.length}</p></div>
-        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#9CA3AF]">Total Alerts</p><p className="text-2xl font-bold text-white mt-1">{alerts.length}</p></div>
+        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Active Alerts</p><p className="text-2xl font-bold text-white mt-1">{alerts.filter((a) => a.is_active).length}</p></div>
+        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Events (30d)</p><p className="text-2xl font-bold text-white mt-1">{feed.length}</p></div>
+        <div className="kpi-card"><p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Total Alerts</p><p className="text-2xl font-bold text-white mt-1">{alerts.length}</p></div>
       </div>
 
       <Tabs defaultValue="alerts" className="w-full">
-        <TabsList className="bg-[#111827]/80/5 p-1 rounded-md">
-          <TabsTrigger value="alerts" className="text-xs rounded-md data-[state=active]:bg-[#111827]/80 data-[state=active]:shadow-sm">My Alerts ({alerts.length})</TabsTrigger>
-          <TabsTrigger value="feed" className="text-xs rounded-md data-[state=active]:bg-[#111827]/80 data-[state=active]:shadow-sm">Alert Feed ({feed.length})</TabsTrigger>
+        <TabsList className="bg-[#0A2728]/80/5 p-1 rounded-md">
+          <TabsTrigger value="alerts" className="text-xs rounded-md data-[state=active]:bg-[#0A2728]/80 data-[state=active]:shadow-sm">My Alerts ({alerts.length})</TabsTrigger>
+          <TabsTrigger value="feed" className="text-xs rounded-md data-[state=active]:bg-[#0A2728]/80 data-[state=active]:shadow-sm">Alert Feed ({feed.length})</TabsTrigger>
         </TabsList>
 
         <TabsContent value="alerts" className="mt-3">
           <div className="glass-card rounded-md overflow-hidden">
             <Table className="dense-table">
               <TableHeader>
-                <TableRow className="bg-[#111827]/80/5">
-                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Type</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Product</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Threshold</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Channel</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Triggered</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF]">Status</TableHead>
-                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#9CA3AF] text-end">Actions</TableHead>
+                <TableRow className="bg-[#0A2728]/80/5">
+                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Type</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Product</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Threshold</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Channel</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Triggered</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Status</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB] text-end">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {alerts.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-12 text-[#9CA3AF] text-sm">No alerts configured. Create your first alert.</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={7} className="text-center py-12 text-[#A1E4DB] text-sm">No alerts configured. Create your first alert.</TableCell></TableRow>
                 ) : alerts.map((a) => (
                   <TableRow key={a.id} data-testid={`alert-row-${a.id}`}>
                     <TableCell><div className="flex items-center gap-1.5"><AlertTypeIcon type={a.alert_type} /><span className="text-xs capitalize">{a.alert_type.replace("_", " ")}</span></div></TableCell>
                     <TableCell>
-                      <div><p className="text-xs font-medium text-white">{a.product_name_ar || a.product_sku}</p><p className="text-[10px] text-[#9CA3AF] font-mono">{a.product_sku}</p></div>
+                      <div><p className="text-xs font-medium text-white">{a.product_name_ar || a.product_sku}</p><p className="text-[10px] text-[#A1E4DB] font-mono">{a.product_sku}</p></div>
                     </TableCell>
                     <TableCell><span className="text-xs">{a.threshold ? `${a.threshold}%` : "-"}</span></TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px] capitalize">{a.channel}</Badge></TableCell>
-                    <TableCell><span className="text-xs text-[#9CA3AF]">{a.triggered_count || 0}x</span></TableCell>
+                    <TableCell><span className="text-xs text-[#A1E4DB]">{a.triggered_count || 0}x</span></TableCell>
                     <TableCell>
                       <Badge variant="outline" className={`text-[10px] ${a.is_active ? "bg-green-50 text-green-700 border-green-200" : "bg-gray-50 text-gray-500 border-gray-200"}`}>
                         {a.is_active ? "Active" : "Paused"}
@@ -179,20 +179,20 @@ export default function AlertsPage() {
         <TabsContent value="feed" className="mt-3">
           <div className="glass-card rounded-md overflow-hidden">
             {feed.length === 0 ? (
-              <div className="text-center py-12 text-[#9CA3AF] text-sm">No alert events in the last 30 days</div>
+              <div className="text-center py-12 text-[#A1E4DB] text-sm">No alert events in the last 30 days</div>
             ) : (
               <div className="divide-y divide-[#E5E7EB]">
                 {feed.map((ev) => (
-                  <div key={ev.id} className="flex items-center gap-4 px-4 py-3 hover:bg-[#111827]/80/5 transition-colors" data-testid={`feed-event-${ev.id}`}>
+                  <div key={ev.id} className="flex items-center gap-4 px-4 py-3 hover:bg-[#0A2728]/80/5 transition-colors" data-testid={`feed-event-${ev.id}`}>
                     <AlertTypeIcon type={ev.alert_type} />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-white">
                         <span className="capitalize">{ev.alert_type?.replace("_", " ")}</span> - <span className="font-mono">{ev.sku}</span>
-                        {ev.store_name && <span className="text-[#9CA3AF]"> at {ev.store_name}</span>}
+                        {ev.store_name && <span className="text-[#A1E4DB]"> at {ev.store_name}</span>}
                       </p>
-                      <p className="text-[10px] text-[#9CA3AF]">{ev.old_value} &rarr; {ev.new_value}</p>
+                      <p className="text-[10px] text-[#A1E4DB]">{ev.old_value} &rarr; {ev.new_value}</p>
                     </div>
-                    <span className="text-[10px] text-[#9CA3AF] shrink-0">{formatDate(ev.triggered_at)}</span>
+                    <span className="text-[10px] text-[#A1E4DB] shrink-0">{formatDate(ev.triggered_at)}</span>
                   </div>
                 ))}
               </div>
@@ -241,7 +241,7 @@ export default function AlertsPage() {
           </div>
           <DialogFooter className="relative z-[60]">
             <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="rounded-md" type="button">{t("btn_cancel")}</Button>
-            <Button size="sm" onClick={handleCreate} className="bg-[#00D4B4] hover:bg-[#00E5C3] text-white rounded-md" data-testid="alert-save-btn" type="button">Create Alert</Button>
+            <Button size="sm" onClick={handleCreate} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md" data-testid="alert-save-btn" type="button">Create Alert</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

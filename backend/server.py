@@ -57,7 +57,7 @@ CRAWLER_TOKEN = "zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGj
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Daleel Pets API")
+app = FastAPI(title="Daleel API")
 router = APIRouter(prefix="/api")
 
 @router.get("/debug/token")
@@ -522,7 +522,7 @@ def get_stock_signal(qty):
 async def seed_database():
     if await db.stores.count_documents({}) > 0:
         return
-    logger.info("Seeding Daleel Pets database...")
+    logger.info("Seeding Daleel database...")
     random.seed(42)
     now = datetime.now(timezone.utc)
 
@@ -619,7 +619,7 @@ async def seed_database():
     # Write test credentials
     creds_path = Path("/app/memory/test_credentials.md")
     creds_path.parent.mkdir(exist_ok=True)
-    creds_path.write_text(f"# Daleel Pets Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_pw}\n- Role: admin\n\n## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n")
+    creds_path.write_text(f"# Daleel Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_pw}\n- Role: admin\n\n## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n")
 
     logger.info(f"Seeded {len(STORES_SEED)} stores, {len(all_products_data)} products, {len(all_snapshots)} snapshots")
 
@@ -3296,7 +3296,7 @@ async def get_product_stats(user=Depends(get_user)):
 # ── Root ────────────────────────────────────────────────────
 @router.get("/")
 async def root():
-    return {"message": "Daleel Pets API - دليل بيتس"}
+    return {"message": "Daleel API — دليل"}
 
 # ── App Setup ───────────────────────────────────────────────
 app.include_router(router)
