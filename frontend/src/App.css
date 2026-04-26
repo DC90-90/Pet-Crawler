@@ -81,7 +81,17 @@ html[data-theme="light"] .dense-table tbody tr { background-color: var(--hrm-car
 html[data-theme="light"] .dense-table tbody tr:hover { background-color: var(--hrm-elevated) !important; }
 html[data-theme="light"] .dense-table thead tr { background-color: var(--hrm-elevated) !important; }
 html[data-theme="light"] .dense-table thead th { color: var(--hrm-text) !important; }
+html[data-theme="light"] [data-testid="app-layout"] { background: var(--hrm-bg) !important; }
 html[data-theme="light"] aside[data-testid="sidebar-nav"] { background: var(--hrm-bg) !important; border-color: var(--hrm-border) !important; }
+html[data-theme="light"] aside[data-testid="sidebar-nav"] h1,
+html[data-theme="light"] aside[data-testid="sidebar-nav"] span,
+html[data-theme="light"] aside[data-testid="sidebar-nav"] p,
+html[data-theme="light"] aside[data-testid="sidebar-nav"] button,
+html[data-theme="light"] aside[data-testid="sidebar-nav"] a { color: var(--hrm-text) !important; }
+html[data-theme="light"] aside[data-testid="sidebar-nav"] [style*="#A1E4DB"],
+html[data-theme="light"] aside[data-testid="sidebar-nav"] p[style*="#A1E4DB"] { color: var(--hrm-muted) !important; }
+html[data-theme="light"] aside[data-testid="sidebar-nav"] [style*="#1E988E"] { color: var(--hrm-accent) !important; }
+html[data-theme="light"] aside[data-testid="sidebar-nav"] div[style*="#13625F"] { border-color: var(--hrm-border) !important; }
 html[data-theme="light"] input[type="date"] { color-scheme: light !important; background: var(--hrm-card) !important; color: var(--hrm-text) !important; }
 html[data-theme="light"] .hrm-input { background: var(--hrm-card) !important; color: var(--hrm-text) !important; border-color: var(--hrm-border) !important; }
 html[data-theme="light"] .stock-high { color: #047857 !important; }

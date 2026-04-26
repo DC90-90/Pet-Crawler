@@ -1,8 +1,8 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Target } from "lucide-react";
-import { useState } from "react";
+import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Target, Sun, Moon } from "lucide-react";
+import { useState, useEffect } from "react";
 
 const navItems = [
   { to: "/", icon: Package, labelKey: "nav_products", label: "Dashboard" },
@@ -19,6 +19,17 @@ export default function Sidebar() {
   const { logout, user } = useAuth();
   const { t, toggleLang, lang, isRTL } = useI18n();
   const [collapsed, setCollapsed] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === "undefined") return "dark";
+    return localStorage.getItem("daleel_theme") || "dark";
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("daleel_theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
   const w = collapsed ? "w-[68px]" : "w-[240px]";
 
@@ -85,6 +96,22 @@ export default function Sidebar() {
         >
           <Languages className="w-3.5 h-3.5 shrink-0" />
           {!collapsed && t("lang_switch")}
+        </button>
+        <button
+          onClick={toggleTheme}
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          className={`flex items-center gap-2 w-full px-3 py-2 rounded text-xs transition-all hover:bg-[#104745]/60 ${collapsed ? "justify-center" : ""}`}
+          style={{ color: "#A1E4DB" }}
+          data-testid="theme-toggle-btn"
+        >
+          {theme === "dark" ? <Sun className="w-3.5 h-3.5 shrink-0" /> : <Moon className="w-3.5 h-3.5 shrink-0" />}
+          {!collapsed && (
+            <span data-testid="theme-toggle-label">
+              {theme === "dark"
+                ? (isRTL ? "الوضع النهاري" : "Light Mode")
+                : (isRTL ? "الوضع الليلي" : "Dark Mode")}
+            </span>
+          )}
         </button>
         <NavLink
           to="/settings"
