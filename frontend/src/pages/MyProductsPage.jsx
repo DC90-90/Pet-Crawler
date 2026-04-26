@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
-import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown } from "lucide-react";
+import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -155,14 +155,51 @@ export default function MyProductsPage() {
               <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#A1E4DB] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : (
               data.products.map((p) => (
-                <TableRow key={p.sku} className="cursor-pointer" onClick={() => setSelectedSku(p.sku)} data-testid={`product-row-${p.sku}`}>
+                <TableRow key={p.sku} className="cursor-pointer hover:bg-[#104745]/40" onClick={() => setSelectedSku(p.sku)} data-testid={`product-row-${p.sku}`}>
                   <TableCell>
-                    <div>
-                      <p className="text-sm font-medium text-white leading-tight">{p.name_ar}</p>
-                      <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        {p.product_url ? (
+                          <a
+                            href={p.product_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="block hover:text-[#6AC1B5] transition-colors"
+                            data-testid={`product-link-${p.sku}`}
+                            title={p.product_url}
+                          >
+                            <p className="text-sm font-medium text-white leading-tight inline-flex items-center gap-1">
+                              {p.name_ar}
+                              <ExternalLink className="w-3 h-3 opacity-60 flex-shrink-0" />
+                            </p>
+                            <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
+                          </a>
+                        ) : (
+                          <>
+                            <p className="text-sm font-medium text-white leading-tight">{p.name_ar}</p>
+                            <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
-                  <TableCell><span className="text-xs font-mono text-[#A1E4DB]">{p.sku}</span></TableCell>
+                  <TableCell>
+                    {p.product_url ? (
+                      <a
+                        href={p.product_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-xs font-mono text-[#A1E4DB] hover:text-[#6AC1B5]"
+                        data-testid={`product-sku-link-${p.sku}`}
+                      >
+                        {p.sku}
+                      </a>
+                    ) : (
+                      <span className="text-xs font-mono text-[#A1E4DB]">{p.sku}</span>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <div>
                       <span className="text-sm font-semibold text-white metric-number">{p.price} {t("sar")}</span>

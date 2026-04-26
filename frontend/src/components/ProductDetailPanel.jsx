@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
-import { X } from "lucide-react";
+import { X, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -129,7 +129,23 @@ export default function ProductDetailPanel({ sku, onClose }) {
                   <TableBody>
                     {product.store_prices?.map((sp) => (
                       <TableRow key={sp.store_id}>
-                        <TableCell className="text-xs font-medium">{sp.store_name}</TableCell>
+                        <TableCell className="text-xs font-medium">
+                          {sp.product_url ? (
+                            <a
+                              href={sp.product_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-white hover:text-[#6AC1B5] transition-colors"
+                              data-testid={`store-link-${sp.store_id}`}
+                              title={sp.product_url}
+                            >
+                              {sp.store_name}
+                              <ExternalLink className="w-3 h-3 opacity-60" />
+                            </a>
+                          ) : (
+                            sp.store_name
+                          )}
+                        </TableCell>
                         <TableCell>
                           <span className="text-xs font-semibold">{sp.price} SAR</span>
                           {sp.discount_pct > 0 && <span className="text-[10px] text-green-600 ms-1">-{sp.discount_pct}%</span>}

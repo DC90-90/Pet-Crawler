@@ -156,6 +156,23 @@ async def _finalize_crawl_log(db, crawl_log, store_id):
 
 
 # ── Raw Product Normalizer ───────────────────────────────────
+def _absolutize_url(raw_url, store_domain):
+    """Turn a raw URL value (full URL, path, or slug) into an absolute https URL on the store's domain."""
+    if not raw_url or not store_domain:
+        return ""
+    s = str(raw_url).strip()
+    if not s:
+        return ""
+    if s.startswith("http://") or s.startswith("https://"):
+        return s
+    if s.startswith("//"):
+        return "https:" + s
+    if s.startswith("/"):
+        return f"https://{store_domain}{s}"
+    # Treat as slug — Salla/Zid both expose products under /products/{slug}
+    return f"https://{store_domain}/products/{s}"
+
+
 def _normalize_raw_product(raw, store_name):
     """Normalize a single raw product dict from any source into a standard form."""
     name_ar = raw.get("name", raw.get("title", ""))
@@ -214,6 +231,20 @@ def _normalize_raw_product(raw, store_name):
     elif isinstance(imgs, dict):
         img_url = imgs.get("url", imgs.get("src", ""))
 
+    # Storefront product URL: try Salla/Zid common keys, then nested objects
+    product_url = (
+        raw.get("url")
+        or raw.get("permalink")
+        or raw.get("product_url")
+        or raw.get("link")
+        or raw.get("page_url")
+        or raw.get("product_page_url")
+    )
+    if not product_url:
+        urls_obj = raw.get("urls") or {}
+        if isinstance(urls_obj, dict):
+            product_url = urls_obj.get("customer") or urls_obj.get("store") or urls_obj.get("url") or ""
+    product_url = str(product_url or "").strip()
     return {
         "name_ar": name_ar,
         "sku": sku_raw,
@@ -223,6 +254,7 @@ def _normalize_raw_product(raw, store_name):
         "sold_count": max(0, sold_count),
         "in_stock": bool(in_stock),
         "img_url": img_url,
+        "product_url": product_url,
     }
 
 
@@ -230,8 +262,10 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
     """Process raw product data from any crawler tier into products + snapshots."""
     new_count = 0
     snap_count = 0
+    store_domain = store.get("domain", "")
     for raw in all_raw:
         norm = _normalize_raw_product(raw, store["name"])
+        product_url = _absolutize_url(norm.get("product_url"), store_domain)
 
         existing = await db.products.find_one({"sku": norm["sku"]})
         if not existing:
@@ -244,13 +278,19 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 "animal_type": guess_animal(norm["name_ar"]),
                 "weight_kg": extract_weight(norm["name_ar"]),
                 "image_url": norm["img_url"],
+                "product_url": product_url,
                 "first_seen_at": now.isoformat(),
             })
             new_count += 1
         else:
             pid = existing["id"]
+            patch = {}
             if norm["img_url"] and not existing.get("image_url"):
-                await db.products.update_one({"id": pid}, {"$set": {"image_url": norm["img_url"]}})
+                patch["image_url"] = norm["img_url"]
+            if product_url and not existing.get("product_url"):
+                patch["product_url"] = product_url
+            if patch:
+                await db.products.update_one({"id": pid}, {"$set": patch})
 
         disc_pct = round((1 - norm["price"] / norm["original_price"]) * 100) if norm["original_price"] > norm["price"] > 0 else 0
         await db.product_snapshots.insert_one({
@@ -265,6 +305,7 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "in_stock": norm["in_stock"],
             "qty_available": norm["qty"],
             "sold_count": norm["sold_count"],
+            "product_url": product_url,
             "source_tier": tier,
             "confidence_score": confidence,
             "crawled_at": now,

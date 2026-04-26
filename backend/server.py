@@ -1510,6 +1510,12 @@ async def my_products(
         ]
     products = await db.products.find(prod_query, {"_id": 0}).to_list(5000)
 
+    # Pull SKU → product_url from my_products (user's own store) and store domains for fallback search URLs
+    my_url_by_sku = {p["sku"]: p.get("product_url") for p in await db.my_products.find({}, {"_id": 0, "sku": 1, "product_url": 1}).to_list(10000) if p.get("product_url")}
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "domain": 1})
+    own_domain = own_store.get("domain") if own_store else None
+    store_domains = {s["id"]: s.get("domain") for s in await db.stores.find({}, {"_id": 0, "id": 1, "domain": 1}).to_list(200) if s.get("domain")}
+
     result = []
     total_sold = 0
     total_rev = 0.0
@@ -1519,6 +1525,28 @@ async def my_products(
         if not metrics:
             continue
         row = {**p, **metrics}
+
+        # Resolve product_url with priority:
+        # 1. my_products (user's own catalog URL)
+        # 2. db.products.product_url (last URL captured by any crawler/ingest)
+        # 3. Latest snapshot's product_url (per-store URL from any tracked store)
+        # 4. Fallback: own-store search URL by SKU, else first competitor's search URL
+        url = my_url_by_sku.get(p["sku"]) or p.get("product_url") or ""
+        if not url:
+            for snaps in stores_data.values():
+                snap_url = (snaps[-1] if snaps else {}).get("product_url")
+                if snap_url:
+                    url = snap_url
+                    break
+        if not url:
+            if own_domain:
+                url = f"https://{own_domain}/search?keyword={p['sku']}"
+            elif stores_data:
+                first_sid = next(iter(stores_data.keys()))
+                fd = store_domains.get(first_sid)
+                if fd:
+                    url = f"https://{fd}/search?keyword={p['sku']}"
+        row["product_url"] = url
         result.append(row)
         total_sold += metrics["qty_sold_est"]
         total_rev += metrics["revenue_est"]
@@ -1582,17 +1610,26 @@ async def get_product(sku: str, user=Depends(get_user)):
             "discount_pct": {"$first": "$discount_pct"},
             "qty_available": {"$first": "$qty_available"},
             "in_stock": {"$first": "$in_stock"},
+            "product_url": {"$first": "$product_url"},
             "source_tier": {"$first": "$source_tier"},
             "confidence_score": {"$first": "$confidence_score"},
             "crawled_at": {"$first": "$crawled_at"},
         }},
     ]
     store_prices = await db.product_snapshots.aggregate(pipeline).to_list(20)
+    # Look up store domains for fallback URL building
+    store_ids = [sp["_id"] for sp in store_prices]
+    domains = {s["id"]: s.get("domain") async for s in db.stores.find({"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1})}
     for sp in store_prices:
         sp["store_id"] = sp.pop("_id")
         sp["stock_signal"] = get_stock_signal(sp.get("qty_available", 0), in_stock=sp.get("in_stock"))
         if isinstance(sp.get("crawled_at"), datetime):
             sp["crawled_at"] = sp["crawled_at"].isoformat()
+        # Fallback: build a search URL on the competitor store using SKU
+        if not sp.get("product_url"):
+            d = domains.get(sp["store_id"])
+            if d:
+                sp["product_url"] = f"https://{d}/search?keyword={sku}"
 
     prices = [sp["price"] for sp in store_prices if sp["price"]]
     product["store_prices"] = store_prices
@@ -2584,7 +2621,7 @@ async def import_products(file: UploadFile = File(...), user=Depends(get_user)):
         if r not in col_map:
             raise HTTPException(400, f"Missing required column: {r}")
 
-    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1})
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1, "domain": 1})
     store_id = own_store["id"] if own_store else "own"
     now = datetime.now(timezone.utc)
     imported = 0
@@ -2632,6 +2669,18 @@ async def import_products(file: UploadFile = File(...), user=Depends(get_user)):
         images = str(g("images") or "")
         img_url = images.split(",")[0].strip() if images else ""
 
+        page_url = str(g("product_page_url") or "").strip()
+        product_url = ""
+        if page_url:
+            if page_url.startswith("http://") or page_url.startswith("https://"):
+                product_url = page_url
+            elif own_store and own_store.get("domain"):
+                domain = own_store["domain"]
+                if page_url.startswith("/"):
+                    product_url = f"https://{domain}{page_url}"
+                else:
+                    product_url = f"https://{domain}/products/{page_url}"
+
         doc = {
             "sku": sku, "barcode": barcode, "name_ar": name_ar, "name_en": name_en,
             "description_ar": desc_ar, "description_en": desc_en,
@@ -2639,7 +2688,9 @@ async def import_products(file: UploadFile = File(...), user=Depends(get_user)):
             "cost": round(cost, 2) if cost else None,
             "quantity": max(0, qty), "categories_ar": cats_ar, "categories_en": cats_en,
             "weight": weight_val, "weight_unit": weight_unit,
-            "image_url": img_url, "is_own_store": True, "store_id": store_id,
+            "image_url": img_url,
+            "product_url": product_url,
+            "is_own_store": True, "store_id": store_id,
             "imported_at": now.isoformat(),
         }
         await db.my_products.update_one({"sku": sku}, {"$set": doc}, upsert=True)
@@ -3033,6 +3084,17 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                 in_stock_raw = raw.get("in_stock")
                 in_stock = bool(in_stock_raw) if in_stock_raw is not None else (quantity > 0)
 
+                # Storefront product URL — accept full URL, path, or slug
+                raw_url = str(raw.get("product_url") or raw.get("url") or raw.get("permalink") or "").strip()
+                product_url = ""
+                if raw_url:
+                    if raw_url.startswith("http://") or raw_url.startswith("https://"):
+                        product_url = raw_url
+                    elif raw_url.startswith("/"):
+                        product_url = f"https://{payload.domain}{raw_url}"
+                    else:
+                        product_url = f"https://{payload.domain}/products/{raw_url}"
+
                 if price <= 0:
                     skipped += 1
                     continue
@@ -3053,6 +3115,7 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                         "barcode": barcode,
                         "brand": "", "category": "", "animal_type": "",
                         "weight_kg": 0, "image_url": "",
+                        "product_url": product_url,
                         "first_seen_at": now.isoformat(),
                     })
                     inserted += 1
@@ -3065,6 +3128,8 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                         update_fields["name_en"] = name_en
                     if barcode and not existing.get("barcode"):
                         update_fields["barcode"] = barcode
+                    if product_url and not existing.get("product_url"):
+                        update_fields["product_url"] = product_url
                     if update_fields:
                         await db.products.update_one({"id": pid}, {"$set": update_fields})
                     updated += 1
@@ -3079,6 +3144,7 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                     "original_price": round(original_price, 2),
                     "discount_pct": max(0, disc_pct),
                     "in_stock": in_stock,
+                    "product_url": product_url,
                     "qty_available": max(0, quantity),
                     "sold_count": sold_count,
                     "source_tier": 0,
