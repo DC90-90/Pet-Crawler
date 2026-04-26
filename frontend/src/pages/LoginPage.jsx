@@ -6,44 +6,6 @@ import api from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { ArrowRight } from "lucide-react";
 
-const HaramLogo = () => (
-  <svg
-    viewBox="0 0 300 340"
-    xmlns="http://www.w3.org/2000/svg"
-    style={{ width: 80, height: 90 }}
-    data-testid="haram-logo"
-  >
-    <defs>
-      <filter id="topglow" x="-80%" y="-80%" width="260%" height="260%">
-        <feGaussianBlur stdDeviation="10" result="blur" />
-        <feMerge>
-          <feMergeNode in="blur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-      <filter id="midglow" x="-40%" y="-40%" width="180%" height="180%">
-        <feGaussianBlur stdDeviation="4" result="blur" />
-        <feMerge>
-          <feMergeNode in="blur" />
-          <feMergeNode in="SourceGraphic" />
-        </feMerge>
-      </filter>
-    </defs>
-    <line x1="150" y1="88" x2="112" y2="158" stroke="#DAF8F4" strokeWidth="1" opacity="0.5" />
-    <line x1="150" y1="88" x2="196" y2="158" stroke="#DAF8F4" strokeWidth="1" opacity="0.5" />
-    <line x1="112" y1="171" x2="196" y2="171" stroke="#DAF8F4" strokeWidth="1" opacity="0.5" />
-    <line x1="118" y1="184" x2="88" y2="232" stroke="#DAF8F4" strokeWidth="1" opacity="0.4" />
-    <line x1="196" y1="184" x2="212" y2="232" stroke="#DAF8F4" strokeWidth="1" opacity="0.4" />
-    <line x1="88" y1="244" x2="212" y2="244" stroke="#DAF8F4" strokeWidth="1" opacity="0.4" />
-    <rect x="133" y="68" width="34" height="34" rx="3" fill="#A1E4DB" filter="url(#topglow)" />
-    <rect x="94" y="158" width="34" height="26" rx="2" fill="#1E988E" filter="url(#midglow)" />
-    <rect x="178" y="158" width="34" height="26" rx="2" fill="#104745" />
-    <rect x="72" y="228" width="28" height="22" rx="2" fill="#0A2728" />
-    <rect x="136" y="228" width="28" height="22" rx="2" fill="#0A2728" />
-    <rect x="200" y="228" width="28" height="22" rx="2" fill="#0A2728" />
-  </svg>
-);
-
 export default function LoginPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState("");
@@ -95,22 +57,23 @@ export default function LoginPage() {
       data-testid="login-page"
     >
       <div style={{ width: "100%", maxWidth: 420, margin: "0 auto" }}>
-        {/* Logo + tagline */}
-        <div className="flex flex-col items-center mb-8">
-          <HaramLogo />
-          <p
+        {/* Wordmark */}
+        <div className="flex flex-col items-center mb-10">
+          <h1
             style={{
               fontFamily: "'Space Grotesk', sans-serif",
-              fontSize: 11,
-              color: "#1E988E",
-              letterSpacing: "0.2em",
-              textAlign: "center",
-              marginTop: 8,
+              fontSize: 56,
+              fontWeight: 700,
+              letterSpacing: "0.05em",
+              textTransform: "uppercase",
+              color: "#FFFFFF",
+              margin: 0,
+              lineHeight: 1,
             }}
-            data-testid="login-tagline"
+            data-testid="login-wordmark"
           >
-            BUILD. SCALE. GROW.
-          </p>
+            Daleel
+          </h1>
         </div>
 
         {/* Login Card */}
