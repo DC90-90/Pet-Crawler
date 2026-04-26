@@ -48,13 +48,15 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
 - **Per-day date picker** on My Products (`day-picker-input`) — overrides 7/14/30/90D pills via `?on_date=YYYY-MM-DD`
 - **Product Detail panel speed-up** — single aggregated `/api/products/{sku}/full?days=30` replaces 3 round-trips; renders per-store sparklines + Recharts price-history chart
 - **Storefront deep-links** on every product row + every store row inside the detail panel
-- Tested via testing agent (iteration_12.json): 100% backend (16/16), 100% frontend (5/5), no issues
+- **Refactor (Feb 2026)** — extracted Pydantic models to `/app/backend/models/schemas.py` and shared helpers/constants to `/app/backend/core/utils.py`. Reduced `server.py` from 3661 → 3476 lines.
+- **Refactor (Feb 2026)** — split `PriceIntelPage.jsx` (530 lines) into 4 sub-components under `/app/frontend/src/components/priceIntel/`: `PriceIntelShared.jsx` (badges + level definitions), `PriceIntelHeader.jsx` (KPIs, distribution, guide, market position), `PriceIntelTabs.jsx` (5 tab tables), `PriceIntelDetailSheet.jsx` (drill-down sheet). Page is now 135 lines (~75% reduction).
+- Tested via testing agent (iteration_12 + iteration_13): 100% backend (38/38), 100% frontend, no issues
 
 ## Backlog
 - **P1** Resend email integration (alerts + weekly digest)
 - **P1** Multi-tenant role-based access
 - **P2** Webhook notifications (Slack/Telegram)
-- **Refactor** Split large pages (`PriceIntelPage.jsx`, `InsightsPage.jsx`); organize backend into `routes/` and `models/`
+- **Refactor (next pass)** Continue splitting `server.py` route handlers into `routes/` modules (auth, products, insights, alerts, stores, crawler, baseline, price-intel) — current pass extracted models + shared utils only
 
 ## Credentials
 - Admin: `admin@daleelpets.com` / `BGv8ZcRYrBTPlJFHHhZQ3Q` (kept unchanged — live auth credential)
