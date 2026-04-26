@@ -35,6 +35,7 @@ export default function MyProductsPage() {
   const [data, setData] = useState({ kpis: {}, products: [] });
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
+  const [onDate, setOnDate] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [sortBy, setSortBy] = useState("revenue_est");
@@ -45,11 +46,14 @@ export default function MyProductsPage() {
 
   const fetchData = useCallback(() => {
     setLoading(true);
-    api.get("/my-products", { params: { days, search: search || undefined, category: category !== "all" ? category : undefined, sort_by: sortBy, sort_order: sortOrder } })
+    const params = { search: search || undefined, category: category !== "all" ? category : undefined, sort_by: sortBy, sort_order: sortOrder };
+    if (onDate) params.on_date = onDate;
+    else params.days = days;
+    api.get("/my-products", { params })
       .then((r) => setData(r.data))
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [days, search, category, sortBy, sortOrder]);
+  }, [days, onDate, search, category, sortBy, sortOrder]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -100,10 +104,31 @@ export default function MyProductsPage() {
         <div className="flex gap-1" data-testid="date-range-picker">
           {RANGE_OPTIONS.map((d) => (
             <button key={d}
-              onClick={() => setDays(d)}
-              className={`text-xs rounded-full h-7 px-3 font-medium transition-all ${days === d ? "bg-[#1E988E] text-[#090E1C]" : "text-[#A1E4DB] hover:text-white hover:bg-white/5"}`}
+              onClick={() => { setDays(d); setOnDate(""); }}
+              className={`text-xs rounded-full h-7 px-3 font-medium transition-all ${!onDate && days === d ? "bg-[#1E988E] text-[#090E1C]" : "text-[#A1E4DB] hover:text-white hover:bg-white/5"}`}
               data-testid={`range-${d}d`}>{t(`d${d}`)}</button>
           ))}
+        </div>
+        <div className="flex items-center gap-2 ms-2 ps-2 border-s border-[#13625F]" data-testid="date-day-picker">
+          <input
+            type="date"
+            value={onDate}
+            onChange={(e) => setOnDate(e.target.value)}
+            max={new Date().toISOString().slice(0, 10)}
+            className="text-xs h-7 px-2 rounded bg-[#0A2728] border border-[#13625F] text-white focus:outline-none focus:border-[#1E988E]"
+            style={{ colorScheme: "dark" }}
+            data-testid="day-picker-input"
+            title="Filter to a specific day"
+          />
+          {onDate && (
+            <button
+              onClick={() => setOnDate("")}
+              className="text-[10px] uppercase tracking-wider text-[#A1E4DB] hover:text-white"
+              data-testid="day-picker-clear"
+            >
+              {isRTL ? "إلغاء" : "Clear"}
+            </button>
+          )}
         </div>
         <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#A1E4DB]" />

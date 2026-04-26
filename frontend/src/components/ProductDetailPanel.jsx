@@ -37,15 +37,14 @@ export default function ProductDetailPanel({ sku, onClose }) {
   useEffect(() => {
     if (!sku) { setProduct(null); return; }
     setLoading(true);
-    Promise.all([
-      api.get(`/products/${sku}`),
-      api.get(`/products/${sku}/history?days=30`),
-      api.get(`/products/${sku}/velocity?days=14`),
-    ]).then(([p, h, v]) => {
-      setProduct(p.data);
-      setHistory(h.data.history || {});
-      setVelocity(v.data);
-    }).catch(console.error).finally(() => setLoading(false));
+    api.get(`/products/${encodeURIComponent(sku)}/full?days=30`)
+      .then(({ data }) => {
+        setProduct(data);
+        setHistory(data.history || {});
+        setVelocity(data.velocity || null);
+      })
+      .catch(console.error)
+      .finally(() => setLoading(false));
   }, [sku]);
 
   // Build price history chart data
@@ -122,29 +121,30 @@ export default function ProductDetailPanel({ sku, onClose }) {
                     <TableRow className="bg-[#0A2728]/80/5">
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Store</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Price</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">30-day Trend</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Stock</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Tier</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {product.store_prices?.map((sp) => (
+                    {product.store_prices?.map((sp) => {
+                      const series = (history?.[sp.store_name] || []).map((h) => h.price).filter((p) => p > 0);
+                      const minP = series.length ? Math.min(...series) : 0;
+                      const maxP = series.length ? Math.max(...series) : 0;
+                      const range = maxP - minP || 1;
+                      const points = series.length > 1
+                        ? series.map((p, i) => `${(i / (series.length - 1)) * 100},${30 - ((p - minP) / range) * 28 - 1}`).join(" ")
+                        : "";
+                      const trendPct = series.length > 1 ? Math.round(((series[series.length - 1] - series[0]) / series[0]) * 100) : 0;
+                      return (
                       <TableRow key={sp.store_id}>
                         <TableCell className="text-xs font-medium">
                           {sp.product_url ? (
-                            <a
-                              href={sp.product_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 text-white hover:text-[#6AC1B5] transition-colors"
-                              data-testid={`store-link-${sp.store_id}`}
-                              title={sp.product_url}
-                            >
+                            <a href={sp.product_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-white hover:text-[#6AC1B5] transition-colors" data-testid={`store-link-${sp.store_id}`} title={sp.product_url}>
                               {sp.store_name}
                               <ExternalLink className="w-3 h-3 opacity-60" />
                             </a>
-                          ) : (
-                            sp.store_name
-                          )}
+                          ) : (sp.store_name)}
                         </TableCell>
                         <TableCell>
                           <span className="text-xs font-semibold">{sp.price} SAR</span>
@@ -157,6 +157,16 @@ export default function ProductDetailPanel({ sku, onClose }) {
                           )}
                         </TableCell>
                         <TableCell>
+                          {points ? (
+                            <div className="inline-flex items-center gap-2" data-testid={`store-trend-${sp.store_id}`}>
+                              <svg width="100" height="30" viewBox="0 0 100 30" className="overflow-visible">
+                                <polyline fill="none" stroke={trendPct > 5 ? "#EF4444" : trendPct < -5 ? "#10B981" : "#6AC1B5"} strokeWidth="1.5" points={points} />
+                              </svg>
+                              <span className={`text-[10px] font-mono ${trendPct > 0 ? "text-red-400" : trendPct < 0 ? "text-emerald-400" : "text-[#A1E4DB]"}`}>{trendPct > 0 ? "+" : ""}{trendPct}%</span>
+                            </div>
+                          ) : (<span className="text-[10px] text-[#A1E4DB]/60">—</span>)}
+                        </TableCell>
+                        <TableCell>
                           <StockBadge signal={sp.stock_signal} />
                           {sp.tier4_qty_exact != null && (
                             <span className="text-[10px] text-emerald-600 ms-1 font-medium">{sp.tier4_qty_exact} exact</span>
@@ -164,7 +174,8 @@ export default function ProductDetailPanel({ sku, onClose }) {
                         </TableCell>
                         <TableCell><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${sp.source_tier === 4 ? "bg-emerald-50 text-emerald-700" : `tier-${sp.source_tier}`}`}>T{sp.source_tier}</span></TableCell>
                       </TableRow>
-                    ))}
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>

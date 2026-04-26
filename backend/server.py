@@ -1484,6 +1484,9 @@ def compute_product_metrics(snapshots_by_store, days):
 @router.get("/my-products")
 async def my_products(
     days: int = Query(30),
+    on_date: Optional[str] = Query(None, description="Filter to a specific calendar day (YYYY-MM-DD); overrides 'days'"),
+    date_from: Optional[str] = Query(None, description="Inclusive lower-bound date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="Inclusive upper-bound date (YYYY-MM-DD)"),
     category: Optional[str] = Query(None),
     animal_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
@@ -1491,8 +1494,21 @@ async def my_products(
     sort_order: str = Query("desc"),
     user=Depends(get_user)
 ):
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    snap_query = {"crawled_at": {"$gte": since}}
+    # Resolve date window
+    if on_date:
+        start = datetime.fromisoformat(on_date).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+        snap_query = {"crawled_at": {"$gte": start, "$lt": end}}
+        effective_days = 1
+    elif date_from or date_to:
+        df = datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc) if date_from else (datetime.now(timezone.utc) - timedelta(days=days))
+        dt = (datetime.fromisoformat(date_to).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc) + timedelta(days=1)) if date_to else datetime.now(timezone.utc)
+        snap_query = {"crawled_at": {"$gte": df, "$lt": dt}}
+        effective_days = max(1, (dt - df).days)
+    else:
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        snap_query = {"crawled_at": {"$gte": since}}
+        effective_days = days
     snapshots = await db.product_snapshots.find(snap_query, {"_id": 0}).to_list(50000)
 
     # Group snapshots by sku, then by store
@@ -1528,7 +1544,7 @@ async def my_products(
     total_rev = 0.0
     for p in products:
         stores_data = by_sku.get(p["sku"], {})
-        metrics = compute_product_metrics(stores_data, days)
+        metrics = compute_product_metrics(stores_data, effective_days)
         if not metrics:
             continue
         row = {**p, **metrics}
@@ -1661,6 +1677,92 @@ async def product_history(sku: str, days: int = Query(30), user=Depends(get_user
             "qty": s.get("qty_available", 0),
         })
     return {"history": by_store}
+
+
+@router.get("/products/{sku}/full")
+async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_user)):
+    """Combined endpoint — returns product + store_prices + history + velocity in a single payload.
+    Built to replace 3 separate endpoint round-trips for the Product Detail panel.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    product = await db.products.find_one({"sku": sku}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Product not found")
+
+    snapshots = await db.product_snapshots.find(
+        {"sku": sku, "crawled_at": {"$gte": since}}, {"_id": 0}
+    ).sort("crawled_at", 1).to_list(5000)
+
+    # Group by store_id
+    by_store_id = {}
+    store_id_to_name = {}
+    for s in snapshots:
+        sid = s["store_id"]
+        store_id_to_name[sid] = s.get("store_name", sid)
+        by_store_id.setdefault(sid, []).append(s)
+
+    # Per-store latest snapshot + price history series
+    store_ids = list(by_store_id.keys())
+    domains = {s["id"]: s.get("domain") async for s in db.stores.find({"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1})}
+
+    store_prices = []
+    history_by_store = {}
+    for sid, snaps in by_store_id.items():
+        latest = snaps[-1]
+        url = latest.get("product_url") or ""
+        if not url:
+            d = domains.get(sid)
+            if d:
+                url = f"https://{d}/search?keyword={sku}"
+        store_prices.append({
+            "store_id": sid,
+            "store_name": store_id_to_name[sid],
+            "price": latest.get("price"),
+            "original_price": latest.get("original_price"),
+            "discount_pct": latest.get("discount_pct"),
+            "qty_available": latest.get("qty_available"),
+            "in_stock": latest.get("in_stock"),
+            "stock_signal": get_stock_signal(latest.get("qty_available", 0), in_stock=latest.get("in_stock")),
+            "source_tier": latest.get("source_tier"),
+            "confidence_score": latest.get("confidence_score"),
+            "product_url": url,
+            "crawled_at": latest["crawled_at"].isoformat() if isinstance(latest.get("crawled_at"), datetime) else latest.get("crawled_at"),
+        })
+        # Build per-store price history points
+        history_by_store[store_id_to_name[sid]] = [{
+            "date": s["crawled_at"].isoformat() if isinstance(s["crawled_at"], datetime) else s["crawled_at"],
+            "price": s.get("price"),
+            "qty": s.get("qty_available", 0),
+        } for s in snaps]
+
+    prices = [sp["price"] for sp in store_prices if sp.get("price")]
+    product["store_prices"] = store_prices
+    product["price_range"] = {"min": min(prices), "max": max(prices), "avg": round(statistics.mean(prices), 2)} if prices else {}
+    product["total_volume"] = sum(sp.get("qty_available", 0) or 0 for sp in store_prices)
+    product["history"] = history_by_store
+
+    # Velocity (lightweight: per-day total units summed across stores using net depletion)
+    daily_units = {}
+    daily_revenue = {}
+    for sid, snaps in by_store_id.items():
+        valid = [(s["crawled_at"], s.get("qty_available", 0) or 0, s.get("price") or 0) for s in snaps if (s.get("qty_available", 0) or 0) not in PLACEHOLDER_QTY_VALUES and (s.get("qty_available", 0) or 0) <= 200]
+        if len(valid) < 3:
+            continue
+        for i in range(1, len(valid)):
+            prev_q, curr_q = valid[i - 1][1], valid[i][1]
+            if curr_q >= prev_q:
+                continue
+            d = min(prev_q - curr_q, MAX_QTY_DELTA_PER_INTERVAL)
+            ca = valid[i][0]
+            day_key = ca.strftime("%Y-%m-%d") if isinstance(ca, datetime) else str(ca)[:10]
+            daily_units[day_key] = daily_units.get(day_key, 0) + d
+            daily_revenue[day_key] = daily_revenue.get(day_key, 0) + d * valid[i][2]
+
+    velocity = [{"date": k, "units": daily_units.get(k, 0), "revenue": round(daily_revenue.get(k, 0), 2)} for k in sorted(set(daily_units.keys()) | set(daily_revenue.keys()))]
+    total_units = sum(daily_units.values())
+    product["velocity"] = {"velocity": velocity, "avg_daily": round(total_units / max(days, 1), 1), "total_units": total_units}
+    return product
 
 @router.get("/products/{sku}/velocity")
 async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_user)):

@@ -1,6 +1,6 @@
 /* ── Daleel — HRM-SA Brand Identity ─────────────────── */
 :root {
-  /* HRM-SA palette */
+  /* HRM-SA palette (DARK — default) */
   --hrm-bg: #090E1C;
   --hrm-card: #0A2728;
   --hrm-elevated: #104745;
@@ -29,6 +29,65 @@
   --dp-warning: #F59E0B;
   --dp-danger: #EF4444;
 }
+
+/* ── LIGHT THEME OVERRIDES ─────────────────────────────── */
+html[data-theme="light"] {
+  --hrm-bg: #FFFFFF;
+  --hrm-card: #F4F8F7;
+  --hrm-elevated: #E8F1EE;
+  --hrm-border: #C9DDD9;
+  --hrm-accent: #0F7A72;
+  --hrm-accent-light: #1E988E;
+  --hrm-muted: #4B6864;
+  --hrm-near-white: #1A2925;
+  --hrm-text: #0A1A1F;
+
+  --dp-bg: var(--hrm-bg);
+  --dp-surface: var(--hrm-card);
+  --dp-surface-hover: var(--hrm-elevated);
+  --dp-sidebar: var(--hrm-bg);
+  --dp-navy: var(--hrm-bg);
+  --dp-teal: var(--hrm-accent);
+  --dp-text: var(--hrm-text);
+  --dp-muted: var(--hrm-muted);
+  --dp-border: var(--hrm-border);
+}
+
+html[data-theme="light"] body {
+  background: var(--hrm-bg) !important;
+  color: var(--hrm-text) !important;
+}
+html[data-theme="light"] h1,
+html[data-theme="light"] h2,
+html[data-theme="light"] h3,
+html[data-theme="light"] h4,
+html[data-theme="light"] h5,
+html[data-theme="light"] h6 { color: var(--hrm-text) !important; }
+html[data-theme="light"] .text-white { color: var(--hrm-text) !important; }
+html[data-theme="light"] .text-\[\#A1E4DB\] { color: var(--hrm-muted) !important; }
+html[data-theme="light"] .text-\[\#6AC1B5\] { color: var(--hrm-accent) !important; }
+html[data-theme="light"] .bg-\[\#0A2728\] { background-color: var(--hrm-card) !important; }
+html[data-theme="light"] .bg-\[\#090E1C\] { background-color: var(--hrm-bg) !important; }
+html[data-theme="light"] .bg-\[\#104745\] { background-color: var(--hrm-elevated) !important; }
+html[data-theme="light"] .bg-\[\#104745\]\/40 { background-color: var(--hrm-elevated) !important; }
+html[data-theme="light"] .bg-\[\#104745\]\/60 { background-color: var(--hrm-elevated) !important; }
+html[data-theme="light"] .border-\[\#13625F\] { border-color: var(--hrm-border) !important; }
+html[data-theme="light"] .border-\[\#1E988E\] { border-color: var(--hrm-accent) !important; }
+html[data-theme="light"] .text-\[\#1E988E\] { color: var(--hrm-accent) !important; }
+html[data-theme="light"] .text-\[\#FFFFFF\] { color: var(--hrm-text) !important; }
+html[data-theme="light"] .glass-card,
+html[data-theme="light"] .kpi-card { background-color: var(--hrm-card) !important; border-color: var(--hrm-border) !important; }
+html[data-theme="light"] .dense-table tbody tr { background-color: var(--hrm-card) !important; }
+html[data-theme="light"] .dense-table tbody tr:hover { background-color: var(--hrm-elevated) !important; }
+html[data-theme="light"] .dense-table thead tr { background-color: var(--hrm-elevated) !important; }
+html[data-theme="light"] .dense-table thead th { color: var(--hrm-text) !important; }
+html[data-theme="light"] aside[data-testid="sidebar-nav"] { background: var(--hrm-bg) !important; border-color: var(--hrm-border) !important; }
+html[data-theme="light"] input[type="date"] { color-scheme: light !important; background: var(--hrm-card) !important; color: var(--hrm-text) !important; }
+html[data-theme="light"] .hrm-input { background: var(--hrm-card) !important; color: var(--hrm-text) !important; border-color: var(--hrm-border) !important; }
+html[data-theme="light"] .stock-high { color: #047857 !important; }
+html[data-theme="light"] .stock-medium { color: #B45309 !important; }
+html[data-theme="light"] .stock-low { color: #C2410C !important; }
+html[data-theme="light"] .stock-oos { color: #B91C1C !important; }
 
 /* ── Typography ─────────────────────────────── */
 html {
