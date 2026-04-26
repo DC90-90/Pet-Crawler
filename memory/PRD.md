@@ -44,6 +44,11 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
 - `/api/crawler/ingest`: per-row try/except, currency/null coercion, `upsert` stores by domain
 - Brand rebrand: all "Daleel Pets" → "Daleel", removed pet-specific copy
 - HRM-SA theme: `App.css` + `index.css` rewritten, Login & Sidebar refactored, 69 stale teal refs swept across all pages via global sed
+- **Light/Dark theme toggle** (Feb 2026) — Sun/Moon button in Sidebar (`data-testid="theme-toggle-btn"`), persists to `localStorage.daleel_theme`, no-flash inline init script in `public/index.html`. CSS overrides under `html[data-theme="light"]` cover sidebar, KPI cards, dense table, glass-card, and inputs.
+- **Per-day date picker** on My Products (`day-picker-input`) — overrides 7/14/30/90D pills via `?on_date=YYYY-MM-DD`
+- **Product Detail panel speed-up** — single aggregated `/api/products/{sku}/full?days=30` replaces 3 round-trips; renders per-store sparklines + Recharts price-history chart
+- **Storefront deep-links** on every product row + every store row inside the detail panel
+- Tested via testing agent (iteration_12.json): 100% backend (16/16), 100% frontend (5/5), no issues
 
 ## Backlog
 - **P1** Resend email integration (alerts + weekly digest)
