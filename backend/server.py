@@ -1668,21 +1668,45 @@ async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_use
         by_store.setdefault(s["store_id"], []).append(s)
 
     daily_sales = {}
+    daily_revenue = {}
     for sid, snaps in by_store.items():
+        if len(snaps) < 2:
+            continue
+        # Per-pair deltas, but apply the same defensive filters as _estimate_sales_from_snapshots:
+        # skip placeholder qty values, cap delta per interval, prefer sold_count diff when available.
+        sold_counts = [s.get("sold_count", 0) or 0 for s in snaps]
+        use_sold_counter = max(sold_counts) > 0
         for i in range(1, len(snaps)):
-            prev_q = snaps[i - 1].get("qty_available", 0)
-            curr_q = snaps[i].get("qty_available", 0)
-            delta = prev_q - curr_q
-            if delta > 0:
-                ca = snaps[i]["crawled_at"]
-                date_key = ca.strftime("%Y-%m-%d") if isinstance(ca, datetime) else ca[:10]
+            ca = snaps[i]["crawled_at"]
+            date_key = ca.strftime("%Y-%m-%d") if isinstance(ca, datetime) else ca[:10]
+            price = snaps[i].get("price") or 0
+            if use_sold_counter:
+                inc = max(0, (sold_counts[i] - sold_counts[i - 1]))
+                inc = min(inc, MAX_DAILY_SALES_PER_SKU)  # daily-per-SKU cap
+                if inc > 0:
+                    daily_sales[date_key] = daily_sales.get(date_key, 0) + inc
+                    daily_revenue[date_key] = daily_revenue.get(date_key, 0) + inc * price
+            else:
+                prev_q = snaps[i - 1].get("qty_available", 0) or 0
+                curr_q = snaps[i].get("qty_available", 0) or 0
+                if prev_q in PLACEHOLDER_QTY_VALUES or curr_q in PLACEHOLDER_QTY_VALUES or prev_q > 500:
+                    continue
+                delta = prev_q - curr_q
+                if delta <= 0:
+                    continue
+                delta = min(delta, MAX_QTY_DELTA_PER_INTERVAL)
                 daily_sales[date_key] = daily_sales.get(date_key, 0) + delta
+                daily_revenue[date_key] = daily_revenue.get(date_key, 0) + delta * price
 
     # Fill in missing days
     velocity_data = []
     for d in range(days, -1, -1):
         date = (datetime.now(timezone.utc) - timedelta(days=d)).strftime("%Y-%m-%d")
-        velocity_data.append({"date": date, "units": daily_sales.get(date, 0)})
+        velocity_data.append({
+            "date": date,
+            "units": daily_sales.get(date, 0),
+            "revenue": round(daily_revenue.get(date, 0), 2),
+        })
 
     # 7-day rolling avg
     total_units = sum(v["units"] for v in velocity_data)
@@ -2387,41 +2411,70 @@ async def store_profile(store_id: str, user=Depends(get_user)):
 
     avg_disc = round(statistics.mean([l["discount_pct"] for l in latest if l["discount_pct"] > 0]) if any(l["discount_pct"] > 0 for l in latest) else 0, 1)
 
-    # Revenue estimation from depletion over 90 days
+    # Revenue estimation over 90 days — use defensive sales algorithm
     snaps_90d = await db.product_snapshots.find({"store_id": store_id, "crawled_at": {"$gte": since_90d}}, {"_id": 0}).sort("crawled_at", 1).to_list(50000)
     by_sku = {}
     for s in snaps_90d:
         by_sku.setdefault(s["sku"], []).append(s)
 
-    total_rev = 0
+    total_rev = 0.0
     total_sold = 0
     weekly_rev = {}
+    daily_rev = {}
     sku_sales = {}
 
     for sku, slist in by_sku.items():
+        if len(slist) < 2:
+            continue
+        # Estimate aggregate sales (units + revenue) for this SKU over the window using the defensible method
+        units_total, rev_total, _ = _estimate_sales_from_snapshots(slist, days=90)
+        if units_total <= 0:
+            continue
+        total_sold += units_total
+        total_rev += rev_total
+        sku_sales[sku] = sku_sales.get(sku, 0) + units_total
+
+        # For trend distribution, attribute deltas to their snapshot date — same algorithm, per-pair, with same caps
+        sold_counts = [s.get("sold_count", 0) or 0 for s in slist]
+        use_sold_counter = max(sold_counts) > 0
         for i in range(1, len(slist)):
-            delta = slist[i-1].get("qty_available", 0) - slist[i].get("qty_available", 0)
-            if delta > 0:
-                rev = delta * slist[i]["price"]
-                total_sold += delta
-                total_rev += rev
-                sku_sales[sku] = sku_sales.get(sku, 0) + delta
-                ca = slist[i]["crawled_at"]
-                week_key = ca.strftime("%Y-W%W") if isinstance(ca, datetime) else ca[:10]
-                weekly_rev[week_key] = weekly_rev.get(week_key, 0) + rev
+            ca = slist[i]["crawled_at"]
+            week_key = ca.strftime("%Y-W%W") if isinstance(ca, datetime) else ca[:10]
+            day_key = ca.strftime("%Y-%m-%d") if isinstance(ca, datetime) else ca[:10]
+            price = slist[i].get("price") or 0
+            inc = 0
+            if use_sold_counter:
+                inc = max(0, (sold_counts[i] - sold_counts[i - 1]))
+                inc = min(inc, MAX_DAILY_SALES_PER_SKU)
+            else:
+                prev_q = slist[i - 1].get("qty_available", 0) or 0
+                curr_q = slist[i].get("qty_available", 0) or 0
+                if prev_q in PLACEHOLDER_QTY_VALUES or curr_q in PLACEHOLDER_QTY_VALUES or prev_q > 500:
+                    continue
+                d = prev_q - curr_q
+                if d <= 0:
+                    continue
+                inc = min(d, MAX_QTY_DELTA_PER_INTERVAL)
+            if inc <= 0:
+                continue
+            rev = inc * price
+            weekly_rev[week_key] = weekly_rev.get(week_key, 0) + rev
+            daily_rev[day_key] = daily_rev.get(day_key, 0) + rev
+
+    # Compute the actual time span of data for accurate monthly normalization
+    if snaps_90d:
+        first_ca = snaps_90d[0]["crawled_at"]
+        last_ca = snaps_90d[-1]["crawled_at"]
+        if isinstance(first_ca, str):
+            first_ca = datetime.fromisoformat(first_ca.replace("Z", "+00:00"))
+        if isinstance(last_ca, str):
+            last_ca = datetime.fromisoformat(last_ca.replace("Z", "+00:00"))
+        span_days = max(1, (last_ca - first_ca).days)
+    else:
+        span_days = 1
 
     # Revenue trend (weekly)
     revenue_trend = [{"week": k, "revenue": round(v, 2)} for k, v in sorted(weekly_rev.items())]
-
-    # Also compute daily for toggle
-    daily_rev = {}
-    for sku, slist in by_sku.items():
-        for i in range(1, len(slist)):
-            delta = slist[i-1].get("qty_available", 0) - slist[i].get("qty_available", 0)
-            if delta > 0:
-                ca = slist[i]["crawled_at"]
-                day_key = ca.strftime("%Y-%m-%d") if isinstance(ca, datetime) else ca[:10]
-                daily_rev[day_key] = daily_rev.get(day_key, 0) + delta * slist[i]["price"]
     daily_trend = [{"date": k, "revenue": round(v, 2)} for k, v in sorted(daily_rev.items())]
 
     # Top 10 products by sales
@@ -2454,11 +2507,20 @@ async def store_profile(store_id: str, user=Depends(get_user)):
         if p:
             recently_oos.append({**p, "sku": l["_id"], "last_qty": l["qty"]})
 
+    # Estimated monthly revenue: scale total_rev (over span_days) to a 30-day month
+    # Avoid the old `/3` hack — that assumed exactly 90 days of perfect data
+    est_monthly_revenue = round(total_rev * 30 / max(span_days, 1), 2) if total_rev > 0 else 0
+    est_daily_revenue = round(total_rev / max(span_days, 1), 2) if total_rev > 0 else 0
+    est_daily_units = round(total_sold / max(span_days, 1), 1) if total_sold > 0 else 0
+
     return {
         "store": store,
         "kpis": {
             "catalog_size": len(skus), "active_skus": len(active_skus),
-            "est_monthly_revenue": round(total_rev / 3, 2),
+            "est_monthly_revenue": est_monthly_revenue,
+            "est_daily_revenue": est_daily_revenue,
+            "est_daily_sales": est_daily_units,
+            "data_span_days": span_days,
             "avg_discount_rate": avg_disc, "last_crawled": store.get("last_crawled_at"),
         },
         "revenue_trend_weekly": revenue_trend,
