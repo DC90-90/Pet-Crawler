@@ -198,10 +198,11 @@ def _normalize_raw_product(raw, store_name):
 
     qty = int(raw.get("quantity", raw.get("stock_quantity", raw.get("qty", 0))) or 0)
 
-    # Capture cumulative sales counter (Salla: sales_count, Zid: sold_count) — primary signal for sales estimation
+    # Capture cumulative sales counter (Salla: sales_count, Zid: sold_count, legacy Salla: sold_products_count)
     sold_count = int(
         raw.get("sales_count")
         or raw.get("sold_count")
+        or raw.get("sold_products_count")
         or raw.get("total_sold")
         or raw.get("orders_count")
         or 0
@@ -227,13 +228,25 @@ def _normalize_raw_product(raw, store_name):
     imgs = raw.get("images", raw.get("image", []))
     img_url = ""
     if isinstance(imgs, list) and imgs:
-        img_url = imgs[0].get("url", imgs[0].get("src", "")) if isinstance(imgs[0], dict) else str(imgs[0])
+        first = imgs[0]
+        if isinstance(first, dict):
+            # Modern Salla: {url, src}; Legacy Salla: {image: {full_size, original}}
+            img_url = (
+                first.get("url")
+                or first.get("src")
+                or (first.get("image", {}).get("full_size") if isinstance(first.get("image"), dict) else "")
+                or (first.get("image", {}).get("original") if isinstance(first.get("image"), dict) else "")
+                or ""
+            )
+        else:
+            img_url = str(first)
     elif isinstance(imgs, dict):
         img_url = imgs.get("url", imgs.get("src", ""))
 
     # Storefront product URL: try Salla/Zid common keys, then nested objects
     product_url = (
         raw.get("url")
+        or raw.get("html_url")  # legacy Salla
         or raw.get("permalink")
         or raw.get("product_url")
         or raw.get("link")
@@ -352,6 +365,19 @@ async def _try_single_endpoint(http, ep, crawl_log):
             crawl_log["endpoints_tried"].append(attempt)
             return [], None
         items = body.get("data", body.get("products", body.get("results", [])))
+        # Handle nested legacy Salla schema: { "data": { "products": { "data": [...], "current_page": 1 } } }
+        if isinstance(items, dict):
+            inner_products = items.get("products")
+            if isinstance(inner_products, dict) and isinstance(inner_products.get("data"), list):
+                # Stash pagination metadata for the legacy paginator
+                ep["_legacy_pagination"] = {
+                    "current_page": inner_products.get("current_page", 1),
+                    "last_page": inner_products.get("last_page"),
+                    "next_page_url": inner_products.get("next_page_url"),
+                }
+                items = inner_products["data"]
+            elif isinstance(items.get("data"), list):
+                items = items["data"]
         if isinstance(items, list) and len(items) >= 3:
             attempt["products"] = len(items)
             # Store cursor info for Salla cursor pagination
@@ -408,7 +434,7 @@ async def _paginate_endpoint(http, ep, initial_items):
                 break
         logger.info(f"[Pagination] Done: {len(all_items)} total across {pages_fetched} pages")
     else:
-        # Zid page-number pagination
+        # Zid page-number pagination + legacy Salla page-number pagination
         page = 2
         while page <= 200:
             params = dict(ep.get("params", {}))
@@ -419,6 +445,13 @@ async def _paginate_endpoint(http, ep, initial_items):
                     break
                 body = r.json()
                 more = body.get("data", body.get("products", body.get("results", [])))
+                # Legacy Salla nested envelope: { data: { products: { data: [...] } } }
+                if isinstance(more, dict):
+                    inner = more.get("products")
+                    if isinstance(inner, dict) and isinstance(inner.get("data"), list):
+                        more = inner["data"]
+                    elif isinstance(more.get("data"), list):
+                        more = more["data"]
                 if not more:
                     break
                 all_items.extend(more)
@@ -823,8 +856,12 @@ async def _discover_salla_category_ids(page, base):
 
 
 async def _capture_salla_store_identifier(page, base):
-    """Visit storefront and capture the `store-identifier` header from the first XHR call to api.salla.dev."""
+    """Visit storefront and capture the `store-identifier` header from the first XHR call to api.salla.dev.
+    Falls back to visiting a known category route if the homepage doesn't trigger any API calls quickly.
+    Also tries reading the meta tag / window.Salla object on the page as a last resort.
+    """
     sid_holder = {"value": None}
+
     def on_request(req):
         if sid_holder["value"]:
             return
@@ -832,18 +869,71 @@ async def _capture_salla_store_identifier(page, base):
             sid = req.headers.get("store-identifier")
             if sid:
                 sid_holder["value"] = sid
+
     page.on("request", on_request)
+
+    async def _wait_and_scroll(timeout_ms):
+        elapsed = 0
+        while elapsed < timeout_ms and not sid_holder["value"]:
+            await page.wait_for_timeout(700)
+            elapsed += 700
+            try:
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight); window.scrollTo(0, 0)")
+            except Exception:
+                pass
+
+    # Pass 1 — homepage
     try:
         await page.goto(f"{base}/", wait_until="domcontentloaded", timeout=25000)
-        await page.wait_for_timeout(3500)
-        # Trigger more XHR by scrolling
-        for _ in range(3):
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await page.wait_for_timeout(1200)
-            if sid_holder["value"]:
-                break
+        await _wait_and_scroll(7000)
     except Exception:
         pass
+
+    if sid_holder["value"]:
+        return sid_holder["value"]
+
+    # Pass 2 — try reading window.Salla / meta tags directly
+    try:
+        sid_from_dom = await page.evaluate("""
+            () => {
+              try {
+                if (window.Salla && window.Salla.config && window.Salla.config.store && window.Salla.config.store.id) {
+                  return String(window.Salla.config.store.id);
+                }
+                if (window.salla && window.salla.config && window.salla.config.store && window.salla.config.store.id) {
+                  return String(window.salla.config.store.id);
+                }
+                const meta = document.querySelector('meta[name="store-id"], meta[property="store-id"], meta[name="salla-store-id"]');
+                if (meta) return meta.getAttribute('content');
+                // Look for store id embedded in the page HTML/scripts
+                const html = document.documentElement.outerHTML;
+                const m = html.match(/"store_id"\\s*:\\s*"?(\\d{5,})"?/i)
+                       || html.match(/store-identifier['"\\s:=]+(\\d{5,})/i)
+                       || html.match(/storeId['"\\s:=]+(\\d{5,})/i);
+                if (m) return m[1];
+                return null;
+              } catch (e) { return null; }
+            }
+        """)
+        if sid_from_dom:
+            return str(sid_from_dom)
+    except Exception:
+        pass
+
+    # Pass 3 — visit a category route (often has more aggressive XHR than homepage)
+    try:
+        # Try common category-list routes
+        for path in ["/ar/categories", "/categories", "/ar/products", "/products"]:
+            try:
+                await page.goto(f"{base}{path}", wait_until="domcontentloaded", timeout=18000)
+                await _wait_and_scroll(5000)
+                if sid_holder["value"]:
+                    return sid_holder["value"]
+            except Exception:
+                continue
+    except Exception:
+        pass
+
     return sid_holder["value"]
 
 

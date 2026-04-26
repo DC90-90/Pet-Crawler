@@ -639,14 +639,14 @@ async def seed_database():
 async def ensure_stores():
     """Ensure all required stores exist and have correct configuration."""
     required_stores = [
-        {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products", "tier1_only": True},
-        {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products", "tier1_only": True},
-        {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "working_endpoint": "/api/v1/products", "tier1_only": True},
-        {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products", "tier1_only": True},
+        {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
+        {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
+        {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "use_storefront_categories": True, "tier1_only": False},
+        {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Aleef", "domain": "aleef.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
-        {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "use_storefront_categories": True},
+        {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
     ]
     now = datetime.now(timezone.utc)
     added = 0
