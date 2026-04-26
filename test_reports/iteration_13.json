@@ -1,0 +1,101 @@
+{
+  "summary": "Completed regression testing for Daleel refactor (Feb 2026). Pydantic models extracted to /app/backend/models/schemas.py and helper utilities to /app/backend/core/utils.py work correctly. PriceIntelPage split into 4 sub-components under /app/frontend/src/components/priceIntel/ renders correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "critical": [],
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Price Intel Detail Sheet",
+        "issues": ["Recharts console warning about chart dimensions (-1x-1) when price history chart container not fully visible - non-critical"]
+      }
+    ]
+  },
+  "passed_tests": [
+    "GET /api/health returns healthy/connected (MongoDB connected, scheduler jobs running)",
+    "GET /api/auth/me with admin token returns user (admin@daleelpets.com)",
+    "GET /api/my-products?days=7 returns kpis + products",
+    "GET /api/products/{sku}/full?days=30 returns aggregated payload (store_prices, history, velocity)",
+    "POST /api/auth/login parses AuthIn model correctly",
+    "POST /api/stores parses StoreIn model correctly",
+    "POST /api/alerts parses AlertIn model correctly",
+    "POST /api/saved-filters parses SavedFilterIn model correctly",
+    "POST /api/import/run-matching parses MatchActionIn model correctly",
+    "POST /api/crawler/ingest parses IngestPayload model correctly (with bearer token)",
+    "GET /api/insights/summary responds 200",
+    "GET /api/insights/leaderboard responds 200",
+    "GET /api/scanner/opportunities responds 200",
+    "GET /api/discounts/top-pct responds 200",
+    "GET /api/discounts/top-amount responds 200",
+    "GET /api/stores/{store_id}/profile returns profile data",
+    "get_stock_signal helper works (products have valid stock_signal values)",
+    "_estimate_sales_from_snapshots helper works (KPIs have total_units_sold, total_revenue)",
+    "compute_product_metrics helper works (store_prices have computed metrics)",
+    "GET /api/price-intel/dashboard responds 200 with summary, action_required, my_advantages, full_table, confidence_distribution",
+    "GET /api/baseline/leaderboard responds 200",
+    "GET /api/baseline/catalog-gaps responds 200",
+    "Frontend: Price Intel page loads with data-testid=price-intel-page",
+    "Frontend: KPI row shows 6 cards (My Products, Matched, Overpriced RED/YELLOW, I'm Cheapest, OOS Opportunity)",
+    "Frontend: Confidence distribution bar renders with segments",
+    "Frontend: Confidence guide toggle (data-testid=toggle-guide) shows/hides guide panel",
+    "Frontend: Market Position widget shows store ranking (#12 of 13 stores)",
+    "Frontend: All 5 tabs present (data-testid=tab-action, tab-advantage, tab-full, tab-unverified, tab-gaps)",
+    "Frontend: Each tab renders its corresponding table",
+    "Frontend: Clicking row opens detail sheet (data-testid=product-detail-sheet)",
+    "Frontend: Detail sheet shows ConfidenceBadge, Confirm/Reject buttons",
+    "Frontend: Theme toggle (data-testid=theme-toggle-btn) switches between dark/light themes"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_refactor_regression.py",
+    "/app/test_reports/pytest/refactor_regression_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [
+    "/app/backend/tests/test_refactor_regression.py"
+  ],
+  "success_rate": {
+    "backend": "100% (22/22 tests passed)",
+    "frontend": "100% (all Price Intel page elements verified)"
+  },
+  "test_credentials": {
+    "admin_email": "admin@daleelpets.com",
+    "admin_password": "BGv8ZcRYrBTPlJFHHhZQ3Q",
+    "crawler_token": "zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO"
+  },
+  "seed_data_creation": "None - using existing seed data",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Refactor regression complete. Pydantic models (AuthIn, StoreIn, StoreUpdate, AlertIn, SavedFilterIn, Tier4CredentialsIn, OtpSubmitIn, MatchActionIn, IngestPayload) now imported from /app/backend/models/schemas.py. Helper utilities (PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU, get_stock_signal, _coerce_num, _coerce_int, _estimate_sales_from_snapshots, compute_product_metrics) now imported from /app/backend/core/utils.py. PriceIntelPage.jsx (135 lines) orchestrates 4 sub-components: PriceIntelShared.jsx (ConfidenceBadge, FlagBadges), PriceIntelHeader.jsx (KpiRow, ConfidenceDistribution, ConfidenceGuidePanel, MarketPositionWidget), PriceIntelTabs.jsx (5 table components), PriceIntelDetailSheet.jsx (detail sheet with price history chart).",
+  "mocked_apis": {
+    "has_mocked_apis": false,
+    "mocked_apis_list": []
+  },
+  "refactor_verification": {
+    "backend_models_extracted": {
+      "file": "/app/backend/models/schemas.py",
+      "models": ["AuthIn", "StoreIn", "StoreUpdate", "AlertIn", "SavedFilterIn", "Tier4CredentialsIn", "OtpSubmitIn", "MatchActionIn", "IngestPayload"],
+      "status": "WORKING"
+    },
+    "backend_utils_extracted": {
+      "file": "/app/backend/core/utils.py",
+      "functions": ["get_stock_signal", "_coerce_num", "_coerce_int", "_estimate_sales_from_snapshots", "compute_product_metrics"],
+      "constants": ["PLACEHOLDER_QTY_VALUES", "MAX_QTY_DELTA_PER_INTERVAL", "MAX_DAILY_SALES_PER_SKU"],
+      "status": "WORKING"
+    },
+    "frontend_priceIntel_split": {
+      "main_file": "/app/frontend/src/pages/PriceIntelPage.jsx (135 lines)",
+      "components": [
+        "/app/frontend/src/components/priceIntel/PriceIntelShared.jsx",
+        "/app/frontend/src/components/priceIntel/PriceIntelHeader.jsx",
+        "/app/frontend/src/components/priceIntel/PriceIntelTabs.jsx",
+        "/app/frontend/src/components/priceIntel/PriceIntelDetailSheet.jsx"
+      ],
+      "status": "WORKING"
+    }
+  }
+}

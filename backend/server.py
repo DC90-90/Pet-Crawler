@@ -25,6 +25,17 @@ from crawlers import (
 )
 from cryptography.fernet import Fernet, InvalidToken
 
+# ── Refactored modules (Feb 2026) ───────────────────────────
+from models import (
+    AuthIn, StoreIn, StoreUpdate, AlertIn, SavedFilterIn,
+    Tier4CredentialsIn, OtpSubmitIn, MatchActionIn, IngestPayload,
+)
+from core import (
+    PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
+    get_stock_signal, _coerce_num, _coerce_int,
+    _estimate_sales_from_snapshots, compute_product_metrics,
+)
+
 SERVER_START_TIME = time.time()
 
 # ── Fernet Encryption (Tier 4 Credential Vault) ────────────
@@ -228,46 +239,7 @@ async def health_detailed(user=Depends(get_user)):
         "stores": list(results),
     }
 
-# ── Models ──────────────────────────────────────────────────
-class AuthIn(BaseModel):
-    email: str
-    password: str
-    name: Optional[str] = None
-
-class StoreIn(BaseModel):
-    name: str
-    domain: str
-    platform: str
-    base_url: Optional[str] = ""
-    crawl_frequency_hrs: Optional[int] = 24
-
-class StoreUpdate(BaseModel):
-    name: Optional[str] = None
-    platform: Optional[str] = None
-    base_url: Optional[str] = None
-    crawl_frequency_hrs: Optional[int] = None
-    is_active: Optional[bool] = None
-
-class AlertIn(BaseModel):
-    product_sku: Optional[str] = None
-    category: Optional[str] = None
-    store_id: Optional[str] = None
-    alert_type: str = "price_drop"
-    threshold: Optional[float] = None
-    channel: str = "in_app"
-
-class SavedFilterIn(BaseModel):
-    name: str
-    filters: dict
-
-class Tier4CredentialsIn(BaseModel):
-    email: Optional[str] = None
-    password: Optional[str] = None
-    phone: Optional[str] = None
-
-class OtpSubmitIn(BaseModel):
-    store_id: str
-    otp_code: str
+# ── Models moved to /app/backend/models/schemas.py during Feb 2026 refactor ──
 
 # ── Seed Data ───────────────────────────────────────────────
 STORES_SEED = [
@@ -513,23 +485,7 @@ EXTRA_PRODUCT_TEMPLATES = [
     ("CA-CT-CG01", "حقيبة حمل قطط شفافة", "Transparent Cat Carrier", "Generic", "accessories", "cat", 0, 109),
 ]
 
-def get_stock_signal(qty, in_stock=None):
-    """Return a stock label.
-    Many Salla/Zid stores set quantity=0 for products with `unlimited_quantity=true` or
-    untracked inventory while still being available for purchase. Use the explicit
-    `in_stock` flag (when present) as the source of truth and only fall back to qty.
-    """
-    if in_stock is False:
-        return "OOS"
-    if in_stock is True and (qty is None or qty == 0):
-        return "AVAIL"  # In-stock but quantity not tracked
-    if qty is None or qty == 0:
-        return "OOS"
-    if qty < 10:
-        return "LOW"
-    if qty <= 30:
-        return "MEDIUM"
-    return "HIGH"
+# get_stock_signal moved to /app/backend/core/utils.py (Feb 2026 refactor)
 
 async def seed_database():
     if await db.stores.count_documents({}) > 0:
@@ -1366,119 +1322,11 @@ async def _login_shopify(page, base_url, store, credentials, phone_last4):
     return {"success": False, "error": "No email/password fields found"}
 
 
-# Heuristic constants for sales estimation (defensive — avoid placeholder-stock-noise blowing up totals)
-PLACEHOLDER_QTY_VALUES = {99, 100, 999, 1000, 9999, 10000, 99999, 100000}
-MAX_QTY_DELTA_PER_INTERVAL = 10  # >10 units sold per single crawl interval per SKU is almost certainly a data error
-MAX_DAILY_SALES_PER_SKU = 30     # absolute upper bound: at most 30 units/day per SKU
+# ── Sales-estimation constants & helpers moved to /app/backend/core/utils.py (Feb 2026 refactor) ──
 MIN_SNAPSHOT_PAIRS_FOR_SALES = 2  # need at least 2 valid deltas before any sales credit
 
 
-def _estimate_sales_from_snapshots(snaps, days):
-    """
-    Estimate sales for a SKU at a single store from chronological snapshot list.
-    Strategy:
-      1. PREFER sold_count diff (Salla `sales_count` / Zid `sold_count`) — cumulative sales counter, most reliable.
-      2. FALL BACK to qty depletion with sanity filters (drop placeholder values, cap deltas).
-    Returns (units_sold, revenue, used_method).
-    """
-    if not snaps or len(snaps) < 2:
-        return 0, 0.0, "insufficient_data"
-
-    # ── Method 1: sold_count cumulative diff (most reliable) ──
-    sold_counts = [s.get("sold_count", 0) or 0 for s in snaps]
-    if max(sold_counts) > 0 and sold_counts[0] >= 0:
-        # Find first non-zero and last; ensure monotonic non-decrease (resets shouldn't be counted)
-        first_sc = next((sc for sc in sold_counts if sc > 0), 0)
-        last_sc = sold_counts[-1] if sold_counts[-1] >= first_sc else max(sold_counts)
-        units_from_counter = max(0, last_sc - first_sc)
-        if units_from_counter > 0:
-            avg_price = sum((s.get("price") or 0) for s in snaps) / max(1, len(snaps))
-            # Cap at sane absolute upper bound
-            units_capped = min(units_from_counter, MAX_DAILY_SALES_PER_SKU * max(1, days))
-            return units_capped, round(units_capped * avg_price, 2), "sold_count_diff"
-
-    # ── Method 2: NET qty depletion with strict signal requirements ──
-    # Use (first_qty − last_qty) instead of summing every micro-delta to avoid
-    # double-counting restocks and inventory adjustments.
-    valid_qtys = [s.get("qty_available", 0) or 0 for s in snaps if (s.get("qty_available", 0) or 0) not in PLACEHOLDER_QTY_VALUES and (s.get("qty_available", 0) or 0) <= 200]
-    if len(valid_qtys) < 3:
-        return 0, 0.0, "insufficient_signal"
-
-    first_qty = valid_qtys[0]
-    last_qty = valid_qtys[-1]
-    net_drop = first_qty - last_qty
-
-    # Require meaningful net signal — single-unit fluctuations are noise
-    if net_drop < 3:
-        return 0, 0.0, "insufficient_signal"
-
-    # Confirm no big restock spike that would fake-inflate the drop
-    for i in range(1, len(valid_qtys)):
-        if valid_qtys[i] > valid_qtys[i - 1] + 5:
-            # Restock detected → return only the post-restock depletion
-            net_drop = valid_qtys[i] - last_qty
-            if net_drop < 3:
-                return 0, 0.0, "insufficient_signal"
-            break
-
-    units = min(net_drop, MAX_DAILY_SALES_PER_SKU * max(1, days))
-    avg_price = sum((s.get("price") or 0) for s in snaps) / max(1, len(snaps))
-    revenue = round(units * avg_price, 2)
-
-    return units, round(revenue, 2), "qty_net_depletion"
-
-
-# ── Update test-login to actually trigger login ─────────────
-def compute_product_metrics(snapshots_by_store, days):
-    """Given {store_id: [snapshots sorted by crawled_at asc]}, compute market metrics."""
-    all_latest_prices = []
-    total_sold = 0
-    total_revenue = 0.0
-    latest_qty = 0
-    any_in_stock = False
-    confidences = []
-    latest_tier = 1
-
-    for store_id, snaps in snapshots_by_store.items():
-        if not snaps:
-            continue
-        latest = snaps[-1]
-        all_latest_prices.append(latest["price"])
-        confidences.append(latest["confidence_score"])
-        latest_tier = latest["source_tier"]
-        latest_qty = max(latest_qty, latest.get("qty_available", 0))
-        if latest.get("in_stock") is True:
-            any_in_stock = True
-
-        # Estimate sales using the new defensible algorithm
-        units, revenue, _ = _estimate_sales_from_snapshots(snaps, days)
-        total_sold += units
-        total_revenue += revenue
-
-    if not all_latest_prices:
-        return None
-
-    min_p = min(all_latest_prices)
-    max_p = max(all_latest_prices)
-    med_p = statistics.median(all_latest_prices)
-    avg_p = statistics.mean(all_latest_prices)
-    avg_conf = round(statistics.mean(confidences)) if confidences else 0
-
-    return {
-        "price": round(avg_p, 2),
-        "min_price": round(min_p, 2),
-        "max_price": round(max_p, 2),
-        "median_price": round(med_p, 2),
-        "vs_lowest_pct": round(((avg_p - min_p) / min_p) * 100, 1) if min_p > 0 else 0,
-        "vs_median_pct": round(((avg_p - med_p) / med_p) * 100, 1) if med_p > 0 else 0,
-        "qty_sold_est": total_sold,
-        "revenue_est": round(total_revenue, 2),
-        "num_sellers": len(all_latest_prices),
-        "latest_qty": latest_qty,
-        "stock_signal": get_stock_signal(latest_qty, in_stock=any_in_stock if any_in_stock else None),
-        "confidence_score": avg_conf,
-        "source_tier": latest_tier,
-    }
+# _estimate_sales_from_snapshots and compute_product_metrics moved to core/utils.py
 
 # ── Product Routes ──────────────────────────────────────────
 @router.get("/my-products")
@@ -2778,10 +2626,7 @@ async def trigger_digest(user=Depends(get_user)):
 # ── My Products Import & Price Intelligence ─────────────────
 from matcher import match_my_product, run_matching_for_all
 
-class MatchActionIn(BaseModel):
-    my_sku: str
-    competitor_sku: str
-    competitor_store_id: str
+# MatchActionIn moved to /app/backend/models/schemas.py (Feb 2026 refactor)
 
 @router.post("/import/products")
 async def import_products(file: UploadFile = File(...), user=Depends(get_user)):
@@ -3175,36 +3020,7 @@ async def list_my_products(page: int = 1, limit: int = 50, search: str = "", use
 
 
 # ── External Crawler Ingest API ──────────────────────────────
-class IngestPayload(BaseModel):
-    store_id: str
-    store_name: str
-    domain: str
-    platform: str
-    products: list
-
-def _coerce_num(v, default=0.0):
-    """Defensively coerce a value that may be None / int / float / str with currency or commas to float."""
-    if v is None or v == "":
-        return float(default)
-    if isinstance(v, bool):
-        return float(default)
-    if isinstance(v, (int, float)):
-        return float(v)
-    try:
-        # Strip currency symbols, Arabic separators, commas, spaces
-        s = re.sub(r"[^0-9.\-]", "", str(v))
-        if s in ("", "-", ".", "-."):
-            return float(default)
-        return float(s)
-    except (ValueError, TypeError):
-        return float(default)
-
-
-def _coerce_int(v, default=0):
-    try:
-        return int(_coerce_num(v, default))
-    except (ValueError, TypeError):
-        return int(default)
+# IngestPayload, _coerce_num, _coerce_int moved to models/schemas.py and core/utils.py (Feb 2026 refactor)
 
 
 @router.post("/crawler/ingest")
