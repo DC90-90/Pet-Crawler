@@ -1368,8 +1368,9 @@ async def _login_shopify(page, base_url, store, credentials, phone_last4):
 
 # Heuristic constants for sales estimation (defensive — avoid placeholder-stock-noise blowing up totals)
 PLACEHOLDER_QTY_VALUES = {99, 100, 999, 1000, 9999, 10000, 99999, 100000}
-MAX_QTY_DELTA_PER_INTERVAL = 30  # >30 units sold per single crawl interval per SKU is almost certainly a data error
-MAX_DAILY_SALES_PER_SKU = 200    # absolute upper bound for sanity
+MAX_QTY_DELTA_PER_INTERVAL = 10  # >10 units sold per single crawl interval per SKU is almost certainly a data error
+MAX_DAILY_SALES_PER_SKU = 30     # absolute upper bound: at most 30 units/day per SKU
+MIN_SNAPSHOT_PAIRS_FOR_SALES = 2  # need at least 2 valid deltas before any sales credit
 
 
 def _estimate_sales_from_snapshots(snaps, days):
@@ -1396,34 +1397,35 @@ def _estimate_sales_from_snapshots(snaps, days):
             units_capped = min(units_from_counter, MAX_DAILY_SALES_PER_SKU * max(1, days))
             return units_capped, round(units_capped * avg_price, 2), "sold_count_diff"
 
-    # ── Method 2: qty depletion with sanity filters ──
-    units = 0
-    revenue = 0.0
-    for i in range(1, len(snaps)):
-        prev_qty = snaps[i - 1].get("qty_available", 0) or 0
-        curr_qty = snaps[i].get("qty_available", 0) or 0
-        # Skip placeholder stock values — these are "unlimited" markers, not real inventory
-        if prev_qty in PLACEHOLDER_QTY_VALUES or curr_qty in PLACEHOLDER_QTY_VALUES:
-            continue
-        # Skip when previous qty was already absurdly high (likely placeholder)
-        if prev_qty > 500:
-            continue
-        delta = prev_qty - curr_qty
-        if delta <= 0:
-            continue
-        # Sanity cap per snapshot interval
-        delta = min(delta, MAX_QTY_DELTA_PER_INTERVAL)
-        units += delta
-        revenue += delta * (snaps[i].get("price") or 0)
+    # ── Method 2: NET qty depletion with strict signal requirements ──
+    # Use (first_qty − last_qty) instead of summing every micro-delta to avoid
+    # double-counting restocks and inventory adjustments.
+    valid_qtys = [s.get("qty_available", 0) or 0 for s in snaps if (s.get("qty_available", 0) or 0) not in PLACEHOLDER_QTY_VALUES and (s.get("qty_available", 0) or 0) <= 200]
+    if len(valid_qtys) < 3:
+        return 0, 0.0, "insufficient_signal"
 
-    # Final daily cap
-    daily_cap = MAX_DAILY_SALES_PER_SKU * max(1, days)
-    if units > daily_cap:
-        scale = daily_cap / units
-        units = int(units * scale)
-        revenue *= scale
+    first_qty = valid_qtys[0]
+    last_qty = valid_qtys[-1]
+    net_drop = first_qty - last_qty
 
-    return units, round(revenue, 2), "qty_depletion_capped"
+    # Require meaningful net signal — single-unit fluctuations are noise
+    if net_drop < 3:
+        return 0, 0.0, "insufficient_signal"
+
+    # Confirm no big restock spike that would fake-inflate the drop
+    for i in range(1, len(valid_qtys)):
+        if valid_qtys[i] > valid_qtys[i - 1] + 5:
+            # Restock detected → return only the post-restock depletion
+            net_drop = valid_qtys[i] - last_qty
+            if net_drop < 3:
+                return 0, 0.0, "insufficient_signal"
+            break
+
+    units = min(net_drop, MAX_DAILY_SALES_PER_SKU * max(1, days))
+    avg_price = sum((s.get("price") or 0) for s in snaps) / max(1, len(snaps))
+    revenue = round(units * avg_price, 2)
+
+    return units, round(revenue, 2), "qty_net_depletion"
 
 
 # ── Update test-login to actually trigger login ─────────────
@@ -2086,86 +2088,100 @@ async def discount_aggression(user=Depends(get_user)):
 # ── Price Opportunity Scanner ────────────────────────────────
 @router.get("/scanner/opportunities")
 async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
+    """Returns price opportunities — uses MongoDB aggregation instead of loading 100K snapshots into memory."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    snaps = await db.product_snapshots.find({"crawled_at": {"$gte": since}}, {"_id": 0}).sort("crawled_at", -1).to_list(100000)
-    # Group latest per sku per store
-    latest = {}
-    for s in snaps:
-        key = (s["sku"], s["store_id"])
-        if key not in latest:
-            latest[key] = s
-    # Group by sku
+
+    # Get own store id
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_id = own_store["id"] if own_store else None
+
+    # Get all SKUs we care about (own catalog) — prevents scanning 12k+ unrelated SKUs
+    own_skus = set(p["sku"] for p in await db.my_products.find({}, {"_id": 0, "sku": 1}).to_list(20000) if p.get("sku"))
+    if not own_skus:
+        return {"opportunities": [], "well_positioned": [], "undercut": [],
+                "summary": {"total_overpriced": 0, "total_uplift": 0, "zero_sales_overpriced": 0}}
+
+    # Aggregate latest snapshot per (sku, store_id) for our SKUs only
+    pipeline = [
+        {"$match": {"sku": {"$in": list(own_skus)}, "crawled_at": {"$gte": since}}},
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {
+            "_id": {"sku": "$sku", "store_id": "$store_id"},
+            "sku": {"$first": "$sku"},
+            "store_id": {"$first": "$store_id"},
+            "store_name": {"$first": "$store_name"},
+            "price": {"$first": "$price"},
+            "qty_available": {"$first": "$qty_available"},
+            "in_stock": {"$first": "$in_stock"},
+            "crawled_at": {"$first": "$crawled_at"},
+        }},
+    ]
+    latest_snaps = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(50000)
+
     by_sku = {}
-    for (sku, sid), s in latest.items():
-        by_sku.setdefault(sku, []).append(s)
-    # Compute sales velocity per sku
-    all_snaps_sorted = {}
-    for s in snaps:
-        all_snaps_sorted.setdefault((s["sku"], s["store_id"]), []).append(s)
-    sku_sales = {}
-    for (sku, sid), sl in all_snaps_sorted.items():
-        sl.sort(key=lambda x: x["crawled_at"])
-        sold = 0
-        for i in range(1, len(sl)):
-            d = sl[i-1].get("qty_available", 0) - sl[i].get("qty_available", 0)
-            if d > 0: sold += d
-        sku_sales[(sku, sid)] = sold
-    # Build opportunities
-    products = await db.products.find({}, {"_id": 0}).to_list(500)
+    for s in latest_snaps:
+        by_sku.setdefault(s["sku"], []).append(s)
+
+    products = await db.products.find({"sku": {"$in": list(own_skus)}}, {"_id": 0}).to_list(20000)
     prod_map = {p["sku"]: p for p in products}
+
     opportunities = []
+    well_positioned = []
+    undercut = []
     total_overpriced = 0
     total_uplift = 0
     zero_sales_overpriced = 0
+
     for sku, store_snaps in by_sku.items():
-        if len(store_snaps) < 2: continue
-        prices = [s["price"] for s in store_snaps if s["price"] > 0]
-        if not prices: continue
+        if len(store_snaps) < 2:
+            continue
+        prices = [s["price"] for s in store_snaps if s.get("price", 0) > 0]
+        if not prices:
+            continue
         min_price = min(prices)
         avg_price = statistics.mean(prices)
-        max_price = max(prices)
         for s in store_snaps:
-            if s["price"] <= 0: continue
+            if s.get("price", 0) <= 0:
+                continue
             gap_pct = round((s["price"] - min_price) / min_price * 100, 1) if min_price > 0 else 0
-            if gap_pct < 10: continue
-            total_sold_market = sum(sku_sales.get((sku, st["store_id"]), 0) for st in store_snaps)
-            my_sold = sku_sales.get((sku, s["store_id"]), 0)
-            uplift = round((s["price"] - min_price) * total_sold_market / max(len(store_snaps), 1), 2)
+            if gap_pct < 10:
+                # Low-gap: well-positioned tracking
+                gap_avg = abs(s["price"] - avg_price) / avg_price * 100 if avg_price > 0 else 0
+                if gap_avg <= 5:
+                    p = prod_map.get(sku, {})
+                    well_positioned.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_price, 2), "store_name": s["store_name"]})
+                if s["price"] == min_price and s["price"] < avg_price * 0.95:
+                    p = prod_map.get(sku, {})
+                    undercut.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_price, 2), "store_name": s["store_name"]})
+                continue
+            uplift = round((s["price"] - min_price) * len(store_snaps), 2)
             p = prod_map.get(sku, {})
-            badge = "overpriced_risk" if gap_pct >= 25 and my_sold == 0 else "quick_win" if uplift >= 500 and s.get("qty_available", 0) > 0 else "overpriced"
-            if badge == "overpriced_risk": zero_sales_overpriced += 1
+            badge = "overpriced_risk" if gap_pct >= 25 else "quick_win" if uplift >= 500 and s.get("qty_available", 0) > 0 else "overpriced"
+            if badge == "overpriced_risk":
+                zero_sales_overpriced += 1
             total_overpriced += 1
             total_uplift += uplift
             opportunities.append({
                 "sku": sku, "name_ar": p.get("name_ar", sku), "name_en": p.get("name_en", ""), "category": p.get("category", ""),
                 "image_url": p.get("image_url", ""), "store_name": s["store_name"], "store_id": s["store_id"],
                 "my_price": s["price"], "market_lowest": min_price, "market_avg": round(avg_price, 2),
-                "gap_pct": gap_pct, "units_sold": my_sold, "market_sold": total_sold_market,
+                "gap_pct": gap_pct, "units_sold": 0, "market_sold": 0,
                 "revenue_uplift": uplift, "badge": badge, "num_sellers": len(store_snaps),
                 "in_stock": s.get("in_stock", False), "qty": s.get("qty_available", 0),
             })
+
     opportunities.sort(key=lambda x: x["revenue_uplift"], reverse=True)
-    # Also find well-positioned and undercut opportunities
-    well_positioned = []
-    undercut = []
-    for sku, store_snaps in by_sku.items():
-        prices = [s["price"] for s in store_snaps if s["price"] > 0]
-        if len(prices) < 2: continue
-        min_p, avg_p = min(prices), statistics.mean(prices)
-        for s in store_snaps:
-            gap = abs(s["price"] - avg_p) / avg_p * 100 if avg_p > 0 else 0
-            if gap <= 5:
-                p = prod_map.get(sku, {})
-                well_positioned.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_p, 2), "store_name": s["store_name"]})
-            if s["price"] == min_p and s["price"] < avg_p * 0.95:
-                total_sold_market = sum(sku_sales.get((sku, st["store_id"]), 0) for st in store_snaps)
-                p = prod_map.get(sku, {})
-                undercut.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_p, 2), "store_name": s["store_name"], "market_sold": total_sold_market})
     return {
-        "summary": {"overpriced_count": total_overpriced, "total_uplift_sar": round(total_uplift, 2), "zero_sales_overpriced": zero_sales_overpriced},
-        "opportunities": opportunities[:50],
-        "well_positioned": well_positioned[:20],
-        "undercut": undercut[:20],
+        "opportunities": opportunities[:200],
+        "well_positioned": well_positioned[:50],
+        "undercut": undercut[:50],
+        "summary": {
+            "total_overpriced": total_overpriced,
+            "total_uplift": round(total_uplift, 2),
+            "zero_sales_overpriced": zero_sales_overpriced,
+            "overpriced_count": total_overpriced,
+            "total_uplift_sar": round(total_uplift, 2),
+        },
     }
 
 # ── Alerts ───────────────────────────────────────────────────
