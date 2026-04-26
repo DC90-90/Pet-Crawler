@@ -787,13 +787,171 @@ async def crawl_tier3_html(db, store):
     return crawl_log
 
 
+async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=80, max_scrolls_per_cat=15):
+    """
+    Custom Tier 2.5 crawler for Salla stores that have disabled their public /api/v1/products feed.
+    Strategy:
+      1. Visit homepage with Playwright
+      2. Extract all category numeric IDs from `/redirect/categories/{id}` links
+      3. For each category, navigate to /ar/redirect/categories/{id} and scroll to bottom repeatedly,
+         capturing all `api.salla.dev/store/v1/products` XHR payloads
+      4. Deduplicate products by id
+
+    Returns the same crawl_log shape as crawl_tier2_xhr for compatibility.
+    """
+    start_time = time.time()
+    base = f"https://{store['domain']}"
+    crawl_log = _make_crawl_log(store, tier_attempted=2)
+    crawl_log["endpoint_used"] = "salla_storefront_categories"
+
+    seen_ids = set()
+    captured = []  # list[dict] — full Salla product objects keyed by id
+
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            ctx = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                locale="ar-SA",
+                extra_http_headers={
+                    "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
+                    "Accept": "application/json, text/html, */*",
+                },
+            )
+            page = await ctx.new_page()
+
+            def _absorb_products(items):
+                added = 0
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    pid = it.get("id") or it.get("product_id") or it.get("sku")
+                    if not pid or pid in seen_ids:
+                        continue
+                    seen_ids.add(pid)
+                    captured.append(it)
+                    added += 1
+                return added
+
+            async def _on_response(response):
+                url = response.url
+                if "api.salla.dev/store/v1/products" not in url:
+                    return
+                # Skip non-listing endpoints (like /products/options)
+                if "/products/options" in url or "/products/details" in url:
+                    return
+                try:
+                    body = await response.json()
+                    if isinstance(body, dict):
+                        items = body.get("data") or body.get("products") or []
+                        if isinstance(items, list):
+                            _absorb_products(items)
+                except Exception:
+                    pass
+
+            page.on("response", _on_response)
+
+            # 1. Homepage — discover category IDs
+            try:
+                await page.goto(f"{base}/", wait_until="networkidle", timeout=25000)
+                await page.wait_for_timeout(2500)
+            except Exception as e:
+                crawl_log["endpoints_tried"].append({"endpoint": "/", "status": 0, "products": 0, "error": str(e)[:80]})
+
+            cat_ids = await page.evaluate("""
+                () => {
+                  const ids = new Set();
+                  // Salla redirect-style links: /ar/redirect/categories/{id} or /redirect/categories/{id}
+                  document.querySelectorAll('a[href*="/redirect/categories/"]').forEach(a => {
+                    const m = a.href.match(/categories\\/(\\d+)/);
+                    if (m) ids.add(m[1]);
+                  });
+                  // Direct category links: /ar/categories/{id} or /categories/{id}
+                  document.querySelectorAll('a[href*="/categories/"]').forEach(a => {
+                    const m = a.href.match(/categories\\/(\\d+)/);
+                    if (m) ids.add(m[1]);
+                  });
+                  return Array.from(ids);
+                }
+            """)
+            cat_ids = list(dict.fromkeys(cat_ids))[:max_categories]
+            crawl_log["endpoints_tried"].append({"endpoint": "homepage", "status": 200, "products": 0, "error": f"discovered {len(cat_ids)} categories"})
+            logger.info(f"[ZarafaCrawler] {store['name']} discovered {len(cat_ids)} categories")
+
+            # 2. Iterate categories, scroll each to bottom
+            for idx, cid in enumerate(cat_ids):
+                if len(captured) >= target_min_products * 4:
+                    break  # Safety cap — we've fetched plenty
+                cat_url = f"{base}/ar/redirect/categories/{cid}"
+                before = len(captured)
+                try:
+                    await page.goto(cat_url, wait_until="domcontentloaded", timeout=20000)
+                    await page.wait_for_timeout(1800)
+                    last_count = len(captured)
+                    stagnant_rounds = 0
+                    for i in range(max_scrolls_per_cat):
+                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        await page.wait_for_timeout(1300)
+                        if len(captured) == last_count:
+                            stagnant_rounds += 1
+                            if stagnant_rounds >= 3:
+                                break
+                        else:
+                            stagnant_rounds = 0
+                            last_count = len(captured)
+                    after = len(captured)
+                    crawl_log["endpoints_tried"].append({
+                        "endpoint": f"category {cid}",
+                        "status": 200,
+                        "products": after - before,
+                        "error": None,
+                    })
+                except Exception as e:
+                    crawl_log["endpoints_tried"].append({
+                        "endpoint": f"category {cid}",
+                        "status": 0,
+                        "products": 0,
+                        "error": str(e)[:80],
+                    })
+
+            await browser.close()
+
+    except ImportError:
+        crawl_log["error"] = "Playwright not installed"
+    except Exception as e:
+        crawl_log["error"] = f"Storefront crawler error: {str(e)[:200]}"
+
+    now = datetime.now(timezone.utc)
+    crawl_log["duration_secs"] = round(time.time() - start_time, 1)
+
+    if captured and len(captured) >= 3:
+        crawl_log["tier_used"] = 2
+        crawl_log["http_status"] = 200
+        crawl_log["products_found"] = len(captured)
+        new_c, snap_c = await process_crawled_products(db, store, captured, now, tier=2, confidence=85)
+        crawl_log["products_new"] = new_c
+        crawl_log["products_updated"] = len(captured) - new_c
+        crawl_log["snapshots_created"] = snap_c
+        await db.stores.update_one({"id": store["id"]}, {"$set": {"working_xhr_pattern": "salla_storefront_categories"}})
+    else:
+        if not crawl_log["error"]:
+            crawl_log["error"] = f"Storefront-categories captured {len(captured)} products — falling through"
+
+    await _finalize_crawl_log(db, crawl_log, store["id"])
+    logger.info(f"[StorefrontCategories] {store['name']}: found={crawl_log['products_found']}, dur={crawl_log['duration_secs']}s")
+    return crawl_log
+
+
 # ── Waterfall Orchestrator ───────────────────────────────────
 async def crawl_store_waterfall(db, store):
-    """Run the 3-tier waterfall crawler for a store, with optional Tier 4 supplement."""
+    """Run the multi-tier waterfall crawler for a store, with optional Tier 4 supplement."""
     platform = store.get("platform", "").lower()
     tier1_only = bool(store.get("tier1_only"))
-    # Tier 1: JSON endpoints
-    if platform in ("salla", "shopify", "zid"):
+    storefront_strategy = bool(store.get("use_storefront_categories"))
+
+    # Tier 1: JSON endpoints (skipped if store has explicitly disabled the API)
+    if platform in ("salla", "shopify", "zid") and not storefront_strategy:
         result = await crawl_salla_tier1(db, store)
         if result.get("tier_used"):
             # Tier 4: Authenticated supplement (runs after success if configured)
@@ -803,7 +961,15 @@ async def crawl_store_waterfall(db, store):
             # Skip Playwright-based Tiers 2/3 (e.g., on hosts without Chromium)
             result["error"] = (result.get("error") or "") + " | tier1_only=True: Tier 2/3 browser tiers skipped."
             return result
-    # Tier 2: XHR interception
+
+    # Tier 2.5 (Storefront categories) — for stores that disabled their public API
+    if storefront_strategy:
+        result = await crawl_salla_storefront_categories(db, store)
+        if result.get("tier_used"):
+            await _try_tier4_supplement(db, store, result)
+            return result
+
+    # Tier 2: XHR interception (homepage scroll)
     result = await crawl_tier2_xhr(db, store)
     if result.get("tier_used"):
         await _try_tier4_supplement(db, store, result)

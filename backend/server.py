@@ -646,6 +646,7 @@ async def ensure_stores():
         {"name": "Aleef", "domain": "aleef.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
+        {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "use_storefront_categories": True},
     ]
     now = datetime.now(timezone.utc)
     added = 0
@@ -659,12 +660,13 @@ async def ensure_stores():
                 "buyer_account_enc": "", "is_active": True, "priority": s["priority"],
                 "working_endpoint": s.get("working_endpoint", ""),
                 "tier1_only": bool(s.get("tier1_only", False)),
+                "use_storefront_categories": bool(s.get("use_storefront_categories", False)),
                 "last_crawled_at": "", "created_at": now.isoformat(),
             })
             added += 1
             logger.info(f"[Stores] Added: {s['name']} ({s['domain']})")
         else:
-            # Update platform/working_endpoint/tier1_only if store exists but has wrong config
+            # Update platform/working_endpoint/tier1_only/use_storefront_categories if store exists but has wrong config
             updates = {}
             if existing.get("platform") != s["platform"]:
                 updates["platform"] = s["platform"]
@@ -673,6 +675,9 @@ async def ensure_stores():
             desired_tier1_only = bool(s.get("tier1_only", False))
             if bool(existing.get("tier1_only", False)) != desired_tier1_only:
                 updates["tier1_only"] = desired_tier1_only
+            desired_storefront = bool(s.get("use_storefront_categories", False))
+            if bool(existing.get("use_storefront_categories", False)) != desired_storefront:
+                updates["use_storefront_categories"] = desired_storefront
             if updates:
                 await db.stores.update_one({"domain": s["domain"]}, {"$set": updates})
                 logger.info(f"[Stores] Updated config for {s['name']}: {updates}")
