@@ -787,26 +787,89 @@ async def crawl_tier3_html(db, store):
     return crawl_log
 
 
-async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=80, max_scrolls_per_cat=15):
-    """
-    Custom Tier 2.5 crawler for Salla stores that have disabled their public /api/v1/products feed.
-    Strategy:
-      1. Visit homepage with Playwright
-      2. Extract all category numeric IDs from `/redirect/categories/{id}` links
-      3. For each category, navigate to /ar/redirect/categories/{id} and scroll to bottom repeatedly,
-         capturing all `api.salla.dev/store/v1/products` XHR payloads
-      4. Deduplicate products by id
+async def _discover_salla_category_ids(page, base):
+    """Click into menus/dropdowns to expand nested subcategories, then extract all category IDs."""
+    try:
+        await page.goto(f"{base}/", wait_until="domcontentloaded", timeout=25000)
+        await page.wait_for_timeout(2500)
+        # Hover-trigger dropdown menus to load their child links into DOM
+        try:
+            await page.evaluate("""
+                () => {
+                  document.querySelectorAll('a, button, [class*="menu"], [class*="nav"]').forEach(el => {
+                    el.dispatchEvent(new MouseEvent('mouseenter', {bubbles:true}));
+                    el.dispatchEvent(new MouseEvent('mouseover', {bubbles:true}));
+                  });
+                }
+            """)
+            await page.wait_for_timeout(800)
+        except Exception:
+            pass
 
-    Returns the same crawl_log shape as crawl_tier2_xhr for compatibility.
+        # Visit each category page to discover its subcategories (nested-only on page-load)
+        ids = await page.evaluate("""
+            () => {
+              const out = new Set();
+              document.querySelectorAll('a[href*="/categories/"], a[href*="/redirect/categories/"]').forEach(a => {
+                const m = a.href.match(/categories\\/(\\d+)/);
+                if (m) out.add(m[1]);
+              });
+              return Array.from(out);
+            }
+        """)
+        return list(dict.fromkeys(ids))
+    except Exception:
+        return []
+
+
+async def _capture_salla_store_identifier(page, base):
+    """Visit storefront and capture the `store-identifier` header from the first XHR call to api.salla.dev."""
+    sid_holder = {"value": None}
+    def on_request(req):
+        if sid_holder["value"]:
+            return
+        if "api.salla.dev/store/v1" in req.url:
+            sid = req.headers.get("store-identifier")
+            if sid:
+                sid_holder["value"] = sid
+    page.on("request", on_request)
+    try:
+        await page.goto(f"{base}/", wait_until="domcontentloaded", timeout=25000)
+        await page.wait_for_timeout(3500)
+        # Trigger more XHR by scrolling
+        for _ in range(3):
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.wait_for_timeout(1200)
+            if sid_holder["value"]:
+                break
+    except Exception:
+        pass
+    return sid_holder["value"]
+
+
+async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=200, max_pages_per_cat=200):
+    """
+    Direct-API crawler for Salla stores that disabled their public /api/v1/products endpoint.
+    Strategy:
+      1. Open storefront in Playwright once to:
+         a. Capture the store's secret `store-identifier` header value
+         b. Extract category IDs from menu (including nested via hover-trigger)
+         c. Visit each top-level category to discover subcategory IDs
+      2. Close browser. Use plain httpx with the captured `store-identifier` to walk
+         `https://api.salla.dev/store/v1/products?source=categories&source_value[]={cat_id}` cursor pages.
+      3. Deduplicate products by `id`.
     """
     start_time = time.time()
     base = f"https://{store['domain']}"
     crawl_log = _make_crawl_log(store, tier_attempted=2)
-    crawl_log["endpoint_used"] = "salla_storefront_categories"
+    crawl_log["endpoint_used"] = "salla_storefront_categories_direct"
 
     seen_ids = set()
-    captured = []  # list[dict] — full Salla product objects keyed by id
+    captured = []
+    store_identifier = None
+    cat_ids = []
 
+    # Phase 1 — Playwright: capture store-identifier + discover all categories (incl. nested)
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
@@ -814,132 +877,111 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
             ctx = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="ar-SA",
-                extra_http_headers={
-                    "Accept-Language": "ar-SA,ar;q=0.9,en;q=0.8",
-                    "Accept": "application/json, text/html, */*",
-                },
             )
             page = await ctx.new_page()
+            store_identifier = await _capture_salla_store_identifier(page, base)
+            top_cat_ids = await _discover_salla_category_ids(page, base)
+            logger.info(f"[StorefrontCategories] {store['name']}: store_identifier={store_identifier}, top categories={len(top_cat_ids)}")
+            crawl_log["endpoints_tried"].append({"endpoint": "homepage", "status": 200, "products": 0, "error": f"store-id={store_identifier} top_cats={len(top_cat_ids)}"})
 
-            def _absorb_products(items):
-                added = 0
-                for it in items:
-                    if not isinstance(it, dict):
-                        continue
-                    pid = it.get("id") or it.get("product_id") or it.get("sku")
-                    if not pid or pid in seen_ids:
-                        continue
-                    seen_ids.add(pid)
-                    captured.append(it)
-                    added += 1
-                return added
-
-            async def _on_response(response):
-                url = response.url
-                if "api.salla.dev/store/v1/products" not in url:
-                    return
-                # Skip non-listing endpoints (like /products/options)
-                if "/products/options" in url or "/products/details" in url:
-                    return
+            # Visit each top category to discover subcategories
+            sub_ids = set(top_cat_ids)
+            for cid in top_cat_ids[:60]:
                 try:
-                    body = await response.json()
-                    if isinstance(body, dict):
-                        items = body.get("data") or body.get("products") or []
-                        if isinstance(items, list):
-                            _absorb_products(items)
+                    await page.goto(f"{base}/ar/redirect/categories/{cid}", wait_until="domcontentloaded", timeout=18000)
+                    await page.wait_for_timeout(1500)
+                    new_sub = await page.evaluate("""
+                        () => {
+                          const out = new Set();
+                          document.querySelectorAll('a[href*="/categories/"], a[href*="/redirect/categories/"]').forEach(a => {
+                            const m = a.href.match(/categories\\/(\\d+)/);
+                            if (m) out.add(m[1]);
+                          });
+                          return Array.from(out);
+                        }
+                    """)
+                    sub_ids.update(new_sub)
                 except Exception:
                     pass
-
-            page.on("response", _on_response)
-
-            # 1. Homepage — discover category IDs
-            try:
-                await page.goto(f"{base}/", wait_until="networkidle", timeout=25000)
-                await page.wait_for_timeout(2500)
-            except Exception as e:
-                crawl_log["endpoints_tried"].append({"endpoint": "/", "status": 0, "products": 0, "error": str(e)[:80]})
-
-            cat_ids = await page.evaluate("""
-                () => {
-                  const ids = new Set();
-                  // Salla redirect-style links: /ar/redirect/categories/{id} or /redirect/categories/{id}
-                  document.querySelectorAll('a[href*="/redirect/categories/"]').forEach(a => {
-                    const m = a.href.match(/categories\\/(\\d+)/);
-                    if (m) ids.add(m[1]);
-                  });
-                  // Direct category links: /ar/categories/{id} or /categories/{id}
-                  document.querySelectorAll('a[href*="/categories/"]').forEach(a => {
-                    const m = a.href.match(/categories\\/(\\d+)/);
-                    if (m) ids.add(m[1]);
-                  });
-                  return Array.from(ids);
-                }
-            """)
-            cat_ids = list(dict.fromkeys(cat_ids))[:max_categories]
-            crawl_log["endpoints_tried"].append({"endpoint": "homepage", "status": 200, "products": 0, "error": f"discovered {len(cat_ids)} categories"})
-            logger.info(f"[ZarafaCrawler] {store['name']} discovered {len(cat_ids)} categories")
-
-            # 2. Iterate categories, scroll each to bottom
-            for idx, cid in enumerate(cat_ids):
-                if len(captured) >= target_min_products * 4:
-                    break  # Safety cap — we've fetched plenty
-                cat_url = f"{base}/ar/redirect/categories/{cid}"
-                before = len(captured)
-                try:
-                    await page.goto(cat_url, wait_until="domcontentloaded", timeout=20000)
-                    await page.wait_for_timeout(1800)
-                    last_count = len(captured)
-                    stagnant_rounds = 0
-                    for i in range(max_scrolls_per_cat):
-                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        await page.wait_for_timeout(1300)
-                        if len(captured) == last_count:
-                            stagnant_rounds += 1
-                            if stagnant_rounds >= 3:
-                                break
-                        else:
-                            stagnant_rounds = 0
-                            last_count = len(captured)
-                    after = len(captured)
-                    crawl_log["endpoints_tried"].append({
-                        "endpoint": f"category {cid}",
-                        "status": 200,
-                        "products": after - before,
-                        "error": None,
-                    })
-                except Exception as e:
-                    crawl_log["endpoints_tried"].append({
-                        "endpoint": f"category {cid}",
-                        "status": 0,
-                        "products": 0,
-                        "error": str(e)[:80],
-                    })
-
+            cat_ids = list(sub_ids)[:max_categories]
+            crawl_log["endpoints_tried"].append({"endpoint": "subcategory_discovery", "status": 200, "products": 0, "error": f"total_categories_discovered={len(cat_ids)}"})
             await browser.close()
-
     except ImportError:
         crawl_log["error"] = "Playwright not installed"
     except Exception as e:
-        crawl_log["error"] = f"Storefront crawler error: {str(e)[:200]}"
+        crawl_log["error"] = f"Storefront crawler discovery error: {str(e)[:200]}"
+
+    if not store_identifier:
+        crawl_log["error"] = (crawl_log.get("error") or "") + " | Failed to capture store-identifier"
+        crawl_log["duration_secs"] = round(time.time() - start_time, 1)
+        await _finalize_crawl_log(db, crawl_log, store["id"])
+        return crawl_log
+
+    # Phase 2 — direct API with store-identifier header + cursor pagination
+    api_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ar",
+        "x-requested-with": "XMLHttpRequest",
+        "Referer": f"{base}/",
+        "Origin": base,
+        "store-identifier": store_identifier,
+    }
+
+    async with httpx.AsyncClient(timeout=20.0, headers=api_headers) as client:
+        for cid in cat_ids:
+            url = f"https://api.salla.dev/store/v1/products?source=categories&source_value%5B%5D={cid}&limit=50"
+            cat_count = 0
+            for page_num in range(max_pages_per_cat):
+                try:
+                    r = await client.get(url)
+                    if r.status_code != 200:
+                        crawl_log["endpoints_tried"].append({"endpoint": f"cat={cid} p={page_num+1}", "status": r.status_code, "products": 0, "error": r.text[:100]})
+                        break
+                    body = r.json()
+                    items = body.get("data") or []
+                    new_added = 0
+                    for it in items:
+                        if not isinstance(it, dict):
+                            continue
+                        pid = it.get("id")
+                        if pid is None or pid in seen_ids:
+                            continue
+                        seen_ids.add(pid)
+                        captured.append(it)
+                        new_added += 1
+                    cat_count += new_added
+                    next_url = (body.get("cursor") or {}).get("next")
+                    if not next_url:
+                        break
+                    url = next_url
+                except Exception as e:
+                    crawl_log["endpoints_tried"].append({"endpoint": f"cat={cid} p={page_num+1}", "status": 0, "products": 0, "error": str(e)[:80]})
+                    break
+            if cat_count > 0:
+                crawl_log["endpoints_tried"].append({"endpoint": f"category {cid}", "status": 200, "products": cat_count, "error": None})
 
     now = datetime.now(timezone.utc)
     crawl_log["duration_secs"] = round(time.time() - start_time, 1)
 
-    if captured and len(captured) >= 3:
+    if captured:
         crawl_log["tier_used"] = 2
         crawl_log["http_status"] = 200
         crawl_log["products_found"] = len(captured)
-        new_c, snap_c = await process_crawled_products(db, store, captured, now, tier=2, confidence=85)
+        new_c, snap_c = await process_crawled_products(db, store, captured, now, tier=2, confidence=88)
         crawl_log["products_new"] = new_c
         crawl_log["products_updated"] = len(captured) - new_c
         crawl_log["snapshots_created"] = snap_c
-        await db.stores.update_one({"id": store["id"]}, {"$set": {"working_xhr_pattern": "salla_storefront_categories"}})
+        await db.stores.update_one({"id": store["id"]}, {"$set": {
+            "working_xhr_pattern": "salla_storefront_categories_direct",
+            "salla_store_identifier": store_identifier,
+        }})
     else:
-        if not crawl_log["error"]:
-            crawl_log["error"] = f"Storefront-categories captured {len(captured)} products — falling through"
+        if not crawl_log.get("error"):
+            crawl_log["error"] = "Storefront-categories captured 0 products"
 
     await _finalize_crawl_log(db, crawl_log, store["id"])
-    logger.info(f"[StorefrontCategories] {store['name']}: found={crawl_log['products_found']}, dur={crawl_log['duration_secs']}s")
+    logger.info(f"[StorefrontCategories] {store['name']}: found={crawl_log['products_found']}, dur={crawl_log['duration_secs']}s, cats={len(cat_ids)}")
     return crawl_log
 
 
