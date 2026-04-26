@@ -513,10 +513,22 @@ EXTRA_PRODUCT_TEMPLATES = [
     ("CA-CT-CG01", "حقيبة حمل قطط شفافة", "Transparent Cat Carrier", "Generic", "accessories", "cat", 0, 109),
 ]
 
-def get_stock_signal(qty):
-    if qty == 0: return "OOS"
-    if qty < 10: return "LOW"
-    if qty <= 30: return "MEDIUM"
+def get_stock_signal(qty, in_stock=None):
+    """Return a stock label.
+    Many Salla/Zid stores set quantity=0 for products with `unlimited_quantity=true` or
+    untracked inventory while still being available for purchase. Use the explicit
+    `in_stock` flag (when present) as the source of truth and only fall back to qty.
+    """
+    if in_stock is False:
+        return "OOS"
+    if in_stock is True and (qty is None or qty == 0):
+        return "AVAIL"  # In-stock but quantity not tracked
+    if qty is None or qty == 0:
+        return "OOS"
+    if qty < 10:
+        return "LOW"
+    if qty <= 30:
+        return "MEDIUM"
     return "HIGH"
 
 async def seed_database():
@@ -1349,6 +1361,66 @@ async def _login_shopify(page, base_url, store, credentials, phone_last4):
     return {"success": False, "error": "No email/password fields found"}
 
 
+# Heuristic constants for sales estimation (defensive — avoid placeholder-stock-noise blowing up totals)
+PLACEHOLDER_QTY_VALUES = {99, 100, 999, 1000, 9999, 10000, 99999, 100000}
+MAX_QTY_DELTA_PER_INTERVAL = 30  # >30 units sold per single crawl interval per SKU is almost certainly a data error
+MAX_DAILY_SALES_PER_SKU = 200    # absolute upper bound for sanity
+
+
+def _estimate_sales_from_snapshots(snaps, days):
+    """
+    Estimate sales for a SKU at a single store from chronological snapshot list.
+    Strategy:
+      1. PREFER sold_count diff (Salla `sales_count` / Zid `sold_count`) — cumulative sales counter, most reliable.
+      2. FALL BACK to qty depletion with sanity filters (drop placeholder values, cap deltas).
+    Returns (units_sold, revenue, used_method).
+    """
+    if not snaps or len(snaps) < 2:
+        return 0, 0.0, "insufficient_data"
+
+    # ── Method 1: sold_count cumulative diff (most reliable) ──
+    sold_counts = [s.get("sold_count", 0) or 0 for s in snaps]
+    if max(sold_counts) > 0 and sold_counts[0] >= 0:
+        # Find first non-zero and last; ensure monotonic non-decrease (resets shouldn't be counted)
+        first_sc = next((sc for sc in sold_counts if sc > 0), 0)
+        last_sc = sold_counts[-1] if sold_counts[-1] >= first_sc else max(sold_counts)
+        units_from_counter = max(0, last_sc - first_sc)
+        if units_from_counter > 0:
+            avg_price = sum((s.get("price") or 0) for s in snaps) / max(1, len(snaps))
+            # Cap at sane absolute upper bound
+            units_capped = min(units_from_counter, MAX_DAILY_SALES_PER_SKU * max(1, days))
+            return units_capped, round(units_capped * avg_price, 2), "sold_count_diff"
+
+    # ── Method 2: qty depletion with sanity filters ──
+    units = 0
+    revenue = 0.0
+    for i in range(1, len(snaps)):
+        prev_qty = snaps[i - 1].get("qty_available", 0) or 0
+        curr_qty = snaps[i].get("qty_available", 0) or 0
+        # Skip placeholder stock values — these are "unlimited" markers, not real inventory
+        if prev_qty in PLACEHOLDER_QTY_VALUES or curr_qty in PLACEHOLDER_QTY_VALUES:
+            continue
+        # Skip when previous qty was already absurdly high (likely placeholder)
+        if prev_qty > 500:
+            continue
+        delta = prev_qty - curr_qty
+        if delta <= 0:
+            continue
+        # Sanity cap per snapshot interval
+        delta = min(delta, MAX_QTY_DELTA_PER_INTERVAL)
+        units += delta
+        revenue += delta * (snaps[i].get("price") or 0)
+
+    # Final daily cap
+    daily_cap = MAX_DAILY_SALES_PER_SKU * max(1, days)
+    if units > daily_cap:
+        scale = daily_cap / units
+        units = int(units * scale)
+        revenue *= scale
+
+    return units, round(revenue, 2), "qty_depletion_capped"
+
+
 # ── Update test-login to actually trigger login ─────────────
 def compute_product_metrics(snapshots_by_store, days):
     """Given {store_id: [snapshots sorted by crawled_at asc]}, compute market metrics."""
@@ -1356,6 +1428,7 @@ def compute_product_metrics(snapshots_by_store, days):
     total_sold = 0
     total_revenue = 0.0
     latest_qty = 0
+    any_in_stock = False
     confidences = []
     latest_tier = 1
 
@@ -1367,13 +1440,13 @@ def compute_product_metrics(snapshots_by_store, days):
         confidences.append(latest["confidence_score"])
         latest_tier = latest["source_tier"]
         latest_qty = max(latest_qty, latest.get("qty_available", 0))
+        if latest.get("in_stock") is True:
+            any_in_stock = True
 
-        # Compute sold from depletion
-        for i in range(1, len(snaps)):
-            delta = snaps[i - 1].get("qty_available", 0) - snaps[i].get("qty_available", 0)
-            if delta > 0:
-                total_sold += delta
-                total_revenue += delta * snaps[i]["price"]
+        # Estimate sales using the new defensible algorithm
+        units, revenue, _ = _estimate_sales_from_snapshots(snaps, days)
+        total_sold += units
+        total_revenue += revenue
 
     if not all_latest_prices:
         return None
@@ -1395,7 +1468,7 @@ def compute_product_metrics(snapshots_by_store, days):
         "revenue_est": round(total_revenue, 2),
         "num_sellers": len(all_latest_prices),
         "latest_qty": latest_qty,
-        "stock_signal": get_stock_signal(latest_qty),
+        "stock_signal": get_stock_signal(latest_qty, in_stock=any_in_stock if any_in_stock else None),
         "confidence_score": avg_conf,
         "source_tier": latest_tier,
     }
@@ -1435,7 +1508,7 @@ async def my_products(
             {"name_en": {"$regex": search, "$options": "i"}},
             {"sku": {"$regex": search, "$options": "i"}},
         ]
-    products = await db.products.find(prod_query, {"_id": 0}).to_list(500)
+    products = await db.products.find(prod_query, {"_id": 0}).to_list(5000)
 
     result = []
     total_sold = 0
@@ -1517,7 +1590,7 @@ async def get_product(sku: str, user=Depends(get_user)):
     store_prices = await db.product_snapshots.aggregate(pipeline).to_list(20)
     for sp in store_prices:
         sp["store_id"] = sp.pop("_id")
-        sp["stock_signal"] = get_stock_signal(sp.get("qty_available", 0))
+        sp["stock_signal"] = get_stock_signal(sp.get("qty_available", 0), in_stock=sp.get("in_stock"))
         if isinstance(sp.get("crawled_at"), datetime):
             sp["crawled_at"] = sp["crawled_at"].isoformat()
 
@@ -1659,21 +1732,20 @@ async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
 
     leaderboard = []
     for store_id, sku_data in by_store.items():
-        total_rev = 0
+        total_rev = 0.0
+        total_units = 0
         total_products = len(sku_data)
         for sku, snap_list in sku_data.items():
-            for i in range(1, len(snap_list)):
-                prev_qty = snap_list[i - 1].get("qty_available", 0) or 0
-                curr_qty = snap_list[i].get("qty_available", 0) or 0
-                delta = prev_qty - curr_qty
-                if 0 < delta < 500:  # Cap at 500 to avoid data errors
-                    total_rev += delta * snap_list[i]["price"]
+            units, revenue, _ = _estimate_sales_from_snapshots(snap_list, days)
+            total_units += units
+            total_rev += revenue
 
         store_name = store_names.get(store_id, store_id)
         leaderboard.append({
             "store": store_name,
             "store_id": store_id,
             "revenue_est": round(total_rev, 2),
+            "units_sold": total_units,
             "products": total_products,
         })
 
@@ -1696,13 +1768,11 @@ async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = 
     sellers = []
     for sku, data in by_sku.items():
         total_sold = 0
-        total_rev = 0
+        total_rev = 0.0
         for sid, snaps in data["store_snaps"].items():
-            for i in range(1, len(snaps)):
-                delta = snaps[i - 1].get("qty_available", 0) - snaps[i].get("qty_available", 0)
-                if delta > 0:
-                    total_sold += delta
-                    total_rev += delta * snaps[i]["price"]
+            units, revenue, _ = _estimate_sales_from_snapshots(snaps, days)
+            total_sold += units
+            total_rev += revenue
         if total_sold > 0:
             product = await db.products.find_one({"sku": sku}, {"_id": 0})
             if product:

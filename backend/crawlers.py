@@ -181,7 +181,31 @@ def _normalize_raw_product(raw, store_name):
 
     qty = int(raw.get("quantity", raw.get("stock_quantity", raw.get("qty", 0))) or 0)
 
-    in_stock = raw.get("status") in ("sale", "active") or raw.get("is_available", raw.get("availability", qty > 0))
+    # Capture cumulative sales counter (Salla: sales_count, Zid: sold_count) — primary signal for sales estimation
+    sold_count = int(
+        raw.get("sales_count")
+        or raw.get("sold_count")
+        or raw.get("total_sold")
+        or raw.get("orders_count")
+        or 0
+    )
+
+    # in_stock detection — handle multiple platform conventions defensively
+    explicit_avail = raw.get("is_available")
+    if explicit_avail is None:
+        explicit_avail = raw.get("availability")
+    status_val = str(raw.get("status", "")).lower()
+
+    if explicit_avail is True or explicit_avail in ("yes", "available", "in_stock"):
+        in_stock = True
+    elif explicit_avail is False or explicit_avail in ("no", "unavailable", "out_of_stock", "sold_out"):
+        in_stock = False
+    elif status_val in ("sale", "active", "available", "published", "visible"):
+        in_stock = True  # Active product on storefront → treat as in-stock unless explicitly unavailable
+    elif status_val in ("draft", "hidden", "deleted", "out", "out_of_stock", "sold_out"):
+        in_stock = False
+    else:
+        in_stock = qty > 0  # Last-resort fallback
 
     imgs = raw.get("images", raw.get("image", []))
     img_url = ""
@@ -196,6 +220,7 @@ def _normalize_raw_product(raw, store_name):
         "price": price,
         "original_price": original_price,
         "qty": max(0, qty),
+        "sold_count": max(0, sold_count),
         "in_stock": bool(in_stock),
         "img_url": img_url,
     }
@@ -239,6 +264,7 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "discount_pct": max(0, disc_pct),
             "in_stock": norm["in_stock"],
             "qty_available": norm["qty"],
+            "sold_count": norm["sold_count"],
             "source_tier": tier,
             "confidence_score": confidence,
             "crawled_at": now,

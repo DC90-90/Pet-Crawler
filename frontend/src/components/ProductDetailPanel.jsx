@@ -12,8 +12,9 @@ import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/comp
 const STORE_COLORS = ["#002DF5", "#00C853", "#FF3B30", "#FFB300", "#8B5CF6", "#EC4899", "#06B6D4"];
 
 function StockBadge({ signal }) {
-  const cls = { HIGH: "stock-high", MEDIUM: "stock-medium", LOW: "stock-low", OOS: "stock-oos" };
-  return <span className={`text-xs font-bold ${cls[signal] || ""}`}>{signal}</span>;
+  const cls = { HIGH: "stock-high", MEDIUM: "stock-medium", LOW: "stock-low", OOS: "stock-oos", AVAIL: "stock-high" };
+  const labelMap = { AVAIL: "IN STOCK" };
+  return <span className={`text-xs font-bold ${cls[signal] || ""}`}>{labelMap[signal] || signal}</span>;
 }
 
 function TierBadge({ tier, score }) {

@@ -11,8 +11,9 @@ import ProductDetailPanel from "@/components/ProductDetailPanel";
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
 function StockBadge({ signal }) {
-  const cls = { HIGH: "stock-high", MEDIUM: "stock-medium", LOW: "stock-low", OOS: "stock-oos" };
-  return <span className={`text-xs font-bold ${cls[signal] || ""}`}>{signal}</span>;
+  const cls = { HIGH: "stock-high", MEDIUM: "stock-medium", LOW: "stock-low", OOS: "stock-oos", AVAIL: "stock-high" };
+  const labelMap = { AVAIL: "IN STOCK" };
+  return <span className={`text-xs font-bold ${cls[signal] || ""}`}>{labelMap[signal] || signal}</span>;
 }
 
 function ConfBadge({ tier, score }) {
