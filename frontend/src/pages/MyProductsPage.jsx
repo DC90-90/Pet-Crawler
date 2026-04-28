@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import ProductDetailPanel from "@/components/ProductDetailPanel";
+import { MineBadge } from "@/components/MineBadge";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
@@ -197,8 +198,16 @@ export default function MyProductsPage() {
             ) : data.products.length === 0 ? (
               <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#A1E4DB] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : (
-              data.products.map((p) => (
-                <TableRow key={p.sku} className="cursor-pointer hover:bg-[#104745]/40" onClick={() => setSelectedSku(p.sku)} data-testid={`product-row-${p.sku}`}>
+              data.products.map((p) => {
+                const isMine = p.is_my_product;
+                return (
+                <TableRow
+                  key={p.sku}
+                  className={`cursor-pointer hover:bg-[#104745]/40 ${isMine ? "bg-[#1E988E]/[0.06] border-s-2 border-s-[#1E988E]" : ""}`}
+                  onClick={() => setSelectedSku(p.sku)}
+                  data-testid={`product-row-${p.sku}`}
+                  data-is-mine={isMine ? "true" : "false"}
+                >
                   <TableCell>
                     <div className="flex items-start gap-2">
                       <div className="flex-1 min-w-0">
@@ -212,7 +221,8 @@ export default function MyProductsPage() {
                             data-testid={`product-link-${p.sku}`}
                             title={p.product_url}
                           >
-                            <p className="text-sm font-medium text-white leading-tight inline-flex items-center gap-1">
+                            <p className="text-sm font-medium text-white leading-tight inline-flex items-center gap-1.5">
+                              <MineBadge sku={p.sku} />
                               {p.name_ar}
                               <ExternalLink className="w-3 h-3 opacity-60 flex-shrink-0" />
                             </p>
@@ -220,7 +230,10 @@ export default function MyProductsPage() {
                           </a>
                         ) : (
                           <>
-                            <p className="text-sm font-medium text-white leading-tight">{p.name_ar}</p>
+                            <p className="text-sm font-medium text-white leading-tight inline-flex items-center gap-1.5">
+                              <MineBadge sku={p.sku} />
+                              {p.name_ar}
+                            </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
                           </>
                         )}
@@ -262,7 +275,8 @@ export default function MyProductsPage() {
                   <TableCell><StockBadge signal={p.stock_signal} /></TableCell>
                   <TableCell><ConfBadge tier={p.source_tier} score={p.confidence_score} /></TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>

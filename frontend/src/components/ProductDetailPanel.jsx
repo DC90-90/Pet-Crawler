@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/components/SeasonalAnnotations";
+import { MineBadge } from "@/components/MineBadge";
 
 const STORE_COLORS = ["#002DF5", "#00C853", "#FF3B30", "#FFB300", "#8B5CF6", "#EC4899", "#06B6D4"];
 
@@ -68,7 +69,8 @@ export default function ProductDetailPanel({ sku, onClose }) {
     <Sheet open={!!sku} onOpenChange={(open) => { if (!open) onClose(); }}>
       <SheetContent className="w-[520px] sm:max-w-[520px] overflow-y-auto p-0" data-testid="product-detail-panel">
         <SheetHeader className="px-5 py-4 border-b border-white/10 sticky top-0 bg-[#0A2728]/80 z-10">
-          <SheetTitle className="text-base font-bold text-white">
+          <SheetTitle className="text-base font-bold text-white inline-flex items-center gap-2">
+            <MineBadge sku={sku} />
             {product?.name_ar || t("loading")}
           </SheetTitle>
         </SheetHeader>

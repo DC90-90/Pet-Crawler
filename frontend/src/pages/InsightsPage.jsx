@@ -10,6 +10,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/components/SeasonalAnnotations";
 import DigestModal from "@/components/DigestModal";
 import { BarChart3, Bell, Eye } from "lucide-react";
+import { MineBadge } from "@/components/MineBadge";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
@@ -113,7 +114,7 @@ export default function InsightsPage() {
               <div key={s.sku} className="flex items-center gap-3 py-1.5 border-b border-white/5 last:border-0" data-testid={`top-seller-${i}`}>
                 <span className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#1E988E] text-[#090E1C]" : "bg-white/5 text-[#A1E4DB]"}`}>{i + 1}</span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-white truncate">{s.name_ar}</p>
+                  <p className="text-xs font-medium text-white truncate inline-flex items-center gap-1.5"><MineBadge sku={s.sku} />{s.name_ar}</p>
                   <p className="text-[10px] text-[#A1E4DB]">{s.brand} - {s.category}</p>
                 </div>
                 <div className="text-end">
@@ -142,7 +143,7 @@ export default function InsightsPage() {
                 <div className="space-y-1.5">
                   {c.top_products.map((p) => (
                     <div key={p.sku} className="flex items-center justify-between text-xs py-1 border-b border-white/5">
-                      <span className="text-[#A1E4DB] truncate flex-1">{p.name_ar}</span>
+                      <span className="text-[#A1E4DB] truncate flex-1 inline-flex items-center gap-1.5"><MineBadge sku={p.sku} />{p.name_ar}</span>
                       <span className="font-bold text-white ms-2">{p.units_sold}</span>
                     </div>
                   ))}
@@ -161,7 +162,7 @@ export default function InsightsPage() {
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
             {priceWars.map((w) => (
               <div key={w.sku} className="py-2 border-b border-white/5 last:border-0">
-                <p className="text-xs font-medium text-white truncate">{w.name_ar}</p>
+                <p className="text-xs font-medium text-white truncate inline-flex items-center gap-1.5"><MineBadge sku={w.sku} />{w.name_ar}</p>
                 <div className="flex items-center gap-2 mt-1">
                   <Badge variant="outline" className="text-[10px] border-[#EF4444]/30 text-[#EF4444] bg-[#EF4444]/10">{w.spread_sar} SAR spread</Badge>
                   <span className="text-[10px] text-[#A1E4DB]">{w.spread_pct}%</span>
@@ -178,7 +179,7 @@ export default function InsightsPage() {
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
             {restock.map((r) => (
               <div key={r.sku} className="py-2 border-b border-white/5 last:border-0">
-                <p className="text-xs font-medium text-white truncate">{r.name_ar}</p>
+                <p className="text-xs font-medium text-white truncate inline-flex items-center gap-1.5"><MineBadge sku={r.sku} />{r.name_ar}</p>
                 <p className="text-[10px] text-red-500 mt-0.5">OOS at: {r.oos_stores.join(", ")}</p>
                 <p className="text-[10px] text-green-600">In stock at: {r.in_stock_stores.map((s) => s.store).join(", ")}</p>
               </div>
@@ -194,7 +195,7 @@ export default function InsightsPage() {
             {gaps.map((g) => (
               <div key={g.sku} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-white truncate">{g.name_ar}</p>
+                  <p className="text-xs font-medium text-white truncate inline-flex items-center gap-1.5"><MineBadge sku={g.sku} />{g.name_ar}</p>
                   <p className="text-[10px] text-[#A1E4DB]">{g.num_stores} stores / {g.missing_count} missing</p>
                 </div>
                 <Badge className="text-[10px] bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30" variant="outline">

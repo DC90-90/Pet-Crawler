@@ -1392,7 +1392,9 @@ async def my_products(
     products = await db.products.find(prod_query, {"_id": 0}).to_list(5000)
 
     # Pull SKU → product_url from my_products (user's own store) and store domains for fallback search URLs
-    my_url_by_sku = {p["sku"]: p.get("product_url") for p in await db.my_products.find({}, {"_id": 0, "sku": 1, "product_url": 1}).to_list(10000) if p.get("product_url")}
+    my_products_docs = await db.my_products.find({}, {"_id": 0, "sku": 1, "product_url": 1}).to_list(20000)
+    my_url_by_sku = {p["sku"]: p.get("product_url") for p in my_products_docs if p.get("product_url")}
+    my_skus_set = {p["sku"] for p in my_products_docs if p.get("sku")}
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "domain": 1})
     own_domain = own_store.get("domain") if own_store else None
     store_domains = {s["id"]: s.get("domain") for s in await db.stores.find({}, {"_id": 0, "id": 1, "domain": 1}).to_list(200) if s.get("domain")}
@@ -1428,6 +1430,7 @@ async def my_products(
                 if fd:
                     url = f"https://{fd}/search?keyword={p['sku']}"
         row["product_url"] = url
+        row["is_my_product"] = p["sku"] in my_skus_set
         result.append(row)
         total_sold += metrics["qty_sold_est"]
         total_rev += metrics["revenue_est"]
@@ -1552,6 +1555,7 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
     product = await db.products.find_one({"sku": sku}, {"_id": 0})
     if not product:
         raise HTTPException(404, "Product not found")
+    product["is_my_product"] = await db.my_products.count_documents({"sku": sku}, limit=1) > 0
 
     snapshots = await db.product_snapshots.find(
         {"sku": sku, "crawled_at": {"$gte": since}}, {"_id": 0}
@@ -3034,6 +3038,17 @@ async def list_my_products(page: int = 1, limit: int = 50, search: str = "", use
     total = await db.my_products.count_documents(query)
     items = await db.my_products.find(query, {"_id": 0}).skip((page - 1) * limit).limit(limit).to_list(limit)
     return {"items": items, "total": total, "page": page, "pages": (total + limit - 1) // limit}
+
+
+@router.get("/my-skus")
+async def get_my_skus(user=Depends(get_user)):
+    """Lightweight set of SKUs in the user's own catalog.
+
+    Used by the frontend to highlight "my products" across all pages without
+    having to load the heavy `/api/my-products-list` payload.
+    """
+    skus = [p["sku"] for p in await db.my_products.find({}, {"_id": 0, "sku": 1}).to_list(20000) if p.get("sku")]
+    return {"skus": skus, "count": len(skus)}
 
 
 # ── External Crawler Ingest API ──────────────────────────────

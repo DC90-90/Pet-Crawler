@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useState, useEffect, createContext, useContext } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { I18nProvider } from "@/lib/i18n";
+import { MySkusProvider } from "@/lib/mySkus";
 import api from "@/lib/api";
 import Sidebar from "@/components/Sidebar";
 import LoginPage from "@/pages/LoginPage";
@@ -92,13 +93,15 @@ function App() {
   return (
     <I18nProvider>
       <AuthProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/*" element={<AppLayout />} />
-          </Routes>
-          <Toaster position="top-right" />
-        </BrowserRouter>
+        <MySkusProvider>
+          <BrowserRouter>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/*" element={<AppLayout />} />
+            </Routes>
+            <Toaster position="top-right" />
+          </BrowserRouter>
+        </MySkusProvider>
       </AuthProvider>
     </I18nProvider>
   );
