@@ -37,6 +37,7 @@ export default function MyProductsPage() {
   const [days, setDays] = useState(30);
   const [onDate, setOnDate] = useState("");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [sortBy, setSortBy] = useState("revenue_est");
   const [sortOrder, setSortOrder] = useState("desc");
@@ -50,7 +51,7 @@ export default function MyProductsPage() {
     setLoading(true);
     const offset = (page - 1) * pageSize;
     const params = {
-      search: search || undefined,
+      search: debouncedSearch || undefined,
       category: category !== "all" ? category : undefined,
       sort_by: sortBy, sort_order: sortOrder,
       limit: pageSize, offset,
@@ -61,12 +62,18 @@ export default function MyProductsPage() {
       .then((r) => setData(r.data))
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [days, onDate, search, category, sortBy, sortOrder, page, pageSize]);
+  }, [days, onDate, debouncedSearch, category, sortBy, sortOrder, page, pageSize]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
+  // 300ms search debounce — avoids hammering the API on every keystroke
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(id);
+  }, [search]);
+
   // Reset to first page when filters change
-  useEffect(() => { setPage(1); }, [days, onDate, search, category, sortBy, sortOrder, pageSize]);
+  useEffect(() => { setPage(1); }, [days, onDate, debouncedSearch, category, sortBy, sortOrder, pageSize]);
 
   const handleSort = (field) => {
     if (sortBy === field) setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
