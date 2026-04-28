@@ -1340,6 +1340,8 @@ async def my_products(
     search: Optional[str] = Query(None),
     sort_by: str = Query("revenue_est"),
     sort_order: str = Query("desc"),
+    limit: int = Query(100, ge=1, le=500, description="Max products per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
     user=Depends(get_user)
 ):
     # Resolve date window
@@ -1357,7 +1359,15 @@ async def my_products(
         since = datetime.now(timezone.utc) - timedelta(days=days)
         snap_query = {"crawled_at": {"$gte": since}}
         effective_days = days
-    snapshots = await db.product_snapshots.find(snap_query, {"_id": 0}).to_list(50000)
+    snapshots = await db.product_snapshots.find(
+        snap_query,
+        {
+            "_id": 0, "sku": 1, "store_id": 1, "store_name": 1,
+            "crawled_at": 1, "price": 1, "original_price": 1, "discount_pct": 1,
+            "qty_available": 1, "in_stock": 1, "sold_count": 1,
+            "confidence_score": 1, "source_tier": 1, "product_url": 1,
+        },
+    ).to_list(50000)
 
     # Group snapshots by sku, then by store
     by_sku = {}
@@ -1426,18 +1436,23 @@ async def my_products(
     reverse = sort_order == "desc"
     result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
 
-    # Market share
+    # Market share (computed on FULL set, before pagination)
     for r in result:
         r["market_size"] = total_sold
         r["market_share_pct"] = round((r["qty_sold_est"] / total_sold) * 100, 1) if total_sold > 0 else 0
 
+    total_count = len(result)
     kpis = {
-        "total_products": len(result),
+        "total_products": total_count,
         "total_units_sold": total_sold,
         "total_revenue": round(total_rev, 2),
-        "avg_market_share": round(100 / len(result), 1) if result else 0,
+        "avg_market_share": round(100 / total_count, 1) if total_count else 0,
     }
-    return {"kpis": kpis, "products": result}
+    # Distinct categories across the FULL filtered set (so the dropdown stays complete after pagination)
+    categories_all = sorted({(r.get("category") or "") for r in result if r.get("category")})
+    # Apply pagination AFTER sort + KPIs so totals remain accurate
+    paged = result[offset: offset + limit]
+    return {"kpis": kpis, "products": paged, "total": total_count, "limit": limit, "offset": offset, "categories": categories_all}
 
 @router.get("/products")
 async def list_products(
@@ -1674,7 +1689,6 @@ async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_use
 @router.get("/insights/summary")
 async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    total_skus = await db.products.count_documents({})
 
     # Price drops: snapshots where price decreased
     pipeline_drops = [
@@ -1684,9 +1698,6 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
         {"$match": {"$expr": {"$and": [{"$gte": [{"$size": "$prices"}, 2]}, {"$lt": [{"$arrayElemAt": ["$prices", 0]}, {"$arrayElemAt": ["$prices", 1]}]}]}}},
         {"$count": "drops"},
     ]
-    drops_result = await db.product_snapshots.aggregate(pipeline_drops).to_list(1)
-    price_drops = drops_result[0]["drops"] if drops_result else random.randint(8, 25)
-
     # Product gaps: products carried by < 3 stores
     pipeline_gaps = [
         {"$match": {"crawled_at": {"$gte": since}}},
@@ -1694,9 +1705,6 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
         {"$match": {"$expr": {"$lt": [{"$size": "$stores"}, 3]}}},
         {"$count": "gaps"},
     ]
-    gaps_result = await db.product_snapshots.aggregate(pipeline_gaps).to_list(1)
-    product_gaps = gaps_result[0]["gaps"] if gaps_result else 0
-
     # Median price spread
     pipeline_spread = [
         {"$match": {"crawled_at": {"$gte": since}}},
@@ -1705,16 +1713,25 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
         {"$group": {"_id": "$_id.sku", "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}}},
         {"$project": {"spread": {"$subtract": ["$max_p", "$min_p"]}}},
     ]
-    spreads = await db.product_snapshots.aggregate(pipeline_spread).to_list(500)
-    spread_vals = [s["spread"] for s in spreads if s["spread"] > 0]
-    median_spread = round(statistics.median(spread_vals), 2) if spread_vals else 0
-
     # Avg confidence
     pipeline_conf = [
         {"$match": {"crawled_at": {"$gte": since}}},
         {"$group": {"_id": None, "avg_conf": {"$avg": "$confidence_score"}}},
     ]
-    conf_result = await db.product_snapshots.aggregate(pipeline_conf).to_list(1)
+
+    # Run all 5 queries in parallel
+    total_skus, drops_result, gaps_result, spreads, conf_result = await asyncio.gather(
+        db.products.count_documents({}),
+        db.product_snapshots.aggregate(pipeline_drops).to_list(1),
+        db.product_snapshots.aggregate(pipeline_gaps).to_list(1),
+        db.product_snapshots.aggregate(pipeline_spread).to_list(500),
+        db.product_snapshots.aggregate(pipeline_conf).to_list(1),
+    )
+
+    price_drops = drops_result[0]["drops"] if drops_result else random.randint(8, 25)
+    product_gaps = gaps_result[0]["gaps"] if gaps_result else 0
+    spread_vals = [s["spread"] for s in spreads if s["spread"] > 0]
+    median_spread = round(statistics.median(spread_vals), 2) if spread_vals else 0
     avg_confidence = round(conf_result[0]["avg_conf"], 1) if conf_result else 0
 
     return {
@@ -3460,6 +3477,15 @@ app.add_middleware(
 async def startup():
     await seed_database()
     await ensure_stores()
+    # Idempotent indexes (safe to run on every startup; no-op if already present)
+    try:
+        await db.product_snapshots.create_index("crawled_at")
+        await db.product_snapshots.create_index([("sku", 1), ("crawled_at", -1)])
+        await db.product_snapshots.create_index([("store_id", 1), ("crawled_at", -1)])
+        await db.products.create_index("sku", unique=True)
+        await db.products.create_index("category")
+    except Exception as e:
+        logger.warning(f"Index creation skipped: {e}")
     # Register crawl jobs for all active stores (skip own store)
     stores = await db.stores.find({"is_active": True}, {"_id": 0}).to_list(100)
     for idx, s in enumerate(stores):

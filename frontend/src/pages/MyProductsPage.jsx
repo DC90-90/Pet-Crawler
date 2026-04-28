@@ -32,7 +32,7 @@ function SortIcon({ field, sortBy, sortOrder }) {
 
 export default function MyProductsPage() {
   const { t, isRTL } = useI18n();
-  const [data, setData] = useState({ kpis: {}, products: [] });
+  const [data, setData] = useState({ kpis: {}, products: [], total: 0 });
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
   const [onDate, setOnDate] = useState("");
@@ -41,21 +41,32 @@ export default function MyProductsPage() {
   const [sortBy, setSortBy] = useState("revenue_est");
   const [sortOrder, setSortOrder] = useState("desc");
   const [selectedSku, setSelectedSku] = useState(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
 
-  const categories = [...new Set(data.products.map((p) => p.category))].sort();
+  const categories = data.categories || [...new Set(data.products.map((p) => p.category))].sort();
 
   const fetchData = useCallback(() => {
     setLoading(true);
-    const params = { search: search || undefined, category: category !== "all" ? category : undefined, sort_by: sortBy, sort_order: sortOrder };
+    const offset = (page - 1) * pageSize;
+    const params = {
+      search: search || undefined,
+      category: category !== "all" ? category : undefined,
+      sort_by: sortBy, sort_order: sortOrder,
+      limit: pageSize, offset,
+    };
     if (onDate) params.on_date = onDate;
     else params.days = days;
     api.get("/my-products", { params })
       .then((r) => setData(r.data))
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [days, onDate, search, category, sortBy, sortOrder]);
+  }, [days, onDate, search, category, sortBy, sortOrder, page, pageSize]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Reset to first page when filters change
+  useEffect(() => { setPage(1); }, [days, onDate, search, category, sortBy, sortOrder, pageSize]);
 
   const handleSort = (field) => {
     if (sortBy === field) setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
@@ -251,6 +262,46 @@ export default function MyProductsPage() {
       </div>
 
       <ProductDetailPanel sku={selectedSku} onClose={() => setSelectedSku(null)} />
+
+      {/* Pagination */}
+      {data.total > pageSize && (
+        <div className="flex items-center justify-between px-2" data-testid="pagination">
+          <p className="text-xs text-[#A1E4DB]">
+            {isRTL
+              ? `عرض ${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, data.total)} من ${data.total.toLocaleString()}`
+              : `Showing ${((page - 1) * pageSize + 1).toLocaleString()}–${Math.min(page * pageSize, data.total).toLocaleString()} of ${data.total.toLocaleString()}`}
+          </p>
+          <div className="flex items-center gap-2">
+            <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+              <SelectTrigger className="w-[90px] h-7 text-xs rounded-full bg-white/5 border-white/10 text-white" data-testid="page-size-select">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-[#104745] border-white/10 text-white">
+                {[50, 100, 200, 500].map((n) => <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="h-7 px-3 text-xs rounded-full bg-white/5 border border-white/10 text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed"
+              data-testid="page-prev-btn"
+            >
+              {isRTL ? "التالي" : "Prev"}
+            </button>
+            <span className="text-xs font-mono text-[#A1E4DB]" data-testid="page-indicator">
+              {page} / {Math.max(1, Math.ceil(data.total / pageSize))}
+            </span>
+            <button
+              onClick={() => setPage((p) => p + 1)}
+              disabled={page * pageSize >= data.total}
+              className="h-7 px-3 text-xs rounded-full bg-white/5 border border-white/10 text-white hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed"
+              data-testid="page-next-btn"
+            >
+              {isRTL ? "السابق" : "Next"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

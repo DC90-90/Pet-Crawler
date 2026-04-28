@@ -49,7 +49,11 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
 - **Product Detail panel speed-up** — single aggregated `/api/products/{sku}/full?days=30` replaces 3 round-trips; renders per-store sparklines + Recharts price-history chart
 - **Storefront deep-links** on every product row + every store row inside the detail panel
 - **Refactor (Feb 2026)** — extracted Pydantic models to `/app/backend/models/schemas.py` and shared helpers/constants to `/app/backend/core/utils.py`. Reduced `server.py` from 3661 → 3476 lines.
-- **Refactor (Feb 2026)** — split `PriceIntelPage.jsx` (530 lines) into 4 sub-components under `/app/frontend/src/components/priceIntel/`: `PriceIntelShared.jsx` (badges + level definitions), `PriceIntelHeader.jsx` (KPIs, distribution, guide, market position), `PriceIntelTabs.jsx` (5 tab tables), `PriceIntelDetailSheet.jsx` (drill-down sheet). Page is now 135 lines (~75% reduction).
+- **Refactor (Feb 2026)** — split `PriceIntelPage.jsx` (530 lines) into 4 sub-components under `/app/frontend/src/components/priceIntel/`: `PriceIntelShared.jsx`, `PriceIntelHeader.jsx`, `PriceIntelTabs.jsx`, `PriceIntelDetailSheet.jsx`. Page is now 135 lines.
+- **Performance hotfix (Feb 2026)** — `/api/my-products` now supports `limit`/`offset` pagination + projected snapshot fields. Payload dropped from **4.27 MB → 65 KB (98.5% smaller)** and response time 1.1s → 0.5s. KPIs still computed across the full filtered set.
+- **Performance hotfix (Feb 2026)** — `/api/insights/summary` now runs all 5 aggregations in parallel (`asyncio.gather`).
+- **Performance hotfix (Feb 2026)** — Added idempotent index on `product_snapshots.crawled_at` and `products.category` at startup (existing DBs benefit on next boot).
+- **Frontend pagination** added to `MyProductsPage.jsx` (`data-testid="pagination"` with prev/next + page-size selector) — handles thousands of products without browser hang.
 - Tested via testing agent (iteration_12 + iteration_13): 100% backend (38/38), 100% frontend, no issues
 
 ## Backlog
