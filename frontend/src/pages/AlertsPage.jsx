@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SkuLine } from "@/components/SkuLine";
 
 const ALERT_TYPES = [
   { value: "price_drop", label: "Price Drop", icon: ArrowDown, color: "text-red-500" },
@@ -149,7 +150,7 @@ export default function AlertsPage() {
                   <TableRow key={a.id} data-testid={`alert-row-${a.id}`}>
                     <TableCell><div className="flex items-center gap-1.5"><AlertTypeIcon type={a.alert_type} /><span className="text-xs capitalize">{a.alert_type.replace("_", " ")}</span></div></TableCell>
                     <TableCell>
-                      <div><p className="text-xs font-medium text-white">{a.product_name_ar || a.product_sku}</p><p className="text-[10px] text-[#A1E4DB] font-mono">{a.product_sku}</p></div>
+                      <div><p className="text-xs font-medium text-white">{a.product_name_ar || a.product_sku}</p><SkuLine sku={a.product_sku} barcode={a.product_barcode} /></div>
                     </TableCell>
                     <TableCell><span className="text-xs">{a.threshold ? `${a.threshold}%` : "-"}</span></TableCell>
                     <TableCell><Badge variant="outline" className="text-[10px] capitalize">{a.channel}</Badge></TableCell>
@@ -187,10 +188,11 @@ export default function AlertsPage() {
                     <AlertTypeIcon type={ev.alert_type} />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-white">
-                        <span className="capitalize">{ev.alert_type?.replace("_", " ")}</span> - <span className="font-mono">{ev.sku}</span>
+                        <span className="capitalize">{ev.alert_type?.replace("_", " ")}</span>
                         {ev.store_name && <span className="text-[#A1E4DB]"> at {ev.store_name}</span>}
                       </p>
-                      <p className="text-[10px] text-[#A1E4DB]">{ev.old_value} &rarr; {ev.new_value}</p>
+                      <SkuLine sku={ev.sku} />
+                      <p className="text-[10px] text-[#A1E4DB] mt-0.5">{ev.old_value} &rarr; {ev.new_value}</p>
                     </div>
                     <span className="text-[10px] text-[#A1E4DB] shrink-0">{formatDate(ev.triggered_at)}</span>
                   </div>

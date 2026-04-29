@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
 import { MineBadge } from "@/components/MineBadge";
+import { SkuLine } from "@/components/SkuLine";
 
 const RANGE_OPTIONS = [7, 14, 30];
 const BADGE_CFG = {
@@ -110,7 +111,7 @@ export default function ScannerPage() {
               const BIcon = bcfg.icon;
               return (
                 <TableRow key={`${o.sku}-${o.store_id}-${i}`} className="cursor-pointer hover:bg-[#0A2728]/80/5" onClick={() => setSelectedOpp(o)} data-testid={`opp-row-${i}`}>
-                  <TableCell><div><p className="text-xs font-medium text-white inline-flex items-center gap-1.5"><MineBadge sku={o.sku} />{o.name_ar}</p><p className="text-[10px] text-[#A1E4DB] font-mono">{o.sku}</p></div></TableCell>
+                  <TableCell><div><p className="text-xs font-medium text-white inline-flex items-center gap-1.5"><MineBadge sku={o.sku} />{o.name_ar}</p><SkuLine sku={o.sku} barcode={o.barcode} /></div></TableCell>
                   <TableCell><span className="text-xs">{o.store_name}</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-red-500">{o.my_price} ﷼</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-green-600">{o.market_lowest} ﷼</span></TableCell>

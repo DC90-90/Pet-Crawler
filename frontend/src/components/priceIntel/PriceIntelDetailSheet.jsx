@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { ConfidenceBadge, FlagBadges } from "./PriceIntelShared";
+import { SkuLine } from "@/components/SkuLine";
 
 export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm, onReject }) {
   return (
@@ -19,9 +20,10 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
               <p className="text-[10px] uppercase text-[#A1E4DB] tracking-wider mb-2">My Product</p>
               <div className="flex items-center gap-3">
                 {detail.my_product.image_url && <img src={detail.my_product.image_url} alt="" className="w-16 h-16 rounded-lg object-cover bg-white/5" />}
-                <div>
+                <div className="flex-1 min-w-0">
                   <p className="text-sm text-white font-medium">{detail.my_product.name_en}</p>
                   <p className="text-xs text-[#A1E4DB]">{detail.my_product.name_ar}</p>
+                  <SkuLine sku={detail.my_product.sku} barcode={detail.my_product.barcode} size="sm" className="mt-0.5" />
                   <p className="text-lg font-bold text-[#1E988E] metric-number mt-1">{detail.market_summary.my_price} SAR</p>
                 </div>
               </div>
@@ -36,11 +38,12 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
             {detail.competitors.map((c) => (
               <div key={`${c.competitor_sku}-${c.competitor_store_id}`} className="glass-card p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <p className="text-sm text-white font-medium">{c.competitor_store_name}</p>
                     <p className="text-[10px] text-[#A1E4DB]">{c.competitor_name}</p>
+                    <SkuLine sku={c.competitor_sku} barcode={c.competitor_barcode} className="mt-0.5" />
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     <ConfidenceBadge confidence={c.confidence} />
                     <FlagBadges flags={c.flags} />
                   </div>

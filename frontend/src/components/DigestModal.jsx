@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { RefreshCw } from "lucide-react";
+import { SkuLine } from "@/components/SkuLine";
 
 export default function DigestModal({ open, onClose }) {
   const [digest, setDigest] = useState(null);
@@ -69,7 +70,7 @@ export default function DigestModal({ open, onClose }) {
             {/* Price Drops */}
             <Section title="Top Price Drops" items={c.top_price_drops} renderItem={(d) => (
               <div className="flex items-center justify-between">
-                <div><p className="text-xs font-medium">{d.name_ar}</p><p className="text-[10px] text-[#A1E4DB]">{d.store_name}</p></div>
+                <div><p className="text-xs font-medium">{d.name_ar}</p><SkuLine sku={d.sku} barcode={d.barcode} /><p className="text-[10px] text-[#A1E4DB]">{d.store_name}</p></div>
                 <div className="text-end"><span className="text-xs line-through text-[#A1E4DB]">{d.old_price} ﷼</span> <span className="text-xs font-bold text-green-600">{d.new_price} ﷼</span><Badge variant="outline" className="text-[9px] ms-1.5 bg-green-50 text-green-700 border-green-200">-{d.drop_pct}%</Badge></div>
               </div>
             )} />
@@ -77,7 +78,7 @@ export default function DigestModal({ open, onClose }) {
             {/* New Products */}
             <Section title="New Products Spotted" items={c.new_products} renderItem={(p) => (
               <div className="flex items-center justify-between">
-                <p className="text-xs font-medium">{p.name_ar}</p>
+                <div className="flex-1 min-w-0"><p className="text-xs font-medium">{p.name_ar}</p><SkuLine sku={p.sku} barcode={p.barcode} /></div>
                 <Badge variant="secondary" className="text-[10px]">{p.category}</Badge>
               </div>
             )} />
@@ -85,7 +86,7 @@ export default function DigestModal({ open, onClose }) {
             {/* OOS Events */}
             <Section title="Competitor Out-of-Stock" items={c.oos_events} renderItem={(e) => (
               <div className="flex items-center justify-between">
-                <div><p className="text-xs font-medium">{e.name_ar}</p><p className="text-[10px] text-[#A1E4DB]">{e.store_name}</p></div>
+                <div><p className="text-xs font-medium">{e.name_ar}</p><SkuLine sku={e.sku} barcode={e.barcode} /><p className="text-[10px] text-[#A1E4DB]">{e.store_name}</p></div>
                 <Badge variant="outline" className="text-[9px] bg-red-50 text-red-600 border-red-200">OOS</Badge>
               </div>
             )} />

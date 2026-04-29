@@ -2848,6 +2848,7 @@ async def price_intel_dashboard(user=Depends(get_user)):
 
         row = {
             "my_sku": my_sku,
+            "my_barcode": mp.get("barcode", ""),
             "my_name_ar": mp.get("name_ar", ""),
             "my_name_en": mp.get("name_en", ""),
             "my_price": my_price,
@@ -2955,6 +2956,13 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
 
     matches = await db.product_matches.find({"my_sku": sku}, {"_id": 0}).to_list(100)
 
+    # Look up competitor barcodes from /products to enrich the cards (Feb 2026: SKU/EAN display)
+    comp_skus = list({m["competitor_sku"] for m in matches})
+    comp_barcodes_by_sku = {
+        p["sku"]: p.get("barcode", "")
+        async for p in db.products.find({"sku": {"$in": comp_skus}}, {"_id": 0, "sku": 1, "barcode": 1})
+    } if comp_skus else {}
+
     # Get price history for each matched competitor (last 90 days)
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=90)
@@ -2980,6 +2988,7 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
 
         competitors.append({
             **m,
+            "competitor_barcode": comp_barcodes_by_sku.get(m["competitor_sku"], ""),
             "price_history": [{"price": h["price"], "in_stock": h.get("in_stock"), "date": h["crawled_at"].isoformat() if hasattr(h["crawled_at"], 'isoformat') else str(h["crawled_at"])} for h in history[-60:]],
             "price_trend": trend,
         })

@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/components/SeasonalAnnotations";
 import { MineBadge } from "@/components/MineBadge";
+import { SkuLine } from "@/components/SkuLine";
 
 const STORE_COLORS = ["#002DF5", "#00C853", "#FF3B30", "#FFB300", "#8B5CF6", "#EC4899", "#06B6D4"];
 
@@ -82,8 +83,8 @@ export default function ProductDetailPanel({ sku, onClose }) {
             {/* Product Header */}
             <div>
               <p className="text-sm text-[#A1E4DB]">{product.name_en}</p>
+              <SkuLine sku={product.sku} barcode={product.barcode} size="sm" className="mt-1" />
               <div className="flex items-center gap-2 mt-1.5">
-                <Badge variant="outline" className="text-[10px] font-mono">{product.sku}</Badge>
                 <Badge variant="secondary" className="text-[10px] capitalize">{product.category}</Badge>
                 <Badge variant="secondary" className="text-[10px]">{product.brand}</Badge>
               </div>

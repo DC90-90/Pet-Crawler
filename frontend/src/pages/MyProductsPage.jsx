@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import ProductDetailPanel from "@/components/ProductDetailPanel";
 import { MineBadge } from "@/components/MineBadge";
+import { SkuLine } from "@/components/SkuLine";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
@@ -227,6 +228,7 @@ export default function MyProductsPage() {
                               <ExternalLink className="w-3 h-3 opacity-60 flex-shrink-0" />
                             </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
+                            <SkuLine sku={p.sku} barcode={p.barcode} className="mt-0.5" />
                           </a>
                         ) : (
                           <>
@@ -235,6 +237,7 @@ export default function MyProductsPage() {
                               {p.name_ar}
                             </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
+                            <SkuLine sku={p.sku} barcode={p.barcode} className="mt-0.5" />
                           </>
                         )}
                       </div>
