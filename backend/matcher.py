@@ -349,13 +349,28 @@ async def _build_competitor_lookups(db, own_store_id):
 
 async def run_matching_for_all(db, progress_callback=None):
     """Run matching engine for ALL my_products. Returns summary stats."""
-    my_products = await db.my_products.find({}, {"_id": 0}).to_list(5000)
+    # Hardening (Feb 2026): only run matching for items explicitly tagged as own-store.
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_store_id = own_store["id"] if own_store else None
+
+    mp_query = {"is_own_store": True}
+    if own_store_id:
+        mp_query["store_id"] = own_store_id
+
+    my_products = await db.my_products.find(mp_query, {"_id": 0}).to_list(5000)
+    # Fallback for legacy data with no flags — still match, but log a warning
+    if not my_products:
+        legacy = await db.my_products.find({}, {"_id": 0}).to_list(5000)
+        if legacy:
+            logger.warning(
+                f"[Matching] No my_products tagged with is_own_store=True; "
+                f"falling back to all {len(legacy)} my_products. Re-tag the catalog to silence this warning."
+            )
+        my_products = legacy
     total = len(my_products)
     stats = {"total": total, "matched": 0, "unmatched": 0, "total_matches": 0}
 
     # Pre-build lookups ONCE
-    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
-    own_store_id = own_store["id"] if own_store else None
     comp_snapshots, comp_products = await _build_competitor_lookups(db, own_store_id)
 
     for i, mp in enumerate(my_products):

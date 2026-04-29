@@ -7,23 +7,37 @@ import { ConfidenceBadge, FlagBadges } from "./PriceIntelShared";
 import { SkuLine } from "@/components/SkuLine";
 
 export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm, onReject }) {
+  const ownStoreId = detail?.own_store_id;
+  const myProduct = detail?.my_product;
+  const isVerifiedMine = !!myProduct && myProduct.is_own_store === true;
+  // Defensive filter (Feb 2026): never render own store as a "competitor"
+  const safeCompetitors = (detail?.competitors || []).filter(
+    (c) => !ownStoreId || c.competitor_store_id !== ownStoreId
+  );
+
   return (
     <Sheet open={!!selectedSku} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent className="w-[600px] sm:max-w-[600px] bg-[#0A2728] border-white/10 overflow-y-auto" data-testid="product-detail-sheet">
         <SheetHeader>
-          <SheetTitle className="text-white text-lg">{detail?.my_product?.name_en || detail?.my_product?.name_ar || "Loading..."}</SheetTitle>
+          <SheetTitle className="text-white text-lg">{myProduct?.name_en || myProduct?.name_ar || "Loading..."}</SheetTitle>
         </SheetHeader>
-        {detail && (
+        {detail && !isVerifiedMine && (
+          <div className="mt-4 glass-card p-4 border border-[#EF4444]/30 bg-[#EF4444]/5" data-testid="not-mine-error">
+            <p className="text-sm text-[#EF4444] font-semibold">This product is not in your store catalog</p>
+            <p className="text-xs text-[#A1E4DB] mt-1">Only products imported into your own store can be viewed here. If you believe this is wrong, re-run a catalog import.</p>
+          </div>
+        )}
+        {detail && isVerifiedMine && (
           <div className="space-y-5 mt-4">
             {/* My Product Info */}
-            <div className="glass-card p-4">
+            <div className="glass-card p-4" data-testid="my-product-card">
               <p className="text-[10px] uppercase text-[#A1E4DB] tracking-wider mb-2">My Product</p>
               <div className="flex items-center gap-3">
-                {detail.my_product.image_url && <img src={detail.my_product.image_url} alt="" className="w-16 h-16 rounded-lg object-cover bg-white/5" />}
+                {myProduct.image_url && <img src={myProduct.image_url} alt="" className="w-16 h-16 rounded-lg object-cover bg-white/5" />}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm text-white font-medium">{detail.my_product.name_en}</p>
-                  <p className="text-xs text-[#A1E4DB]">{detail.my_product.name_ar}</p>
-                  <SkuLine sku={detail.my_product.sku} barcode={detail.my_product.barcode} size="sm" className="mt-0.5" />
+                  <p className="text-sm text-white font-medium">{myProduct.name_en}</p>
+                  <p className="text-xs text-[#A1E4DB]">{myProduct.name_ar}</p>
+                  <SkuLine sku={myProduct.sku} barcode={myProduct.barcode} size="sm" className="mt-0.5" />
                   <p className="text-lg font-bold text-[#1E988E] metric-number mt-1">{detail.market_summary.my_price} SAR</p>
                 </div>
               </div>
@@ -35,7 +49,7 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
             </div>
 
             {/* Competitors */}
-            {detail.competitors.map((c) => (
+            {safeCompetitors.map((c) => (
               <div key={`${c.competitor_sku}-${c.competitor_store_id}`} className="glass-card p-4">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex-1 min-w-0">

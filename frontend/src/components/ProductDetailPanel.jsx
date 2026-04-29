@@ -148,6 +148,9 @@ export default function ProductDetailPanel({ sku, onClose }) {
                               <ExternalLink className="w-3 h-3 opacity-60" />
                             </a>
                           ) : (sp.store_name)}
+                          {sp.is_own_store && (
+                            <span className="ms-1.5 inline-flex items-center text-[8px] font-bold tracking-[0.1em] uppercase px-1 py-0.5 rounded bg-[#1E988E]/15 text-[#1E988E] border border-[#1E988E]/30" data-testid={`my-store-tag-${sp.store_id}`}>My Store</span>
+                          )}
                         </TableCell>
                         <TableCell>
                           <span className="text-xs font-semibold">{sp.price} SAR</span>

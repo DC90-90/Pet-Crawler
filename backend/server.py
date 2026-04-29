@@ -1571,7 +1571,7 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
 
     # Per-store latest snapshot + price history series
     store_ids = list(by_store_id.keys())
-    domains = {s["id"]: s.get("domain") async for s in db.stores.find({"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1})}
+    stores_meta = {s["id"]: s async for s in db.stores.find({"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1, "is_own_store": 1})}
 
     store_prices = []
     history_by_store = {}
@@ -1579,12 +1579,13 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
         latest = snaps[-1]
         url = latest.get("product_url") or ""
         if not url:
-            d = domains.get(sid)
+            d = stores_meta.get(sid, {}).get("domain")
             if d:
                 url = f"https://{d}/search?keyword={sku}"
         store_prices.append({
             "store_id": sid,
             "store_name": store_id_to_name[sid],
+            "is_own_store": stores_meta.get(sid, {}).get("is_own_store") is True,
             "price": latest.get("price"),
             "original_price": latest.get("original_price"),
             "discount_pct": latest.get("discount_pct"),
@@ -2803,8 +2804,20 @@ async def import_status(user=Depends(get_user)):
 @router.get("/price-intel/dashboard")
 async def price_intel_dashboard(user=Depends(get_user)):
     """Price Intelligence Dashboard — all sections."""
-    matches = await db.product_matches.find({}, {"_id": 0}).to_list(50000)
-    my_products = {p["sku"]: p async for p in db.my_products.find({}, {"_id": 0})}
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_store_id = own_store["id"] if own_store else None
+
+    # Defensive: only consider documents flagged as belonging to the user's own store
+    # (Feb 2026 hardening — prevents accidental "MY PRODUCT" leakage if the my_products
+    # collection ever ingests competitor data via a wrong import).
+    my_products_query = {"is_own_store": True}
+    if own_store_id:
+        my_products_query["store_id"] = own_store_id
+
+    # Strictly exclude any matches that point back at our own store as the competitor
+    matches_query = {"competitor_store_id": {"$ne": own_store_id}} if own_store_id else {}
+    matches = await db.product_matches.find(matches_query, {"_id": 0}).to_list(50000)
+    my_products = {p["sku"]: p async for p in db.my_products.find(my_products_query, {"_id": 0})}
 
     # Fix 5: Separate high-confidence (>=75) from unverified (<75)
     high_conf_matches = [m for m in matches if m.get("confidence", 0) >= 75]
@@ -2949,12 +2962,28 @@ async def price_intel_dashboard(user=Depends(get_user)):
 
 @router.get("/price-intel/product/{sku}")
 async def price_intel_product_detail(sku: str, user=Depends(get_user)):
-    """Section D — drill-down for a single product."""
-    mp = await db.my_products.find_one({"sku": sku}, {"_id": 0})
-    if not mp:
-        raise HTTPException(404, "Product not found")
+    """Section D — drill-down for a single product. Strictly own-store sourced."""
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1, "domain": 1})
+    own_store_id = own_store["id"] if own_store else None
 
-    matches = await db.product_matches.find({"my_sku": sku}, {"_id": 0}).to_list(100)
+    # Hardening (Feb 2026): only return a my_product that is verified own-store.
+    mp_query = {"sku": sku, "is_own_store": True}
+    if own_store_id:
+        mp_query["store_id"] = own_store_id
+    mp = await db.my_products.find_one(mp_query, {"_id": 0})
+    if not mp:
+        # Fall back to the legacy (no flag) lookup so old data still works,
+        # but never if the SKU only lives in the shared `products` catalog.
+        legacy = await db.my_products.find_one({"sku": sku}, {"_id": 0})
+        if not legacy:
+            raise HTTPException(404, "Product not found in your catalog")
+        mp = legacy
+
+    # Strictly exclude any matches whose competitor is actually our own store
+    matches_query = {"my_sku": sku}
+    if own_store_id:
+        matches_query["competitor_store_id"] = {"$ne": own_store_id}
+    matches = await db.product_matches.find(matches_query, {"_id": 0}).to_list(100)
 
     # Look up competitor barcodes from /products to enrich the cards (Feb 2026: SKU/EAN display)
     comp_skus = list({m["competitor_sku"] for m in matches})
@@ -2995,7 +3024,8 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
 
     all_prices = [c["competitor_price"] for c in competitors if c["competitor_price"] > 0]
     return {
-        "my_product": mp,
+        "my_product": {**mp, "is_own_store": True},
+        "own_store_id": own_store_id,
         "competitors": competitors,
         "market_summary": {
             "lowest_price": min(all_prices) if all_prices else 0,
@@ -3510,6 +3540,18 @@ async def startup():
         await db.products.create_index("category")
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
+    # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.
+    try:
+        own_check = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+        if not own_check:
+            res = await db.stores.update_one(
+                {"domain": "pets-houses.com"},
+                {"$set": {"is_own_store": True}},
+            )
+            if res.modified_count:
+                logger.info("Auto-set is_own_store=True on pets-houses.com (no own store was flagged)")
+    except Exception as e:
+        logger.warning(f"Own-store flag check skipped: {e}")
     # One-time purge of legacy name-based matches (Feb 2026: matcher v4 dropped name matching).
     # Idempotent — after the first run nothing matches the predicate.
     try:
