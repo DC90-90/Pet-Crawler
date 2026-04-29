@@ -3094,6 +3094,45 @@ async def get_my_skus(user=Depends(get_user)):
 # IngestPayload, _coerce_num, _coerce_int moved to models/schemas.py and core/utils.py (Feb 2026 refactor)
 
 
+@router.post("/admin/cleanup-own-snapshots")
+async def cleanup_own_snapshots(dry_run: bool = Query(False, description="If true, only count without deleting"), user=Depends(get_user)):
+    """One-time cleanup of legacy product_snapshots from the user's own store.
+
+    These snapshots accumulated before `is_own_store` was set on the store and don't
+    leak into competitor views (filters block them) but bloat the collection. This
+    endpoint lets the admin purge them safely.
+
+    Usage:
+        POST /api/admin/cleanup-own-snapshots             → delete and return counts
+        POST /api/admin/cleanup-own-snapshots?dry_run=true → just count
+    """
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1, "domain": 1})
+    if not own_store:
+        raise HTTPException(400, "No store is flagged as is_own_store=True. Aborting cleanup.")
+
+    own_store_id = own_store["id"]
+    count = await db.product_snapshots.count_documents({"store_id": own_store_id})
+
+    if dry_run or count == 0:
+        return {
+            "dry_run": dry_run,
+            "own_store": {"id": own_store_id, "name": own_store["name"], "domain": own_store.get("domain")},
+            "snapshots_found": count,
+            "deleted": 0,
+            "message": "Dry run — no rows deleted" if dry_run else "Nothing to clean up",
+        }
+
+    result = await db.product_snapshots.delete_many({"store_id": own_store_id})
+    logger.info(f"[Admin] Cleaned up {result.deleted_count} own-store snapshots from {own_store['name']}")
+    return {
+        "dry_run": False,
+        "own_store": {"id": own_store_id, "name": own_store["name"], "domain": own_store.get("domain")},
+        "snapshots_found": count,
+        "deleted": result.deleted_count,
+        "message": f"Removed {result.deleted_count} legacy own-store snapshots from {own_store['name']}",
+    }
+
+
 @router.post("/crawler/ingest")
 async def crawler_ingest(request: Request, payload: IngestPayload):
     """Secure bulk ingest endpoint for external crawler running on Saudi IP."""
