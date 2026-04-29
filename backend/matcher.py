@@ -1,6 +1,7 @@
 """
-Daleel — Product Matching Engine v3
-3-level waterfall: Barcode → SKU → Name
+Daleel — Product Matching Engine v4
+2-level waterfall: Barcode → SKU
+Name-based matching has been REMOVED (Feb 2026, by user request).
 CRITICAL: A wrong match is worse than no match.
 """
 import re, logging
@@ -154,7 +155,6 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
     my_name_en = str(my_product.get("name_en", ""))
     my_name_full = f"{my_name_ar} {my_name_en}"
     my_weight_g = _extract_weight_grams(my_name_en) or _extract_weight_grams(my_name_ar)
-    my_brand = _extract_brand(my_name_full)
     my_is_bundle = _is_bundle_sku(my_sku) or _has_pack_indicator(my_name_full)
 
     # Barcode candidates from MY product: explicit barcode + numeric SKU
@@ -268,78 +268,11 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
     if matched_skus:
         return _dedupe_matches(matches)
 
-    # ── LEVEL 3: Name Matching (STRICT) ─────────────────────
-    my_tokens_ar = _tokenize(my_name_ar)
-    my_tokens_en = _tokenize(my_name_en)
-    my_all_tokens = set(my_tokens_ar + my_tokens_en)
-
-    if len(my_all_tokens) >= 6:
-        for snap in comp_snapshots:
-            c_sku = str(snap["sku"]).strip()
-            if c_sku in blacklist or c_sku in matched_skus:
-                continue
-            c_prod = comp_products.get(c_sku, {})
-            c_name_ar = str(c_prod.get("name_ar", ""))
-            c_name_en = str(c_prod.get("name_en", ""))
-            c_name = f"{c_name_ar} {c_name_en}"
-            c_tokens = set(_tokenize(c_name_ar) + _tokenize(c_name_en))
-
-            if len(c_tokens) < 6:
-                continue
-
-            common = my_all_tokens & c_tokens
-            n_common = len(common)
-            # STRICT: minimum 6 token overlap
-            if n_common < 6:
-                continue
-
-            # Require >=60% overlap of the smaller set
-            smaller = min(len(my_all_tokens), len(c_tokens))
-            if smaller > 0 and n_common / smaller < 0.6:
-                continue
-
-            # STRICT: Brand must match if both products carry a known brand
-            c_brand = _extract_brand(c_name)
-            if my_brand and c_brand and my_brand != c_brand:
-                continue
-            # If MY product has a brand but competitor has NO recognizable brand → reject
-            if my_brand and not c_brand:
-                continue
-
-            # Pack compatibility
-            if not _pack_compatible(my_name_full, c_name):
-                continue
-
-            # STRICT: Weight must match exactly (within 10%) when both products specify weight
-            c_weight_g = _extract_weight_grams(c_name)
-            if (my_weight_g and c_weight_g) and _weights_reject(my_weight_g, c_weight_g):
-                continue
-            # If MY product has weight but competitor doesn't → reject
-            if my_weight_g and not c_weight_g:
-                continue
-
-            # STRICT: Price ratio max 1.3×
-            my_price = float(my_product.get("sale_price") or my_product.get("price") or 0)
-            comp_price = float(snap.get("price", 0))
-            if my_price > 0 and comp_price > 0:
-                ratio = max(my_price, comp_price) / min(my_price, comp_price)
-                if ratio > 1.3:
-                    continue
-
-            # Confidence based on token overlap depth
-            if n_common >= 9:
-                conf = 90
-            elif n_common >= 7:
-                conf = 87
-            else:
-                conf = 85
-
-            if c_sku in confirmed:
-                conf = 100
-
-            matches.append(_build_match(my_product, snap, c_prod, conf, f"name_{n_common}tok"))
-            matched_skus.add(c_sku)
-
+    # ── LEVEL 3: REMOVED (Feb 2026) ─────────────────────────
+    # Name-based matching has been disabled per user request: too many false
+    # positives (e.g., "Royal Canin SHN Mini Junior 4kg" being matched to
+    # unrelated 209 SAR products with only 80% name overlap).
+    # We now only match on Barcode/EAN (Level 1) or exact SKU (Level 2).
     return _dedupe_matches(matches)
 
 

@@ -3501,6 +3501,20 @@ async def startup():
         await db.products.create_index("category")
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
+    # One-time purge of legacy name-based matches (Feb 2026: matcher v4 dropped name matching).
+    # Idempotent — after the first run nothing matches the predicate.
+    try:
+        purged = await db.product_matches.delete_many({
+            "manually_confirmed": {"$ne": True},
+            "$or": [
+                {"match_method": {"$regex": "^name_"}},
+                {"confidence": {"$lt": 95}},
+            ],
+        })
+        if purged.deleted_count:
+            logger.info(f"Purged {purged.deleted_count} legacy name-based matches at startup")
+    except Exception as e:
+        logger.warning(f"Legacy match cleanup skipped: {e}")
     # Register crawl jobs for all active stores (skip own store)
     stores = await db.stores.find({"is_active": True}, {"_id": 0}).to_list(100)
     for idx, s in enumerate(stores):
