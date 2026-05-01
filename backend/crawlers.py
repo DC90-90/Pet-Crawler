@@ -261,6 +261,8 @@ def _normalize_raw_product(raw, store_name):
     return {
         "name_ar": name_ar,
         "sku": sku_raw,
+        "barcode": str(raw.get("barcode") or raw.get("gtin") or raw.get("ean") or raw.get("upc") or "").strip(),
+        "sale_price": float(sale_price) if 0 < sale_price < (price + sale_price) else None,
         "price": price,
         "original_price": original_price,
         "qty": max(0, qty),
@@ -1075,9 +1077,170 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
     return crawl_log
 
 
+_NUMERIC_BARCODE_RE = re.compile(r"^\d{8,14}$")
+
+
+def _is_valid_ean(val):
+    return bool(val) and bool(_NUMERIC_BARCODE_RE.match(str(val).strip()))
+
+
+async def sync_own_store_prices(db, store=None):
+    """Sync prices/quantities from the user's own Zid store back into db.my_products.
+
+    Strategy:
+      1. Find the store flagged is_own_store=True (or use the one passed in).
+      2. Crawl its public Tier-1 JSON endpoint (no Playwright — JSON only).
+      3. For each crawled product, match against my_products by:
+           Level 1 — barcode match (8-14 digit EAN)
+           Level 2 — exact SKU match
+         No name-based matching.
+      4. Update ONLY: price, sale_price, quantity, in_stock, last_synced_at, sync_source.
+         Never overwrite catalog metadata (names, images, categories, URLs).
+      5. After sync, schedule run_matching_for_all() so Price Intel reflects the new prices.
+
+    Returns: {"updated": int, "not_found": int, "crawled": int, "store": str, "synced_at": iso}
+    """
+    if store is None:
+        store = await db.stores.find_one({"is_own_store": True}, {"_id": 0})
+    if not store:
+        logger.warning("[OwnSync] No store flagged is_own_store=True — skipping sync")
+        return {"updated": 0, "not_found": 0, "crawled": 0, "store": None,
+                "synced_at": datetime.now(timezone.utc).isoformat(),
+                "error": "no_own_store_flagged"}
+
+    started_at = datetime.now(timezone.utc)
+    logger.info(f"[OwnSync] Starting price sync for {store['name']} ({store.get('domain')})")
+
+    # ── Tier-1 JSON crawl (no browser) ──
+    base = f"https://{store['domain']}"
+    platform = store.get("platform", "zid").lower()
+    endpoints = _build_salla_endpoints(base, store.get("working_endpoint"), platform=platform)
+    crawl_log = _make_crawl_log(store, tier_attempted=1)
+    all_raw = []
+    winning_endpoint = None
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/html, */*",
+        }) as http:
+            for ep in endpoints:
+                items, matched_ep = await _try_single_endpoint(http, ep, crawl_log)
+                if matched_ep:
+                    all_raw = await _paginate_endpoint(http, matched_ep, items)
+                    winning_endpoint = matched_ep
+                    break
+    except Exception as e:
+        crawl_log["error"] = str(e)[:300]
+        logger.error(f"[OwnSync] Crawl failed: {e}")
+
+    crawled = len(all_raw)
+    crawl_log["products_found"] = crawled
+    if winning_endpoint:
+        crawl_log["tier_used"] = 1
+        crawl_log["endpoint_used"] = winning_endpoint["tag"]
+        await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
+
+    # ── Pre-build lookup tables of my_products by barcode + SKU ──
+    my_by_sku, my_by_barcode = {}, {}
+    async for mp in db.my_products.find({}, {"_id": 0, "sku": 1, "barcode": 1}):
+        if mp.get("sku"):
+            my_by_sku[str(mp["sku"]).strip()] = mp["sku"]
+        if _is_valid_ean(mp.get("barcode")):
+            my_by_barcode[str(mp["barcode"]).strip()] = mp["sku"]
+
+    # ── Match + update ──
+    updated, not_found = 0, 0
+    sync_ts = datetime.now(timezone.utc).isoformat()
+    UPDATE_FIELDS_NEVER_OVERWRITE = {  # noqa: F841 — documentation only
+        "sku", "barcode", "name_ar", "name_en", "description_ar", "description_en",
+        "categories_ar", "categories_en", "images", "product_page_url",
+        "is_own_store", "store_id", "imported_at",
+    }
+
+    for raw in all_raw:
+        norm = _normalize_raw_product(raw, store["name"])
+        crawled_sku = str(norm["sku"]).strip()
+        crawled_barcode = str(norm.get("barcode") or "").strip()
+
+        target_sku = None
+        # Level 1: barcode (EAN 8-14 digits)
+        if _is_valid_ean(crawled_barcode) and crawled_barcode in my_by_barcode:
+            target_sku = my_by_barcode[crawled_barcode]
+        # Level 2: exact SKU match
+        elif crawled_sku and crawled_sku in my_by_sku:
+            target_sku = my_by_sku[crawled_sku]
+        # Numeric-SKU-as-barcode fallback (some Zid stores put EAN in the SKU field)
+        elif _is_valid_ean(crawled_sku) and crawled_sku in my_by_barcode:
+            target_sku = my_by_barcode[crawled_sku]
+
+        if not target_sku:
+            not_found += 1
+            continue
+
+        update_doc = {
+            "price": round(norm["price"], 2),
+            "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
+            "quantity": int(norm["qty"]),
+            "in_stock": bool(norm["in_stock"]),
+            "last_synced_at": sync_ts,
+            "sync_source": "zid_crawler",
+        }
+        await db.my_products.update_one({"sku": target_sku}, {"$set": update_doc})
+        updated += 1
+
+    duration = (datetime.now(timezone.utc) - started_at).total_seconds()
+    crawl_log["products_updated"] = updated
+    crawl_log["products_new"] = 0  # never creates new my_products rows
+    crawl_log["snapshots_created"] = 0
+    if not all_raw:
+        crawl_log["error"] = (crawl_log.get("error") or "") + " | own-store crawl returned 0 items"
+    await _finalize_crawl_log(db, crawl_log, store["id"])
+
+    # Persist sync stats on the store doc for /api/import/status
+    await db.stores.update_one(
+        {"id": store["id"]},
+        {"$set": {
+            "last_own_store_sync": sync_ts,
+            "own_store_sync_updated": updated,
+            "own_store_sync_not_found": not_found,
+            "own_store_sync_crawled": crawled,
+        }},
+    )
+
+    logger.info(f"[OwnSync] Done in {duration:.1f}s — crawled={crawled}, updated={updated}, not_found={not_found}")
+
+    return {
+        "store": store["name"],
+        "domain": store.get("domain"),
+        "crawled": crawled,
+        "updated": updated,
+        "not_found": not_found,
+        "synced_at": sync_ts,
+        "duration_seconds": round(duration, 1),
+        # Mimic the standard crawl-log shape so /api/stores/{id}/crawl response stays consistent
+        "tier_used": crawl_log.get("tier_used"),
+        "http_status": 200 if winning_endpoint else 0,
+        "products_found": crawled,
+        "products_new": 0,
+        "products_updated": updated,
+        "snapshots_created": 0,
+        "error": crawl_log.get("error"),
+        "completed_at": sync_ts,
+        "duration_secs": round(duration, 1),
+        "is_own_store_sync": True,
+    }
+
+
 # ── Waterfall Orchestrator ───────────────────────────────────
 async def crawl_store_waterfall(db, store):
-    """Run the multi-tier waterfall crawler for a store, with optional Tier 4 supplement."""
+    """Run the multi-tier waterfall crawler for a store, with optional Tier 4 supplement.
+
+    Special-case: own store (is_own_store=True) is sync'd into my_products via
+    sync_own_store_prices() instead of going through the competitor snapshot pipeline.
+    """
+    if store.get("is_own_store"):
+        return await sync_own_store_prices(db, store=store)
+
     platform = store.get("platform", "").lower()
     tier1_only = bool(store.get("tier1_only"))
     storefront_strategy = bool(store.get("use_storefront_categories"))

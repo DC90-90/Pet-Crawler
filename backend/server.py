@@ -3,7 +3,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends, Response, UploadFile, File
+from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends, Response, UploadFile, File, BackgroundTasks
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -22,6 +22,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from crawlers import (
     crawl_store_waterfall, process_crawled_products,
     extract_brand, guess_category, guess_animal, extract_weight,
+    sync_own_store_prices,
 )
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -2792,13 +2793,46 @@ async def import_status(user=Depends(get_user)):
     confirmed_count = await db.product_matches.count_documents({"manually_confirmed": True})
     blacklist_count = await db.match_blacklist.count_documents({})
     job = await db.matching_jobs.find_one({"job": "latest"}, {"_id": 0})
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "name": 1, "domain": 1, "last_own_store_sync": 1, "own_store_sync_updated": 1, "own_store_sync_not_found": 1, "own_store_sync_crawled": 1})
     return {
         "my_products": my_count,
         "total_matches": match_count,
         "confirmed_matches": confirmed_count,
         "blacklisted": blacklist_count,
         "matching_job": job,
+        "own_store": (
+            {
+                "name": own.get("name"),
+                "domain": own.get("domain"),
+                "last_own_store_sync": own.get("last_own_store_sync"),
+                "own_store_sync_updated": own.get("own_store_sync_updated", 0),
+                "own_store_sync_not_found": own.get("own_store_sync_not_found", 0),
+                "own_store_sync_crawled": own.get("own_store_sync_crawled", 0),
+            }
+            if own else None
+        ),
     }
+
+
+@router.post("/import/sync-own-store")
+async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_user)):
+    """Manually trigger a price sync from the user's own Zid store into my_products."""
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0})
+    if not own:
+        raise HTTPException(400, "No store flagged is_own_store=True. Set the flag on your store first.")
+
+    async def _run_sync_and_match():
+        try:
+            res = await sync_own_store_prices(db)
+            logger.info(f"[OwnSync/bg] {res}")
+            # Re-run matching so Price Intel reflects the new own-store prices
+            stats = await run_matching_for_all(db)
+            logger.info(f"[OwnSync/bg] re-matching complete: {stats}")
+        except Exception as e:
+            logger.error(f"[OwnSync/bg] failed: {e}")
+
+    background.add_task(_run_sync_and_match)
+    return {"message": "Sync started", "status": "running", "store": own.get("name"), "domain": own.get("domain")}
 
 
 @router.get("/price-intel/dashboard")
@@ -3612,7 +3646,16 @@ async def startup():
     if not scheduler.running:
         scheduler.start()
     scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0, id="weekly_digest", replace_existing=True)
-    logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest")
+    # Own-store price sync every 6h (Feb 2026)
+    async def _scheduled_own_sync():
+        try:
+            res = await sync_own_store_prices(db)
+            logger.info(f"[Scheduler] Own-store sync: {res.get('updated')} updated / {res.get('not_found')} unmatched")
+            await run_matching_for_all(db)
+        except Exception as e:
+            logger.error(f"[Scheduler] Own-store sync failed: {e}")
+    scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
+    logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync")
 
 @app.on_event("shutdown")
 async def shutdown():
