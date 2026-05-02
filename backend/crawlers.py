@@ -258,10 +258,39 @@ def _normalize_raw_product(raw, store_name):
         if isinstance(urls_obj, dict):
             product_url = urls_obj.get("customer") or urls_obj.get("store") or urls_obj.get("url") or ""
     product_url = str(product_url or "").strip()
+
+    # Barcode extraction (Feb 2026): Salla often puts valid EANs on variants
+    # (raw.skus[].barcode/gtin/mpn), not on the product root. Iterate variants first.
+    _EAN_RE = re.compile(r"^\d{8,14}$")
+    barcode = ""
+    from_variant = False
+    variants = raw.get("skus")
+    if isinstance(variants, list):
+        for v in variants:
+            if not isinstance(v, dict):
+                continue
+            for key in ("barcode", "gtin", "mpn"):
+                cand = str(v.get(key) or "").strip()
+                if _EAN_RE.match(cand):
+                    barcode = cand
+                    from_variant = True
+                    break
+            if barcode:
+                break
+    if not barcode:
+        for key in ("gtin", "mpn", "barcode", "ean", "upc"):
+            cand = str(raw.get(key) or "").strip()
+            if _EAN_RE.match(cand):
+                barcode = cand
+                break
+    logger.info(
+        f"normalize_salla barcode_source={'variant' if from_variant else 'root' if barcode else 'none'} sku={sku_raw}"
+    )
+
     return {
         "name_ar": name_ar,
         "sku": sku_raw,
-        "barcode": str(raw.get("barcode") or raw.get("gtin") or raw.get("ean") or raw.get("upc") or "").strip(),
+        "barcode": barcode,
         "sale_price": float(sale_price) if 0 < sale_price < (price + sale_price) else None,
         "price": price,
         "original_price": original_price,
