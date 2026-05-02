@@ -3310,6 +3310,65 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
             "last_crawl_endpoint": "external_ingest",
         }})
 
+        # ── Own-store sync (Feb 2026) ───────────────────────
+        # If the ingested domain is flagged as the user's own store, also mirror
+        # prices/qty into db.my_products (barcode → SKU match, never overwrite catalog metadata).
+        own_store_synced = 0
+        own_store_not_found = 0
+        own_check = await db.stores.find_one(
+            {"domain": payload.domain, "is_own_store": True},
+            {"_id": 0, "id": 1},
+        )
+        if own_check:
+            # Build quick lookup tables from my_products
+            my_by_sku, my_by_barcode = {}, {}
+            async for mp in db.my_products.find({}, {"_id": 0, "sku": 1, "barcode": 1}):
+                s = str(mp.get("sku") or "").strip()
+                b = str(mp.get("barcode") or "").strip()
+                if s:
+                    my_by_sku[s] = mp["sku"]
+                if b and b.isdigit() and 8 <= len(b) <= 14:
+                    my_by_barcode[b] = mp["sku"]
+
+            sync_ts = now.isoformat()
+            for raw in payload.products:
+                if not isinstance(raw, dict):
+                    continue
+                c_sku = str(raw.get("sku") or "").strip()
+                c_barcode = str(raw.get("barcode") or "").strip()
+                # Level 1: barcode (8-14 digit EAN)
+                target_sku = None
+                if c_barcode and c_barcode.isdigit() and 8 <= len(c_barcode) <= 14 and c_barcode in my_by_barcode:
+                    target_sku = my_by_barcode[c_barcode]
+                # Level 2: exact SKU
+                elif c_sku and c_sku in my_by_sku:
+                    target_sku = my_by_sku[c_sku]
+                # Numeric-SKU-as-barcode fallback
+                elif c_sku and c_sku.isdigit() and 8 <= len(c_sku) <= 14 and c_sku in my_by_barcode:
+                    target_sku = my_by_barcode[c_sku]
+
+                if not target_sku:
+                    own_store_not_found += 1
+                    continue
+
+                price_v = _coerce_num(raw.get("price"), 0)
+                sale_v = _coerce_num(raw.get("sale_price"), 0)
+                qty_v = _coerce_int(raw.get("quantity"), 0)
+                in_stock_raw = raw.get("in_stock")
+                in_stock_v = bool(in_stock_raw) if in_stock_raw is not None else (qty_v > 0)
+                await db.my_products.update_one(
+                    {"sku": target_sku},
+                    {"$set": {
+                        "price": round(price_v, 2),
+                        "sale_price": round(sale_v, 2) if 0 < sale_v < price_v else None,
+                        "quantity": qty_v,
+                        "in_stock": in_stock_v,
+                        "last_synced_at": sync_ts,
+                        "sync_source": "crawler_ingest",
+                    }},
+                )
+                own_store_synced += 1
+
         return {
             "received": len(payload.products),
             "inserted": inserted,
@@ -3319,6 +3378,8 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
             "token_valid": True,
             "store_id": canonical_store_id,
             "crawled_at": now.isoformat(),
+            "own_store_synced": own_store_synced,
+            "own_store_not_found": own_store_not_found,
         }
     except HTTPException:
         raise
