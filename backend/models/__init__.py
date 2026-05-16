@@ -8,6 +8,10 @@ from .schemas import (
     OtpSubmitIn,
     MatchActionIn,
     IngestPayload,
+    AdminCreateUserIn,
+    AdminUpdatePasswordIn,
+    AdminUpdateRoleIn,
+    AdminUpdatePagesIn,
 )
 
 __all__ = [
@@ -20,4 +24,8 @@ __all__ = [
     "OtpSubmitIn",
     "MatchActionIn",
     "IngestPayload",
+    "AdminCreateUserIn",
+    "AdminUpdatePasswordIn",
+    "AdminUpdateRoleIn",
+    "AdminUpdatePagesIn",
 ]

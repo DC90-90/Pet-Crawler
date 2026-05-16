@@ -3,7 +3,7 @@
 Extracted from server.py during the Feb 2026 refactor. Keeping all schemas in
 one module avoids circular imports with the route handlers.
 """
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 
 
@@ -11,6 +11,26 @@ class AuthIn(BaseModel):
     email: str
     password: str
     name: Optional[str] = None
+
+
+class AdminCreateUserIn(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+    role: str = "user"  # one of: admin, user (super_admin cannot be created via API)
+    allowed_pages: Optional[List[str]] = None
+
+
+class AdminUpdatePasswordIn(BaseModel):
+    password: str
+
+
+class AdminUpdateRoleIn(BaseModel):
+    role: str  # one of: admin, user
+
+
+class AdminUpdatePagesIn(BaseModel):
+    allowed_pages: List[str]
 
 
 class StoreIn(BaseModel):

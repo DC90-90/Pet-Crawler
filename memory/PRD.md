@@ -59,6 +59,7 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
 - **Matcher v4 (Feb 2026)** — Name-based matching (Level 3) **completely removed** per user request. Engine now only matches via Barcode/EAN (conf 99) or exact SKU (conf 95). Any pre-existing name-based or <95-confidence non-confirmed matches are purged on backend startup (idempotent).
 - Tested via testing agent (iteration_12 + iteration_13): 100% backend (38/38), 100% frontend, no issues
 - **Production CORS hotfix (Feb 2026)** — Production login was failing at `https://daleel.hrm-sa.com` with "Something went wrong". Root cause: the deployed frontend bundle was built with `REACT_APP_BACKEND_URL=https://saudi-pets-monitor.emergent.host` (cross-origin) and axios sends `withCredentials: true`. The K8s ingress returned `Access-Control-Allow-Origin: *` which is illegal with credentials, so the browser blocked the response. **Fix**: `/app/frontend/src/lib/api.js` now compares `process.env.REACT_APP_BACKEND_URL` origin against `window.location.origin` — if they differ (e.g. on a custom domain), it falls back to the page origin and calls `/api/*` same-origin. Cookies also switched to `SameSite=none; Secure` as a safety net. User must redeploy to push fix to production.
+- **Super Admin + RBAC (Feb 2026)** — Introduced 3-tier role system (`super_admin`, `admin`, `user`) with per-user `allowed_pages` list. Hardcoded super admin `a.disi@taqueen.sa` / `Ahmaddc90@` is seeded idempotently on every startup (force-updates password) and is fully immutable — backend `seed_super_admin()` plus guard checks in `/api/admin/users/*` routes prevent ANY actor (including the super admin via mistake) from deleting it, demoting it, or revoking its pages. Only the super admin can change their own password. Legacy `admin@daleelpets.com` is deleted on startup per user instruction. New endpoints: `GET/POST /api/admin/users`, `DELETE /api/admin/users/{id}`, `PATCH /api/admin/users/{id}/{password|role|pages}`. Frontend: new `UsersPage` (super-admin-only) with create/edit/delete UI + per-page checkbox grid; `Sidebar` filters nav items by `canAccessPage(user, pageKey)`; `ProtectedRoute` enforces per-page guards and redirects unauthorized users to `/no-access`. Public `/auth/register` still works but new users get zero page access until super admin grants. Tested via curl (12 backend cases) and browser e2e (super admin login → create limited user → re-login as limited user → confirm sidebar hides ungranted tabs + /stores blocked).
 
 ## Backlog
 - **P1** Resend email integration (alerts + weekly digest)
@@ -67,7 +68,8 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
 - **Refactor (next pass)** Continue splitting `server.py` route handlers into `routes/` modules (auth, products, insights, alerts, stores, crawler, baseline, price-intel) — current pass extracted models + shared utils only
 
 ## Credentials
-- Admin: `admin@daleelpets.com` / `BGv8ZcRYrBTPlJFHHhZQ3Q` (kept unchanged — live auth credential)
+- **Super Admin (god mode, immutable)**: `a.disi@taqueen.sa` / `Ahmaddc90@`
+- Legacy `admin@daleelpets.com` was deleted on startup per user instruction (Feb 2026).
 - Crawler token (hardcoded): `zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO`
 
 ## Preview URL

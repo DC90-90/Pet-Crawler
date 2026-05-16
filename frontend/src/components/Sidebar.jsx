@@ -1,18 +1,18 @@
 import { NavLink } from "react-router-dom";
-import { useAuth } from "@/App";
+import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Target, Sun, Moon } from "lucide-react";
+import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Target, Sun, Moon, ShieldCheck } from "lucide-react";
 import { useState, useEffect } from "react";
 
 const navItems = [
-  { to: "/", icon: Package, labelKey: "nav_products", label: "Dashboard" },
-  { to: "/price-intel", icon: Target, labelKey: "nav_priceintel", label: "Price Intel" },
-  { to: "/insights", icon: BarChart3, labelKey: "nav_insights", label: "Insights" },
-  { to: "/scanner", icon: Zap, labelKey: "nav_scanner", label: "Scanner" },
-  { to: "/discounts", icon: Percent, labelKey: "nav_discounts", label: "Discounts" },
-  { to: "/alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },
-  { to: "/stores", icon: Store, labelKey: "nav_stores", label: "Stores" },
-  { to: "/import", icon: Upload, labelKey: "nav_import", label: "Import" },
+  { to: "/", pageKey: "my_products", icon: Package, labelKey: "nav_products", label: "Dashboard" },
+  { to: "/price-intel", pageKey: "price_intel", icon: Target, labelKey: "nav_priceintel", label: "Price Intel" },
+  { to: "/insights", pageKey: "insights", icon: BarChart3, labelKey: "nav_insights", label: "Insights" },
+  { to: "/scanner", pageKey: "scanner", icon: Zap, labelKey: "nav_scanner", label: "Scanner" },
+  { to: "/discounts", pageKey: "discounts", icon: Percent, labelKey: "nav_discounts", label: "Discounts" },
+  { to: "/alerts", pageKey: "alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },
+  { to: "/stores", pageKey: "stores", icon: Store, labelKey: "nav_stores", label: "Stores" },
+  { to: "/import", pageKey: "import", icon: Upload, labelKey: "nav_import", label: "Import" },
 ];
 
 export default function Sidebar() {
@@ -65,13 +65,32 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 py-3 px-2 space-y-0.5">
-        {navItems.map((item) => (
+        {navItems
+          .filter((item) => canAccessPage(user, item.pageKey))
+          .map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === "/"}
+              data-testid={`nav-${item.labelKey}`}
+              title={collapsed ? t(item.labelKey) : undefined}
+              className={({ isActive }) =>
+                `flex items-center gap-3 px-3 py-2.5 rounded text-sm transition-all duration-200 group relative ${
+                  isActive
+                    ? "text-[#6AC1B5] bg-[#104745] border-s-2 border-[#1E988E]"
+                    : "text-[#A1E4DB] hover:text-white hover:bg-[#104745]/60 border-s-2 border-transparent"
+                } ${collapsed ? "justify-center px-0" : ""}`
+              }
+            >
+              <item.icon className="w-4.5 h-4.5 shrink-0" />
+              {!collapsed && <span>{t(item.labelKey)}</span>}
+            </NavLink>
+          ))}
+        {user?.role === "super_admin" && (
           <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === "/"}
-            data-testid={`nav-${item.labelKey}`}
-            title={collapsed ? t(item.labelKey) : undefined}
+            to="/users"
+            data-testid="nav-users"
+            title={collapsed ? "Users" : undefined}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2.5 rounded text-sm transition-all duration-200 group relative ${
                 isActive
@@ -80,10 +99,10 @@ export default function Sidebar() {
               } ${collapsed ? "justify-center px-0" : ""}`
             }
           >
-            <item.icon className="w-4.5 h-4.5 shrink-0" />
-            {!collapsed && <span>{t(item.labelKey)}</span>}
+            <ShieldCheck className="w-4.5 h-4.5 shrink-0" />
+            {!collapsed && <span>Users</span>}
           </NavLink>
-        ))}
+        )}
       </nav>
 
       {/* Footer */}
@@ -113,18 +132,20 @@ export default function Sidebar() {
             </span>
           )}
         </button>
-        <NavLink
-          to="/settings"
-          data-testid="nav-settings"
-          className={({ isActive }) =>
-            `flex items-center gap-2 w-full px-3 py-2 rounded text-xs transition-all ${
-              isActive ? "text-[#6AC1B5] bg-[#104745]" : "text-[#A1E4DB] hover:text-white hover:bg-[#104745]/60"
-            } ${collapsed ? "justify-center" : ""}`
-          }
-        >
-          <Settings className="w-3.5 h-3.5 shrink-0" />
-          {!collapsed && (isRTL ? "الإعدادات" : "Settings")}
-        </NavLink>
+        {canAccessPage(user, "settings") && (
+          <NavLink
+            to="/settings"
+            data-testid="nav-settings"
+            className={({ isActive }) =>
+              `flex items-center gap-2 w-full px-3 py-2 rounded text-xs transition-all ${
+                isActive ? "text-[#6AC1B5] bg-[#104745]" : "text-[#A1E4DB] hover:text-white hover:bg-[#104745]/60"
+              } ${collapsed ? "justify-center" : ""}`
+            }
+          >
+            <Settings className="w-3.5 h-3.5 shrink-0" />
+            {!collapsed && (isRTL ? "الإعدادات" : "Settings")}
+          </NavLink>
+        )}
         {user && !collapsed && (
           <div className="px-3 py-1">
             <p className="text-[10px] truncate" style={{ color: "#A1E4DB", opacity: 0.6 }}>{user.email}</p>

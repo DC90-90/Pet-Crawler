@@ -30,6 +30,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from models import (
     AuthIn, StoreIn, StoreUpdate, AlertIn, SavedFilterIn,
     Tier4CredentialsIn, OtpSubmitIn, MatchActionIn, IngestPayload,
+    AdminCreateUserIn, AdminUpdatePasswordIn, AdminUpdateRoleIn, AdminUpdatePagesIn,
 )
 from core import (
     PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
@@ -66,6 +67,18 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
 CRAWLER_TOKEN = "zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO"
+
+# ── RBAC Constants ──────────────────────────────────────────
+# Super admin is hardcoded — cannot be deleted, demoted, or have password changed by anyone else.
+SUPER_ADMIN_EMAIL = "a.disi@taqueen.sa"
+SUPER_ADMIN_PASSWORD = "Ahmaddc90@"
+LEGACY_ADMIN_EMAIL = "admin@daleelpets.com"  # to be deleted on startup
+
+VALID_ROLES = ["super_admin", "admin", "user"]
+ALL_PAGES = [
+    "my_products", "price_intel", "insights", "scanner",
+    "discounts", "alerts", "stores", "import", "settings",
+]
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -130,13 +143,32 @@ async def get_user(request: Request):
         u = await db.users.find_one({"_id": ObjectId(p["sub"])})
         if not u:
             raise HTTPException(401, "User not found")
-        return {"id": str(u["_id"]), "email": u["email"], "name": u.get("name", ""), "role": u.get("role", "user")}
+        role = u.get("role", "user")
+        # super_admin always has access to every page (implicit)
+        allowed = ALL_PAGES if role == "super_admin" else list(u.get("allowed_pages", []) or [])
+        return {
+            "id": str(u["_id"]),
+            "email": u["email"],
+            "name": u.get("name", ""),
+            "role": role,
+            "allowed_pages": allowed,
+        }
     except pyjwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(401, "Invalid token")
+
+
+def require_super_admin(user=Depends(get_user)):
+    if user.get("role") != "super_admin":
+        raise HTTPException(403, "Super admin access required")
+    return user
+
+
+def is_super_admin_email(email: str) -> bool:
+    return (email or "").strip().lower() == SUPER_ADMIN_EMAIL.lower()
 
 # ── Health Endpoint ──────────────────────────────────────────
 @router.get("/health")
@@ -560,22 +592,8 @@ async def seed_database():
     if all_snapshots:
         await db.product_snapshots.insert_many(all_snapshots)
 
-    # Seed admin user
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@daleelpets.com")
-    admin_pw = os.environ.get("ADMIN_PASSWORD", "BGv8ZcRYrBTPlJFHHhZQ3Q")
-    existing_admin = await db.users.find_one({"email": admin_email})
-    if not existing_admin:
-        await db.users.insert_one({
-            "email": admin_email, "password_hash": hash_pw(admin_pw),
-            "name": "Admin", "role": "admin",
-            "created_at": datetime.now(timezone.utc),
-        })
-    else:
-        # Always update password to match current ADMIN_PASSWORD
-        await db.users.update_one(
-            {"email": admin_email},
-            {"$set": {"password_hash": hash_pw(admin_pw)}},
-        )
+    # Note: admin user seeding moved to seed_super_admin() (always runs, idempotent).
+    # The legacy admin@daleelpets.com account is deleted there.
 
     # Create indexes
     await db.users.create_index("email", unique=True)
@@ -584,11 +602,6 @@ async def seed_database():
     await db.product_snapshots.create_index("product_id")
     await db.products.create_index("sku", unique=True)
     await db.stores.create_index("domain", unique=True)
-
-    # Write test credentials
-    creds_path = Path("/app/memory/test_credentials.md")
-    creds_path.parent.mkdir(exist_ok=True)
-    creds_path.write_text(f"# Daleel Test Credentials\n\n## Admin\n- Email: {admin_email}\n- Password: {admin_pw}\n- Role: admin\n\n## Auth Endpoints\n- POST /api/auth/login\n- POST /api/auth/register\n- GET /api/auth/me\n")
 
     logger.info(f"Seeded {len(STORES_SEED)} stores, {len(all_products_data)} products, {len(all_snapshots)} snapshots")
 
@@ -668,12 +681,23 @@ async def register(request: Request, data: AuthIn, response: Response):
     email = data.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(400, "Email already registered")
-    doc = {"email": email, "password_hash": hash_pw(data.password), "name": data.name or email.split("@")[0], "role": "user", "created_at": datetime.now(timezone.utc)}
+    # Anyone registering via the public endpoint gets ZERO page access until super_admin grants.
+    # The super_admin email is reserved — it can never be self-registered.
+    if is_super_admin_email(email):
+        raise HTTPException(403, "This email is reserved")
+    doc = {
+        "email": email,
+        "password_hash": hash_pw(data.password),
+        "name": data.name or email.split("@")[0],
+        "role": "user",
+        "allowed_pages": [],
+        "created_at": datetime.now(timezone.utc),
+    }
     result = await db.users.insert_one(doc)
     uid = str(result.inserted_id)
     token = make_token(uid, email)
     response.set_cookie("daleel_token", token, httponly=True, samesite="none", secure=True, max_age=86400, path="/")
-    return {"token": token, "user": {"id": uid, "email": email, "name": doc["name"], "role": "user"}}
+    return {"token": token, "user": {"id": uid, "email": email, "name": doc["name"], "role": "user", "allowed_pages": []}}
 
 @router.post("/auth/login")
 @limiter.limit("5/minute")
@@ -683,9 +707,20 @@ async def login(request: Request, data: AuthIn, response: Response):
     if not user or not check_pw(data.password, user["password_hash"]):
         raise HTTPException(401, "Invalid credentials")
     uid = str(user["_id"])
+    role = user.get("role", "user")
+    allowed = ALL_PAGES if role == "super_admin" else list(user.get("allowed_pages", []) or [])
     token = make_token(uid, email)
     response.set_cookie("daleel_token", token, httponly=True, samesite="none", secure=True, max_age=86400, path="/")
-    return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", ""), "role": user.get("role", "user")}}
+    return {
+        "token": token,
+        "user": {
+            "id": uid,
+            "email": email,
+            "name": user.get("name", ""),
+            "role": role,
+            "allowed_pages": allowed,
+        },
+    }
 
 @router.get("/auth/me")
 async def me(user=Depends(get_user)):
@@ -699,6 +734,157 @@ async def logout(response: Response):
 @router.get("/protected")
 async def protected(user=Depends(get_user)):
     return {"message": "Authenticated", "user": user}
+
+# ── Super Admin: User Management ─────────────────────────────
+def _serialize_user(u: dict) -> dict:
+    """Strip _id and password_hash for safe JSON responses."""
+    role = u.get("role", "user")
+    return {
+        "id": str(u["_id"]),
+        "email": u.get("email", ""),
+        "name": u.get("name", ""),
+        "role": role,
+        "allowed_pages": ALL_PAGES if role == "super_admin" else list(u.get("allowed_pages", []) or []),
+        "created_at": (u.get("created_at").isoformat() if isinstance(u.get("created_at"), datetime) else u.get("created_at")),
+        "is_super_admin": is_super_admin_email(u.get("email", "")),
+    }
+
+
+def _validate_pages(pages: List[str]) -> List[str]:
+    return [p for p in (pages or []) if p in ALL_PAGES]
+
+
+@router.get("/admin/users")
+async def admin_list_users(user=Depends(require_super_admin)):
+    cursor = db.users.find({}, {"password_hash": 0}).sort("created_at", -1)
+    out = []
+    async for u in cursor:
+        out.append(_serialize_user(u))
+    return {"users": out, "all_pages": ALL_PAGES, "valid_roles": VALID_ROLES}
+
+
+@router.post("/admin/users")
+async def admin_create_user(data: AdminCreateUserIn, _=Depends(require_super_admin)):
+    email = data.email.lower().strip()
+    if not email or "@" not in email:
+        raise HTTPException(400, "Invalid email")
+    if len(data.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    if data.role not in ("admin", "user"):
+        raise HTTPException(400, f"Role must be 'admin' or 'user' (got '{data.role}')")
+    if is_super_admin_email(email):
+        raise HTTPException(403, "This email is reserved for the super admin")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(400, "Email already registered")
+    doc = {
+        "email": email,
+        "password_hash": hash_pw(data.password),
+        "name": data.name or email.split("@")[0],
+        "role": data.role,
+        "allowed_pages": _validate_pages(data.allowed_pages or []),
+        "created_at": datetime.now(timezone.utc),
+    }
+    result = await db.users.insert_one(doc)
+    doc["_id"] = result.inserted_id
+    return _serialize_user(doc)
+
+
+@router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, _=Depends(require_super_admin)):
+    try:
+        target = await db.users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        raise HTTPException(400, "Invalid user id")
+    if not target:
+        raise HTTPException(404, "User not found")
+    if is_super_admin_email(target.get("email", "")):
+        raise HTTPException(403, "The super admin cannot be deleted")
+    await db.users.delete_one({"_id": ObjectId(user_id)})
+    return {"deleted": True, "id": user_id}
+
+
+@router.patch("/admin/users/{user_id}/password")
+async def admin_update_password(user_id: str, data: AdminUpdatePasswordIn, current_user=Depends(require_super_admin)):
+    try:
+        target = await db.users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        raise HTTPException(400, "Invalid user id")
+    if not target:
+        raise HTTPException(404, "User not found")
+    # The super_admin password can only be changed by the super_admin themselves (i.e. when target == current_user)
+    if is_super_admin_email(target.get("email", "")) and str(target["_id"]) != current_user["id"]:
+        raise HTTPException(403, "Only the super admin can change their own password")
+    if len(data.password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"password_hash": hash_pw(data.password)}})
+    return {"updated": True, "id": user_id}
+
+
+@router.patch("/admin/users/{user_id}/role")
+async def admin_update_role(user_id: str, data: AdminUpdateRoleIn, _=Depends(require_super_admin)):
+    if data.role not in ("admin", "user"):
+        raise HTTPException(400, "Role must be 'admin' or 'user'")
+    try:
+        target = await db.users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        raise HTTPException(400, "Invalid user id")
+    if not target:
+        raise HTTPException(404, "User not found")
+    if is_super_admin_email(target.get("email", "")):
+        raise HTTPException(403, "The super admin role cannot be changed")
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"role": data.role}})
+    updated = await db.users.find_one({"_id": ObjectId(user_id)})
+    return _serialize_user(updated)
+
+
+@router.patch("/admin/users/{user_id}/pages")
+async def admin_update_pages(user_id: str, data: AdminUpdatePagesIn, _=Depends(require_super_admin)):
+    try:
+        target = await db.users.find_one({"_id": ObjectId(user_id)})
+    except Exception:
+        raise HTTPException(400, "Invalid user id")
+    if not target:
+        raise HTTPException(404, "User not found")
+    if is_super_admin_email(target.get("email", "")):
+        raise HTTPException(403, "The super admin always has access to every page")
+    pages = _validate_pages(data.allowed_pages)
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"allowed_pages": pages}})
+    updated = await db.users.find_one({"_id": ObjectId(user_id)})
+    return _serialize_user(updated)
+
+
+async def seed_super_admin():
+    """Idempotent super admin seed.
+
+    - Always force-updates `a.disi@taqueen.sa` to the hardcoded password (so the
+      password can never be drifted by anyone).
+    - Removes the legacy `admin@daleelpets.com` account if it exists.
+    """
+    now = datetime.now(timezone.utc)
+    existing = await db.users.find_one({"email": SUPER_ADMIN_EMAIL.lower()})
+    payload = {
+        "email": SUPER_ADMIN_EMAIL.lower(),
+        "password_hash": hash_pw(SUPER_ADMIN_PASSWORD),
+        "name": "Super Admin",
+        "role": "super_admin",
+        "allowed_pages": ALL_PAGES,
+    }
+    if existing is None:
+        payload["created_at"] = now
+        await db.users.insert_one(payload)
+        logger.info(f"[RBAC] Seeded super admin {SUPER_ADMIN_EMAIL}")
+    else:
+        await db.users.update_one(
+            {"_id": existing["_id"]},
+            {"$set": payload},
+        )
+        logger.info(f"[RBAC] Refreshed super admin {SUPER_ADMIN_EMAIL}")
+
+    # Remove legacy admin account per user instruction
+    legacy = await db.users.find_one({"email": LEGACY_ADMIN_EMAIL.lower()})
+    if legacy:
+        await db.users.delete_one({"_id": legacy["_id"]})
+        logger.info(f"[RBAC] Removed legacy admin {LEGACY_ADMIN_EMAIL}")
 
 # ── Crawlers imported from crawlers.py ───────────────────────
 # crawl_store_waterfall, process_crawled_products, extract_brand,
@@ -3695,6 +3881,7 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup():
     await seed_database()
+    await seed_super_admin()
     await ensure_stores()
     # Idempotent indexes (safe to run on every startup; no-op if already present)
     try:
