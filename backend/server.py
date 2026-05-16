@@ -3936,6 +3936,51 @@ async def startup():
     scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
     logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync")
 
+    # ── Playwright Chromium self-heal (Feb 2026 production deploy fix) ─────
+    # In some deploys (notably daleel.hrm-sa.com) the Chromium binary at
+    # PLAYWRIGHT_BROWSERS_PATH is missing or version-mismatched after a redeploy,
+    # which makes Tier 3 HTML crawls fail with:
+    #   BrowserType.launch: Executable doesn't exist at /pw-browsers/...
+    # We check on every startup and run `playwright install chromium` if the
+    # binary is missing. Idempotent: no-op when it's already installed correctly.
+    # Runs in a background thread so it never blocks app startup.
+    import threading
+    import subprocess
+    import sys
+    def _ensure_chromium_installed():
+        try:
+            browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
+            # Probe: try to resolve the executable path Playwright expects.
+            from playwright.sync_api import sync_playwright
+            try:
+                with sync_playwright() as p:
+                    exe = p.chromium.executable_path
+                    if exe and Path(exe).exists():
+                        logger.info(f"[Playwright] Chromium present at {exe}")
+                        return
+                    logger.warning(f"[Playwright] Chromium NOT found at expected path {exe!r} — running playwright install chromium...")
+            except Exception as probe_err:
+                logger.warning(f"[Playwright] Probe failed ({probe_err}); attempting install anyway")
+            # Run installer. --with-deps would require root + apt; in managed
+            # containers the OS deps are pre-baked, so plain `install chromium`
+            # is the safe move. PLAYWRIGHT_BROWSERS_PATH (if set) is honoured
+            # automatically by the subprocess via env inheritance.
+            install_env = os.environ.copy()
+            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+            logger.info(f"[Playwright] Installing chromium (browsers_path={browsers_path!r})... cmd={' '.join(cmd)}")
+            result = subprocess.run(cmd, env=install_env, capture_output=True, text=True, timeout=600)
+            if result.returncode == 0:
+                logger.info("[Playwright] Chromium install completed successfully")
+                if result.stdout:
+                    logger.info(f"[Playwright] stdout: {result.stdout[-500:]}")
+            else:
+                logger.error(f"[Playwright] Install FAILED (rc={result.returncode})")
+                logger.error(f"[Playwright] stdout: {result.stdout[-1000:]}")
+                logger.error(f"[Playwright] stderr: {result.stderr[-1000:]}")
+        except Exception as e:
+            logger.error(f"[Playwright] Self-heal exception: {e}")
+    threading.Thread(target=_ensure_chromium_installed, name="playwright-selfheal", daemon=True).start()
+
 @app.on_event("shutdown")
 async def shutdown():
     if scheduler.running:
