@@ -70,4 +70,4 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
 - Crawler token (hardcoded): `zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO`
 
 ## Preview URL
-https://saudi-pets-monitor.preview.emergentagent.com
+https://price-monitor-58.preview.emergentagent.com
