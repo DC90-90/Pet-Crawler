@@ -3936,50 +3936,111 @@ async def startup():
     scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
     logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync")
 
-    # ── Playwright Chromium self-heal (Feb 2026 production deploy fix) ─────
-    # In some deploys (notably daleel.hrm-sa.com) the Chromium binary at
-    # PLAYWRIGHT_BROWSERS_PATH is missing or version-mismatched after a redeploy,
-    # which makes Tier 3 HTML crawls fail with:
-    #   BrowserType.launch: Executable doesn't exist at /pw-browsers/...
-    # We check on every startup and run `playwright install chromium` if the
-    # binary is missing. Idempotent: no-op when it's already installed correctly.
-    # Runs in a background thread so it never blocks app startup.
+    # ── Playwright Chromium AGGRESSIVE self-heal (Feb 2026 production deploy fix v2) ─
+    # The previous probe-based version checked `chromium.executable_path` and skipped
+    # install if the full chromium binary was present. That was a bug: in Playwright
+    # >= 1.49, `chromium.launch(headless=True)` actually uses a SEPARATE binary
+    # called `chrome-headless-shell` (different path from full chromium). Production
+    # had full chromium but was missing chrome-headless-shell, so the probe said
+    # "all good" yet every Tier-3 crawl still failed.
+    #
+    # New strategy:
+    #   1. Detect if PLAYWRIGHT_BROWSERS_PATH is writable; if not, unset it so
+    #      Playwright falls back to ~/.cache/ms-playwright.
+    #   2. ALWAYS run `playwright install chromium chromium-headless-shell` —
+    #      no probe, no skip. (Idempotent: noop if already up to date.)
+    #   3. Smoke test by actually launching headless Chromium against about:blank.
+    #      Log success or the exact failure with stack-trace.
+    # Runs in a background daemon thread so it never blocks app startup. Crawl jobs
+    # have 15-180 min offsets from startup so there is plenty of time for the install.
     import threading
     import subprocess
     import sys
-    def _ensure_chromium_installed():
-        try:
-            browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
-            # Probe: try to resolve the executable path Playwright expects.
-            from playwright.sync_api import sync_playwright
+    def _aggressive_playwright_self_heal():
+        # 1. Writability probe on PLAYWRIGHT_BROWSERS_PATH
+        browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+        install_env = os.environ.copy()
+        if browsers_path:
             try:
-                with sync_playwright() as p:
-                    exe = p.chromium.executable_path
-                    if exe and Path(exe).exists():
-                        logger.info(f"[Playwright] Chromium present at {exe}")
-                        return
-                    logger.warning(f"[Playwright] Chromium NOT found at expected path {exe!r} — running playwright install chromium...")
-            except Exception as probe_err:
-                logger.warning(f"[Playwright] Probe failed ({probe_err}); attempting install anyway")
-            # Run installer. --with-deps would require root + apt; in managed
-            # containers the OS deps are pre-baked, so plain `install chromium`
-            # is the safe move. PLAYWRIGHT_BROWSERS_PATH (if set) is honoured
-            # automatically by the subprocess via env inheritance.
-            install_env = os.environ.copy()
-            cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
-            logger.info(f"[Playwright] Installing chromium (browsers_path={browsers_path!r})... cmd={' '.join(cmd)}")
-            result = subprocess.run(cmd, env=install_env, capture_output=True, text=True, timeout=600)
+                p = Path(browsers_path)
+                p.mkdir(parents=True, exist_ok=True)
+                probe = p / ".daleel_writeprobe"
+                probe.write_text("ok")
+                probe.unlink()
+                logger.info(f"[Playwright] PLAYWRIGHT_BROWSERS_PATH={browsers_path!r} is WRITABLE")
+            except Exception as write_err:
+                logger.warning(
+                    f"[Playwright] PLAYWRIGHT_BROWSERS_PATH={browsers_path!r} is NOT writable "
+                    f"({write_err.__class__.__name__}: {write_err}). Falling back to default "
+                    f"~/.cache/ms-playwright by unsetting the env var for this process."
+                )
+                # Unset for both the install subprocess AND the parent (so subsequent
+                # Playwright launches use the default location).
+                install_env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+                os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+                browsers_path = ""
+
+        effective_path = install_env.get("PLAYWRIGHT_BROWSERS_PATH", "<default ~/.cache/ms-playwright>")
+        # 2. ALWAYS install chromium + chromium-headless-shell
+        cmd = [sys.executable, "-m", "playwright", "install", "chromium", "chromium-headless-shell"]
+        logger.info(f"[Playwright] Aggressive install starting (browsers_path={effective_path!r}); cmd={' '.join(cmd)}")
+        try:
+            result = subprocess.run(cmd, env=install_env, capture_output=True, text=True, timeout=900)
             if result.returncode == 0:
-                logger.info("[Playwright] Chromium install completed successfully")
+                logger.info(f"[Playwright] Install completed successfully (rc=0)")
                 if result.stdout:
-                    logger.info(f"[Playwright] stdout: {result.stdout[-500:]}")
+                    logger.info(f"[Playwright] install stdout (last 800): {result.stdout[-800:]}")
             else:
                 logger.error(f"[Playwright] Install FAILED (rc={result.returncode})")
-                logger.error(f"[Playwright] stdout: {result.stdout[-1000:]}")
-                logger.error(f"[Playwright] stderr: {result.stderr[-1000:]}")
+                logger.error(f"[Playwright] install stdout (last 1500): {result.stdout[-1500:] if result.stdout else '<empty>'}")
+                logger.error(f"[Playwright] install stderr (last 1500): {result.stderr[-1500:] if result.stderr else '<empty>'}")
+        except subprocess.TimeoutExpired:
+            logger.error("[Playwright] Install TIMED OUT after 15 minutes — Tier-3 crawls will continue to fail")
+            return
         except Exception as e:
-            logger.error(f"[Playwright] Self-heal exception: {e}")
-    threading.Thread(target=_ensure_chromium_installed, name="playwright-selfheal", daemon=True).start()
+            logger.error(f"[Playwright] Install raised exception: {e.__class__.__name__}: {e}")
+            return
+
+        # 3. Smoke test: actually launch headless Chromium and navigate to about:blank.
+        # This exercises BOTH chromium and chromium-headless-shell binaries.
+        try:
+            from playwright.sync_api import sync_playwright
+            logger.info("[Playwright] Smoke test: launching headless Chromium against about:blank...")
+            with sync_playwright() as pw:
+                exe = pw.chromium.executable_path
+                logger.info(f"[Playwright] chromium.executable_path resolves to: {exe!r}")
+                browser = pw.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
+                page = browser.new_page()
+                page.goto("about:blank", timeout=10000)
+                title = page.title()
+                browser.close()
+                logger.info(
+                    f"[Playwright] Smoke test PASSED — headless Chromium launched, "
+                    f"navigated to about:blank, title={title!r}. Tier-3 crawls should now work."
+                )
+        except Exception as smoke_err:
+            logger.error(
+                f"[Playwright] Smoke test FAILED: {smoke_err.__class__.__name__}: {smoke_err}"
+            )
+            # Last-resort diagnostic: dump what's actually on disk so we can see why
+            try:
+                root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache" / "ms-playwright")))
+                if root.exists():
+                    contents = sorted(d.name for d in root.iterdir())
+                    logger.error(f"[Playwright] Contents of {root}: {contents}")
+                else:
+                    logger.error(f"[Playwright] Browsers root {root} does not exist")
+            except Exception as diag_err:
+                logger.error(f"[Playwright] Could not dump browsers dir: {diag_err}")
+
+    threading.Thread(
+        target=_aggressive_playwright_self_heal,
+        name="playwright-selfheal",
+        daemon=True,
+    ).start()
 
 @app.on_event("shutdown")
 async def shutdown():
