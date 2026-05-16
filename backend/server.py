@@ -245,12 +245,12 @@ async def health_detailed(user=Depends(get_user)):
 # ── Seed Data ───────────────────────────────────────────────
 STORES_SEED = [
     {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1},
-    {"name": "Panda Store", "domain": "matjarpanda.com", "platform": "salla", "priority": 1},
+    {"name": "Panda Store", "domain": "matjarpanda.com", "platform": "zid", "priority": 1},
     {"name": "Lana Pets", "domain": "lanapets.com", "platform": "salla", "priority": 1},
     {"name": "Cute Pets", "domain": "cutepets.com", "platform": "shopify", "priority": 1},
     {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2},
     {"name": "Caty Store", "domain": "caty-store.com", "platform": "salla", "priority": 2},
-    {"name": "Petsy", "domain": "petsysa.com", "platform": "salla", "priority": 2},
+    {"name": "Petsy", "domain": "petsysa.com", "platform": "zid", "priority": 2},
 ]
 
 PRODUCTS_SEED = [
@@ -602,6 +602,8 @@ async def ensure_stores():
         {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Aleef", "domain": "aleef.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
+        {"name": "Petsy", "domain": "petsysa.com", "platform": "zid", "priority": 2, "working_endpoint": "/api/v1/products"},
+        {"name": "Panda Store", "domain": "matjarpanda.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
         {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
         {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
     ]
@@ -3126,6 +3128,35 @@ async def get_my_skus(user=Depends(get_user)):
 
 # ── External Crawler Ingest API ──────────────────────────────
 # IngestPayload, _coerce_num, _coerce_int moved to models/schemas.py and core/utils.py (Feb 2026 refactor)
+
+
+@router.get("/admin/recent-snapshots")
+async def admin_recent_snapshots(limit: int = Query(200, ge=1, le=1000), user=Depends(get_user)):
+    """Read-only admin helper: latest N snapshots joined with store platform.
+
+    Used for spot-checking the impact of the Feb 2026 stock-normalize micro-fixes.
+    """
+    stores = {s["id"]: s async for s in db.stores.find({}, {"_id": 0, "id": 1, "platform": 1, "name": 1, "is_own_store": 1})}
+
+    snaps = await db.product_snapshots.find(
+        {},
+        {
+            "_id": 0,
+            "sku": 1, "store_id": 1, "store_name": 1,
+            "price": 1, "qty_available": 1, "in_stock": 1,
+            "product_url": 1, "crawled_at": 1, "source_tier": 1,
+        },
+    ).sort("crawled_at", -1).limit(limit).to_list(limit)
+
+    for s in snaps:
+        meta = stores.get(s.get("store_id")) or {}
+        s["platform"] = meta.get("platform", "")
+        s["is_own_store"] = bool(meta.get("is_own_store", False))
+        ca = s.get("crawled_at")
+        if hasattr(ca, "isoformat"):
+            s["crawled_at"] = ca.isoformat()
+
+    return {"count": len(snaps), "snapshots": snaps}
 
 
 @router.post("/admin/cleanup-own-snapshots")

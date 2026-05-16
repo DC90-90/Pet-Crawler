@@ -196,7 +196,17 @@ def _normalize_raw_product(raw, store_name):
         original_price = price
         price = sale_price
 
-    qty = int(raw.get("quantity", raw.get("stock_quantity", raw.get("qty", 0))) or 0)
+    # Stock quantity parsing (Feb 2026 micro-fixes):
+    # - Salla returns quantity as STRING ("50") and uses unlimited_quantity flag
+    # - Zid returns quantity as int|null and uses is_infinite flag
+    # Handle both inline since this function is platform-agnostic.
+    if raw.get("unlimited_quantity") or raw.get("is_infinite"):
+        qty = 999
+    else:
+        try:
+            qty = max(0, int(float(str(raw.get("quantity") or raw.get("stock_quantity") or raw.get("qty") or 0))))
+        except (ValueError, TypeError):
+            qty = 0
 
     # Capture cumulative sales counter (Salla: sales_count, Zid: sold_count, legacy Salla: sold_products_count)
     sold_count = int(
@@ -243,20 +253,23 @@ def _normalize_raw_product(raw, store_name):
     elif isinstance(imgs, dict):
         img_url = imgs.get("url", imgs.get("src", ""))
 
-    # Storefront product URL: try Salla/Zid common keys, then nested objects
-    product_url = (
-        raw.get("url")
-        or raw.get("html_url")  # legacy Salla
-        or raw.get("permalink")
-        or raw.get("product_url")
-        or raw.get("link")
-        or raw.get("page_url")
-        or raw.get("product_page_url")
-    )
+    # Storefront product URL (Feb 2026): prefer Salla's `urls.customer` over the generic
+    # `url` field, since `url` may be the admin URL or short link.
+    urls_obj = raw.get("urls") or {}
+    product_url = ""
+    if isinstance(urls_obj, dict):
+        product_url = urls_obj.get("customer") or urls_obj.get("store") or urls_obj.get("url") or ""
     if not product_url:
-        urls_obj = raw.get("urls") or {}
-        if isinstance(urls_obj, dict):
-            product_url = urls_obj.get("customer") or urls_obj.get("store") or urls_obj.get("url") or ""
+        product_url = (
+            raw.get("url")
+            or raw.get("html_url")
+            or raw.get("permalink")
+            or raw.get("product_url")
+            or raw.get("link")
+            or raw.get("page_url")
+            or raw.get("product_page_url")
+            or ""
+        )
     product_url = str(product_url or "").strip()
 
     # Barcode extraction (Feb 2026): Salla often puts valid EANs on variants
@@ -285,6 +298,12 @@ def _normalize_raw_product(raw, store_name):
                 break
     logger.info(
         f"normalize_salla barcode_source={'variant' if from_variant else 'root' if barcode else 'none'} sku={sku_raw}"
+    )
+    # Feb 2026: stock signal observability — tells us when unlimited flags fired
+    _plat = "salla" if "unlimited_quantity" in raw else ("zid" if "is_infinite" in raw else "unknown")
+    logger.info(
+        f"stock_normalize platform={_plat} sku={sku_raw} qty={qty} "
+        f"unlimited={bool(raw.get('unlimited_quantity') or raw.get('is_infinite'))}"
     )
 
     return {
