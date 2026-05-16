@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
-import api from "@/lib/api";
+import api, { API_BASE } from "@/lib/api";
 import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -83,7 +83,7 @@ export default function MyProductsPage() {
   };
 
   const handleExport = () => {
-    window.open(`${process.env.REACT_APP_BACKEND_URL}/api/export/products?days=${days}`, "_blank");
+    window.open(`${API_BASE}/export/products?days=${days}`, "_blank");
   };
 
   const kpis = data.kpis || {};

@@ -672,7 +672,7 @@ async def register(request: Request, data: AuthIn, response: Response):
     result = await db.users.insert_one(doc)
     uid = str(result.inserted_id)
     token = make_token(uid, email)
-    response.set_cookie("daleel_token", token, httponly=True, samesite="lax", max_age=86400, path="/")
+    response.set_cookie("daleel_token", token, httponly=True, samesite="none", secure=True, max_age=86400, path="/")
     return {"token": token, "user": {"id": uid, "email": email, "name": doc["name"], "role": "user"}}
 
 @router.post("/auth/login")
@@ -684,7 +684,7 @@ async def login(request: Request, data: AuthIn, response: Response):
         raise HTTPException(401, "Invalid credentials")
     uid = str(user["_id"])
     token = make_token(uid, email)
-    response.set_cookie("daleel_token", token, httponly=True, samesite="lax", max_age=86400, path="/")
+    response.set_cookie("daleel_token", token, httponly=True, samesite="none", secure=True, max_age=86400, path="/")
     return {"token": token, "user": {"id": uid, "email": email, "name": user.get("name", ""), "role": user.get("role", "user")}}
 
 @router.get("/auth/me")
