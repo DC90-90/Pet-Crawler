@@ -9,11 +9,62 @@ import re
 import uuid
 import time
 import logging
+import itertools
 import httpx
 from datetime import datetime, timezone
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
 logger = logging.getLogger(__name__)
+
+# ── Webshare Residential Proxy (Saudi Arabia) ───────────────
+# Rotating residential proxy used ONLY for stores that have `use_proxy=True`
+# on their store document. Bandwidth is finite (50 GB/month) so the rotation
+# helper is intentionally gated by the per-store flag at the caller.
+_PROXY_USERNAMES = (
+    [u.strip() for u in os.getenv("PROXY_USERNAMES", "").split(",") if u.strip()]
+    if os.getenv("PROXY_USERNAMES")
+    else []
+)
+_PROXY_ITER = itertools.cycle(_PROXY_USERNAMES) if _PROXY_USERNAMES else None
+_PROXY_PWD = os.getenv("PROXY_PASSWORD", "")
+_PROXY_HOST = os.getenv("PROXY_HOST", "p.webshare.io")
+_PROXY_PORT = os.getenv("PROXY_PORT", "80")
+
+
+def get_proxy_credentials():
+    """Return (username, password, host, port) tuple for the next rotation slot,
+    or None if proxies aren't configured. Username rotates round-robin."""
+    if not _PROXY_ITER:
+        return None
+    user = next(_PROXY_ITER)
+    return (user, _PROXY_PWD, _PROXY_HOST, _PROXY_PORT)
+
+
+def get_proxy_url():
+    """Return a full proxy URL (`http://user:pass@host:port`) or None."""
+    creds = get_proxy_credentials()
+    if not creds:
+        return None
+    user, pwd, host, port = creds
+    return f"http://{user}:{pwd}@{host}:{port}"
+
+
+def playwright_proxy_config(user, pwd, host, port):
+    """Build the dict Playwright's `chromium.launch(proxy=...)` expects."""
+    return {"server": f"http://{host}:{port}", "username": user, "password": pwd}
+
+
+async def record_proxy_usage(db, store, bytes_estimate):
+    """Best-effort bandwidth tracking. Never raises."""
+    try:
+        await db.proxy_usage.insert_one({
+            "crawled_at": datetime.now(timezone.utc),
+            "store_id": store.get("id", ""),
+            "store_domain": store.get("domain", ""),
+            "bytes_estimate": int(bytes_estimate or 0),
+        })
+    except Exception as e:
+        logger.warning(f"[Proxy] usage record failed: {e}")
 
 # ── Constants ────────────────────────────────────────────────
 KNOWN_BRANDS = [
@@ -524,11 +575,25 @@ async def crawl_salla_tier1(db, store):
     all_raw = []
     winning_endpoint = None
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers={
+    httpx_kwargs = {
+        "timeout": 15.0,
+        "follow_redirects": True,
+        "headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json, text/html, */*",
-        }) as http:
+        },
+    }
+    proxy_url = None
+    if store.get("use_proxy"):
+        creds = get_proxy_credentials()
+        if creds:
+            u, p, h, port = creds
+            proxy_url = f"http://{u}:{p}@{h}:{port}"
+            httpx_kwargs["proxy"] = proxy_url
+            logger.info(f"[Proxy] store={store.get('domain')} tier=1 using proxy_user={u}")
+
+    try:
+        async with httpx.AsyncClient(**httpx_kwargs) as http:
             for ep in endpoints:
                 items, matched_ep = await _try_single_endpoint(http, ep, crawl_log)
                 if matched_ep:
@@ -620,7 +685,14 @@ async def crawl_tier2_xhr(db, store):
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+            if store.get("use_proxy"):
+                creds = get_proxy_credentials()
+                if creds:
+                    user, pwd, host, port = creds
+                    launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
+                    logger.info(f"[Proxy] store={store.get('domain')} tier=2 using proxy_user={user}")
+            browser = await pw.chromium.launch(**launch_kwargs)
             ctx = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="ar-SA",
@@ -823,7 +895,14 @@ async def crawl_tier3_html(db, store):
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+            if store.get("use_proxy"):
+                creds = get_proxy_credentials()
+                if creds:
+                    user, pwd, host, port = creds
+                    launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
+                    logger.info(f"[Proxy] store={store.get('domain')} tier=3 using proxy_user={user}")
+            browser = await pw.chromium.launch(**launch_kwargs)
             ctx = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", locale="ar-SA")
             page = await ctx.new_page()
             for path in STORE_PAGES:
@@ -1008,12 +1087,21 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
     captured = []
     store_identifier = None
     cat_ids = []
+    proxy_user_for_httpx = None
 
     # Phase 1 — Playwright: capture store-identifier + discover all categories (incl. nested)
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+            if store.get("use_proxy"):
+                creds = get_proxy_credentials()
+                if creds:
+                    user, pwd, host, port = creds
+                    launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
+                    proxy_user_for_httpx = (user, pwd, host, port)
+                    logger.info(f"[Proxy] store={store.get('domain')} tier=storefront_categories using proxy_user={user}")
+            browser = await pw.chromium.launch(**launch_kwargs)
             ctx = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="ar-SA",
@@ -1068,13 +1156,21 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
         "store-identifier": store_identifier,
     }
 
-    async with httpx.AsyncClient(timeout=20.0, headers=api_headers) as client:
+    httpx_kwargs = {"timeout": 20.0, "headers": api_headers}
+    bytes_consumed = 0
+    if store.get("use_proxy") and proxy_user_for_httpx:
+        u, p, h, port = proxy_user_for_httpx
+        httpx_kwargs["proxy"] = f"http://{u}:{p}@{h}:{port}"
+        logger.info(f"[Proxy] store={store.get('domain')} tier=storefront_categories_api using proxy_user={u}")
+
+    async with httpx.AsyncClient(**httpx_kwargs) as client:
         for cid in cat_ids:
             url = f"https://api.salla.dev/store/v1/products?source=categories&source_value%5B%5D={cid}&limit=50"
             cat_count = 0
             for page_num in range(max_pages_per_cat):
                 try:
                     r = await client.get(url)
+                    bytes_consumed += len(r.content or b"")
                     if r.status_code != 200:
                         crawl_log["endpoints_tried"].append({"endpoint": f"cat={cid} p={page_num+1}", "status": r.status_code, "products": 0, "error": r.text[:100]})
                         break
@@ -1121,6 +1217,9 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
             crawl_log["error"] = "Storefront-categories captured 0 products"
 
     await _finalize_crawl_log(db, crawl_log, store["id"])
+    if store.get("use_proxy") and bytes_consumed > 0:
+        await record_proxy_usage(db, store, bytes_consumed)
+        logger.info(f"[Proxy] usage store={store.get('domain')} bytes={bytes_consumed}")
     logger.info(f"[StorefrontCategories] {store['name']}: found={crawl_log['products_found']}, dur={crawl_log['duration_secs']}s, cats={len(cat_ids)}")
     return crawl_log
 

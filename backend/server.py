@@ -608,6 +608,10 @@ async def seed_database():
 
 async def ensure_stores():
     """Ensure all required stores exist and have correct configuration."""
+    # Stores that should route Tier 1/2/3 traffic through the Saudi residential
+    # proxy (Webshare). Hardcoded list — bandwidth is finite (50 GB/month) so we
+    # explicitly opt-in per domain rather than proxy everything.
+    proxy_stores = {"cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa", "lanapets.com", "zarafaksa.com"}
     required_stores = [
         {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
         {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
@@ -633,12 +637,13 @@ async def ensure_stores():
                 "working_endpoint": s.get("working_endpoint", ""),
                 "tier1_only": bool(s.get("tier1_only", False)),
                 "use_storefront_categories": bool(s.get("use_storefront_categories", False)),
+                "use_proxy": s["domain"] in proxy_stores,
                 "last_crawled_at": "", "created_at": now.isoformat(),
             })
             added += 1
             logger.info(f"[Stores] Added: {s['name']} ({s['domain']})")
         else:
-            # Update platform/working_endpoint/tier1_only/use_storefront_categories if store exists but has wrong config
+            # Update platform/working_endpoint/tier1_only/use_storefront_categories/use_proxy if changed
             updates = {}
             if existing.get("platform") != s["platform"]:
                 updates["platform"] = s["platform"]
@@ -650,9 +655,25 @@ async def ensure_stores():
             desired_storefront = bool(s.get("use_storefront_categories", False))
             if bool(existing.get("use_storefront_categories", False)) != desired_storefront:
                 updates["use_storefront_categories"] = desired_storefront
+            desired_proxy = s["domain"] in proxy_stores
+            if bool(existing.get("use_proxy", False)) != desired_proxy:
+                updates["use_proxy"] = desired_proxy
             if updates:
                 await db.stores.update_one({"domain": s["domain"]}, {"$set": updates})
                 logger.info(f"[Stores] Updated config for {s['name']}: {updates}")
+
+    # Ensure use_proxy is also set for stores that already exist in DB but aren't
+    # in required_stores (e.g. Lana Pets was added externally via ingest API).
+    for domain in proxy_stores:
+        await db.stores.update_one(
+            {"domain": domain, "use_proxy": {"$ne": True}},
+            {"$set": {"use_proxy": True}},
+        )
+    # Defensive: every other store explicitly off
+    await db.stores.update_many(
+        {"domain": {"$nin": list(proxy_stores)}, "use_proxy": {"$exists": False}},
+        {"$set": {"use_proxy": False}},
+    )
 
     # Mark pets-houses.com as own store
     await db.stores.update_one(
@@ -851,6 +872,49 @@ async def admin_update_pages(user_id: str, data: AdminUpdatePagesIn, _=Depends(r
     await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"allowed_pages": pages}})
     updated = await db.users.find_one({"_id": ObjectId(user_id)})
     return _serialize_user(updated)
+
+
+@router.get("/admin/proxy-usage")
+async def admin_proxy_usage(user=Depends(get_user)):
+    """Webshare residential proxy bandwidth dashboard. Admin/super-admin only."""
+    if user.get("role") not in ("admin", "super_admin"):
+        raise HTTPException(403, "Admin access required")
+
+    now = datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    pipeline_today = [
+        {"$match": {"crawled_at": {"$gte": day_start}}},
+        {"$group": {"_id": None, "total": {"$sum": "$bytes_estimate"}}},
+    ]
+    pipeline_month = [
+        {"$match": {"crawled_at": {"$gte": month_start}}},
+        {"$group": {"_id": None, "total": {"$sum": "$bytes_estimate"}}},
+    ]
+    today_rows = await db.proxy_usage.aggregate(pipeline_today).to_list(length=1)
+    month_rows = await db.proxy_usage.aggregate(pipeline_month).to_list(length=1)
+
+    bytes_today = int(today_rows[0]["total"]) if today_rows else 0
+    bytes_month = int(month_rows[0]["total"]) if month_rows else 0
+
+    monthly_limit_gb = 50
+    monthly_limit_bytes = monthly_limit_gb * 1024 * 1024 * 1024
+    pct_used = round((bytes_month / monthly_limit_bytes) * 100, 4) if monthly_limit_bytes else 0.0
+
+    proxy_store_cursor = db.stores.find({"use_proxy": True}, {"_id": 0, "domain": 1, "name": 1})
+    proxy_stores = []
+    async for s in proxy_store_cursor:
+        proxy_stores.append(s.get("domain", ""))
+
+    return {
+        "proxy_enabled_stores": proxy_stores,
+        "estimated_bytes_today": bytes_today,
+        "estimated_bytes_this_month": bytes_month,
+        "monthly_limit_gb": monthly_limit_gb,
+        "pct_used": pct_used,
+        "stores_using_proxy_count": len(proxy_stores),
+    }
 
 
 async def seed_super_admin():
@@ -4041,6 +4105,34 @@ async def startup():
         name="playwright-selfheal",
         daemon=True,
     ).start()
+
+    # ── Proxy smoke test (Saudi residential, Webshare) ─────────
+    # Verifies the proxy is reachable + identifies the exit IP. Only runs if
+    # PROXY_USERNAMES is configured. Non-fatal: a failure is logged but never
+    # crashes the backend.
+    def _proxy_smoke_test():
+        import httpx as _httpx
+        proxy_users = os.getenv("PROXY_USERNAMES", "").split(",")
+        proxy_users = [u.strip() for u in proxy_users if u.strip()]
+        if not proxy_users:
+            logger.info("[Proxy] Smoke test skipped: PROXY_USERNAMES env not set")
+            return
+        user = proxy_users[0]
+        host = os.getenv("PROXY_HOST", "p.webshare.io")
+        port = os.getenv("PROXY_PORT", "80")
+        pwd = os.getenv("PROXY_PASSWORD", "")
+        proxy_url = f"http://{user}:{pwd}@{host}:{port}"
+        try:
+            with _httpx.Client(proxy=proxy_url, timeout=30.0) as cli:
+                r = cli.get("https://api.ipify.org?format=json")
+                if r.status_code == 200:
+                    exit_ip = r.json().get("ip", "?")
+                    logger.info(f"[Proxy] Smoke test: connected via SA proxy, exit IP = {exit_ip}")
+                else:
+                    logger.error(f"[Proxy] Smoke test FAILED: HTTP {r.status_code} body={r.text[:200]}")
+        except Exception as e:
+            logger.error(f"[Proxy] Smoke test FAILED: {e.__class__.__name__}: {e}")
+    threading.Thread(target=_proxy_smoke_test, name="proxy-smoketest", daemon=True).start()
 
 @app.on_event("shutdown")
 async def shutdown():
