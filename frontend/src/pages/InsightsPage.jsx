@@ -98,17 +98,52 @@ export default function InsightsPage() {
       )}
 
       {/* Revenue Leaderboard Chart */}
-      <div className="glass-card rounded-md p-5">
+      <div className="glass-card rounded-md p-5" data-testid="revenue-leaderboard">
         <h3 className="text-sm font-semibold text-white mb-4">{t("chart_leaderboard")}</h3>
-        <ResponsiveContainer width="100%" height={Math.max(280, (leaderboard?.length || 0) * 36)}>
-          <BarChart data={leaderboard} layout="vertical" margin={{ left: 10, right: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
-            <XAxis type="number" tickFormatter={(v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} tick={{ fontSize: 10, fill: "#A1E4DB" }} />
-            <YAxis type="category" dataKey="store" width={120} tick={{ fontSize: 11, fill: "#A1E4DB" }} />
-            <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Est. Revenue"]} contentStyle={{ background: "#104745", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#A1E4DB" }} itemStyle={{ color: "#1E988E" }} />
-            <Bar dataKey="revenue_est" fill="#1E988E" radius={[0, 4, 4, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        {(() => {
+          // Feb 2026 — split rows by revenue_status so Salla stores that can
+          // never expose sold_count don't appear as visually-identical "0 bars"
+          // alongside truly low-revenue stores.
+          const computed = (leaderboard || []).filter((r) => r.revenue_status === "computed");
+          const accumulating = (leaderboard || []).filter((r) => r.revenue_status === "insufficient_history");
+          const unavailable = (leaderboard || []).filter((r) => r.revenue_status === "sales_data_unavailable");
+          return (
+            <>
+              {computed.length > 0 ? (
+                <ResponsiveContainer width="100%" height={Math.max(220, computed.length * 36)}>
+                  <BarChart data={computed} layout="vertical" margin={{ left: 10, right: 20 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
+                    <XAxis type="number" tickFormatter={(v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} tick={{ fontSize: 10, fill: "#A1E4DB" }} />
+                    <YAxis type="category" dataKey="store" width={120} tick={{ fontSize: 11, fill: "#A1E4DB" }} />
+                    <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Est. Revenue"]} contentStyle={{ background: "#104745", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#A1E4DB" }} itemStyle={{ color: "#1E988E" }} />
+                    <Bar dataKey="revenue_est" fill="#1E988E" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-xs text-[#A1E4DB] py-4 text-center" data-testid="leaderboard-no-computed">
+                  No store has enough multi-snapshot history to compute revenue yet.
+                </p>
+              )}
+
+              {(accumulating.length > 0 || unavailable.length > 0) && (
+                <div className="mt-5 pt-4 border-t border-white/5 space-y-2">
+                  {accumulating.map((r) => (
+                    <div key={r.store_id} className="flex items-center justify-between text-xs" title="Sales data is available but needs more days of crawl history to compute reliable estimates" data-testid={`accumulating-${r.store_id}`}>
+                      <span className="text-[#A1E4DB]">{r.store}</span>
+                      <span className="text-[#FBBF24] tracking-wider text-[10px]">Tracked — accumulating history</span>
+                    </div>
+                  ))}
+                  {unavailable.map((r) => (
+                    <div key={r.store_id} className="flex items-center justify-between text-xs" title="This store's public API does not expose sales count (Salla limitation). Product catalog and prices are still tracked." data-testid={`unavailable-${r.store_id}`}>
+                      <span className="text-[#A1E4DB]">{r.store} <span className="text-[10px] text-[#A1E4DB] opacity-60">({r.products} products)</span></span>
+                      <span className="text-[#6AC1B5] tracking-wider text-[10px]">Tracked — sales data unavailable (Salla limitation)</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Top Sellers + Trending side by side */}

@@ -2077,10 +2077,12 @@ async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
         if s.get("is_own_store"):
             own_store_id = s["id"]
 
+    # Fetch all snapshots in the window unbounded (Feb 2026 fix — previous
+    # to_list(100000) ascending-sort silently dropped the newest 46k+ docs)
     snapshots = await db.product_snapshots.find(
         {"crawled_at": {"$gte": since}, "price": {"$gt": 0}},
-        {"_id": 0, "store_id": 1, "sku": 1, "price": 1, "qty_available": 1, "crawled_at": 1}
-    ).sort("crawled_at", 1).to_list(100000)
+        {"_id": 0, "store_id": 1, "sku": 1, "price": 1, "qty_available": 1, "sold_count": 1, "crawled_at": 1}
+    ).sort("crawled_at", 1).to_list(length=None)
 
     # Group by store_id → sku → chronological snapshots
     by_store = {}
@@ -2095,10 +2097,31 @@ async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
         total_rev = 0.0
         total_units = 0
         total_products = len(sku_data)
+        has_sold_count_signal = False
+        has_usable_qty_signal = False
         for sku, snap_list in sku_data.items():
             units, revenue, _ = _estimate_sales_from_snapshots(snap_list, days)
             total_units += units
             total_rev += revenue
+            # Detect raw data availability — independent of whether revenue computed
+            if not has_sold_count_signal:
+                if any((sn.get("sold_count") or 0) > 0 for sn in snap_list):
+                    has_sold_count_signal = True
+            if not has_usable_qty_signal:
+                if any(0 < (sn.get("qty_available") or 0) <= 200 for sn in snap_list):
+                    has_usable_qty_signal = True
+
+        # Classify revenue status so the UI can show an honest label for Salla
+        # stores that never expose sold_count (Feb 2026 UX fix).
+        if total_rev > 0:
+            revenue_status = "computed"
+        elif not has_sold_count_signal and not has_usable_qty_signal:
+            # No raw signal exists — revenue cannot be computed now or ever
+            # (typical for Salla `format=light` storefronts).
+            revenue_status = "sales_data_unavailable"
+        else:
+            # Raw signal exists but not enough multi-snapshot history yet.
+            revenue_status = "insufficient_history"
 
         store_name = store_names.get(store_id, store_id)
         leaderboard.append({
@@ -2107,9 +2130,12 @@ async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
             "revenue_est": round(total_rev, 2),
             "units_sold": total_units,
             "products": total_products,
+            "revenue_status": revenue_status,
         })
 
-    leaderboard.sort(key=lambda x: x["revenue_est"], reverse=True)
+    # Sort by computed revenue first, then by products tracked so unavailable
+    # stores still appear in a stable order at the bottom.
+    leaderboard.sort(key=lambda x: (-x["revenue_est"], -x["products"]))
     return leaderboard
 
 @router.get("/insights/top-sellers")
@@ -2119,7 +2145,7 @@ async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = 
     match = {"crawled_at": {"$gte": since}}
     if store_id and store_id != "all":
         match["store_id"] = store_id
-    snapshots = await db.product_snapshots.find(match, {"_id": 0}).sort("crawled_at", 1).to_list(50000)
+    snapshots = await db.product_snapshots.find(match, {"_id": 0}).sort("crawled_at", 1).to_list(length=None)
 
     by_sku = {}
     for s in snapshots:
@@ -2151,7 +2177,7 @@ async def insights_trending(days: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     snapshots = await db.product_snapshots.find(
         {"crawled_at": {"$gte": since}}, {"_id": 0}
-    ).sort("crawled_at", 1).to_list(50000)
+    ).sort("crawled_at", 1).to_list(length=None)
 
     by_cat = {}
     for s in snapshots:
@@ -2190,9 +2216,13 @@ async def insights_trending(days: int = Query(30), user=Depends(get_user)):
 
 @router.get("/insights/gaps")
 @ttl_cache(60)
-async def insights_gaps(user=Depends(get_user)):
+async def insights_gaps(days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
     total_stores = await db.stores.count_documents({"is_active": True})
     pipeline = [
+        # Feb 2026 fix — restrict to recent snapshots so dormant-store data
+        # from months ago doesn't corrupt the gap analysis.
+        {"$match": {"crawled_at": {"$gte": since}, "price": {"$gt": 0}}},
         {"$sort": {"crawled_at": -1}},
         {"$group": {"_id": "$sku", "stores": {"$addToSet": "$store_id"}}},
         {"$match": {"$expr": {"$lt": [{"$size": "$stores"}, total_stores]}}},
@@ -2214,9 +2244,12 @@ async def insights_gaps(user=Depends(get_user)):
 
 @router.get("/insights/price-wars")
 @ttl_cache(60)
-async def insights_price_wars(user=Depends(get_user)):
+async def insights_price_wars(days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
     pipeline = [
-        {"$match": {"price": {"$gt": 0}}},
+        # Feb 2026 fix — restrict to recent snapshots so months-old prices
+        # from dormant stores don't generate fake "price wars".
+        {"$match": {"crawled_at": {"$gte": since}, "price": {"$gt": 0}}},
         {"$sort": {"crawled_at": -1}},
         {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "store_name": {"$first": "$store_name"}}},
         {"$group": {"_id": "$_id.sku", "prices": {"$push": {"store": "$store_name", "price": "$price"}}, "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}, "count": {"$sum": 1}}},
@@ -2239,13 +2272,17 @@ async def insights_price_wars(user=Depends(get_user)):
 
 @router.get("/insights/restock-opportunities")
 @ttl_cache(60)
-async def insights_restock(user=Depends(get_user)):
+async def insights_restock(days: int = Query(30), user=Depends(get_user)):
+    since = datetime.now(timezone.utc) - timedelta(days=days)
     pipeline = [
+        # Feb 2026 fix — restrict to recent snapshots so historical
+        # OOS/in-stock states don't generate stale recommendations.
+        {"$match": {"crawled_at": {"$gte": since}}},
         {"$sort": {"crawled_at": -1}},
         {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "in_stock": {"$first": "$in_stock"}, "store_name": {"$first": "$store_name"}, "qty": {"$first": "$qty_available"}}},
         {"$group": {"_id": "$_id.sku", "stores": {"$push": {"store": "$store_name", "in_stock": "$in_stock", "qty": "$qty"}}}},
     ]
-    data = await db.product_snapshots.aggregate(pipeline).to_list(500)
+    data = await db.product_snapshots.aggregate(pipeline).to_list(length=None)
     result = []
     for d in data:
         oos_stores = [s["store"] for s in d["stores"] if not s["in_stock"]]
