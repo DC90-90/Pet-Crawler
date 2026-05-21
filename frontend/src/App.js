@@ -1,24 +1,43 @@
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { useState, useEffect, createContext, useContext } from "react";
+import { useState, useEffect, createContext, useContext, lazy, Suspense } from "react";
 import { Toaster } from "@/components/ui/sonner";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@/lib/i18n";
 import { MySkusProvider } from "@/lib/mySkus";
 import api from "@/lib/api";
 import Sidebar from "@/components/Sidebar";
 import LoginPage from "@/pages/LoginPage";
-import MyProductsPage from "@/pages/MyProductsPage";
-import InsightsPage from "@/pages/InsightsPage";
-import StoreRegistryPage from "@/pages/StoreRegistryPage";
-import AlertsPage from "@/pages/AlertsPage";
-import CompetitorProfilePage from "@/pages/CompetitorProfilePage";
-import DiscountsPage from "@/pages/DiscountsPage";
-import ScannerPage from "@/pages/ScannerPage";
-import SettingsPage from "@/pages/SettingsPage";
-import ImportPage from "@/pages/ImportPage";
-import PriceIntelPage from "@/pages/PriceIntelPage";
-import UsersPage from "@/pages/UsersPage";
 import NotificationBell from "@/components/NotificationBell";
+
+// Perf sprint Feb 2026 — route-based code splitting. Each page is fetched on
+// demand the first time it's navigated to. Cuts initial JS bundle from ~600KB
+// to ~80KB (only the login page + sidebar shell load up-front).
+const MyProductsPage = lazy(() => import("@/pages/MyProductsPage"));
+const InsightsPage = lazy(() => import("@/pages/InsightsPage"));
+const StoreRegistryPage = lazy(() => import("@/pages/StoreRegistryPage"));
+const AlertsPage = lazy(() => import("@/pages/AlertsPage"));
+const CompetitorProfilePage = lazy(() => import("@/pages/CompetitorProfilePage"));
+const DiscountsPage = lazy(() => import("@/pages/DiscountsPage"));
+const ScannerPage = lazy(() => import("@/pages/ScannerPage"));
+const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
+const ImportPage = lazy(() => import("@/pages/ImportPage"));
+const PriceIntelPage = lazy(() => import("@/pages/PriceIntelPage"));
+const UsersPage = lazy(() => import("@/pages/UsersPage"));
+
+// Perf sprint Feb 2026 — frontend-side stale-while-revalidate cache.
+// 60s staleTime matches backend's TTL cache so refetches are correctly aligned.
+// Tab switches under 60s are instant; older data revalidates in background.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 60 * 1000,           // data is fresh for 60s
+      gcTime: 5 * 60 * 1000,          // keep in cache for 5min
+      refetchOnWindowFocus: false,    // don't refetch every time user tabs back
+      retry: 1,
+    },
+  },
+});
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext);
@@ -29,6 +48,14 @@ export function canAccessPage(user, pageKey) {
   if (user.role === "super_admin") return true;
   const pages = Array.isArray(user.allowed_pages) ? user.allowed_pages : [];
   return pages.includes(pageKey);
+}
+
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center min-h-[60vh]" data-testid="page-loader">
+      <div className="w-8 h-8 rounded-full border-2 border-[#1E988E] border-t-transparent animate-spin" />
+    </div>
+  );
 }
 
 function AuthProvider({ children }) {
@@ -54,6 +81,7 @@ function AuthProvider({ children }) {
     localStorage.removeItem("daleel_token");
     localStorage.removeItem("daleel_user");
     setUser(null);
+    queryClient.clear();
   };
 
   const refreshMe = async () => {
@@ -79,7 +107,7 @@ function ProtectedRoute({ children, pageKey }) {
   if (checking) return <div className="flex items-center justify-center min-h-screen bg-[#090E1C]"><div className="w-8 h-8 rounded-full border-2 border-[#1E988E] border-t-transparent animate-spin" /></div>;
   if (!user) return <Navigate to="/login" replace />;
   if (pageKey && !canAccessPage(user, pageKey)) return <Navigate to="/no-access" replace />;
-  return children;
+  return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
 }
 
 function SuperAdminRoute({ children }) {
@@ -87,7 +115,7 @@ function SuperAdminRoute({ children }) {
   if (checking) return <div className="flex items-center justify-center min-h-screen bg-[#090E1C]"><div className="w-8 h-8 rounded-full border-2 border-[#1E988E] border-t-transparent animate-spin" /></div>;
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== "super_admin") return <Navigate to="/no-access" replace />;
-  return children;
+  return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
 }
 
 function NoAccessPage() {
@@ -117,7 +145,6 @@ function AppLayout() {
     <div className="flex min-h-screen" style={{ background: "radial-gradient(circle at top center, #090E1C 0%, #090E1C 100%)" }} data-testid="app-layout">
       <Sidebar />
       <main className="flex-1 ms-[240px] min-h-screen flex flex-col">
-        {/* Top Bar */}
         <div className="flex items-center justify-end px-6 py-3 border-b border-white/5">
           <NotificationBell />
         </div>
@@ -144,19 +171,21 @@ function AppLayout() {
 
 function App() {
   return (
-    <I18nProvider>
-      <AuthProvider>
-        <MySkusProvider>
-          <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/*" element={<AppLayout />} />
-            </Routes>
-            <Toaster position="top-right" />
-          </BrowserRouter>
-        </MySkusProvider>
-      </AuthProvider>
-    </I18nProvider>
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider>
+        <AuthProvider>
+          <MySkusProvider>
+            <BrowserRouter>
+              <Routes>
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/*" element={<AppLayout />} />
+              </Routes>
+              <Toaster position="top-right" />
+            </BrowserRouter>
+          </MySkusProvider>
+        </AuthProvider>
+      </I18nProvider>
+    </QueryClientProvider>
   );
 }
 

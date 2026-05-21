@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQueries } from "@tanstack/react-query";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -15,41 +16,46 @@ import { SkuLine } from "@/components/SkuLine";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
+// React Query helper — fetches one endpoint, returns the data array/object or empty fallback.
+const fetchInsight = (path, params) => async () => {
+  try {
+    const { data } = await api.get(path, { params });
+    return data;
+  } catch (_e) {
+    return null;
+  }
+};
+
 export default function InsightsPage() {
   const { t } = useI18n();
   const [days, setDays] = useState(30);
-  const [summary, setSummary] = useState(null);
-  const [leaderboard, setLeaderboard] = useState([]);
-  const [topSellers, setTopSellers] = useState([]);
-  const [trending, setTrending] = useState([]);
-  const [gaps, setGaps] = useState([]);
-  const [priceWars, setPriceWars] = useState([]);
-  const [restock, setRestock] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [digestOpen, setDigestOpen] = useState(false);
   const seasonal = useSeasonalEvents();
 
-  useEffect(() => {
-    setLoading(true);
-    const safe = (p) => p.catch(() => ({ data: [] }));
-    Promise.all([
-      api.get("/insights/summary", { params: { days } }).catch(() => ({ data: null })),
-      safe(api.get("/insights/leaderboard", { params: { days } })),
-      safe(api.get("/insights/top-sellers", { params: { days } })),
-      safe(api.get("/insights/trending", { params: { days } })),
-      safe(api.get("/insights/gaps")),
-      safe(api.get("/insights/price-wars")),
-      safe(api.get("/insights/restock-opportunities")),
-    ]).then(([s, l, ts, tr, g, pw, rs]) => {
-      setSummary(s.data);
-      setLeaderboard(l.data || []);
-      setTopSellers(ts.data || []);
-      setTrending(tr.data || []);
-      setGaps(g.data || []);
-      setPriceWars(pw.data || []);
-      setRestock(rs.data || []);
-    }).catch(console.error).finally(() => setLoading(false));
-  }, [days]);
+  // Perf sprint Feb 2026 — useQueries fires all 7 insight calls in PARALLEL
+  // with shared stale-while-revalidate cache (60s). Tab re-visits within
+  // 60s hit the React Query cache and don't trigger any network call at all.
+  const results = useQueries({
+    queries: [
+      { queryKey: ["insights", "summary", days], queryFn: fetchInsight("/insights/summary", { days }) },
+      { queryKey: ["insights", "leaderboard", days], queryFn: fetchInsight("/insights/leaderboard", { days }) },
+      { queryKey: ["insights", "top-sellers", days], queryFn: fetchInsight("/insights/top-sellers", { days }) },
+      { queryKey: ["insights", "trending", days], queryFn: fetchInsight("/insights/trending", { days }) },
+      { queryKey: ["insights", "gaps"], queryFn: fetchInsight("/insights/gaps") },
+      { queryKey: ["insights", "price-wars"], queryFn: fetchInsight("/insights/price-wars") },
+      { queryKey: ["insights", "restock"], queryFn: fetchInsight("/insights/restock-opportunities") },
+    ],
+  });
+
+  const [sQ, lQ, tsQ, trQ, gQ, pwQ, rsQ] = results;
+  const summary = sQ.data;
+  const leaderboard = lQ.data || [];
+  const topSellers = tsQ.data || [];
+  const trending = trQ.data || [];
+  const gaps = gQ.data || [];
+  const priceWars = pwQ.data || [];
+  const restock = rsQ.data || [];
+  const loading = results.some((r) => r.isLoading);
 
   if (loading) return <div className="p-6 text-sm text-[#A1E4DB]" data-testid="insights-loading">{t("loading")}</div>;
 

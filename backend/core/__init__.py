@@ -7,6 +7,8 @@ from .utils import (
     _coerce_int,
     _estimate_sales_from_snapshots,
     compute_product_metrics,
+    ttl_cache,
+    cache_clear,
 )
 
 __all__ = [
@@ -18,4 +20,6 @@ __all__ = [
     "_coerce_int",
     "_estimate_sales_from_snapshots",
     "compute_product_metrics",
+    "ttl_cache",
+    "cache_clear",
 ]

@@ -36,6 +36,7 @@ from core import (
     PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
     get_stock_signal, _coerce_num, _coerce_int,
     _estimate_sales_from_snapshots, compute_product_metrics,
+    ttl_cache, cache_clear,
 )
 
 SERVER_START_TIME = time.time()
@@ -600,6 +601,13 @@ async def seed_database():
     await db.product_snapshots.create_index([("sku", 1), ("crawled_at", -1)])
     await db.product_snapshots.create_index([("store_id", 1), ("crawled_at", -1)])
     await db.product_snapshots.create_index("product_id")
+    # Perf sprint Feb 2026 — leading-by-date compound indexes for the dashboard aggregations.
+    # Insight pipelines all start with `{"$match": {"crawled_at": {"$gte": since}}}` and these
+    # let MongoDB satisfy that match + the secondary group key from index alone.
+    await db.product_snapshots.create_index([("crawled_at", -1), ("store_id", 1)])
+    await db.product_snapshots.create_index([("crawled_at", -1), ("sku", 1)])
+    await db.product_snapshots.create_index([("crawled_at", -1), ("confidence_score", 1)])
+    await db.proxy_usage.create_index("crawled_at")
     await db.products.create_index("sku", unique=True)
     await db.stores.create_index("domain", unique=True)
 
@@ -966,6 +974,9 @@ async def scheduled_crawl_job(store_id: str):
         return
     platform = store.get("platform", "").lower()
     await crawl_store_waterfall(db, store)
+    # Perf sprint Feb 2026 — invalidate insights/discounts TTL cache so the new
+    # snapshots show up immediately on the dashboard instead of waiting up to 60s.
+    cache_clear()
 
 def register_crawl_job(store_id, store_name, priority, offset_minutes=0):
     """Register a crawl job for a store in the scheduler."""
@@ -1059,6 +1070,7 @@ async def trigger_crawl(store_id: str, user=Depends(get_user)):
     if not store:
         raise HTTPException(404, "Store not found")
     result = await crawl_store_waterfall(db, store)
+    cache_clear()  # invalidate insight/discount TTL cache after new snapshots land
     return {
         "message": f"Crawl {'completed' if result.get('tier_used') else 'attempted'} for {store['name']}",
         "store_id": store_id,
@@ -1945,6 +1957,7 @@ async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_use
 
 # ── Insights Routes ─────────────────────────────────────────
 @router.get("/insights/summary")
+@ttl_cache(60)
 async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -1999,6 +2012,7 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     }
 
 @router.get("/insights/leaderboard")
+@ttl_cache(60)
 async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -2046,6 +2060,7 @@ async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
     return leaderboard
 
 @router.get("/insights/top-sellers")
+@ttl_cache(60)
 async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = Query(None), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     match = {"crawled_at": {"$gte": since}}
@@ -2078,6 +2093,7 @@ async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = 
     return sellers[:20]
 
 @router.get("/insights/trending")
+@ttl_cache(60)
 async def insights_trending(days: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     snapshots = await db.product_snapshots.find(
@@ -2120,6 +2136,7 @@ async def insights_trending(days: int = Query(30), user=Depends(get_user)):
     return trending
 
 @router.get("/insights/gaps")
+@ttl_cache(60)
 async def insights_gaps(user=Depends(get_user)):
     total_stores = await db.stores.count_documents({"is_active": True})
     pipeline = [
@@ -2143,6 +2160,7 @@ async def insights_gaps(user=Depends(get_user)):
     return result
 
 @router.get("/insights/price-wars")
+@ttl_cache(60)
 async def insights_price_wars(user=Depends(get_user)):
     pipeline = [
         {"$match": {"price": {"$gt": 0}}},
@@ -2167,6 +2185,7 @@ async def insights_price_wars(user=Depends(get_user)):
     return result
 
 @router.get("/insights/restock-opportunities")
+@ttl_cache(60)
 async def insights_restock(user=Depends(get_user)):
     pipeline = [
         {"$sort": {"crawled_at": -1}},
@@ -2204,6 +2223,7 @@ async def create_filter(data: SavedFilterIn, user=Depends(get_user)):
 
 # ── Discounts ────────────────────────────────────────────────
 @router.get("/discounts/top-pct")
+@ttl_cache(60)
 async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}
@@ -2230,6 +2250,7 @@ async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Que
     return out
 
 @router.get("/discounts/top-amount")
+@ttl_cache(60)
 async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}
@@ -2250,6 +2271,7 @@ async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = 
     return out
 
 @router.get("/discounts/timeline")
+@ttl_cache(60)
 async def discount_timeline(user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=90)
     pipeline = [
@@ -2280,6 +2302,7 @@ async def discount_timeline(user=Depends(get_user)):
     return {"timeline": timeline, "stores": stores, "weeks": weeks}
 
 @router.get("/discounts/aggression")
+@ttl_cache(60)
 async def discount_aggression(user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=90)
     stores = await db.stores.find({"is_active": True}, {"_id": 0, "id": 1, "name": 1}).to_list(20)
@@ -2312,6 +2335,7 @@ async def discount_aggression(user=Depends(get_user)):
 
 # ── Price Opportunity Scanner ────────────────────────────────
 @router.get("/scanner/opportunities")
+@ttl_cache(60)
 async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     """Returns price opportunities — uses MongoDB aggregation instead of loading 100K snapshots into memory."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -3952,6 +3976,11 @@ async def startup():
         await db.product_snapshots.create_index("crawled_at")
         await db.product_snapshots.create_index([("sku", 1), ("crawled_at", -1)])
         await db.product_snapshots.create_index([("store_id", 1), ("crawled_at", -1)])
+        # Perf sprint Feb 2026 — leading-by-date for time-range aggregations
+        await db.product_snapshots.create_index([("crawled_at", -1), ("store_id", 1)])
+        await db.product_snapshots.create_index([("crawled_at", -1), ("sku", 1)])
+        await db.product_snapshots.create_index([("crawled_at", -1), ("confidence_score", 1)])
+        await db.proxy_usage.create_index("crawled_at")
         await db.products.create_index("sku", unique=True)
         await db.products.create_index("category")
     except Exception as e:

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQueries } from "@tanstack/react-query";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -9,31 +10,44 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 
 const SCORE_COLORS = ["#FF3B30", "#FF6D00", "#FFB300", "#00C853", "#002DF5", "#8B5CF6", "#EC4899"];
 
+const fetchData = (path, params) => async () => {
+  try {
+    const { data } = await api.get(path, { params });
+    return data;
+  } catch (_e) {
+    return null;
+  }
+};
+
 export default function DiscountsPage() {
   const { t } = useI18n();
-  const [topPct, setTopPct] = useState([]);
-  const [topAmt, setTopAmt] = useState([]);
-  const [timeline, setTimeline] = useState({ timeline: [], stores: [] });
-  const [aggression, setAggression] = useState([]);
   const [storeFilter, setStoreFilter] = useState("all");
   const [catFilter, setCatFilter] = useState("all");
-  const [stores, setStores] = useState([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    setLoading(true);
-    Promise.all([
-      api.get("/discounts/top-pct", { params: { store_id: storeFilter !== "all" ? storeFilter : undefined, category: catFilter !== "all" ? catFilter : undefined } }),
-      api.get("/discounts/top-amount", { params: { store_id: storeFilter !== "all" ? storeFilter : undefined, category: catFilter !== "all" ? catFilter : undefined } }),
-      api.get("/discounts/timeline"),
-      api.get("/discounts/aggression"),
-      api.get("/stores"),
-    ]).then(([p, a, tl, ag, st]) => {
-      setTopPct(p.data); setTopAmt(a.data); setTimeline(tl.data); setAggression(ag.data);
-      const stData = st.data;
-      setStores(Array.isArray(stData) ? stData : stData.stores || []);
-    }).catch(console.error).finally(() => setLoading(false));
-  }, [storeFilter, catFilter]);
+  const params = {
+    store_id: storeFilter !== "all" ? storeFilter : undefined,
+    category: catFilter !== "all" ? catFilter : undefined,
+  };
+
+  // Parallel React Query fetches (60s stale-while-revalidate via App.js default)
+  const results = useQueries({
+    queries: [
+      { queryKey: ["discounts", "top-pct", storeFilter, catFilter], queryFn: fetchData("/discounts/top-pct", params) },
+      { queryKey: ["discounts", "top-amount", storeFilter, catFilter], queryFn: fetchData("/discounts/top-amount", params) },
+      { queryKey: ["discounts", "timeline"], queryFn: fetchData("/discounts/timeline") },
+      { queryKey: ["discounts", "aggression"], queryFn: fetchData("/discounts/aggression") },
+      { queryKey: ["stores"], queryFn: fetchData("/stores") },
+    ],
+  });
+
+  const [pctQ, amtQ, tlQ, aggQ, storesQ] = results;
+  const topPct = pctQ.data || [];
+  const topAmt = amtQ.data || [];
+  const timeline = tlQ.data || { timeline: [], stores: [] };
+  const aggression = aggQ.data || [];
+  const storesData = storesQ.data;
+  const stores = Array.isArray(storesData) ? storesData : (storesData?.stores || []);
+  const loading = results.some((r) => r.isLoading);
 
   if (loading) return <div className="p-6 text-sm text-[#A1E4DB]">{t("loading")}</div>;
 

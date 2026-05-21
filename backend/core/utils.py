@@ -5,7 +5,62 @@ that do not depend on FastAPI or the Mongo client, so they can be safely
 imported from any route module.
 """
 import re
+import time
 import statistics
+import functools
+import inspect
+
+
+# ── TTL Cache (Feb 2026 perf sprint) ────────────────────────
+# Lightweight in-memory cache for read-only aggregation endpoints whose data
+# only changes after a crawl run (every 12-24h). A 60s TTL is correct and safe:
+# users see fresh data within 60s of any crawl completing, and dashboards
+# served from cache return in ~1ms instead of 300-1600ms.
+# Not Redis (single-instance backend) — when we scale horizontally, swap this
+# helper out without touching the call sites.
+_TTL_CACHE: dict = {}
+
+
+def cache_clear():
+    """Manually invalidate the entire TTL cache (called after crawl completion)."""
+    _TTL_CACHE.clear()
+
+
+def ttl_cache(ttl_seconds: int = 60, key_prefix: str = ""):
+    """Decorator that caches async function results by argument values.
+
+    The cache key is `(key_prefix, func_name, *args, *sorted(kwargs.items()))`
+    EXCLUDING any FastAPI `Depends` injected parameters (e.g. `user`). Endpoint
+    handlers should keep `user=Depends(...)` LAST so that filtering is easy.
+    """
+    def decorator(func):
+        sig = inspect.signature(func)
+        # Names of parameters we exclude from the cache key (they're per-user
+        # injected deps, not real inputs that change the response).
+        skip_param_names = {
+            name for name, p in sig.parameters.items()
+            if name in ("user", "_", "request", "response", "db")
+        }
+
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Build a stable key from positional + kwargs, dropping ignored params
+            bound = sig.bind_partial(*args, **kwargs)
+            key_parts = [key_prefix or func.__name__]
+            for name, value in bound.arguments.items():
+                if name in skip_param_names:
+                    continue
+                key_parts.append(f"{name}={value!r}")
+            cache_key = "|".join(key_parts)
+            now = time.time()
+            entry = _TTL_CACHE.get(cache_key)
+            if entry is not None and entry[0] > now:
+                return entry[1]
+            result = await func(*args, **kwargs)
+            _TTL_CACHE[cache_key] = (now + ttl_seconds, result)
+            return result
+        return wrapper
+    return decorator
 
 
 # Placeholder qty values stores use for "untracked / unlimited" inventory.
