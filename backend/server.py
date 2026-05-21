@@ -619,7 +619,7 @@ async def ensure_stores():
     # Stores that should route Tier 1/2/3 traffic through the Saudi residential
     # proxy (Webshare). Hardcoded list — bandwidth is finite (50 GB/month) so we
     # explicitly opt-in per domain rather than proxy everything.
-    proxy_stores = {"cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa", "lanapets.com", "zarafaksa.com"}
+    proxy_stores = {"cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa", "lanapets.com", "zarafaksa.com", "caty-store.com"}
     required_stores = [
         {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
         {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
@@ -681,6 +681,13 @@ async def ensure_stores():
     await db.stores.update_many(
         {"domain": {"$nin": list(proxy_stores)}, "use_proxy": {"$exists": False}},
         {"$set": {"use_proxy": False}},
+    )
+
+    # Diagnostic recovery (Feb 2026) — Caty was deactivated earlier due to persistent
+    # 404s. Re-enable it now that it's routed through the Saudi proxy.
+    await db.stores.update_one(
+        {"domain": "caty-store.com"},
+        {"$set": {"is_active": True}},
     )
 
     # Mark pets-houses.com as own store
