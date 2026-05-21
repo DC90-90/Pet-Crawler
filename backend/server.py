@@ -15,6 +15,7 @@ from bson import ObjectId
 from starlette.responses import StreamingResponse, JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -980,26 +981,59 @@ async def scheduled_crawl_job(store_id: str):
     if not store or not store.get("is_active", True):
         return
     platform = store.get("platform", "").lower()
+    logger.info(f"[Scheduler] Cron fired: {store.get('domain')} at {datetime.now(timezone.utc).isoformat()}")
     await crawl_store_waterfall(db, store)
     # Perf sprint Feb 2026 — invalidate insights/discounts TTL cache so the new
     # snapshots show up immediately on the dashboard instead of waiting up to 60s.
     cache_clear()
 
-def register_crawl_job(store_id, store_name, priority, offset_minutes=0):
-    """Register a crawl job for a store in the scheduler."""
+# ── Daily cron schedule (Feb 2026) ──────────────────────────
+# All active stores crawl ONCE per day at 04:00–04:55 KSA time (UTC+3 → 01:00–01:55 UTC),
+# staggered in 5-minute slots so the backend, proxy pool, and target servers never see
+# concurrent load. Priority field still exists in DB for future use but no longer drives
+# scheduling.
+DAILY_CRAWL_SCHEDULE = [
+    # (domain,            UTC hour, UTC minute) — KSA = UTC + 3
+    ("zarafaksa.com",     1,  0),   # 04:00 KSA
+    ("petsysa.com",       1,  5),   # 04:05 KSA
+    ("lanapets.com",      1, 10),   # 04:10 KSA
+    ("matjarpanda.com",   1, 15),   # 04:15 KSA
+    ("caty-store.com",    1, 20),   # 04:20 KSA
+    ("aleef.com",         1, 25),   # 04:25 KSA
+    ("cutecat.com.sa",    1, 30),   # 04:30 KSA
+    ("cutepets.com.sa",   1, 35),   # 04:35 KSA
+    ("hamtaro.sa",        1, 40),   # 04:40 KSA
+    ("hobbapet.com",      1, 45),   # 04:45 KSA
+    ("mowkly.com",        1, 50),   # 04:50 KSA
+    ("pets-houses.com",   1, 55),   # 04:55 KSA
+]
+DAILY_CRAWL_BY_DOMAIN = {d: (h, m) for d, h, m in DAILY_CRAWL_SCHEDULE}
+
+
+def register_crawl_job(store_id, store_name, store_domain):
+    """Register a daily cron job at the store's assigned 04:00–04:55 KSA slot.
+
+    Stores not in the hardcoded schedule (e.g. newly added via /api/stores)
+    fall back to 02:00 UTC (05:00 KSA) so they still crawl daily without
+    colliding with the scheduled window.
+    """
     job_id = f"crawl_{store_id}"
-    hours = 4 if priority <= 1 else 8
     try:
         scheduler.remove_job(job_id)
     except Exception:
         pass
+    hour, minute = DAILY_CRAWL_BY_DOMAIN.get(store_domain, (2, 0))
     scheduler.add_job(
-        scheduled_crawl_job, IntervalTrigger(hours=hours),
+        scheduled_crawl_job,
+        CronTrigger(hour=hour, minute=minute, timezone="UTC"),
         id=job_id, args=[store_id],
-        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=offset_minutes + 2),
         replace_existing=True,
     )
-    logger.info(f"Scheduler: Registered {store_name} every {hours}h (offset +{offset_minutes}min)")
+    ksa_hh = (hour + 3) % 24
+    logger.info(
+        f"[Scheduler] Registered {store_name} ({store_domain}) — "
+        f"daily at {hour:02d}:{minute:02d} UTC / {ksa_hh:02d}:{minute:02d} KSA"
+    )
 
 def unregister_crawl_job(store_id):
     try:
@@ -1024,8 +1058,20 @@ async def list_stores(user=Depends(get_user)):
         s["product_count"] = await db.product_snapshots.distinct("sku", {"store_id": s["id"]})
         s["product_count"] = len(s["product_count"])
         s["next_crawl_at"] = get_next_run(s["id"])
-        hrs = 4 if s.get("priority", 3) <= 1 else 8
-        s["crawl_frequency_label"] = f"Every {hrs}h"
+        # Daily cron schedule (Feb 2026) — every store crawls once per day at
+        # its assigned 04:00–04:55 KSA slot. Surface the assigned slot so the
+        # frontend can render "Daily at 04:15 KSA" etc.
+        slot = DAILY_CRAWL_BY_DOMAIN.get(s.get("domain", ""))
+        if slot:
+            utc_h, utc_m = slot
+            ksa_h = (utc_h + 3) % 24
+            s["crawl_frequency_label"] = f"Daily at {ksa_h:02d}:{utc_m:02d} KSA"
+            s["crawl_schedule_ksa"] = f"{ksa_h:02d}:{utc_m:02d}"
+            s["crawl_schedule_utc"] = f"{utc_h:02d}:{utc_m:02d}"
+        else:
+            s["crawl_frequency_label"] = "Daily at 05:00 KSA"
+            s["crawl_schedule_ksa"] = "05:00"
+            s["crawl_schedule_utc"] = "02:00"
         # Strip encrypted credential fields — never send to frontend
         for k in ["tier4_email", "tier4_password", "tier4_phone", "tier4_session_cookies"]:
             s.pop(k, None)
@@ -1050,7 +1096,7 @@ async def create_store(data: StoreIn, user=Depends(get_user)):
     }
     await db.stores.insert_one(doc)
     doc.pop("_id", None)
-    register_crawl_job(doc["id"], doc["name"], doc.get("priority", 3), 0)
+    register_crawl_job(doc["id"], doc["name"], doc["domain"])
     return doc
 
 @router.put("/stores/{store_id}")
@@ -4018,10 +4064,11 @@ async def startup():
             logger.info(f"Purged {purged.deleted_count} legacy name-based matches at startup")
     except Exception as e:
         logger.warning(f"Legacy match cleanup skipped: {e}")
-    # Register crawl jobs for all active stores (skip own store)
+    # Register crawl jobs for all active stores using the daily cron schedule
     stores = await db.stores.find({"is_active": True}, {"_id": 0}).to_list(100)
-    for idx, s in enumerate(stores):
-        register_crawl_job(s["id"], s["name"], s.get("priority", 3), idx * 15)
+    for s in stores:
+        register_crawl_job(s["id"], s["name"], s.get("domain", ""))
+    logger.info(f"[Scheduler] Daily crawl schedule loaded — {len(stores)} stores, 04:00–04:55 KSA window.")
     if not scheduler.running:
         scheduler.start()
     scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0, id="weekly_digest", replace_existing=True)

@@ -115,6 +115,28 @@ export default function StoreRegistryPage() {
     return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
   };
 
+  // Format the daily crawl slot in KSA timezone with "Today/Tomorrow" relative wording.
+  // The backend now schedules every store at a fixed 04:00–04:55 KSA daily slot.
+  const formatNextCrawl = (iso) => {
+    if (!iso) return "-";
+    const next = new Date(iso);
+    const now = new Date();
+    // KSA wall-clock day boundary (UTC+3)
+    const ksaNow = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+    const ksaNext = new Date(next.getTime() + 3 * 60 * 60 * 1000);
+    const sameDay = ksaNow.getUTCFullYear() === ksaNext.getUTCFullYear()
+      && ksaNow.getUTCMonth() === ksaNext.getUTCMonth()
+      && ksaNow.getUTCDate() === ksaNext.getUTCDate();
+    const tomorrow = new Date(ksaNow.getTime() + 24 * 60 * 60 * 1000);
+    const isTomorrow = tomorrow.getUTCFullYear() === ksaNext.getUTCFullYear()
+      && tomorrow.getUTCMonth() === ksaNext.getUTCMonth()
+      && tomorrow.getUTCDate() === ksaNext.getUTCDate();
+    const hh = String(ksaNext.getUTCHours()).padStart(2, "0");
+    const mm = String(ksaNext.getUTCMinutes()).padStart(2, "0");
+    const prefix = sameDay ? "Today" : (isTomorrow ? "Tomorrow" : ksaNext.toLocaleDateString("en-GB", { day: "2-digit", month: "short" }));
+    return `${prefix} at ${hh}:${mm} KSA`;
+  };
+
   return (
     <div className="p-6 space-y-5" data-testid="store-registry-page">
       <div className="flex items-center justify-between">
@@ -192,7 +214,7 @@ export default function StoreRegistryPage() {
                   <div>
                     <span className="text-xs text-[#A1E4DB]">{s.crawl_frequency_label}</span>
                     {s.next_crawl_at && !crawlPaused && (
-                      <p className="text-[9px] text-[#A1E4DB]">{formatDate(s.next_crawl_at)}</p>
+                      <p className="text-[9px] text-[#A1E4DB]" data-testid={`next-crawl-${s.id}`}>{formatNextCrawl(s.next_crawl_at)}</p>
                     )}
                     {crawlPaused && <p className="text-[9px] text-red-400">Paused</p>}
                   </div>
