@@ -2120,7 +2120,7 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     product_gaps = gaps_result[0]["gaps"] if gaps_result else 0
     spread_vals = [s["spread"] for s in spreads if s["spread"] > 0]
     median_spread = round(statistics.median(spread_vals), 2) if spread_vals else 0
-    avg_confidence = round(conf_result[0]["avg_conf"], 1) if conf_result else 0
+    avg_confidence = round((conf_result[0].get("avg_conf") or 0), 1) if conf_result else 0
 
     # Data freshness breakdown (Feb 2026 — header card on Insights page).
     # Counts the LATEST snapshot per (sku, store_id) and buckets it by age.
