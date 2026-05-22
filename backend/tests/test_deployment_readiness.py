@@ -9,7 +9,7 @@ import time
 
 # IMPORTANT: Use localhost:8001 for rate limiting tests (Kubernetes ingress masks IPs)
 BASE_URL_LOCAL = "http://localhost:8001"
-BASE_URL_EXTERNAL = os.environ.get('REACT_APP_BACKEND_URL', 'https://price-monitor-58.preview.emergentagent.com').rstrip('/')
+BASE_URL_EXTERNAL = os.environ.get('REACT_APP_BACKEND_URL', 'https://daleel-price-intel.preview.emergentagent.com').rstrip('/')
 
 # Test credentials — from environment or clearly labeled test-only defaults
 ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@daleelpets.com")
