@@ -10,6 +10,7 @@ import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContai
 import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/components/SeasonalAnnotations";
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
+import FreshnessBadge, { isStale } from "@/components/FreshnessBadge";
 
 const STORE_COLORS = ["#002DF5", "#00C853", "#FF3B30", "#FFB300", "#8B5CF6", "#EC4899", "#06B6D4"];
 
@@ -127,6 +128,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">30-day Trend</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Stock</TableHead>
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Tier</TableHead>
+                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Freshness</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -139,8 +141,9 @@ export default function ProductDetailPanel({ sku, onClose }) {
                         ? series.map((p, i) => `${(i / (series.length - 1)) * 100},${30 - ((p - minP) / range) * 28 - 1}`).join(" ")
                         : "";
                       const trendPct = series.length > 1 ? Math.round(((series[series.length - 1] - series[0]) / series[0]) * 100) : 0;
+                      const stale = isStale(sp.crawled_at);
                       return (
-                      <TableRow key={sp.store_id}>
+                      <TableRow key={sp.store_id} style={stale ? { opacity: 0.5 } : undefined} data-stale={stale} data-testid={`store-row-${sp.store_id}`}>
                         <TableCell className="text-xs font-medium">
                           {sp.product_url ? (
                             <a href={sp.product_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-white hover:text-[#6AC1B5] transition-colors" data-testid={`store-link-${sp.store_id}`} title={sp.product_url}>
@@ -179,6 +182,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
                           )}
                         </TableCell>
                         <TableCell><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${sp.source_tier === 4 ? "bg-emerald-50 text-emerald-700" : `tier-${sp.source_tier}`}`}>T{sp.source_tier}</span></TableCell>
+                        <TableCell><FreshnessBadge crawledAt={sp.crawled_at} testIdPrefix={`store-fresh-${sp.store_id}`} /></TableCell>
                       </TableRow>
                       );
                     })}

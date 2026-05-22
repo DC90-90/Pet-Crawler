@@ -5,6 +5,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { ConfidenceBadge, FlagBadges } from "./PriceIntelShared";
 import { SkuLine } from "@/components/SkuLine";
+import FreshnessBadge, { isStale } from "@/components/FreshnessBadge";
 
 export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm, onReject }) {
   const ownStoreId = detail?.own_store_id;
@@ -49,8 +50,21 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
             </div>
 
             {/* Competitors */}
-            {safeCompetitors.map((c) => (
-              <div key={`${c.competitor_sku}-${c.competitor_store_id}`} className="glass-card p-4">
+            {safeCompetitors.map((c) => {
+              const stale = isStale(c.last_crawled_at);
+              return (
+              <div
+                key={`${c.competitor_sku}-${c.competitor_store_id}`}
+                className="glass-card p-4 relative"
+                style={stale ? { opacity: 0.55 } : undefined}
+                data-stale={stale}
+                data-testid={`competitor-row-${c.competitor_sku}`}
+              >
+                {stale && (
+                  <div className="absolute top-2 right-2 px-2 py-0.5 rounded text-[9px] uppercase tracking-wider font-semibold" style={{ background: "rgba(239,68,68,0.2)", border: "1px solid rgba(239,68,68,0.5)", color: "#EF4444" }}>
+                    STALE — do not act
+                  </div>
+                )}
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-white font-medium">{c.competitor_store_name}</p>
@@ -62,8 +76,11 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
                     <FlagBadges flags={c.flags} />
                   </div>
                 </div>
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-lg font-bold text-white metric-number">{c.competitor_price} SAR</span>
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg font-bold text-white metric-number">{c.competitor_price} SAR</span>
+                    <FreshnessBadge crawledAt={c.last_crawled_at} testIdPrefix={`comp-fresh-${c.competitor_sku}`} />
+                  </div>
                   <span className={`text-sm font-semibold ${c.diff_pct > 0 ? "text-[#10B981]" : c.diff_pct < 0 ? "text-[#EF4444]" : "text-[#A1E4DB]"}`}>
                     {c.diff_pct > 0 ? "+" : ""}{c.diff_pct}% ({c.diff_sar > 0 ? "+" : ""}{c.diff_sar} SAR)
                   </span>
@@ -96,7 +113,8 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
                   </Button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </SheetContent>

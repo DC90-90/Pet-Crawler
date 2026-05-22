@@ -97,6 +97,54 @@ export default function InsightsPage() {
         </div>
       )}
 
+      {/* Data Freshness header card (Feb 2026 — instant trust signal) */}
+      {summary?.freshness_breakdown && (
+        <div className="glass-card rounded-md p-4" data-testid="freshness-card">
+          <div className="flex items-baseline justify-between mb-3">
+            <div>
+              <h3 className="text-xs uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Data Freshness</h3>
+              <p className="text-[10px] text-[#A1E4DB] opacity-70 mt-0.5">
+                {summary.freshness_breakdown.total_tracked.toLocaleString()} tracked competitor prices across all stores
+              </p>
+            </div>
+          </div>
+          {(() => {
+            const f = summary.freshness_breakdown;
+            const tiers = [
+              { key: "today",      label: "Today",       pct: f.today_pct,       count: f.today,       color: "#10B981", bg: "rgba(16,185,129,0.85)" },
+              { key: "this_week",  label: "This week",   pct: f.this_week_pct,   count: f.this_week,   color: "#FBBF24", bg: "rgba(251,191,36,0.85)" },
+              { key: "this_month", label: "This month",  pct: f.this_month_pct,  count: f.this_month,  color: "#A1E4DB", bg: "rgba(161,228,219,0.55)" },
+              { key: "stale",      label: "Stale (>30d)",pct: f.stale_pct,       count: f.stale,       color: "#EF4444", bg: "rgba(239,68,68,0.65)" },
+            ];
+            return (
+              <>
+                <div className="flex w-full h-3 rounded overflow-hidden mb-2" data-testid="freshness-bar">
+                  {tiers.map((tier) => (
+                    <div
+                      key={tier.key}
+                      style={{ width: `${tier.pct}%`, background: tier.bg, transition: "width 600ms ease" }}
+                      title={`${tier.label}: ${tier.pct}% (${tier.count.toLocaleString()} prices)`}
+                      data-testid={`freshness-segment-${tier.key}`}
+                    />
+                  ))}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+                  {tiers.map((tier) => (
+                    <div key={tier.key} className="flex items-center gap-2" data-testid={`freshness-tier-${tier.key}`}>
+                      <span className="w-2 h-2 rounded-full" style={{ background: tier.color }} />
+                      <div>
+                        <p className="text-[10px] uppercase tracking-[0.1em] font-semibold" style={{ color: tier.color }}>{tier.label}</p>
+                        <p className="text-sm font-bold text-white">{tier.pct}% <span className="text-[10px] font-normal text-[#A1E4DB] opacity-70">({tier.count.toLocaleString()})</span></p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
       {/* Revenue Leaderboard Chart */}
       <div className="glass-card rounded-md p-5" data-testid="revenue-leaderboard">
         <h3 className="text-sm font-semibold text-white mb-4">{t("chart_leaderboard")}</h3>

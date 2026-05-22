@@ -2058,10 +2058,44 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     median_spread = round(statistics.median(spread_vals), 2) if spread_vals else 0
     avg_confidence = round(conf_result[0]["avg_conf"], 1) if conf_result else 0
 
+    # Data freshness breakdown (Feb 2026 — header card on Insights page).
+    # Counts the LATEST snapshot per (sku, store_id) and buckets it by age.
+    now = datetime.now(timezone.utc)
+    day_24h = now - timedelta(hours=24)
+    day_7d = now - timedelta(days=7)
+    day_30d = now - timedelta(days=30)
+    freshness_pipeline = [
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "latest": {"$first": "$crawled_at"}}},
+        {"$group": {
+            "_id": None,
+            "total": {"$sum": 1},
+            "today": {"$sum": {"$cond": [{"$gte": ["$latest", day_24h]}, 1, 0]}},
+            "this_week": {"$sum": {"$cond": [{"$and": [{"$lt": ["$latest", day_24h]}, {"$gte": ["$latest", day_7d]}]}, 1, 0]}},
+            "this_month": {"$sum": {"$cond": [{"$and": [{"$lt": ["$latest", day_7d]}, {"$gte": ["$latest", day_30d]}]}, 1, 0]}},
+            "stale": {"$sum": {"$cond": [{"$lt": ["$latest", day_30d]}, 1, 0]}},
+        }},
+    ]
+    fr_rows = await db.product_snapshots.aggregate(freshness_pipeline).to_list(1)
+    fr = fr_rows[0] if fr_rows else {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
+    fr_total = max(fr.get("total", 0), 1)
+    freshness_breakdown = {
+        "total_tracked": fr.get("total", 0),
+        "today": fr.get("today", 0),
+        "this_week": fr.get("this_week", 0),
+        "this_month": fr.get("this_month", 0),
+        "stale": fr.get("stale", 0),
+        "today_pct": round(100 * fr.get("today", 0) / fr_total, 1),
+        "this_week_pct": round(100 * fr.get("this_week", 0) / fr_total, 1),
+        "this_month_pct": round(100 * fr.get("this_month", 0) / fr_total, 1),
+        "stale_pct": round(100 * fr.get("stale", 0) / fr_total, 1),
+    }
+
     return {
         "total_skus": total_skus, "price_drops": price_drops,
         "product_gaps": product_gaps, "median_spread": median_spread,
         "avg_confidence": avg_confidence,
+        "freshness_breakdown": freshness_breakdown,
     }
 
 @router.get("/insights/leaderboard")
@@ -3420,6 +3454,12 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
             "competitor_barcode": comp_barcodes_by_sku.get(m["competitor_sku"], ""),
             "price_history": [{"price": h["price"], "in_stock": h.get("in_stock"), "date": h["crawled_at"].isoformat() if hasattr(h["crawled_at"], 'isoformat') else str(h["crawled_at"])} for h in history[-60:]],
             "price_trend": trend,
+            # Freshness badge (Feb 2026) — latest crawl time for this competitor row.
+            # Used by frontend to render Today/X-days-ago/Stale chips.
+            "last_crawled_at": (
+                history[-1]["crawled_at"].isoformat() if history and hasattr(history[-1]["crawled_at"], "isoformat")
+                else (history[-1]["crawled_at"] if history else None)
+            ),
         })
 
     all_prices = [c["competitor_price"] for c in competitors if c["competitor_price"] > 0]
