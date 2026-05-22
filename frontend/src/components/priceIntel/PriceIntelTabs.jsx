@@ -4,6 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ConfidenceBadge, FlagBadges } from "./PriceIntelShared";
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
+import { MarketPositionBadge } from "@/components/MarketPosition";
 
 function ActionRequiredTable({ rows, onOpen }) {
   return (
@@ -22,7 +23,7 @@ function ActionRequiredTable({ rows, onOpen }) {
             <TableRow><TableCell colSpan={6} className="text-center py-12 text-[#A1E4DB]">No overpriced products found</TableCell></TableRow>
           ) : rows.slice(0, 50).map((r) => (
             <TableRow key={r.my_sku} className="cursor-pointer" onClick={() => onOpen(r.my_sku)}>
-              <TableCell><p className="text-sm text-white font-medium truncate max-w-[250px] inline-flex items-center gap-1.5"><MineBadge sku={r.my_sku} />{r.my_name_en || r.my_name_ar}</p><SkuLine sku={r.my_sku} barcode={r.my_barcode} /></TableCell>
+              <TableCell><p className="text-sm text-white font-medium truncate max-w-[250px] inline-flex items-center gap-1.5"><MineBadge sku={r.my_sku} />{r.my_name_en || r.my_name_ar}</p><SkuLine sku={r.my_sku} barcode={r.my_barcode} />{r.market_position && <div className="mt-1"><MarketPositionBadge mp={r.market_position} testIdPrefix={`pi-${r.my_sku}`} /></div>}</TableCell>
               <TableCell><span className="text-sm font-semibold text-white metric-number">{r.my_price} SAR</span></TableCell>
               <TableCell><span className="text-sm text-[#A1E4DB]">{r.cheapest_competitor}</span><br/><span className="text-sm font-semibold text-[#10B981] metric-number">{r.cheapest_price} SAR</span></TableCell>
               <TableCell><span className={`text-sm font-bold ${r.diff_pct > 15 ? "text-[#EF4444]" : "text-[#F59E0B]"}`}>+{r.diff_pct}%</span></TableCell>
@@ -52,7 +53,7 @@ function MyAdvantagesTable({ rows, onOpen }) {
             <TableRow><TableCell colSpan={5} className="text-center py-12 text-[#A1E4DB]">No advantages found yet</TableCell></TableRow>
           ) : rows.slice(0, 50).map((r, i) => (
             <TableRow key={`${r.my_sku}-${r.advantage}-${i}`} className="cursor-pointer" onClick={() => onOpen(r.my_sku)}>
-              <TableCell><p className="text-sm text-white font-medium truncate max-w-[250px] inline-flex items-center gap-1.5"><MineBadge sku={r.my_sku} />{r.my_name_en || r.my_name_ar}</p><SkuLine sku={r.my_sku} barcode={r.my_barcode} /></TableCell>
+              <TableCell><p className="text-sm text-white font-medium truncate max-w-[250px] inline-flex items-center gap-1.5"><MineBadge sku={r.my_sku} />{r.my_name_en || r.my_name_ar}</p><SkuLine sku={r.my_sku} barcode={r.my_barcode} />{r.market_position && <div className="mt-1"><MarketPositionBadge mp={r.market_position} testIdPrefix={`pi-${r.my_sku}`} /></div>}</TableCell>
               <TableCell><span className="text-sm font-semibold text-white metric-number">{r.my_price} SAR</span></TableCell>
               <TableCell>
                 {r.advantage === "cheapest" ? <Badge className="bg-[#10B981]/15 text-[#10B981] border-0 text-xs">I'm Cheapest</Badge> : <Badge className="bg-[#1E988E]/15 text-[#1E988E] border-0 text-xs">Competitor OOS</Badge>}

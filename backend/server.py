@@ -37,6 +37,7 @@ from core import (
     PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
     get_stock_signal, _coerce_num, _coerce_int,
     _estimate_sales_from_snapshots, compute_product_metrics,
+    compute_market_position,
     ttl_cache, cache_clear,
 )
 
@@ -1710,9 +1711,10 @@ async def my_products(
     products = await db.products.find(prod_query, {"_id": 0}).to_list(5000)
 
     # Pull SKU → product_url from my_products (user's own store) and store domains for fallback search URLs
-    my_products_docs = await db.my_products.find({}, {"_id": 0, "sku": 1, "product_url": 1}).to_list(20000)
+    my_products_docs = await db.my_products.find({}, {"_id": 0, "sku": 1, "product_url": 1, "price": 1, "sale_price": 1, "last_synced_at": 1}).to_list(20000)
     my_url_by_sku = {p["sku"]: p.get("product_url") for p in my_products_docs if p.get("product_url")}
     my_skus_set = {p["sku"] for p in my_products_docs if p.get("sku")}
+    my_price_lookup = {p["sku"]: p for p in my_products_docs}
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "domain": 1})
     own_domain = own_store.get("domain") if own_store else None
     store_domains = {s["id"]: s.get("domain") for s in await db.stores.find({}, {"_id": 0, "id": 1, "domain": 1}).to_list(200) if s.get("domain")}
@@ -1720,6 +1722,17 @@ async def my_products(
     result = []
     total_sold = 0
     total_rev = 0.0
+
+    # Market position prep (Feb 2026): pre-build helpers used per-product
+    # below. Doing this OUTSIDE the loop avoids N+1 queries.
+    own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_store_id = own_store_doc.get("id") if own_store_doc else None
+    store_name_by_id = {s["id"]: s.get("name", "") for s in await db.stores.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(200)}
+    matches_by_my_sku = {}
+    if own_store_id:
+        async for m in db.product_matches.find({}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}):
+            matches_by_my_sku.setdefault(m["my_sku"], []).append((m["competitor_sku"], m["competitor_store_id"]))
+
     for p in products:
         stores_data = by_sku.get(p["sku"], {})
         metrics = compute_product_metrics(stores_data, effective_days)
@@ -1749,6 +1762,39 @@ async def my_products(
                     url = f"https://{fd}/search?keyword={p['sku']}"
         row["product_url"] = url
         row["is_my_product"] = p["sku"] in my_skus_set
+
+        # Market position (Feb 2026) — own price lives in db.my_products (not in
+        # product_snapshots), so we synthesize an entry for the own store using
+        # the my_products row directly. Competitors come from matched snapshots.
+        if own_store_id and p["sku"] in my_skus_set:
+            mp_row = my_price_lookup.get(p["sku"]) or {}
+            own_price = mp_row.get("sale_price") or mp_row.get("price")
+            if own_price:
+                seller_prices = [{
+                    "store_id": own_store_id,
+                    "store_name": store_name_by_id.get(own_store_id, "My Store"),
+                    "price": own_price,
+                    "confidence_score": 99,
+                    "crawled_at": mp_row.get("last_synced_at") or datetime.now(timezone.utc),
+                }]
+                for comp_sku, comp_store_id in matches_by_my_sku.get(p["sku"], []):
+                    comp_snaps = by_sku.get(comp_sku, {}).get(comp_store_id, [])
+                    if not comp_snaps:
+                        continue
+                    latest = comp_snaps[-1]
+                    seller_prices.append({
+                        "store_id": comp_store_id,
+                        "store_name": store_name_by_id.get(comp_store_id, ""),
+                        "price": latest.get("price"),
+                        "confidence_score": latest.get("confidence_score", 0),
+                        "crawled_at": latest.get("crawled_at"),
+                    })
+                row["market_position"] = compute_market_position(seller_prices, own_store_id)
+            else:
+                row["market_position"] = None
+        else:
+            row["market_position"] = None
+
         result.append(row)
         total_sold += metrics["qty_sold_est"]
         total_rev += metrics["revenue_est"]
@@ -1928,6 +1974,24 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
     product["total_volume"] = sum(sp.get("qty_available", 0) or 0 for sp in store_prices)
     product["history"] = history_by_store
 
+    # Market position (Feb 2026) — rank my store vs valid competitors. Own price
+    # lives in db.my_products (not in product_snapshots), so we synthesize an
+    # entry for the own store using the my_products row when this SKU is mine.
+    own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1})
+    own_store_id = own_store_doc.get("id") if own_store_doc else None
+    seller_list = list(store_prices)
+    if own_store_id:
+        my_row = await db.my_products.find_one({"sku": sku}, {"_id": 0, "price": 1, "sale_price": 1, "last_synced_at": 1})
+        if my_row:
+            seller_list.append({
+                "store_id": own_store_id,
+                "store_name": own_store_doc.get("name", "My Store"),
+                "price": my_row.get("sale_price") or my_row.get("price"),
+                "confidence_score": 99,
+                "crawled_at": my_row.get("last_synced_at") or datetime.now(timezone.utc),
+            })
+    product["market_position"] = compute_market_position(seller_list, own_store_id) if own_store_id else None
+
     # Velocity (lightweight: per-day total units summed across stores using net depletion)
     daily_units = {}
     daily_revenue = {}
@@ -2091,11 +2155,98 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
         "stale_pct": round(100 * fr.get("stale", 0) / fr_total, 1),
     }
 
+    # Market position summary (Feb 2026) — aggregate over my products that have
+    # a computed market_position. Uses last-7-day, confidence>=75 snapshots
+    # (filtering happens in compute_market_position).
+    own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_store_id = own_store_doc.get("id") if own_store_doc else None
+    market_position_summary = None
+    if own_store_id:
+        # Read my_products directly (own prices don't live in product_snapshots)
+        my_prods = await db.my_products.find({}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1, "last_synced_at": 1}).to_list(length=None)
+        my_skus = [p["sku"] for p in my_prods]
+        my_price_lookup = {p["sku"]: p for p in my_prods}
+        if my_skus:
+            # Build (my_sku -> [(comp_sku, comp_store_id), ...]) map
+            matches_by_my_sku = {}
+            async for m in db.product_matches.find({"my_sku": {"$in": my_skus}}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}):
+                matches_by_my_sku.setdefault(m["my_sku"], []).append((m["competitor_sku"], m["competitor_store_id"]))
+            # Pull 7d snapshots once
+            mp_since = datetime.now(timezone.utc) - timedelta(days=7)
+            relevant_skus = set()
+            for entries in matches_by_my_sku.values():
+                for cs, _sid in entries:
+                    relevant_skus.add(cs)
+            store_name_by_id = {s["id"]: s.get("name", "") for s in await db.stores.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(200)}
+            latest_by_sku_store = {}
+            async for sn in db.product_snapshots.find(
+                {"sku": {"$in": list(relevant_skus)}, "crawled_at": {"$gte": mp_since}},
+                {"_id": 0, "sku": 1, "store_id": 1, "price": 1, "confidence_score": 1, "crawled_at": 1, "store_name": 1}
+            ).sort("crawled_at", -1):
+                key = (sn["sku"], sn["store_id"])
+                if key not in latest_by_sku_store:
+                    latest_by_sku_store[key] = sn
+
+            cheapest = most_expensive = below = above = at_median = 0
+            ranked_count = 0
+            percentile_sum = 0.0
+            now_ts = datetime.now(timezone.utc)
+            for sku in my_skus:
+                mp_row = my_price_lookup.get(sku) or {}
+                my_price = mp_row.get("sale_price") or mp_row.get("price")
+                if not my_price:
+                    continue
+                seller_prices = [{
+                    "store_id": own_store_id,
+                    "store_name": store_name_by_id.get(own_store_id, "My Store"),
+                    "price": my_price,
+                    "confidence_score": 99,
+                    "crawled_at": mp_row.get("last_synced_at") or now_ts,
+                }]
+                for comp_sku, comp_store_id in matches_by_my_sku.get(sku, []):
+                    sn = latest_by_sku_store.get((comp_sku, comp_store_id))
+                    if not sn:
+                        continue
+                    seller_prices.append({
+                        "store_id": comp_store_id,
+                        "store_name": store_name_by_id.get(comp_store_id, ""),
+                        "price": sn.get("price"),
+                        "confidence_score": sn.get("confidence_score", 0),
+                        "crawled_at": sn.get("crawled_at"),
+                    })
+                mp = compute_market_position(seller_prices, own_store_id)
+                if not mp:
+                    continue
+                ranked_count += 1
+                percentile_sum += mp["percentile"]
+                if mp["is_cheapest"]:
+                    cheapest += 1
+                if mp["is_most_expensive"]:
+                    most_expensive += 1
+                if mp["below_median"]:
+                    below += 1
+                elif mp["above_median"]:
+                    above += 1
+                else:
+                    at_median += 1
+            avg_percentile = round(percentile_sum / ranked_count, 1) if ranked_count else None
+            market_position_summary = {
+                "ranked_products": ranked_count,
+                "total_my_products": len(my_skus),
+                "cheapest_count": cheapest,
+                "most_expensive_count": most_expensive,
+                "below_median_count": below,
+                "above_median_count": above,
+                "at_median_count": at_median,
+                "avg_percentile": avg_percentile,
+            }
+
     return {
         "total_skus": total_skus, "price_drops": price_drops,
         "product_gaps": product_gaps, "median_spread": median_spread,
         "avg_confidence": avg_confidence,
         "freshness_breakdown": freshness_breakdown,
+        "market_position_summary": market_position_summary,
     }
 
 @router.get("/insights/leaderboard")
@@ -3238,6 +3389,7 @@ async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_u
 @router.get("/price-intel/dashboard")
 async def price_intel_dashboard(user=Depends(get_user)):
     """Price Intelligence Dashboard — all sections."""
+    now = datetime.now(timezone.utc)
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
     own_store_id = own_store["id"] if own_store else None
 
@@ -3252,6 +3404,21 @@ async def price_intel_dashboard(user=Depends(get_user)):
     matches_query = {"competitor_store_id": {"$ne": own_store_id}} if own_store_id else {}
     matches = await db.product_matches.find(matches_query, {"_id": 0}).to_list(50000)
     my_products = {p["sku"]: p async for p in db.my_products.find(my_products_query, {"_id": 0})}
+
+    # Latest snapshot crawled_at per (competitor_sku, competitor_store_id) — used
+    # for the market_position freshness check (Feb 2026). product_matches.crawled_at
+    # is set at match time and grows stale even when snapshots are fresh.
+    comp_keys = list({(m["competitor_sku"], m["competitor_store_id"]) for m in matches})
+    latest_comp_crawl = {}
+    if comp_keys:
+        snap_since = now - timedelta(days=7)
+        async for sn in db.product_snapshots.find(
+            {"sku": {"$in": [k[0] for k in comp_keys]}, "crawled_at": {"$gte": snap_since}},
+            {"_id": 0, "sku": 1, "store_id": 1, "crawled_at": 1}
+        ).sort("crawled_at", -1):
+            key = (sn["sku"], sn["store_id"])
+            if key not in latest_comp_crawl:
+                latest_comp_crawl[key] = sn["crawled_at"]
 
     # Fix 5: Separate high-confidence (>=75) from unverified (<75)
     high_conf_matches = [m for m in matches if m.get("confidence", 0) >= 75]
@@ -3309,6 +3476,26 @@ async def price_intel_dashboard(user=Depends(get_user)):
             "flags": cheapest.get("flags", []),
             "image_url": mp.get("image_url", ""),
         }
+
+        # Market position (Feb 2026) — own price always counts; competitors use
+        # the freshest available crawled_at from product_snapshots (not match.crawled_at,
+        # which goes stale).
+        seller_list = [{
+            "store_id": own_store_id or "own",
+            "store_name": "My Store",
+            "price": my_price,
+            "confidence_score": 99,
+            "crawled_at": mp.get("last_synced_at") or now,
+        }]
+        for cm in ms:
+            seller_list.append({
+                "store_id": cm.get("competitor_store_id"),
+                "store_name": cm.get("competitor_store_name", ""),
+                "price": cm.get("competitor_price"),
+                "confidence_score": cm.get("confidence", 0),
+                "crawled_at": latest_comp_crawl.get((cm.get("competitor_sku"), cm.get("competitor_store_id"))) or cm.get("crawled_at"),
+            })
+        row["market_position"] = compute_market_position(seller_list, own_store_id or "own")
 
         # Section A: Action Required
         if diff_pct > 15:

@@ -11,6 +11,7 @@ import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/comp
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
 import FreshnessBadge, { isStale } from "@/components/FreshnessBadge";
+import { MarketPositionBar } from "@/components/MarketPosition";
 
 const STORE_COLORS = ["#002DF5", "#00C853", "#FF3B30", "#FFB300", "#8B5CF6", "#EC4899", "#06B6D4"];
 
@@ -108,6 +109,9 @@ export default function ProductDetailPanel({ sku, onClose }) {
                 </div>
               </div>
             )}
+
+            {/* Market Position bar (Feb 2026) */}
+            {product.market_position && <MarketPositionBar mp={product.market_position} />}
 
             {/* Confidence Badge */}
             {product.store_prices?.[0] && (

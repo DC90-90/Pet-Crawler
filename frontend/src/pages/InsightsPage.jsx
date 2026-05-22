@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQueries } from "@tanstack/react-query";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
@@ -28,6 +29,7 @@ const fetchInsight = (path, params) => async () => {
 
 export default function InsightsPage() {
   const { t } = useI18n();
+  const navigate = useNavigate();
   const [days, setDays] = useState(30);
   const [digestOpen, setDigestOpen] = useState(false);
   const seasonal = useSeasonalEvents();
@@ -144,6 +146,61 @@ export default function InsightsPage() {
           })()}
         </div>
       )}
+
+      {/* Market Position summary card (Feb 2026) */}
+      {summary?.market_position_summary && summary.market_position_summary.ranked_products > 0 && (() => {
+        const m = summary.market_position_summary;
+        const pct = m.avg_percentile != null ? m.avg_percentile : null;
+        const verdict = pct == null
+          ? ""
+          : pct < 33 ? `cheaper than most — you're typically at the ${pct}th percentile`
+          : pct < 50 ? `mostly below the market median (${pct}th percentile)`
+          : pct < 66 ? `mostly above the market median (${pct}th percentile)`
+          : `expensive vs the market — you're typically at the ${pct}th percentile`;
+        const tone = pct == null ? "#A1E4DB" : pct < 50 ? "#6AC1B5" : pct < 66 ? "#A1E4DB" : "#FBBF24";
+        const tiles = [
+          { key: "cheapest",       count: m.cheapest_count,       label: "Cheapest seller",     color: "#10B981", filter: "cheapest" },
+          { key: "below_median",   count: m.below_median_count,   label: "Below market median", color: "#6AC1B5", filter: "below_median" },
+          { key: "above_median",   count: m.above_median_count,   label: "Above market median", color: "#FBBF24", filter: "above_median" },
+          { key: "most_expensive", count: m.most_expensive_count, label: "Most expensive",      color: "#F59E0B", filter: "most_expensive" },
+        ];
+        return (
+          <div className="glass-card rounded-md p-4" data-testid="market-position-card">
+            <div className="flex items-baseline justify-between mb-3">
+              <div>
+                <h3 className="text-xs uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Market Position</h3>
+                <p className="text-[10px] text-[#A1E4DB] opacity-70 mt-0.5">
+                  {m.ranked_products.toLocaleString()} of {m.total_my_products.toLocaleString()} products ranked against competitors
+                </p>
+              </div>
+              {pct != null && (
+                <p className="text-xs" style={{ color: tone, fontFamily: "'JetBrains Mono', monospace" }} data-testid="market-pos-verdict">
+                  You're {verdict}
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {tiles.map((tile) => (
+                <button
+                  key={tile.key}
+                  type="button"
+                  onClick={() => navigate(`/?market_filter=${tile.filter}`)}
+                  className="text-left p-3 rounded transition-all hover:bg-[#104745]/40 active:scale-[0.98]"
+                  style={{ border: `1px solid rgba(255,255,255,0.06)`, background: "rgba(0,0,0,0.15)" }}
+                  data-testid={`mp-tile-${tile.key}`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="w-2 h-2 rounded-full" style={{ background: tile.color }} />
+                    <span className="text-[10px] uppercase tracking-[0.1em] font-semibold" style={{ color: tile.color }}>{tile.label}</span>
+                  </div>
+                  <p className="text-xl font-bold text-white">{tile.count.toLocaleString()}</p>
+                  <p className="text-[9px] text-[#A1E4DB] opacity-60 mt-0.5">products</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Revenue Leaderboard Chart */}
       <div className="glass-card rounded-md p-5" data-testid="revenue-leaderboard">

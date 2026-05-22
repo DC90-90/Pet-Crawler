@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import ProductDetailPanel from "@/components/ProductDetailPanel";
 import { MineBadge } from "@/components/MineBadge";
+import { MarketPositionBadge } from "@/components/MarketPosition";
 import { SkuLine } from "@/components/SkuLine";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
@@ -229,6 +230,11 @@ export default function MyProductsPage() {
                             </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
                             <SkuLine sku={p.sku} barcode={p.barcode} className="mt-0.5" />
+                            {p.market_position && (
+                              <div className="mt-1">
+                                <MarketPositionBadge mp={p.market_position} testIdPrefix={`mp-${p.sku}`} />
+                              </div>
+                            )}
                           </a>
                         ) : (
                           <>
@@ -238,6 +244,11 @@ export default function MyProductsPage() {
                             </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
                             <SkuLine sku={p.sku} barcode={p.barcode} className="mt-0.5" />
+                            {p.market_position && (
+                              <div className="mt-1">
+                                <MarketPositionBadge mp={p.market_position} testIdPrefix={`mp-${p.sku}`} />
+                              </div>
+                            )}
                           </>
                         )}
                       </div>

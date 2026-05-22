@@ -224,3 +224,125 @@ def compute_product_metrics(snapshots_by_store, days):
         "confidence_score": avg_conf,
         "source_tier": latest_tier,
     }
+
+
+# ── Market Position helper (Feb 2026) ───────────────────────
+# Used by /api/my-products, /api/products/{sku}/full, /api/insights/summary
+# to rank a product's price against competitors. Rules:
+#   • Only sellers with snapshots crawled in the last 7 days count
+#   • Only confidence_score >= 75 (skips Tier-3 HTML noise)
+#   • Lowest price = rank 1 (best); ties at the same price share the lower rank
+#   • Returns None if fewer than 2 valid sellers OR own price absent
+def compute_market_position(seller_prices, my_store_id):
+    """
+    seller_prices: list of dicts {"store_id", "store_name", "price", "confidence_score", "crawled_at"}
+                   (already pre-filtered to "latest snapshot per store" by caller)
+    my_store_id:   the user's own store_id
+
+    Returns a dict with rank/range/percentile or None if insufficient data.
+    """
+    import math
+    from datetime import datetime, timezone, timedelta
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+
+    def _crawled_ts(v):
+        if isinstance(v, datetime):
+            return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        try:
+            d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    valid = []
+    for sp in seller_prices or []:
+        price = sp.get("price")
+        if not (isinstance(price, (int, float)) and price > 0):
+            continue
+        is_mine = sp.get("store_id") == my_store_id
+        # Own price is always authoritative — skip the freshness/confidence check
+        # for the user's own store. Their price is what THEY set, not crawled.
+        if not is_mine:
+            conf = sp.get("confidence_score", 0) or 0
+            if conf < 75:
+                continue
+            ts = _crawled_ts(sp.get("crawled_at"))
+            if ts is None or ts < cutoff:
+                continue
+        valid.append({
+            "store_id": sp.get("store_id"),
+            "store_name": sp.get("store_name", ""),
+            "price": round(float(price), 2),
+            "is_mine": is_mine,
+        })
+
+    if len(valid) < 2:
+        return None
+
+    # Sort ASC by price; ties share the LOWER rank (standard competition ranking).
+    sorted_sellers = sorted(valid, key=lambda x: x["price"])
+    rank_by_idx = []
+    last_price = None
+    last_rank = 0
+    for i, s in enumerate(sorted_sellers):
+        if last_price is None or s["price"] != last_price:
+            last_rank = i + 1
+            last_price = s["price"]
+        rank_by_idx.append(last_rank)
+
+    prices = [s["price"] for s in sorted_sellers]
+    min_p = prices[0]
+    max_p = prices[-1]
+    n = len(prices)
+    if n % 2 == 1:
+        median_p = prices[n // 2]
+    else:
+        median_p = round((prices[n // 2 - 1] + prices[n // 2]) / 2, 2)
+
+    my_idx = next((i for i, s in enumerate(sorted_sellers) if s["is_mine"]), None)
+    if my_idx is None:
+        return None
+
+    my_rank = rank_by_idx[my_idx]
+    my_price = sorted_sellers[my_idx]["price"]
+    # Percentile (0 = cheapest, 100 = most expensive)
+    if n > 1:
+        percentile = round(((my_rank - 1) / (n - 1)) * 100, 1)
+    else:
+        percentile = 0.0
+
+    is_cheapest = my_rank == 1
+    is_most_expensive = my_price == max_p
+    above_median = my_price > median_p
+    below_median = my_price < median_p
+
+    if is_cheapest:
+        tag = "cheapest"
+    elif is_most_expensive:
+        tag = "most_expensive"
+    elif above_median:
+        tag = "above_median"
+    elif below_median:
+        tag = "below_median"
+    else:
+        tag = "median"
+
+    return {
+        "rank": my_rank,
+        "total_sellers": n,
+        "my_price": my_price,
+        "min_price": min_p,
+        "max_price": max_p,
+        "median_price": median_p,
+        "percentile": percentile,
+        "is_cheapest": is_cheapest,
+        "is_most_expensive": is_most_expensive,
+        "below_median": below_median,
+        "above_median": above_median,
+        "tag": tag,
+        # Compact array for the visual range bar
+        "sellers": [
+            {"store_name": s["store_name"], "price": s["price"], "is_mine": s["is_mine"], "rank": rank_by_idx[i]}
+            for i, s in enumerate(sorted_sellers)
+        ],
+    }
