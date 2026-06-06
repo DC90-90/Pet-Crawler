@@ -14,6 +14,7 @@ import DigestModal from "@/components/DigestModal";
 import { BarChart3, Bell, Eye } from "lucide-react";
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
+import SalesInsights from "@/components/SalesInsights";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
@@ -31,6 +32,8 @@ export default function InsightsPage() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [days, setDays] = useState(30);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [digestOpen, setDigestOpen] = useState(false);
   const seasonal = useSeasonalEvents();
 
@@ -78,6 +81,31 @@ export default function InsightsPage() {
               onClick={() => setDays(d)}
               className={`text-xs rounded-md h-7 px-3 ${days === d ? "bg-[#1E988E] text-[#090E1C]" : ""}`}>{t(`d${d}`)}</Button>
           ))}
+          {/* Custom date range — only consumed by Sales Insights section below.
+              Existing 7/14/30/90D pills above continue to drive every other card on this page. */}
+          <div className="flex items-center gap-1 ms-2" data-testid="insights-custom-range">
+            <span className="text-[10px] uppercase tracking-[0.1em] text-[#A1E4DB] opacity-70">{t("si_date_from")}</span>
+            <input
+              type="date"
+              value={dateFrom}
+              max={dateTo || undefined}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="bg-[#0A2728] border border-white/10 rounded text-xs text-white h-7 px-2"
+              data-testid="insights-date-from"
+            />
+            <span className="text-[10px] uppercase tracking-[0.1em] text-[#A1E4DB] opacity-70">{t("si_date_to")}</span>
+            <input
+              type="date"
+              value={dateTo}
+              min={dateFrom || undefined}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="bg-[#0A2728] border border-white/10 rounded text-xs text-white h-7 px-2"
+              data-testid="insights-date-to"
+            />
+            {(dateFrom || dateTo) && (
+              <Button size="sm" variant="outline" onClick={() => { setDateFrom(""); setDateTo(""); }} className="text-xs h-7 px-2" data-testid="insights-date-clear">{t("si_clear_range")}</Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -175,7 +203,7 @@ export default function InsightsPage() {
               </div>
               {pct != null && (
                 <p className="text-xs" style={{ color: tone, fontFamily: "'JetBrains Mono', monospace" }} data-testid="market-pos-verdict">
-                  You're {verdict}
+                  You&apos;re {verdict}
                 </p>
               )}
             </div>
@@ -363,6 +391,9 @@ export default function InsightsPage() {
       </div>
 
       <DigestModal open={digestOpen} onClose={() => setDigestOpen(false)} />
+
+      {/* Product Sales Insights (additive — does not modify any existing card above) */}
+      <SalesInsights days={days} dateFrom={dateFrom && dateTo ? dateFrom : ""} dateTo={dateFrom && dateTo ? dateTo : ""} />
     </div>
   );
 }

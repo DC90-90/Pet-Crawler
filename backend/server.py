@@ -2483,6 +2483,110 @@ async def insights_restock(days: int = Query(30), user=Depends(get_user)):
     result.sort(key=lambda x: x["oos_count"], reverse=True)
     return result[:15]
 
+# ── Product Sales Insights (Feb 2026 — new section on Insights page) ──
+# Wraps the existing my_products() so sales-estimation logic is reused
+# verbatim, then adds a Top-Brands aggregation + market-share %.
+# Read-only. Does not modify any existing endpoint, calculation or DB doc.
+@router.get("/insights/sales")
+@ttl_cache(60)
+async def insights_sales(
+    days: int = Query(30),
+    date_from: Optional[str] = Query(None, description="YYYY-MM-DD (inclusive)"),
+    date_to: Optional[str] = Query(None, description="YYYY-MM-DD (inclusive)"),
+    search: Optional[str] = Query(None, description="Filter by product name, SKU or brand"),
+    sort: str = Query("revenue_desc", description="sales_desc|sales_asc|revenue_desc|revenue_asc"),
+    user=Depends(get_user),
+):
+    sort_map = {
+        "sales_desc":   ("qty_sold_est", "desc"),
+        "sales_asc":    ("qty_sold_est", "asc"),
+        "revenue_desc": ("revenue_est",  "desc"),
+        "revenue_asc":  ("revenue_est",  "asc"),
+    }
+    sort_by, sort_order = sort_map.get(sort, ("revenue_est", "desc"))
+
+    # Reuse existing canonical sales-estimation logic. limit=500 (max) so brand
+    # aggregation reflects the full filtered set rather than the first page.
+    data = await my_products(
+        days=days,
+        on_date=None,
+        date_from=date_from,
+        date_to=date_to,
+        category=None,
+        animal_type=None,
+        search=None,  # Brand search not supported by my_products(); applied below
+        sort_by=sort_by,
+        sort_order=sort_order,
+        limit=500,
+        offset=0,
+        user=user,
+    )
+    src_products = data.get("products", []) or []
+
+    # Apply search across name (ar/en), SKU and brand
+    if search:
+        q = search.lower().strip()
+        src_products = [
+            p for p in src_products
+            if q in (p.get("name_ar") or "").lower()
+            or q in (p.get("name_en") or "").lower()
+            or q in (p.get("sku") or "").lower()
+            or q in (p.get("brand") or "").lower()
+        ]
+
+    # Project only the fields the new section displays (small payload)
+    out_products = [{
+        "sku":              p.get("sku"),
+        "name_ar":          p.get("name_ar"),
+        "name_en":          p.get("name_en"),
+        "brand":            p.get("brand") or "",
+        "qty_sold_est":     p.get("qty_sold_est", 0) or 0,
+        "revenue_est":      p.get("revenue_est", 0.0) or 0.0,
+        "avg_price":        p.get("price", 0.0) or 0.0,
+        "num_sellers":      p.get("num_sellers", 0) or 0,
+        "stock_signal":     p.get("stock_signal", "") or "",
+        "confidence_score": p.get("confidence_score", 0) or 0,
+    } for p in src_products]
+
+    # Top brands — aggregate revenue + units per brand
+    brand_acc = {}
+    for p in src_products:
+        brand = (p.get("brand") or "").strip() or "Unknown"
+        a = brand_acc.setdefault(brand, {"units": 0, "revenue": 0.0})
+        a["units"]   += p.get("qty_sold_est", 0) or 0
+        a["revenue"] += p.get("revenue_est", 0.0) or 0.0
+
+    total_brand_revenue = sum(v["revenue"] for v in brand_acc.values())
+    top_brands = sorted(
+        [{
+            "brand":            b,
+            "units_sold":       v["units"],
+            "revenue_est":      round(v["revenue"], 2),
+            "market_share_pct": round((v["revenue"] / total_brand_revenue * 100), 1) if total_brand_revenue > 0 else 0.0,
+        } for b, v in brand_acc.items()],
+        key=lambda x: x["revenue_est"],
+        reverse=True,
+    )
+
+    # KPI summary cards
+    total_units   = sum(p.get("qty_sold_est", 0) or 0 for p in src_products)
+    total_revenue = sum(p.get("revenue_est", 0.0) or 0.0 for p in src_products)
+    product_count = len(src_products)
+    avg_rev_per_product = round(total_revenue / product_count, 2) if product_count else 0.0
+    top_brand_name = top_brands[0]["brand"] if top_brands and top_brands[0]["revenue_est"] > 0 else None
+
+    return {
+        "kpis": {
+            "total_units_sold":        total_units,
+            "total_revenue":           round(total_revenue, 2),
+            "avg_revenue_per_product": avg_rev_per_product,
+            "top_brand":               top_brand_name,
+            "product_count":           product_count,
+        },
+        "products":   out_products,
+        "top_brands": top_brands[:20],
+    }
+
 # ── Saved Filters ───────────────────────────────────────────
 @router.get("/saved-filters")
 async def list_filters(user=Depends(get_user)):
