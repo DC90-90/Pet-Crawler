@@ -9,7 +9,7 @@
  * existing my_products() sales-estimation logic. No new estimation is done
  * here or on the server.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import api from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -41,7 +41,7 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
 
   // 300ms debounce on search to keep the API quiet
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  useMemo(() => {
+  useEffect(() => {
     const id = setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => clearTimeout(id);
   }, [search]);
