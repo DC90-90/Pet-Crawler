@@ -2505,8 +2505,14 @@ async def insights_sales(
     }
     sort_by, sort_order = sort_map.get(sort, ("revenue_est", "desc"))
 
-    # Reuse existing canonical sales-estimation logic. limit=500 (max) so brand
-    # aggregation reflects the full filtered set rather than the first page.
+    # Reuse existing canonical sales-estimation logic. limit=5000 so brand
+    # aggregation, market-share %, Top Brands, KPI cards and search are
+    # performed on the FULL eligible product set returned by my_products()
+    # (i.e. every product that has at least one snapshot inside the selected
+    # date window) rather than just the top page. The FastAPI le=500
+    # validator on my_products()'s `limit` is HTTP-only; calling the function
+    # in-process bypasses it. The deeper db.products.find().to_list(5000) cap
+    # inside my_products() remains and is out of scope for this fix.
     data = await my_products(
         days=days,
         on_date=None,
@@ -2517,7 +2523,7 @@ async def insights_sales(
         search=None,  # Brand search not supported by my_products(); applied below
         sort_by=sort_by,
         sort_order=sort_order,
-        limit=500,
+        limit=5000,
         offset=0,
         user=user,
     )
