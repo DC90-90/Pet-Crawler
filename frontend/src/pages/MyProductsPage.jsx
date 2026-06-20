@@ -108,7 +108,7 @@ export default function MyProductsPage() {
           { key: "kpi_products", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_units_sold", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_revenue", val: `${(kpis.total_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
-          { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, icon: TrendingDown, accent: "#F59E0B" },
+          { key: "kpi_market_share", val: kpis.avg_market_share == null ? t("collecting") : `${kpis.avg_market_share}%`, icon: TrendingDown, accent: "#F59E0B" },
         ].map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
             <div className="flex items-center justify-between mb-2">
@@ -180,6 +180,7 @@ export default function MyProductsPage() {
                 { key: "qty_sold_est", label: "col_sales", sortable: true },
                 { key: "revenue_est", label: "col_revenue", sortable: true },
                 { key: "num_sellers", label: "col_sellers", sortable: true },
+                { key: "market_share_pct", label: "col_share", sortable: true },
                 { key: "stock_signal", label: "col_stock", sortable: false },
                 { key: "confidence_score", label: "col_confidence", sortable: true },
               ].map((col) => (
@@ -196,9 +197,9 @@ export default function MyProductsPage() {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#A1E4DB] text-sm">{t("loading")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="text-center py-16 text-[#A1E4DB] text-sm">{t("loading")}</TableCell></TableRow>
             ) : data.products.length === 0 ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#A1E4DB] text-sm">{t("no_data")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={10} className="text-center py-16 text-[#A1E4DB] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : (
               data.products.map((p) => {
                 const isMine = p.is_my_product;
@@ -286,6 +287,15 @@ export default function MyProductsPage() {
                   <TableCell><span className="text-sm font-semibold text-white metric-number">{p.qty_sold_est.toLocaleString()}</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-white metric-number">{p.revenue_est.toLocaleString()} {t("sar")}</span></TableCell>
                   <TableCell><Badge className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]">{p.num_sellers}</Badge></TableCell>
+                  <TableCell>
+                    {p.market_share_status === "ok" ? (
+                      <span className="text-sm font-semibold text-white metric-number" title={isRTL ? `${p.own_units} من ${p.market_units} وحدة` : `${p.own_units} of ${p.market_units} units`}>{p.market_share_pct}%</span>
+                    ) : p.market_share_status === "awaiting_own_history" ? (
+                      <span className="text-[11px] text-[#A1E4DB]/70" title={t("share_awaiting_hint")}>{t("collecting")}</span>
+                    ) : (
+                      <span className="text-[11px] text-[#A1E4DB]/40">—</span>
+                    )}
+                  </TableCell>
                   <TableCell><StockBadge signal={p.stock_signal} /></TableCell>
                   <TableCell><ConfBadge tier={p.source_tier} score={p.confidence_score} /></TableCell>
                 </TableRow>

@@ -8,6 +8,7 @@ from .utils import (
     _estimate_sales_from_snapshots,
     compute_product_metrics,
     compute_market_position,
+    compute_market_share,
     ttl_cache,
     cache_clear,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "_estimate_sales_from_snapshots",
     "compute_product_metrics",
     "compute_market_position",
+    "compute_market_share",
     "ttl_cache",
     "cache_clear",
 ]

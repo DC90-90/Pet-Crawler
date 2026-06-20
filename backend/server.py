@@ -37,7 +37,7 @@ from core import (
     PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
     get_stock_signal, _coerce_num, _coerce_int,
     _estimate_sales_from_snapshots, compute_product_metrics,
-    compute_market_position,
+    compute_market_position, compute_market_share,
     ttl_cache, cache_clear,
 )
 
@@ -1733,6 +1733,17 @@ async def my_products(
         async for m in db.product_matches.find({}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}):
             matches_by_my_sku.setdefault(m["my_sku"], []).append((m["competitor_sku"], m["competitor_store_id"]))
 
+    # Own-store sales history (Jun 2026) — isolated collection, drives TRUE per-product
+    # market share (own units ÷ total market units). Uses the SAME crawled_at window as
+    # competitor snapshots so day-over-day windows line up exactly.
+    own_snaps_by_sku = {}
+    async for s in db.my_product_snapshots.find(
+        snap_query, {"_id": 0, "sku": 1, "price": 1, "qty_available": 1, "sold_count": 1, "crawled_at": 1}
+    ):
+        own_snaps_by_sku.setdefault(s["sku"], []).append(s)
+    for _sku in own_snaps_by_sku:
+        own_snaps_by_sku[_sku].sort(key=lambda x: x["crawled_at"])
+
     for p in products:
         stores_data = by_sku.get(p["sku"], {})
         metrics = compute_product_metrics(stores_data, effective_days)
@@ -1795,6 +1806,27 @@ async def my_products(
         else:
             row["market_position"] = None
 
+        # TRUE competitive market share (Jun 2026): own units ÷ (own + matched competitors).
+        # Only meaningful for the user's OWN products; competitor rows get None.
+        if own_store_id and p["sku"] in my_skus_set:
+            comp_seller_snaps = []
+            for comp_sku, comp_store_id in matches_by_my_sku.get(p["sku"], []):
+                cs = by_sku.get(comp_sku, {}).get(comp_store_id, [])
+                if cs:
+                    comp_seller_snaps.append(cs)
+            ms = compute_market_share(own_snaps_by_sku.get(p["sku"], []), comp_seller_snaps, effective_days)
+            row["market_share_pct"] = ms["market_share_pct"]
+            row["market_share_status"] = ms["status"]
+            row["own_units"] = ms["own_units"]
+            row["competitor_units"] = ms["competitor_units"]
+            row["market_units"] = ms["market_units"]
+        else:
+            row["market_share_pct"] = None
+            row["market_share_status"] = "not_my_product"
+            row["own_units"] = None
+            row["competitor_units"] = None
+            row["market_units"] = None
+
         result.append(row)
         total_sold += metrics["qty_sold_est"]
         total_rev += metrics["revenue_est"]
@@ -1803,17 +1835,24 @@ async def my_products(
     reverse = sort_order == "desc"
     result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
 
-    # Market share (computed on FULL set, before pagination)
-    for r in result:
-        r["market_size"] = total_sold
-        r["market_share_pct"] = round((r["qty_sold_est"] / total_sold) * 100, 1) if total_sold > 0 else 0
-
+    # Overall market share (Jun 2026) — TRUE share across products that already have
+    # enough own-store history: Σ(own units) ÷ Σ(market units). Returns None (not a
+    # misleading number) until at least one product has measurable own + market sales.
+    # NOTE: per-product market_share_pct is set inside the loop above, per row.
     total_count = len(result)
+    ok_rows = [r for r in result if r.get("market_share_status") == "ok"]
+    tot_own = sum((r.get("own_units") or 0) for r in ok_rows)
+    tot_market = sum((r.get("market_units") or 0) for r in ok_rows)
+    overall_share = round((tot_own / tot_market) * 100, 1) if tot_market > 0 else None
     kpis = {
         "total_products": total_count,
         "total_units_sold": total_sold,
         "total_revenue": round(total_rev, 2),
-        "avg_market_share": round(100 / total_count, 1) if total_count else 0,
+        # True overall market share; None while own-store history is still being collected.
+        "avg_market_share": overall_share,
+        # How many of the user's products already have a real share figure (vs. awaiting history).
+        "market_share_coverage": len(ok_rows),
+        "my_products_count": sum(1 for r in result if r.get("is_my_product")),
     }
     # Distinct categories across the FULL filtered set (so the dropdown stays complete after pagination)
     categories_all = sorted({(r.get("category") or "") for r in result if r.get("category")})
@@ -3082,9 +3121,11 @@ async def export_csv(days: int = Query(30), user=Depends(get_user)):
     data = await my_products(days=days, category=None, animal_type=None, search=None, sort_by="revenue_est", sort_order="desc", user=user)
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["SKU", "Name (AR)", "Name (EN)", "Category", "Price (SAR)", "Min Price", "Max Price", "Est. Sales", "Est. Revenue", "Sellers", "Stock Signal", "Confidence"])
+    writer.writerow(["SKU", "Name (AR)", "Name (EN)", "Category", "Price (SAR)", "Min Price", "Max Price", "Est. Sales", "Est. Revenue", "Sellers", "Market Share %", "My Units", "Market Units", "Stock Signal", "Confidence"])
     for p in data["products"]:
-        writer.writerow([p["sku"], p["name_ar"], p["name_en"], p["category"], p.get("price", ""), p.get("min_price", ""), p.get("max_price", ""), p.get("qty_sold_est", ""), p.get("revenue_est", ""), p.get("num_sellers", ""), p.get("stock_signal", ""), p.get("confidence_score", "")])
+        share = p.get("market_share_pct")
+        share_cell = f"{share}" if share is not None else ("collecting" if p.get("market_share_status") == "awaiting_own_history" else "")
+        writer.writerow([p["sku"], p["name_ar"], p["name_en"], p["category"], p.get("price", ""), p.get("min_price", ""), p.get("max_price", ""), p.get("qty_sold_est", ""), p.get("revenue_est", ""), p.get("num_sellers", ""), share_cell, p.get("own_units", ""), p.get("market_units", ""), p.get("stock_signal", ""), p.get("confidence_score", "")])
     output.seek(0)
     return StreamingResponse(io.BytesIO(output.getvalue().encode("utf-8-sig")), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=daleel_pets_export.csv"})
 
@@ -4300,6 +4341,9 @@ async def startup():
         await db.proxy_usage.create_index("crawled_at")
         await db.products.create_index("sku", unique=True)
         await db.products.create_index("category")
+        # Own-store sales history (Jun 2026) — drives true per-product market share.
+        await db.my_product_snapshots.create_index([("sku", 1), ("crawled_at", -1)])
+        await db.my_product_snapshots.create_index("crawled_at")
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
     # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.

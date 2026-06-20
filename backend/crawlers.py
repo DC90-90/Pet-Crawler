@@ -12,6 +12,7 @@ import logging
 import itertools
 import httpx
 from datetime import datetime, timezone
+from core.utils import _coerce_int
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
 logger = logging.getLogger(__name__)
@@ -260,7 +261,9 @@ def _normalize_raw_product(raw, store_name):
             qty = 0
 
     # Capture cumulative sales counter (Salla: sales_count, Zid: sold_count, legacy Salla: sold_products_count)
-    sold_count = int(
+    # Use the defensive _coerce_int (not bare int()) so a non-numeric counter value
+    # from any platform degrades to 0 instead of raising and aborting the crawl.
+    sold_count = _coerce_int(
         raw.get("sales_count")
         or raw.get("sold_count")
         or raw.get("sold_products_count")
@@ -1297,6 +1300,7 @@ async def sync_own_store_prices(db, store=None):
 
     # ── Match + update ──
     updated, not_found = 0, 0
+    own_snap_rows = []  # Jun 2026: own-store sales time-series (isolated collection)
     sync_ts = datetime.now(timezone.utc).isoformat()
     UPDATE_FIELDS_NEVER_OVERWRITE = {  # noqa: F841 — documentation only
         "sku", "barcode", "name_ar", "name_en", "description_ar", "description_en",
@@ -1329,16 +1333,42 @@ async def sync_own_store_prices(db, store=None):
             "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
             "quantity": int(norm["qty"]),
             "in_stock": bool(norm["in_stock"]),
+            "sold_count": int(norm.get("sold_count") or 0),
             "last_synced_at": sync_ts,
             "sync_source": "zid_crawler",
         }
         await db.my_products.update_one({"sku": target_sku}, {"$set": update_doc})
         updated += 1
 
+        # Own-store sales history (Jun 2026): append an immutable time-series row so
+        # TRUE per-product market share can be derived from own depletion / sold_count.
+        # Isolated collection — NEVER product_snapshots (which stays competitors-only,
+        # preserving every existing competitor-analytics invariant). Field names mirror
+        # product_snapshots so _estimate_sales_from_snapshots works unchanged.
+        own_snap_rows.append({
+            "sku": target_sku,
+            "store_id": store["id"],
+            "price": round(norm["price"], 2),
+            "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
+            "qty_available": int(norm["qty"]),
+            "in_stock": bool(norm["in_stock"]),
+            "sold_count": int(norm.get("sold_count") or 0),
+            "crawled_at": started_at,
+        })
+
+    # Persist the own-store snapshot batch (best-effort; never fails the sync).
+    own_snaps_created = 0
+    if own_snap_rows:
+        try:
+            await db.my_product_snapshots.insert_many(own_snap_rows, ordered=False)
+            own_snaps_created = len(own_snap_rows)
+        except Exception as e:
+            logger.warning(f"[OwnSync] my_product_snapshots insert skipped: {e}")
+
     duration = (datetime.now(timezone.utc) - started_at).total_seconds()
     crawl_log["products_updated"] = updated
     crawl_log["products_new"] = 0  # never creates new my_products rows
-    crawl_log["snapshots_created"] = 0
+    crawl_log["snapshots_created"] = own_snaps_created
     if not all_raw:
         crawl_log["error"] = (crawl_log.get("error") or "") + " | own-store crawl returned 0 items"
     await _finalize_crawl_log(db, crawl_log, store["id"])
@@ -1354,7 +1384,10 @@ async def sync_own_store_prices(db, store=None):
         }},
     )
 
-    logger.info(f"[OwnSync] Done in {duration:.1f}s — crawled={crawled}, updated={updated}, not_found={not_found}")
+    logger.info(
+        f"[OwnSync] Done in {duration:.1f}s — crawled={crawled}, updated={updated}, "
+        f"not_found={not_found}, history_rows={own_snaps_created}"
+    )
 
     return {
         "store": store["name"],
@@ -1370,7 +1403,7 @@ async def sync_own_store_prices(db, store=None):
         "products_found": crawled,
         "products_new": 0,
         "products_updated": updated,
-        "snapshots_created": 0,
+        "snapshots_created": own_snaps_created,
         "error": crawl_log.get("error"),
         "completed_at": sync_ts,
         "duration_secs": round(duration, 1),

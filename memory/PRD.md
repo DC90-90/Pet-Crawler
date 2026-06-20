@@ -38,6 +38,15 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
 - **Full rebrand** from "Daleel Pets" → "Daleel" (English + Arabic, all files)
 - **Full HRM-SA visual identity applied** (flat `#090E1C` bg, teal palette, Space Grotesk/Inter/JetBrains Mono, HRM-SA button/card/input/table/badge/scrollbar styles)
 
+## Recent Changes (Jun 2026)
+- **TRUE per-product market share (Jun 2026)** — Replaced the misleading `market_share_pct` on `/api/my-products` (which was *portfolio mix*: a product's units ÷ the user's whole-catalog units) and the tautological `avg_market_share` KPI (was literally `100/N`) with real competitive market share: `own_units ÷ (own_units + matched_competitor_units) × 100`, computed in the new pure helper `core.utils.compute_market_share`. Units for every seller use the existing `_estimate_sales_from_snapshots` (sold_count diff → qty depletion).
+  - **Root data-model fix**: the user's own store was never recorded over time — `sync_own_store_prices` only *overwrote* a single current price/qty in `db.my_products`, and the own store is excluded from `product_snapshots` (competitors-only). So own sales velocity was untrackable and true share was not computable. Added an **isolated** `db.my_product_snapshots` time-series collection (mirrors product_snapshots field names) appended on every own-store sync — **does not touch product_snapshots**, so all competitor-analytics invariants are preserved. New indexes on `(sku, crawled_at)` + `crawled_at`.
+  - Until ≥2 own-store snapshots accrue, share is reported as `null` with `market_share_status="awaiting_own_history"` (UI shows "Collecting…") instead of a fake 0%. Cannot be back-filled to "day one" — own history only starts from first sync after this change.
+  - `/api/my-products` now returns per-row `market_share_pct`, `market_share_status`, `own_units`, `competitor_units`, `market_units`; KPIs add real `avg_market_share` (Σown ÷ Σmarket) + `market_share_coverage`. New "Mkt Share %" column on My Products page + CSV export columns. i18n: `collecting`, `share_awaiting_hint`.
+  - Unit tests: `backend/tests/test_market_share.py` (6 cases, pure/stdlib-only, all pass).
+- **Crash-guard (Jun 2026)** — `_normalize_raw_product` sold_count now uses defensive `_coerce_int` (was bare `int()`), so a non-numeric sales counter from any platform degrades to 0 instead of raising and aborting the crawl.
+- **Known data-accuracy items deferred (Jun 2026, not yet applied — pending live-data validation)**: Zid/legacy-Salla pagination early-exit at `crawlers.py` `len(more) < 20` (can undercount competitor catalogs); barcode matching has no leading-zero/format normalization in `matcher.py` (zero-padding mismatch between Excel barcodes and crawled EANs → missed matches); price-ratio match guards (`>2.0×` barcode / `>1.5×` SKU) are stricter than the documented 150%.
+
 ## Recent Changes (Feb 2026)
 - Crawler token hardcoded in `server.py` (no env var fallback)
 - `seed_database()` force-updates admin password hash on startup

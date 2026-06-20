@@ -226,6 +226,66 @@ def compute_product_metrics(snapshots_by_store, days):
     }
 
 
+# ── Market Share helper (Jun 2026) ──────────────────────────
+# TRUE per-product competitive market share for one of the user's OWN products:
+#   share = own_units / (own_units + matched_competitor_units) * 100
+#
+# Units for every seller (you and each competitor) are estimated with the SAME
+# logic used across the app (_estimate_sales_from_snapshots): cumulative
+# sold_count diff preferred, qty depletion as fallback.
+#
+# IMPORTANT data-model note: the user's own store is NOT in product_snapshots
+# (that table is competitors-only). Own sales history lives in the isolated
+# db.my_product_snapshots collection, populated by sync_own_store_prices. Until
+# at least two own-store snapshots exist over time, own_units cannot be measured,
+# so market share is reported as None with status "awaiting_own_history" rather
+# than a misleading 0%.
+def compute_market_share(own_snaps, competitor_snaps_by_seller, days):
+    """Compute true unit-based market share for ONE of the user's products.
+
+    own_snaps:                  chronological own-store snapshot list (db.my_product_snapshots),
+                                or [] if no history yet.
+    competitor_snaps_by_seller: list of chronological snapshot lists, one per matched
+                                competitor (sku, store) pairing (db.product_snapshots).
+    days:                       analysis-window length (for the sales sanity cap).
+
+    Returns: {own_units, competitor_units, market_units, market_share_pct, status}
+    status ∈ {"ok", "awaiting_own_history", "no_market_data"}.
+    """
+    comp_units = 0
+    for snaps in competitor_snaps_by_seller or []:
+        u, _, _ = _estimate_sales_from_snapshots(snaps, days)
+        comp_units += u
+
+    # Need >= 2 own-store snapshots over time to measure depletion / counter diff.
+    if not own_snaps or len(own_snaps) < 2:
+        return {
+            "own_units": None,
+            "competitor_units": comp_units,
+            "market_units": None,
+            "market_share_pct": None,
+            "status": "awaiting_own_history",
+        }
+
+    own_units, _, _ = _estimate_sales_from_snapshots(own_snaps, days)
+    market_units = own_units + comp_units
+    if market_units <= 0:
+        return {
+            "own_units": own_units,
+            "competitor_units": comp_units,
+            "market_units": 0,
+            "market_share_pct": None,
+            "status": "no_market_data",
+        }
+    return {
+        "own_units": own_units,
+        "competitor_units": comp_units,
+        "market_units": market_units,
+        "market_share_pct": round((own_units / market_units) * 100, 1),
+        "status": "ok",
+    }
+
+
 # ── Market Position helper (Feb 2026) ───────────────────────
 # Used by /api/my-products, /api/products/{sku}/full, /api/insights/summary
 # to rank a product's price against competitors. Rules:
