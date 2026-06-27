@@ -1915,22 +1915,28 @@ async def my_products(
             r["market_share_pct"] = 0
 
     total_count = len(result)
-    # KPI totals — when own_only=True (the My Products page) these are scoped to
-    # the user's own store: total_my_units (own-store snapshot deltas only),
-    # total_my_revenue (= sum of my_units × my_price), avg_market_share (= my
-    # share of total market units for the same SKUs). When own_only=False
-    # (/api/insights/sales) we preserve the legacy market-wide totals so that
-    # endpoint's contract is unchanged.
+    # KPI totals — when own_only=True (the My Products page):
+    #   • Units Sold (Est.) — total **market** units across all sellers of YOUR
+    #     products (Σ qty_sold_est). Tells you the addressable market velocity.
+    #   • Revenue (Est.)    — what you would earn at YOUR price if you captured
+    #     that entire market volume (Σ my_price × qty_sold_est).
+    #   • Avg. Market Share — fraction you actually capture today:
+    #     Σ my_units_sold (own-store snapshot deltas) ÷ Σ market_units × 100.
+    # When own_only=False (/api/insights/sales) the legacy market-wide totals
+    # are preserved verbatim so that endpoint's contract is unchanged.
     total_my_units = sum((r.get("my_units_sold") or 0) for r in result)
-    total_my_revenue = sum((r.get("my_revenue_est") or 0) for r in result)
     if own_only:
+        total_revenue_at_my_prices = sum(
+            ((r.get("my_price") or r.get("price") or 0) * (r.get("qty_sold_est") or 0))
+            for r in result
+        )
         kpis = {
             "total_products": total_count,
-            "total_units_sold": int(total_my_units),
-            "total_revenue": round(total_my_revenue, 2),
+            "total_units_sold": int(total_sold),
+            "total_revenue": round(total_revenue_at_my_prices, 2),
             "avg_market_share": round((total_my_units / total_sold) * 100, 1) if total_sold > 0 else 0,
-            # Expose the raw market figures too in case the FE wants to surface them later
-            "market_units_sold": int(total_sold),
+            # Expose the raw figures too in case the FE wants to surface them later
+            "my_units_sold": int(total_my_units),
             "market_revenue": round(total_rev, 2),
         }
     else:
