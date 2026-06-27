@@ -1848,6 +1848,20 @@ async def my_products(
                 row["competitor_max_price"] = None
                 row["vs_my_price_pct"] = None
 
+            # Own-store sales estimate (Feb 2026) — needed for the four KPI cards
+            # at the top of "My Products". `_estimate_sales_from_snapshots` is the
+            # same canonical primitive used market-wide; here we feed it ONLY the
+            # own-store snapshot list to get *your* units, then multiply by your
+            # current selling price for revenue (per user spec).
+            own_snaps = stores_data.get(own_store_id, []) if own_store_id else []
+            my_units, _own_rev_from_snaps, _ = _estimate_sales_from_snapshots(own_snaps, effective_days)
+            row["my_units_sold"] = int(my_units or 0)
+            row["my_revenue_est"] = round((row["my_units_sold"] * (my_price or 0.0)), 2) if my_price else 0.0
+        else:
+            # Non-own row (only reachable when own_only=False — e.g. /api/insights/sales)
+            row["my_units_sold"] = 0
+            row["my_revenue_est"] = 0.0
+
         # Market position (Feb 2026) — own price lives in db.my_products (not in
         # product_snapshots), so we synthesize an entry for the own store using
         # the my_products row directly. Competitors come from matched snapshots.
@@ -1888,18 +1902,45 @@ async def my_products(
     reverse = sort_order == "desc"
     result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
 
-    # Market share (computed on FULL set, before pagination)
+    # Per-row market share (Feb 2026): proportion of THIS SKU's market sales that
+    # came from my store. Previous formula was "this product's share of the whole
+    # catalog's sales" which had no business meaning.
     for r in result:
-        r["market_size"] = total_sold
-        r["market_share_pct"] = round((r["qty_sold_est"] / total_sold) * 100, 1) if total_sold > 0 else 0
+        market_units_for_sku = r.get("qty_sold_est") or 0
+        my_units_for_sku = r.get("my_units_sold") or 0
+        r["market_size"] = market_units_for_sku
+        if market_units_for_sku > 0:
+            r["market_share_pct"] = round((my_units_for_sku / market_units_for_sku) * 100, 1)
+        else:
+            r["market_share_pct"] = 0
 
     total_count = len(result)
-    kpis = {
-        "total_products": total_count,
-        "total_units_sold": total_sold,
-        "total_revenue": round(total_rev, 2),
-        "avg_market_share": round(100 / total_count, 1) if total_count else 0,
-    }
+    # KPI totals — when own_only=True (the My Products page) these are scoped to
+    # the user's own store: total_my_units (own-store snapshot deltas only),
+    # total_my_revenue (= sum of my_units × my_price), avg_market_share (= my
+    # share of total market units for the same SKUs). When own_only=False
+    # (/api/insights/sales) we preserve the legacy market-wide totals so that
+    # endpoint's contract is unchanged.
+    total_my_units = sum((r.get("my_units_sold") or 0) for r in result)
+    total_my_revenue = sum((r.get("my_revenue_est") or 0) for r in result)
+    if own_only:
+        kpis = {
+            "total_products": total_count,
+            "total_units_sold": int(total_my_units),
+            "total_revenue": round(total_my_revenue, 2),
+            "avg_market_share": round((total_my_units / total_sold) * 100, 1) if total_sold > 0 else 0,
+            # Expose the raw market figures too in case the FE wants to surface them later
+            "market_units_sold": int(total_sold),
+            "market_revenue": round(total_rev, 2),
+        }
+    else:
+        # Legacy market-wide behaviour — keeps /api/insights/sales contract intact
+        kpis = {
+            "total_products": total_count,
+            "total_units_sold": int(total_sold),
+            "total_revenue": round(total_rev, 2),
+            "avg_market_share": round(100 / total_count, 1) if total_count else 0,
+        }
     # Distinct categories across the FULL filtered set (so the dropdown stays complete after pagination)
     categories_all = sorted({(r.get("category") or "") for r in result if r.get("category")})
     # Apply pagination AFTER sort + KPIs so totals remain accurate
