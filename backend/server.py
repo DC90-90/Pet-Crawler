@@ -1710,20 +1710,8 @@ async def my_products(
             {"sku": {"$regex": search, "$options": "i"}},
         ]
 
-    # Own-store gate (Feb 2026): when own_only=True, restrict to SKUs that exist
-    # in db.my_products — i.e. your live + archived pets-houses.com catalog. Soft-
-    # archived rows (present_on_store=False) are kept in the result so the UI can
-    # surface "Not on store" badges without losing history.
-    if own_only:
-        own_skus_list = await db.my_products.distinct("sku")
-        if own_skus_list:
-            prod_query["sku"] = {"$in": own_skus_list}
-        else:
-            # No own catalog yet — return empty rather than the entire market
-            prod_query["sku"] = {"$in": []}
-    products = await db.products.find(prod_query, {"_id": 0}).to_list(5000)
-
-    # Pull SKU → product_url from my_products (user's own store) and store domains for fallback search URLs
+    # Pull my_products lookup BEFORE the catalog query so the "stitch missing
+    # SKUs" step below has access to the price-lookup map.
     my_products_docs = await db.my_products.find(
         {},
         {"_id": 0, "sku": 1, "barcode": 1, "name_ar": 1, "name_en": 1, "product_url": 1,
@@ -1734,6 +1722,44 @@ async def my_products(
     my_skus_set = {p["sku"] for p in my_products_docs if p.get("sku")}
     my_price_lookup = {p["sku"]: p for p in my_products_docs}
     my_presence_lookup = {p["sku"]: p for p in my_products_docs}
+
+    # Own-store gate (Feb 2026): when own_only=True, restrict to SKUs that exist
+    # in db.my_products AND are currently active on the store (present_on_store
+    # is True OR has never been flagged). Soft-archived rows are hidden — they
+    # represent products the merchant deleted from pets-houses.com.
+    own_skus_list = []
+    if own_only:
+        own_skus_list = [p["sku"] for p in my_products_docs
+                         if p.get("sku") and p.get("present_on_store", True)]
+        if own_skus_list:
+            prod_query["sku"] = {"$in": own_skus_list}
+        else:
+            # No own catalog yet — return empty rather than the entire market
+            prod_query["sku"] = {"$in": []}
+    products = await db.products.find(prod_query, {"_id": 0}).to_list(5000)
+
+    # When own_only=True, also stitch in db.my_products SKUs that don't yet have
+    # a db.products catalog row (e.g. just synced from Zid, no scheduled crawl
+    # has run yet). They show in the table with zero market metrics — Issue #1.
+    if own_only and own_skus_list:
+        existing_skus = {p["sku"] for p in products}
+        missing_skus = set(own_skus_list) - existing_skus
+        for sku in missing_skus:
+            mp_doc = my_price_lookup.get(sku)
+            if not mp_doc:
+                continue
+            products.append({
+                "sku": mp_doc["sku"],
+                "barcode": mp_doc.get("barcode", ""),
+                "name_ar": mp_doc.get("name_ar", ""),
+                "name_en": mp_doc.get("name_en", ""),
+                "category": "",
+                "animal_type": "",
+                "brand": "",
+                "image_url": "",
+                "product_url": mp_doc.get("product_url", ""),
+            })
+
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "domain": 1})
     own_domain = own_store.get("domain") if own_store else None
     store_domains = {s["id"]: s.get("domain") for s in await db.stores.find({}, {"_id": 0, "id": 1, "domain": 1}).to_list(200) if s.get("domain")}
@@ -1756,7 +1782,18 @@ async def my_products(
         stores_data = by_sku.get(p["sku"], {})
         metrics = compute_product_metrics(stores_data, effective_days)
         if not metrics:
-            continue
+            # Issue #1: keep the row in the table even if no snapshot history
+            # exists in the selected window. The user's catalogue size must be
+            # constant across time filters; only the metric numbers change.
+            if not own_only:
+                continue
+            metrics = {
+                "price": 0.0, "min_price": 0.0, "max_price": 0.0, "median_price": 0.0,
+                "vs_lowest_pct": 0, "vs_median_pct": 0,
+                "qty_sold_est": 0, "revenue_est": 0.0,
+                "num_sellers": 0, "latest_qty": 0,
+                "stock_signal": "MEDIUM", "confidence_score": 0, "source_tier": 1,
+            }
         row = {**p, **metrics}
 
         # Resolve product_url with priority:
@@ -1902,15 +1939,30 @@ async def my_products(
     reverse = sort_order == "desc"
     result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
 
-    # Per-row market share (Feb 2026): proportion of THIS SKU's market sales that
-    # came from my store. Previous formula was "this product's share of the whole
-    # catalog's sales" which had no business meaning.
+    # Per-row market share (Feb 2026, v2): fraction of THIS SKU's market sales
+    # captured by the user's store. Uses actual own-store snapshot deltas when
+    # available, falls back to a *fair-share* estimate (1 / (num_competitors + 1))
+    # when own-store data is too sparse to compute a real delta — this is the
+    # only path that produces a meaningful non-zero value before enough daily
+    # snapshots accumulate.
     for r in result:
         market_units_for_sku = r.get("qty_sold_est") or 0
         my_units_for_sku = r.get("my_units_sold") or 0
+        n_comp = r.get("num_competitors")
+        if n_comp is None:
+            n_comp = max(0, (r.get("num_sellers") or 0) - 1)
         r["market_size"] = market_units_for_sku
         if market_units_for_sku > 0:
-            r["market_share_pct"] = round((my_units_for_sku / market_units_for_sku) * 100, 1)
+            if my_units_for_sku > 0:
+                share = (my_units_for_sku / market_units_for_sku) * 100
+            else:
+                # Fair-share fallback: 1 / (competitors + me)
+                share = 100.0 / max(1, (n_comp + 1))
+                # Also surface the fair-share value as "estimated my units" so
+                # the KPI aggregation downstream uses something non-zero
+                r["my_units_sold"] = round(market_units_for_sku / max(1, (n_comp + 1)))
+                r["my_share_is_estimate"] = True
+            r["market_share_pct"] = round(share, 1)
         else:
             r["market_share_pct"] = 0
 

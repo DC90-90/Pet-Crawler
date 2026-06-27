@@ -144,35 +144,40 @@ def _estimate_sales_from_snapshots(snaps, days):
             units_capped = min(units_from_counter, MAX_DAILY_SALES_PER_SKU * max(1, days))
             return units_capped, round(units_capped * avg_price, 2), "sold_count_diff"
 
-    # ── Method 2: NET qty depletion with strict signal requirements ──
+    # ── Method 2: positive-delta SUM with restock filtering ──
+    # Monotonic by construction: each additional snapshot can only ADD a non-negative
+    # delta to the total. Prior implementation used `net_drop = first_qty − last_qty`,
+    # which made 90D windows occasionally report LESS than their 7D sub-windows when
+    # the SKU was restocked between them.
     valid_qtys = [
         s.get("qty_available", 0) or 0
         for s in snaps
         if (s.get("qty_available", 0) or 0) not in PLACEHOLDER_QTY_VALUES
         and (s.get("qty_available", 0) or 0) <= 200
     ]
-    if len(valid_qtys) < 3:
+    if len(valid_qtys) < 2:
         return 0, 0.0, "insufficient_signal"
 
-    first_qty = valid_qtys[0]
-    last_qty = valid_qtys[-1]
-    net_drop = first_qty - last_qty
-
-    if net_drop < 3:
-        return 0, 0.0, "insufficient_signal"
-
-    # If a big restock spike happened, only count post-restock depletion
+    # Sum positive (downward) deltas only; treat upward jumps > 5 as restocks
+    # (they contribute 0 to sales).
+    total_drop = 0
+    RESTOCK_SPIKE = 5  # an UPWARD jump > 5 within one sample is a restock, not a sale
     for i in range(1, len(valid_qtys)):
-        if valid_qtys[i] > valid_qtys[i - 1] + 5:
-            net_drop = valid_qtys[i] - last_qty
-            if net_drop < 3:
-                return 0, 0.0, "insufficient_signal"
-            break
+        delta = valid_qtys[i - 1] - valid_qtys[i]
+        if delta > 0:
+            total_drop += delta
+        elif delta < -RESTOCK_SPIKE:
+            # explicit no-op: the previous step is the restock event itself.
+            # Sales captured before it are already in total_drop.
+            pass
 
-    units = min(net_drop, MAX_DAILY_SALES_PER_SKU * max(1, days))
+    if total_drop < 1:
+        return 0, 0.0, "no_depletion"
+
+    units = min(total_drop, MAX_DAILY_SALES_PER_SKU * max(1, days))
     avg_price = sum((s.get("price") or 0) for s in snaps) / max(1, len(snaps))
     revenue = round(units * avg_price, 2)
-    return units, round(revenue, 2), "qty_net_depletion"
+    return units, round(revenue, 2), "qty_positive_delta_sum"
 
 
 def compute_product_metrics(snapshots_by_store, days):
