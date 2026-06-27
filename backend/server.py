@@ -1161,6 +1161,138 @@ async def scheduler_status(user=Depends(get_user)):
     return {"crawl_paused": crawl_paused, "jobs": jobs, "total_jobs": len(jobs)}
 
 
+@router.get("/data-freshness")
+@ttl_cache(60)
+async def data_freshness(user=Depends(get_user)):
+    """Aggregated crawl-data freshness for the dashboard banner.
+
+    Returns:
+      • overall.bucket  → 'today' | 'this_week' | 'this_month' | 'stale' | 'no_data'
+      • overall.latest  → most recent COMPETITOR snapshot (excludes own store)
+      • overall.oldest  → oldest "latest" among competitor stores (the bottleneck)
+      • stores[]        → per-store breakdown (name, last_crawled_at, age_days, bucket, is_own_store)
+      • next_run        → next scheduled crawl time (ISO) — null if paused or unscheduled
+      • crawl_paused    → bool
+    """
+    now = datetime.now(timezone.utc)
+
+    # Per-store latest snapshot (one Mongo aggregation)
+    pipeline = [
+        {"$group": {
+            "_id": "$store_id",
+            "store_name": {"$first": "$store_name"},
+            "latest": {"$max": "$crawled_at"},
+            "snapshot_count": {"$sum": 1},
+        }},
+    ]
+    rows = await db.product_snapshots.aggregate(pipeline).to_list(200)
+    latest_by_store = {r["_id"]: r for r in rows}
+
+    # Resolve store names + own_store flag from db.stores (authoritative)
+    stores_meta = []
+    async for s in db.stores.find({"is_active": True}, {"_id": 0, "id": 1, "name": 1, "is_own_store": 1}):
+        stores_meta.append(s)
+
+    stores_out = []
+    competitor_latests = []
+    own_latest = None
+
+    def _to_dt(v):
+        if isinstance(v, datetime):
+            return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        if isinstance(v, str):
+            try:
+                d = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+            except Exception:
+                return None
+        return None
+
+    def _bucket(latest_dt):
+        if latest_dt is None:
+            return "no_data", None
+        age = now - latest_dt
+        age_days = age.total_seconds() / 86400.0
+        if age < timedelta(hours=24):
+            return "today", age_days
+        if age < timedelta(days=7):
+            return "this_week", age_days
+        if age < timedelta(days=30):
+            return "this_month", age_days
+        return "stale", age_days
+
+    for s in stores_meta:
+        row = latest_by_store.get(s["id"])
+        latest_iso = None
+        latest_dt = None
+        snap_count = 0
+        if row:
+            latest_dt = _to_dt(row.get("latest"))
+            if latest_dt:
+                latest_iso = latest_dt.isoformat()
+            snap_count = int(row.get("snapshot_count") or 0)
+        bucket, age_days = _bucket(latest_dt)
+        is_own = bool(s.get("is_own_store"))
+        stores_out.append({
+            "store_id": s["id"],
+            "store_name": s.get("name", ""),
+            "is_own_store": is_own,
+            "last_crawled_at": latest_iso,
+            "age_days": round(age_days, 1) if age_days is not None else None,
+            "bucket": bucket,
+            "snapshot_count": snap_count,
+        })
+        if is_own:
+            if latest_dt and (own_latest is None or latest_dt > own_latest):
+                own_latest = latest_dt
+        else:
+            if latest_dt:
+                competitor_latests.append(latest_dt)
+
+    # Sort: stale first (so the banner highlights the worst offenders) but keep own store on top
+    stores_out.sort(key=lambda x: (
+        0 if x["is_own_store"] else 1,
+        -(x["age_days"] or 0) if x["bucket"] != "no_data" else 9999,
+    ))
+
+    # Overall freshness is governed by the most-stale competitor store
+    # (the bottleneck — if any competitor is 60d stale, the dashboard is 60d stale).
+    competitor_oldest = min(competitor_latests) if competitor_latests else None
+    competitor_newest = max(competitor_latests) if competitor_latests else None
+
+    overall_bucket, overall_age_days = _bucket(competitor_oldest)
+    overall = {
+        "bucket": overall_bucket,
+        "age_days": round(overall_age_days, 1) if overall_age_days is not None else None,
+        "latest_competitor_crawl": competitor_newest.isoformat() if competitor_newest else None,
+        "oldest_competitor_crawl": competitor_oldest.isoformat() if competitor_oldest else None,
+        "own_store_last_sync": own_latest.isoformat() if own_latest else None,
+        "competitor_store_count": len(competitor_latests),
+    }
+
+    # Next scheduled crawl: earliest crawl_* job in APScheduler
+    next_run_dt = None
+    if not crawl_paused and scheduler.running:
+        for job in scheduler.get_jobs():
+            if not str(job.id).startswith("crawl_"):
+                continue
+            if job.next_run_time is None:
+                continue
+            nr = job.next_run_time
+            if nr.tzinfo is None:
+                nr = nr.replace(tzinfo=timezone.utc)
+            if next_run_dt is None or nr < next_run_dt:
+                next_run_dt = nr
+
+    return {
+        "overall": overall,
+        "stores": stores_out,
+        "next_run": next_run_dt.isoformat() if next_run_dt else None,
+        "crawl_paused": crawl_paused,
+        "checked_at": now.isoformat(),
+    }
+
+
 # ── Tier 4 Credential Vault ─────────────────────────────────
 @router.get("/encryption/verify")
 async def verify_encryption(user=Depends(get_user)):
@@ -1705,10 +1837,17 @@ async def my_products(
     if animal_type and animal_type != "all":
         prod_query["animal_type"] = animal_type
     if search:
+        # Fix (Feb 2026 — flagged by testing agent iteration_15): the search box
+        # is used as a daily-workflow tool to look up products by SKU or
+        # barcode, not just by Arabic/English name. Add barcode + escape any
+        # regex meta-chars so a raw barcode value like "8005852569199" never
+        # gets interpreted as a regex.
+        safe = re.escape(search)
         prod_query["$or"] = [
-            {"name_ar": {"$regex": search, "$options": "i"}},
-            {"name_en": {"$regex": search, "$options": "i"}},
-            {"sku": {"$regex": search, "$options": "i"}},
+            {"name_ar": {"$regex": safe, "$options": "i"}},
+            {"name_en": {"$regex": safe, "$options": "i"}},
+            {"sku": {"$regex": safe, "$options": "i"}},
+            {"barcode": {"$regex": safe, "$options": "i"}},
         ]
 
     # Pull my_products lookup BEFORE the catalog query so the "stitch missing
@@ -1732,6 +1871,20 @@ async def my_products(
     if own_only:
         own_skus_list = [p["sku"] for p in my_products_docs
                          if p.get("sku") and p.get("present_on_store", True)]
+        # Search must also hit db.my_products directly so newly-synced SKUs
+        # without a catalog entry are findable by SKU/barcode (Feb 2026 fix).
+        if search:
+            search_lc = search.lower().strip()
+            matching_own = {
+                p["sku"] for p in my_products_docs
+                if p.get("sku") and p.get("present_on_store", True) and (
+                    search_lc in str(p.get("sku", "")).lower()
+                    or search_lc in str(p.get("barcode", "")).lower()
+                    or search_lc in str(p.get("name_ar", "")).lower()
+                    or search_lc in str(p.get("name_en", "")).lower()
+                )
+            }
+            own_skus_list = list(matching_own)
         if own_skus_list:
             prod_query["sku"] = {"$in": own_skus_list}
         else:
@@ -2048,10 +2201,13 @@ async def list_products(
     if animal_type and animal_type != "all":
         query["animal_type"] = animal_type
     if search:
+        # P1 search fix (Feb 2026): also match barcode + escape regex meta chars.
+        safe = re.escape(search)
         query["$or"] = [
-            {"name_ar": {"$regex": search, "$options": "i"}},
-            {"name_en": {"$regex": search, "$options": "i"}},
-            {"sku": {"$regex": search, "$options": "i"}},
+            {"name_ar": {"$regex": safe, "$options": "i"}},
+            {"name_en": {"$regex": safe, "$options": "i"}},
+            {"sku": {"$regex": safe, "$options": "i"}},
+            {"barcode": {"$regex": safe, "$options": "i"}},
         ]
     total = await db.products.count_documents(query)
     products = await db.products.find(query, {"_id": 0}).skip(skip).limit(limit).to_list(limit)
@@ -4035,10 +4191,13 @@ async def reject_match(data: MatchActionIn, user=Depends(get_user)):
 async def list_my_products(page: int = 1, limit: int = 50, search: str = "", user=Depends(get_user)):
     query = {}
     if search:
+        # P1 search fix (Feb 2026): also match barcode + escape regex meta chars.
+        safe = re.escape(search)
         query["$or"] = [
-            {"name_ar": {"$regex": search, "$options": "i"}},
-            {"name_en": {"$regex": search, "$options": "i"}},
-            {"sku": {"$regex": search, "$options": "i"}},
+            {"name_ar": {"$regex": safe, "$options": "i"}},
+            {"name_en": {"$regex": safe, "$options": "i"}},
+            {"sku": {"$regex": safe, "$options": "i"}},
+            {"barcode": {"$regex": safe, "$options": "i"}},
         ]
     total = await db.my_products.count_documents(query)
     items = await db.my_products.find(query, {"_id": 0}).skip((page - 1) * limit).limit(limit).to_list(limit)

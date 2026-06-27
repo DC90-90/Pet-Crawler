@@ -10,6 +10,7 @@ import ProductDetailPanel from "@/components/ProductDetailPanel";
 import { MineBadge } from "@/components/MineBadge";
 import { MarketPositionBadge } from "@/components/MarketPosition";
 import { SkuLine } from "@/components/SkuLine";
+import DataFreshnessBanner from "@/components/DataFreshnessBanner";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
@@ -142,6 +143,10 @@ export default function MyProductsPage() {
       {syncMsg && (
         <div className="text-xs text-[#A1E4DB] -mt-2" data-testid="sync-status-msg">{syncMsg}</div>
       )}
+
+      {/* Data Freshness Banner (Feb 2026) — surfaces crawl-staleness so the user
+         knows whether the dashboard reflects today's market or last month's snapshot. */}
+      <DataFreshnessBanner />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

@@ -12,6 +12,7 @@ import {
 } from "@/components/priceIntel/PriceIntelHeader";
 import { PriceIntelTabContent } from "@/components/priceIntel/PriceIntelTabs";
 import { PriceIntelDetailSheet } from "@/components/priceIntel/PriceIntelDetailSheet";
+import DataFreshnessBanner from "@/components/DataFreshnessBanner";
 
 export default function PriceIntelPage() {
   const { isRTL } = useI18n();
@@ -91,6 +92,8 @@ export default function PriceIntelPage() {
         <h1 className="text-2xl font-semibold text-white">{isRTL ? "استخبارات الأسعار" : "Price Intelligence"}</h1>
         <p className="text-sm text-[#A1E4DB]">{isRTL ? "مقارنة أسعار منتجاتك مع المنافسين" : "Compare your prices against competitors"}</p>
       </div>
+
+      <DataFreshnessBanner />
 
       <PriceIntelKpiRow summary={data.summary} />
 

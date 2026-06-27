@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
+import DataFreshnessBanner from "@/components/DataFreshnessBanner";
 
 const RANGE_OPTIONS = [7, 14, 30];
 const BADGE_CFG = {
@@ -65,6 +66,8 @@ export default function ScannerPage() {
           </Button>
         </div>
       </div>
+
+      <DataFreshnessBanner />
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

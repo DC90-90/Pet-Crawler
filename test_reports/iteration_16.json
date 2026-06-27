@@ -1,0 +1,71 @@
+{
+  "summary": "Verified the new Data Freshness banner + SKU/barcode search fix. Backend: 8/8 pytest tests pass for /api/data-freshness shape + own-store=today + competitors=stale, plus 4 my-products search scenarios (exact SKU, partial prefix, regex-meta-char escape, name regression). Frontend: DataFreshnessBanner renders correctly on /, /price-intel, /scanner with bucket=stale, expand toggle works, 14 per-store rows with correct data-testid='freshness-store-{store_id}', own-store (Pets houses) shows TODAY, competitor stores show STALE with real ages (36-70 days), 'Next crawl in 11 hrs' visible, and the 11/13 stale fraction is shown.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "DataFreshnessBanner",
+        "issue": "React hydration / HTML validity error in console: 'In HTML, <button> cannot be a descendant of <button>'. The refresh button (data-testid='freshness-refresh-btn') is nested inside the toggle button (data-testid='data-freshness-toggle'). Browser auto-unnests so functionality works, but this fires a console error on every render of every page that mounts the banner (My Products / Price Intel / Scanner).",
+        "selector": "[data-testid='data-freshness-toggle'] [data-testid='freshness-refresh-btn']",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "My Products — date range filter",
+        "issues": ["The 'mm/dd/yyyy' date picker uses the browser-default <input type='date'> instead of the shadcn calendar component used elsewhere — minor inconsistency, not introduced by this iteration."]
+      }
+    ]
+  },
+  "passed_tests": [
+    "Backend: GET /api/data-freshness → 200; response has overall + stores[] + next_run + crawl_paused + checked_at; all buckets ∈ {today,this_week,this_month,stale,no_data}",
+    "Backend: overall.bucket = 'stale', age_days = 70.2, competitor_store_count = 11, latest=2026-05-21, oldest=2026-04-18; own_store_last_sync = 2026-06-27 (today)",
+    "Backend: Own store 'Pets houses' is_own_store=true, bucket='today', age_days=0.1, snapshot_count=2086",
+    "Backend: Competitor stores all bucket='stale' (Petsy/aleef/Hobba 70.2d, CuteCat/CutePets/Mowkly 62d, Hamtaro 41.8d, Panda/Lana 37d, Zarafa/Caty 36d)",
+    "Backend: GET /api/my-products?search=8595602569199&days=90&limit=5 → exactly 1 product, SKU matches (Brit Care Cat Soup with Turkey) — previously returned 10 unrelated, now FIXED",
+    "Backend: GET /api/my-products?search=8005852&days=90&limit=10 → many products, every returned product's sku OR barcode contains '8005852' (Schesir products)",
+    "Backend: GET /api/my-products?search=.*&days=90&limit=5 → 0 wildcard leaks; regex meta-chars properly escaped via re.escape()",
+    "Backend: GET /api/my-products?search=Royal&days=90&limit=10 → ≥1 product with 'Royal' in name (Royal Canin) — name-search regression intact",
+    "Frontend: Login as super_admin → redirect to / (My Products)",
+    "Frontend [/]: data-testid='data-freshness-banner' present + visible, data-freshness-bucket='stale'",
+    "Frontend [/]: Summary text contains 'Oldest competitor crawl: 70 days ago', 'Newest: 36 days ago', '11/13 stores stale', 'Next crawl: in 11 hrs'",
+    "Frontend [/]: Toggle button expands freshness-store-list; 14 rows with data-testid='freshness-store-{uuid}' (e.g. freshness-store-52684f49-8dcf-4d6c-97ac-4a87e65238eb for Pets houses)",
+    "Frontend [/]: Own-store row shows 'Pets houses' + MINE badge + '3 hrs ago' + TODAY pill (green)",
+    "Frontend [/]: Competitor rows show correct ages + STALE pill (red) for 11 stores; 2 placeholder stores (TEST_Regression_Store, Test Store) show 'no data'",
+    "Frontend [/price-intel]: Banner mounts; same bucket=stale, same per-store list when expanded",
+    "Frontend [/scanner]: Banner mounts; same bucket=stale, same per-store list when expanded"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration16_freshness_search.py",
+    "/app/test_reports/pytest/iteration16_results.xml"
+  ],
+  "action_items": [
+    "Fix nested-button DOM warning in DataFreshnessBanner: move the refresh icon out of the toggle <button>, or use a non-button wrapper (e.g. <div role='button' tabIndex={0}>) for the outer expand area, so refresh-btn is a sibling rather than a descendant of toggle. Currently triggers a React console error on every page that mounts the banner."
+  ],
+  "critical_code_review_comments": [
+    "Search fix in /api/my-products is now using re.escape() on the user input and a $or across sku/barcode/name — correctly returns exactly 1 product for the exact SKU search, no longer matches everything on '.*', and preserves name-search regression. Verified across 4 test cases.",
+    "/api/data-freshness returns the exact shape spec'd, with 60s TTL cache. Bucketing thresholds appear correct given 36-70 day staleness of seeded data. Own-store bucket=today proves the Zid 6h sync path is being read.",
+    "Banner correctly accepts and surfaces the relative time 'Next crawl in X hrs' from /scheduler/status; stale-count fraction (11/13) is derived from the stores[] array on the client.",
+    "Minor a11y / HTML validity: button-inside-button warning needs fixing (see action_items). Browsers tolerate this but React 18+ logs a hydration warning."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration16_freshness_search.py (new — 8 tests: 4 for /api/data-freshness, 4 for my-products search)"
+  ],
+  "success_rate": {
+    "backend": "100% (8/8)",
+    "frontend": "100% (3/3 pages render banner with correct testids, bucket, expand behavior, and per-store rows)"
+  },
+  "test_credentials": {
+    "super_admin_email": "a.disi@taqueen.sa",
+    "super_admin_password": "Ahmaddc90@"
+  },
+  "seed_data_creation": "None — used existing seeded data. Competitor crawls are 36-70 days old, so banner legitimately shows 'stale' on red background (expected per spec).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 16 verified: (1) GET /api/data-freshness endpoint matches spec, (2) DataFreshnessBanner renders identically on /, /price-intel, /scanner with per-store rows testid'd as freshness-store-{store_id}, (3) my-products SKU/barcode search now correct via re.escape + $or-on-barcode. Only outstanding issue is a nested-button DOM warning inside DataFreshnessBanner — refresh-btn is rendered inside the toggle-btn. Functionality unaffected but logs a console error on every page load. No backend issues. Banner WILL show red 'stale' state until competitor crawls are re-run — this is expected.",
+  "rca of the issue": "Nested-button warning RCA: In DataFreshnessBanner.jsx around line 146 (toggle button) the refresh button at line 191 is rendered as a child of the toggle's <button> element. Fix: lift the refresh button out of the toggle, e.g. wrap the toggle+refresh in a <div> and make them siblings, or use <div role='button' tabIndex={0} onClick={...} onKeyDown={enter/space}> for the outer expand region. No backend bugs to RCA — search fix and freshness endpoint both verified to be working correctly with real data."
+}
