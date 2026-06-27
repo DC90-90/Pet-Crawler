@@ -143,66 +143,70 @@ export default function DataFreshnessBanner({ className = "" }) {
         border: `1px solid ${style.border}`,
       }}
     >
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="w-full flex items-center gap-3 px-4 py-2.5 text-start cursor-pointer hover:bg-white/[0.02] transition-colors rounded-md"
-        data-testid="data-freshness-toggle"
-      >
-        <Icon className="w-4 h-4 flex-shrink-0" style={{ color: style.color }} />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="text-xs font-semibold tracking-wider uppercase" style={{ color: style.color, fontFamily: "'JetBrains Mono', monospace" }}>
-              {isRTL ? "حداثة البيانات" : "Data Freshness"}
-            </span>
-            <span className="text-xs text-white/85">{message}</span>
-          </div>
-          <div className="text-[11px] text-[#A1E4DB]/80 mt-0.5 flex items-center gap-3 flex-wrap">
-            {overall?.oldest_competitor_crawl && (
-              <span data-testid="freshness-oldest">
-                {isRTL ? "أقدم سحب: " : "Oldest competitor crawl: "}
-                <span className="font-mono">{formatRelative(overall.oldest_competitor_crawl, isRTL)}</span>
-              </span>
-            )}
-            {overall?.latest_competitor_crawl && (
-              <span data-testid="freshness-newest">
-                {isRTL ? "أحدث سحب: " : "Newest: "}
-                <span className="font-mono">{formatRelative(overall.latest_competitor_crawl, isRTL)}</span>
-              </span>
-            )}
-            {staleCount > 0 && (
-              <span data-testid="freshness-stale-count" style={{ color: "#EF4444" }}>
-                {staleCount}/{totalCompetitors} {isRTL ? "متاجر قديمة" : "stores stale"}
-              </span>
-            )}
-            {next_run && !crawl_paused && (
-              <span data-testid="freshness-next-run">
-                {isRTL ? "السحب القادم: " : "Next crawl: "}
-                <span className="font-mono">{formatRelative(next_run, isRTL)}</span>
-              </span>
-            )}
-            {crawl_paused && (
-              <span data-testid="freshness-paused" style={{ color: "#FBBF24" }}>
-                {isRTL ? "السحب موقوف" : "Crawls paused"}
-              </span>
-            )}
-          </div>
-        </div>
+      <div className="flex items-center gap-2 px-4 py-2.5 rounded-md">
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); load(); }}
+          onClick={() => setExpanded((v) => !v)}
+          className="flex-1 flex items-center gap-3 text-start cursor-pointer hover:bg-white/[0.02] transition-colors py-0.5 rounded-md min-w-0"
+          data-testid="data-freshness-toggle"
+          aria-expanded={expanded}
+        >
+          <Icon className="w-4 h-4 flex-shrink-0" style={{ color: style.color }} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-xs font-semibold tracking-wider uppercase" style={{ color: style.color, fontFamily: "'JetBrains Mono', monospace" }}>
+                {isRTL ? "حداثة البيانات" : "Data Freshness"}
+              </span>
+              <span className="text-xs text-white/85">{message}</span>
+            </div>
+            <div className="text-[11px] text-[#A1E4DB]/80 mt-0.5 flex items-center gap-3 flex-wrap">
+              {overall?.oldest_competitor_crawl && (
+                <span data-testid="freshness-oldest">
+                  {isRTL ? "أقدم سحب: " : "Oldest competitor crawl: "}
+                  <span className="font-mono">{formatRelative(overall.oldest_competitor_crawl, isRTL)}</span>
+                </span>
+              )}
+              {overall?.latest_competitor_crawl && (
+                <span data-testid="freshness-newest">
+                  {isRTL ? "أحدث سحب: " : "Newest: "}
+                  <span className="font-mono">{formatRelative(overall.latest_competitor_crawl, isRTL)}</span>
+                </span>
+              )}
+              {staleCount > 0 && (
+                <span data-testid="freshness-stale-count" style={{ color: "#EF4444" }}>
+                  {staleCount}/{totalCompetitors} {isRTL ? "متاجر قديمة" : "stores stale"}
+                </span>
+              )}
+              {next_run && !crawl_paused && (
+                <span data-testid="freshness-next-run">
+                  {isRTL ? "السحب القادم: " : "Next crawl: "}
+                  <span className="font-mono">{formatRelative(next_run, isRTL)}</span>
+                </span>
+              )}
+              {crawl_paused && (
+                <span data-testid="freshness-paused" style={{ color: "#FBBF24" }}>
+                  {isRTL ? "السحب موقوف" : "Crawls paused"}
+                </span>
+              )}
+            </div>
+          </div>
+          {expanded ? (
+            <ChevronUp className="w-4 h-4 text-[#A1E4DB] flex-shrink-0" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-[#A1E4DB] flex-shrink-0" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={load}
           className="p-1.5 rounded-md hover:bg-white/10 transition-colors flex-shrink-0"
           title={isRTL ? "تحديث" : "Refresh"}
           data-testid="freshness-refresh-btn"
+          aria-label={isRTL ? "تحديث حداثة البيانات" : "Refresh data freshness"}
         >
           <RefreshCw className={`w-3.5 h-3.5 text-[#A1E4DB] ${loading ? "animate-spin" : ""}`} />
         </button>
-        {expanded ? (
-          <ChevronUp className="w-4 h-4 text-[#A1E4DB] flex-shrink-0" />
-        ) : (
-          <ChevronDown className="w-4 h-4 text-[#A1E4DB] flex-shrink-0" />
-        )}
-      </button>
+      </div>
 
       {expanded && (
         <div className="border-t border-white/5 px-4 py-3 space-y-1.5" data-testid="freshness-store-list">
