@@ -73,6 +73,18 @@ MAX_QTY_DELTA_PER_INTERVAL = 10
 # Absolute upper bound: at most 30 units/day per SKU.
 MAX_DAILY_SALES_PER_SKU = 30
 
+# Sold-count delta sanity cap (Feb 2026 — P1 data accuracy guard):
+# Sold-counters can occasionally jump (manual reset, backfill, partner sync glitch).
+# Any single per-snapshot increase above this gets clamped — it's almost certainly
+# an admin re-import or a faulty counter, not genuine sales in one crawl interval.
+MAX_SOLD_COUNT_DELTA_PER_INTERVAL = 50
+
+# Minimum confidence_score required to participate in dashboard aggregations
+# (revenue, sales velocity, leaderboards, market position). Lower-tier
+# snapshots (Tier-3 HTML scraping ~75) carry too much noise to drive KPIs.
+# Setting the floor at 85 admits Tier-0/1/2 (own store + structured APIs) only.
+MIN_AGGREGATION_CONFIDENCE = 85
+
 
 def get_stock_signal(qty, in_stock=None):
     """Return a stock label.
@@ -134,12 +146,23 @@ def _estimate_sales_from_snapshots(snaps, days):
         return 0, 0.0, "insufficient_data"
 
     # ── Method 1: sold_count cumulative diff (most reliable) ──
+    # We now sum CLAMPED per-step positive diffs rather than `last - first`.
+    # Reason: a single bad data point (sold_count reset, partner-sync backfill)
+    # used to inflate the window total by thousands. Per-step clamping caps
+    # each interval at MAX_SOLD_COUNT_DELTA_PER_INTERVAL and a total cap of
+    # MAX_DAILY_SALES_PER_SKU * days keeps the window-level number sane too.
     sold_counts = [s.get("sold_count", 0) or 0 for s in snaps]
-    if max(sold_counts) > 0 and sold_counts[0] >= 0:
-        first_sc = next((sc for sc in sold_counts if sc > 0), 0)
-        last_sc = sold_counts[-1] if sold_counts[-1] >= first_sc else max(sold_counts)
-        units_from_counter = max(0, last_sc - first_sc)
-        if units_from_counter > 0:
+    if max(sold_counts) > 0:
+        units_from_counter = 0
+        any_positive_step = False
+        for i in range(1, len(sold_counts)):
+            delta = sold_counts[i] - sold_counts[i - 1]
+            if delta <= 0:
+                # Counter went down (reset / refurbished history) — ignore.
+                continue
+            any_positive_step = True
+            units_from_counter += min(delta, MAX_SOLD_COUNT_DELTA_PER_INTERVAL)
+        if any_positive_step and units_from_counter > 0:
             avg_price = sum((s.get("price") or 0) for s in snaps) / max(1, len(snaps))
             units_capped = min(units_from_counter, MAX_DAILY_SALES_PER_SKU * max(1, days))
             return units_capped, round(units_capped * avg_price, 2), "sold_count_diff"
@@ -235,7 +258,7 @@ def compute_product_metrics(snapshots_by_store, days):
 # Used by /api/my-products, /api/products/{sku}/full, /api/insights/summary
 # to rank a product's price against competitors. Rules:
 #   • Only sellers with snapshots crawled in the last 7 days count
-#   • Only confidence_score >= 75 (skips Tier-3 HTML noise)
+#   • Only confidence_score >= MIN_AGGREGATION_CONFIDENCE (skips Tier-3 HTML noise)
 #   • Lowest price = rank 1 (best); ties at the same price share the lower rank
 #   • Returns None if fewer than 2 valid sellers OR own price absent
 def compute_market_position(seller_prices, my_store_id):
@@ -269,7 +292,7 @@ def compute_market_position(seller_prices, my_store_id):
         # for the user's own store. Their price is what THEY set, not crawled.
         if not is_mine:
             conf = sp.get("confidence_score", 0) or 0
-            if conf < 75:
+            if conf < MIN_AGGREGATION_CONFIDENCE:
                 continue
             ts = _crawled_ts(sp.get("crawled_at"))
             if ts is None or ts < cutoff:

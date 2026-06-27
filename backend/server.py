@@ -35,6 +35,7 @@ from models import (
 )
 from core import (
     PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
+    MIN_AGGREGATION_CONFIDENCE,
     get_stock_signal, _coerce_num, _coerce_int,
     _estimate_sales_from_snapshots, compute_product_metrics,
     compute_market_position,
@@ -1668,16 +1669,16 @@ async def my_products(
     if on_date:
         start = datetime.fromisoformat(on_date).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
         end = start + timedelta(days=1)
-        snap_query = {"crawled_at": {"$gte": start, "$lt": end}}
+        snap_query = {"crawled_at": {"$gte": start, "$lt": end}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
         effective_days = 1
     elif date_from or date_to:
         df = datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc) if date_from else (datetime.now(timezone.utc) - timedelta(days=days))
         dt = (datetime.fromisoformat(date_to).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc) + timedelta(days=1)) if date_to else datetime.now(timezone.utc)
-        snap_query = {"crawled_at": {"$gte": df, "$lt": dt}}
+        snap_query = {"crawled_at": {"$gte": df, "$lt": dt}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
         effective_days = max(1, (dt - df).days)
     else:
         since = datetime.now(timezone.utc) - timedelta(days=days)
-        snap_query = {"crawled_at": {"$gte": since}}
+        snap_query = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
         effective_days = days
     snapshots = await db.product_snapshots.find(
         snap_query,
@@ -2228,8 +2229,9 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
 @router.get("/products/{sku}/velocity")
 async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    # P1 confidence floor: velocity is an aggregation — exclude Tier-3 noise.
     snapshots = await db.product_snapshots.find(
-        {"sku": sku, "crawled_at": {"$gte": since}}, {"_id": 0}
+        {"sku": sku, "crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}, {"_id": 0}
     ).sort("crawled_at", 1).to_list(5000)
 
     # Group by store, compute daily velocity
@@ -2289,9 +2291,14 @@ async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_use
 async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
+    # P1 data accuracy guard (Feb 2026): all dashboard aggregations require
+    # confidence_score >= MIN_AGGREGATION_CONFIDENCE so Tier-3 HTML scraping
+    # noise can't pollute KPIs.
+    base_match = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
+
     # Price drops: snapshots where price decreased
     pipeline_drops = [
-        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$match": base_match},
         {"$sort": {"sku": 1, "store_id": 1, "crawled_at": -1}},
         {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "prices": {"$push": "$price"}}},
         {"$match": {"$expr": {"$and": [{"$gte": [{"$size": "$prices"}, 2]}, {"$lt": [{"$arrayElemAt": ["$prices", 0]}, {"$arrayElemAt": ["$prices", 1]}]}]}}},
@@ -2299,22 +2306,23 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     ]
     # Product gaps: products carried by < 3 stores
     pipeline_gaps = [
-        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$match": base_match},
         {"$group": {"_id": "$sku", "stores": {"$addToSet": "$store_id"}}},
         {"$match": {"$expr": {"$lt": [{"$size": "$stores"}, 3]}}},
         {"$count": "gaps"},
     ]
     # Median price spread
     pipeline_spread = [
-        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$match": base_match},
         {"$sort": {"crawled_at": -1}},
         {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}}},
         {"$group": {"_id": "$_id.sku", "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}}},
         {"$project": {"spread": {"$subtract": ["$max_p", "$min_p"]}}},
     ]
-    # Avg confidence
+    # Avg confidence (computed across the same filtered set so the number is
+    # meaningful in context — average of accepted snapshots, not raw).
     pipeline_conf = [
-        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$match": base_match},
         {"$group": {"_id": None, "avg_conf": {"$avg": "$confidence_score"}}},
     ]
 
@@ -2391,7 +2399,7 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
             store_name_by_id = {s["id"]: s.get("name", "") for s in await db.stores.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(200)}
             latest_by_sku_store = {}
             async for sn in db.product_snapshots.find(
-                {"sku": {"$in": list(relevant_skus)}, "crawled_at": {"$gte": mp_since}},
+                {"sku": {"$in": list(relevant_skus)}, "crawled_at": {"$gte": mp_since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
                 {"_id": 0, "sku": 1, "store_id": 1, "price": 1, "confidence_score": 1, "crawled_at": 1, "store_name": 1}
             ).sort("crawled_at", -1):
                 key = (sn["sku"], sn["store_id"])
@@ -2475,8 +2483,9 @@ async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
 
     # Fetch all snapshots in the window unbounded (Feb 2026 fix — previous
     # to_list(100000) ascending-sort silently dropped the newest 46k+ docs)
+    # P1 confidence floor: exclude Tier-3 HTML scrape noise from leaderboard.
     snapshots = await db.product_snapshots.find(
-        {"crawled_at": {"$gte": since}, "price": {"$gt": 0}},
+        {"crawled_at": {"$gte": since}, "price": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
         {"_id": 0, "store_id": 1, "sku": 1, "price": 1, "qty_available": 1, "sold_count": 1, "crawled_at": 1}
     ).sort("crawled_at", 1).to_list(length=None)
 
@@ -2538,7 +2547,7 @@ async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
 @ttl_cache(60)
 async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = Query(None), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    match = {"crawled_at": {"$gte": since}}
+    match = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
     if store_id and store_id != "all":
         match["store_id"] = store_id
     snapshots = await db.product_snapshots.find(match, {"_id": 0}).sort("crawled_at", 1).to_list(length=None)
@@ -2572,7 +2581,7 @@ async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = 
 async def insights_trending(days: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     snapshots = await db.product_snapshots.find(
-        {"crawled_at": {"$gte": since}}, {"_id": 0}
+        {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}, {"_id": 0}
     ).sort("crawled_at", 1).to_list(length=None)
 
     by_cat = {}
@@ -2618,7 +2627,8 @@ async def insights_gaps(days: int = Query(30), user=Depends(get_user)):
     pipeline = [
         # Feb 2026 fix — restrict to recent snapshots so dormant-store data
         # from months ago doesn't corrupt the gap analysis.
-        {"$match": {"crawled_at": {"$gte": since}, "price": {"$gt": 0}}},
+        # P1 confidence floor — Tier-3 noise stays out of the gap analysis.
+        {"$match": {"crawled_at": {"$gte": since}, "price": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
         {"$sort": {"crawled_at": -1}},
         {"$group": {"_id": "$sku", "stores": {"$addToSet": "$store_id"}}},
         {"$match": {"$expr": {"$lt": [{"$size": "$stores"}, total_stores]}}},
@@ -2645,7 +2655,8 @@ async def insights_price_wars(days: int = Query(30), user=Depends(get_user)):
     pipeline = [
         # Feb 2026 fix — restrict to recent snapshots so months-old prices
         # from dormant stores don't generate fake "price wars".
-        {"$match": {"crawled_at": {"$gte": since}, "price": {"$gt": 0}}},
+        # P1 confidence floor — Tier-3 HTML scrapes excluded.
+        {"$match": {"crawled_at": {"$gte": since}, "price": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
         {"$sort": {"crawled_at": -1}},
         {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "store_name": {"$first": "$store_name"}}},
         {"$group": {"_id": "$_id.sku", "prices": {"$push": {"store": "$store_name", "price": "$price"}}, "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}, "count": {"$sum": 1}}},
@@ -2673,7 +2684,8 @@ async def insights_restock(days: int = Query(30), user=Depends(get_user)):
     pipeline = [
         # Feb 2026 fix — restrict to recent snapshots so historical
         # OOS/in-stock states don't generate stale recommendations.
-        {"$match": {"crawled_at": {"$gte": since}}},
+        # P1 confidence floor — exclude Tier-3 noise.
+        {"$match": {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
         {"$sort": {"crawled_at": -1}},
         {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "in_stock": {"$first": "$in_stock"}, "store_name": {"$first": "$store_name"}, "qty": {"$first": "$qty_available"}}},
         {"$group": {"_id": "$_id.sku", "stores": {"$push": {"store": "$store_name", "in_stock": "$in_stock", "qty": "$qty"}}}},
@@ -2823,7 +2835,8 @@ async def create_filter(data: SavedFilterIn, user=Depends(get_user)):
 @ttl_cache(60)
 async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}
+    # P1 confidence floor: exclude Tier-3 noise from discount rankings.
+    match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
     if store_id and store_id != "all": match["store_id"] = store_id
     pipeline = [
         {"$match": match}, {"$sort": {"crawled_at": -1}},
@@ -2850,7 +2863,8 @@ async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Que
 @ttl_cache(60)
 async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}
+    # P1 confidence floor: exclude Tier-3 noise from discount rankings.
+    match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
     if store_id and store_id != "all": match["store_id"] = store_id
     pipeline = [
         {"$match": match}, {"$sort": {"crawled_at": -1}},
@@ -2872,7 +2886,8 @@ async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = 
 async def discount_timeline(user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=90)
     pipeline = [
-        {"$match": {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}},
+        # P1 confidence floor: exclude Tier-3 noise from discount timeline.
+        {"$match": {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
         {"$project": {"store_name": 1, "week": {"$dateToString": {"format": "%Y-W%V", "date": "$crawled_at"}}, "discount_pct": 1}},
         {"$group": {"_id": {"store": "$store_name", "week": "$week"}, "count": {"$sum": 1}, "avg_depth": {"$avg": "$discount_pct"}}},
         {"$sort": {"_id.week": 1}},
@@ -2906,11 +2921,12 @@ async def discount_aggression(user=Depends(get_user)):
     leaderboard = []
     for store in stores:
         pipeline = [
-            {"$match": {"store_id": store["id"], "crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}}},
+            # P1 confidence floor: exclude Tier-3 noise from aggression scores.
+            {"$match": {"store_id": store["id"], "crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
             {"$group": {"_id": None, "avg_depth": {"$avg": "$discount_pct"}, "max_disc": {"$max": "$discount_pct"}, "total_discounted": {"$sum": 1}}},
         ]
         result = await db.product_snapshots.aggregate(pipeline).to_list(1)
-        total_snaps = await db.product_snapshots.count_documents({"store_id": store["id"], "crawled_at": {"$gte": since}})
+        total_snaps = await db.product_snapshots.count_documents({"store_id": store["id"], "crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}})
         if result:
             r = result[0]
             avg_depth = round(r["avg_depth"], 1)
@@ -2947,9 +2963,10 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
         return {"opportunities": [], "well_positioned": [], "undercut": [],
                 "summary": {"total_overpriced": 0, "total_uplift": 0, "zero_sales_overpriced": 0}}
 
-    # Aggregate latest snapshot per (sku, store_id) for our SKUs only
+    # Aggregate latest snapshot per (sku, store_id) for our SKUs only.
+    # P1 confidence floor: exclude Tier-3 noise from price-opportunity scan.
     pipeline = [
-        {"$match": {"sku": {"$in": list(own_skus)}, "crawled_at": {"$gte": since}}},
+        {"$match": {"sku": {"$in": list(own_skus)}, "crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
         {"$sort": {"crawled_at": -1}},
         {"$group": {
             "_id": {"sku": "$sku", "store_id": "$store_id"},
