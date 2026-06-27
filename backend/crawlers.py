@@ -8,6 +8,7 @@ import os
 import re
 import uuid
 import time
+import asyncio
 import logging
 import itertools
 import httpx
@@ -1231,21 +1232,96 @@ def _is_valid_ean(val):
     return bool(val) and bool(_NUMERIC_BARCODE_RE.match(str(val).strip()))
 
 
+async def _fetch_zid_api_catalog(db, store):
+    """Fetch the full product catalogue from Zid's authenticated Merchant API.
+
+    Uses the per-store Manager Token + Store-Id headers (no OAuth flow). Iterates
+    `GET https://api.zid.sa/v1/products/?page=N&page_size=200` until `next` is null.
+    Returns a list of raw product dicts in the SAME shape `_normalize_raw_product`
+    consumes (sku, barcode, name_ar, name_en, price, qty, image, url) so the caller
+    treats it identically to the public-crawl path.
+
+    Returns ([], "missing_token") if creds are absent — caller falls back to public crawl.
+    Returns ([], "auth_failed") on 4xx so caller can fall back.
+    """
+    token = os.environ.get("ZID_API_TOKEN")
+    store_id = os.environ.get("ZID_STORE_ID")
+    if not token or not store_id:
+        return [], "missing_token"
+
+    headers = {
+        "Access-Token": token,
+        "Store-Id": store_id,
+        "Role": "Manager",
+        "Accept-Language": "en",
+        "Accept": "application/json",
+    }
+    out = []
+    try:
+        async with httpx.AsyncClient(base_url="https://api.zid.sa/v1", timeout=45.0) as http:
+            page = 1
+            while True:
+                resp = await http.get(
+                    "/products/",
+                    params={"page": page, "page_size": 200},
+                    headers=headers,
+                )
+                if resp.status_code in (401, 403):
+                    logger.error(f"[OwnSync][Zid API] auth rejected status={resp.status_code}")
+                    return [], "auth_failed"
+                resp.raise_for_status()
+                payload = resp.json()
+                items = payload.get("results") or []
+                for p in items:
+                    name_obj = p.get("name") or {}
+                    out.append({
+                        "sku": str(p.get("sku") or "").strip(),
+                        "barcode": str(p.get("barcode") or "").strip(),
+                        "name_ar": name_obj.get("ar") or "",
+                        "name_en": name_obj.get("en") or "",
+                        "price": p.get("sale_price") or p.get("price") or 0,
+                        "sale_price": p.get("sale_price"),
+                        "qty_available": 0 if p.get("is_infinite") else (p.get("quantity") or 0),
+                        "in_stock": bool(p.get("is_infinite")) or ((p.get("quantity") or 0) > 0),
+                        "img_url": ((p.get("images") or [{}])[0] or {}).get("origin") or ((p.get("images") or [{}])[0] or {}).get("image") or "",
+                        "product_url": p.get("html_url") or "",
+                        "_zid_id": p.get("id"),
+                        "_zid_is_infinite": bool(p.get("is_infinite")),
+                    })
+                if not payload.get("next"):
+                    break
+                page += 1
+                # Brief breathing room between pages — well below Zid's published rate limits
+                await asyncio.sleep(0.15)
+                if page > 100:
+                    logger.warning("[OwnSync][Zid API] hit 100-page safety cap")
+                    break
+    except httpx.HTTPError as e:
+        logger.error(f"[OwnSync][Zid API] network error after {len(out)} products: {e}")
+        return out, "partial" if out else "network_failed"
+    logger.info(f"[OwnSync][Zid API] fetched {len(out)} products in {page} page(s)")
+    return out, "ok"
+
+
 async def sync_own_store_prices(db, store=None):
     """Sync prices/quantities from the user's own Zid store back into db.my_products.
 
     Strategy:
       1. Find the store flagged is_own_store=True (or use the one passed in).
-      2. Crawl its public Tier-1 JSON endpoint (no Playwright — JSON only).
+      2. PREFER the authenticated Zid Merchant API (when ZID_API_TOKEN +
+         ZID_STORE_ID are present). Falls back to public Tier-1 JSON crawl on
+         auth failure or missing creds.
       3. For each crawled product, match against my_products by:
            Level 1 — barcode match (8-14 digit EAN)
            Level 2 — exact SKU match
          No name-based matching.
       4. Update ONLY: price, sale_price, quantity, in_stock, last_synced_at, sync_source.
          Never overwrite catalog metadata (names, images, categories, URLs).
-      5. After sync, schedule run_matching_for_all() so Price Intel reflects the new prices.
+      5. New SKUs are upserted into db.my_products with full metadata (auto-discovery).
+      6. After sync, schedule run_matching_for_all() so Price Intel reflects the new prices.
 
-    Returns: {"updated": int, "not_found": int, "crawled": int, "store": str, "synced_at": iso}
+    Returns: {"updated": int, "discovered": int, "archived": int, "not_found": int,
+              "crawled": int, "store": str, "synced_at": iso, "source": "zid_api"|"public_crawl"}
     """
     if store is None:
         store = await db.stores.find_one({"is_own_store": True}, {"_id": 0})
@@ -1258,34 +1334,49 @@ async def sync_own_store_prices(db, store=None):
     started_at = datetime.now(timezone.utc)
     logger.info(f"[OwnSync] Starting price sync for {store['name']} ({store.get('domain')})")
 
-    # ── Tier-1 JSON crawl (no browser) ──
-    base = f"https://{store['domain']}"
-    platform = store.get("platform", "zid").lower()
-    endpoints = _build_salla_endpoints(base, store.get("working_endpoint"), platform=platform)
-    crawl_log = _make_crawl_log(store, tier_attempted=1)
-    all_raw = []
+    # ── Try Zid Merchant API first; fall back to public crawl on miss ──
+    sync_source_label = None
+    all_raw, zid_status = await _fetch_zid_api_catalog(db, store)
     winning_endpoint = None
-    try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/html, */*",
-        }) as http:
-            for ep in endpoints:
-                items, matched_ep = await _try_single_endpoint(http, ep, crawl_log)
-                if matched_ep:
-                    all_raw = await _paginate_endpoint(http, matched_ep, items)
-                    winning_endpoint = matched_ep
-                    break
-    except Exception as e:
-        crawl_log["error"] = str(e)[:300]
-        logger.error(f"[OwnSync] Crawl failed: {e}")
+    crawl_log = _make_crawl_log(store, tier_attempted=1)
+
+    if zid_status == "ok" and all_raw:
+        sync_source_label = "zid_api"
+        winning_endpoint = {"tag": "zid_merchant_api"}
+        crawl_log["tier_used"] = 0  # 0 = authenticated API (better than tier 1 public)
+        crawl_log["endpoint_used"] = "https://api.zid.sa/v1/products/"
+        await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": "zid_merchant_api"}})
+    else:
+        if zid_status != "missing_token":
+            logger.warning(f"[OwnSync] Zid API attempt → {zid_status}; falling back to public crawl")
+        sync_source_label = "public_crawl"
+        # ── Public Tier-1 JSON crawl (no browser) ──
+        base = f"https://{store['domain']}"
+        platform = store.get("platform", "zid").lower()
+        endpoints = _build_salla_endpoints(base, store.get("working_endpoint"), platform=platform)
+        all_raw = []
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json, text/html, */*",
+            }) as http:
+                for ep in endpoints:
+                    items, matched_ep = await _try_single_endpoint(http, ep, crawl_log)
+                    if matched_ep:
+                        all_raw = await _paginate_endpoint(http, matched_ep, items)
+                        winning_endpoint = matched_ep
+                        break
+        except Exception as e:
+            crawl_log["error"] = str(e)[:300]
+            logger.error(f"[OwnSync] Crawl failed: {e}")
+
+        if winning_endpoint:
+            crawl_log["tier_used"] = 1
+            crawl_log["endpoint_used"] = winning_endpoint["tag"]
+            await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
 
     crawled = len(all_raw)
     crawl_log["products_found"] = crawled
-    if winning_endpoint:
-        crawl_log["tier_used"] = 1
-        crawl_log["endpoint_used"] = winning_endpoint["tag"]
-        await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
 
     # ── Pre-build lookup tables of my_products by barcode + SKU ──
     my_by_sku, my_by_barcode = {}, {}
@@ -1308,7 +1399,24 @@ async def sync_own_store_prices(db, store=None):
     own_store_id = store.get("id")
 
     for raw in all_raw:
-        norm = _normalize_raw_product(raw, store["name"])
+        # Zid API rows arrive pre-normalised (see _fetch_zid_api_catalog); the
+        # public-crawl path needs _normalize_raw_product to reshape Salla/Zid
+        # storefront JSON. Distinguish by the synthetic `_zid_id` marker.
+        if raw.get("_zid_id"):
+            norm = {
+                "sku": raw.get("sku") or "",
+                "barcode": raw.get("barcode") or "",
+                "name_ar": raw.get("name_ar") or "",
+                "name_en": raw.get("name_en") or "",
+                "price": raw.get("price") or 0,
+                "sale_price": raw.get("sale_price"),
+                "qty": raw.get("qty_available") or 0,
+                "in_stock": raw.get("in_stock", False),
+                "img_url": raw.get("img_url", ""),
+                "product_url": raw.get("product_url", ""),
+            }
+        else:
+            norm = _normalize_raw_product(raw, store["name"])
         crawled_sku = str(norm["sku"]).strip()
         crawled_barcode = str(norm.get("barcode") or "").strip()
 
@@ -1334,7 +1442,7 @@ async def sync_own_store_prices(db, store=None):
                 "sku": crawled_sku,
                 "barcode": crawled_barcode or "",
                 "name_ar": norm.get("name_ar", ""),
-                "name_en": norm.get("name_ar", ""),  # Zid only ships one name field
+                "name_en": norm.get("name_en") or norm.get("name_ar", ""),
                 "image_url": norm.get("img_url", ""),
                 "product_url": norm.get("product_url", ""),
                 "price": round(norm["price"], 2),
@@ -1348,8 +1456,8 @@ async def sync_own_store_prices(db, store=None):
                 "last_seen_on_store": sync_ts,
                 "present_on_store": True,
                 "last_synced_at": sync_ts,
-                "sync_source": "zid_auto_discovery",
-                "discovered_via": "auto_sync",
+                "sync_source": f"{sync_source_label}_auto_discovery",
+                "discovered_via": sync_source_label,
             }
             await db.my_products.update_one(
                 {"sku": crawled_sku},
@@ -1371,13 +1479,71 @@ async def sync_own_store_prices(db, store=None):
             "quantity": int(norm["qty"]),
             "in_stock": bool(norm["in_stock"]),
             "last_synced_at": sync_ts,
-            "sync_source": "zid_crawler",
+            "sync_source": sync_source_label,
             "present_on_store": True,
             "last_seen_on_store": sync_ts,
         }
         await db.my_products.update_one({"sku": target_sku}, {"$set": update_doc})
         seen_skus.add(target_sku)
         updated += 1
+
+    # ── Write through to db.products + db.product_snapshots (Zid API source only) ──
+    # The My Products table joins on db.product_snapshots, so without this write
+    # newly synced Zid products wouldn't appear until the next scheduled crawl
+    # runs and inserts a snapshot. With Zid's API as our authoritative source,
+    # we surface every product immediately via a synthetic source_tier=0 snapshot.
+    snapshots_created = 0
+    if sync_source_label == "zid_api" and all_raw:
+        snap_docs = []
+        prod_upserts = []
+        for raw in all_raw:
+            sku = (raw.get("sku") or "").strip()
+            if not sku:
+                continue
+            price = raw.get("price") or 0
+            qty = raw.get("qty_available") or 0
+            in_stock = bool(raw.get("in_stock")) if not raw.get("_zid_is_infinite") else True
+            barcode = raw.get("barcode") or ""
+            # Upsert catalog row (idempotent — only sets if new, preserves history)
+            prod_upserts.append({
+                "sku": sku,
+                "set_on_insert": {
+                    "id": str(uuid.uuid4()),
+                    "sku": sku,
+                    "barcode": barcode,
+                    "name_ar": raw.get("name_ar") or "",
+                    "name_en": raw.get("name_en") or "",
+                    "image_url": raw.get("img_url") or "",
+                    "product_url": raw.get("product_url") or "",
+                    "first_seen_at": sync_ts,
+                    "category": "",
+                    "animal_type": "",
+                    "brand": "",
+                },
+            })
+            snap_docs.append({
+                "id": str(uuid.uuid4()),
+                "store_id": own_store_id,
+                "store_name": store["name"],
+                "sku": sku,
+                "price": round(price, 2),
+                "original_price": round(price, 2),
+                "discount_pct": 0,
+                "in_stock": in_stock,
+                "qty_available": int(qty),
+                "sold_count": 0,
+                "product_url": raw.get("product_url") or "",
+                "source_tier": 0,  # 0 = authenticated API (best signal we have)
+                "confidence_score": 99,
+                "crawled_at": started_at,
+            })
+        # Bulk upsert catalog rows (only sets on insert; never overwrites)
+        for up in prod_upserts:
+            await db.products.update_one({"sku": up["sku"]}, {"$setOnInsert": up["set_on_insert"]}, upsert=True)
+        # Bulk insert snapshots
+        if snap_docs:
+            await db.product_snapshots.insert_many(snap_docs)
+            snapshots_created = len(snap_docs)
 
     # ── Mark every my_products row NOT seen in this crawl as archived ──
     # Soft-archive only: row + history are preserved, but `present_on_store=False`
@@ -1393,7 +1559,7 @@ async def sync_own_store_prices(db, store=None):
     duration = (datetime.now(timezone.utc) - started_at).total_seconds()
     crawl_log["products_updated"] = updated
     crawl_log["products_new"] = discovered
-    crawl_log["snapshots_created"] = 0
+    crawl_log["snapshots_created"] = snapshots_created
     if not all_raw:
         crawl_log["error"] = (crawl_log.get("error") or "") + " | own-store crawl returned 0 items"
     await _finalize_crawl_log(db, crawl_log, store["id"])
@@ -1419,6 +1585,7 @@ async def sync_own_store_prices(db, store=None):
     return {
         "store": store["name"],
         "domain": store.get("domain"),
+        "source": sync_source_label,
         "crawled": crawled,
         "updated": updated,
         "discovered": discovered,
@@ -1432,7 +1599,7 @@ async def sync_own_store_prices(db, store=None):
         "products_found": crawled,
         "products_new": discovered,
         "products_updated": updated,
-        "snapshots_created": 0,
+        "snapshots_created": snapshots_created,
         "error": crawl_log.get("error"),
         "completed_at": sync_ts,
         "duration_secs": round(duration, 1),
