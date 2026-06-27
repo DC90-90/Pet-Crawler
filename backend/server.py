@@ -1726,7 +1726,8 @@ async def my_products(
     # Pull SKU → product_url from my_products (user's own store) and store domains for fallback search URLs
     my_products_docs = await db.my_products.find(
         {},
-        {"_id": 0, "sku": 1, "product_url": 1, "price": 1, "sale_price": 1, "last_synced_at": 1,
+        {"_id": 0, "sku": 1, "barcode": 1, "name_ar": 1, "name_en": 1, "product_url": 1,
+         "price": 1, "sale_price": 1, "quantity": 1, "in_stock": 1, "last_synced_at": 1,
          "present_on_store": 1, "last_seen_on_store": 1, "discovered_via": 1},
     ).to_list(20000)
     my_url_by_sku = {p["sku"]: p.get("product_url") for p in my_products_docs if p.get("product_url")}
@@ -1787,6 +1788,65 @@ async def my_products(
         row["present_on_store"] = _mp.get("present_on_store") if _mp else None
         row["last_seen_on_store"] = _mp.get("last_seen_on_store")
         row["discovered_via"] = _mp.get("discovered_via")
+
+        # ── My-store-centric fields (Feb 2026) ───────────────────
+        # "My Products" page needs the SKU, name, price and stock to reflect the
+        # user's Zid store, not the market aggregate. We override the catalog
+        # display fields with db.my_products values when this row is mine, and
+        # we derive a `vs_my_price_pct` comparing the cheapest *competitor* to
+        # my price. Snapshot-derived market fields (qty_sold_est, revenue_est,
+        # num_sellers) stay untouched — the frontend labels them as market.
+        if p["sku"] in my_skus_set:
+            mp_doc = my_price_lookup.get(p["sku"]) or {}
+            mp_name_ar = mp_doc.get("name_ar")
+            mp_name_en = mp_doc.get("name_en")
+            mp_barcode = mp_doc.get("barcode")
+            if mp_name_ar:
+                row["name_ar"] = mp_name_ar
+            if mp_name_en:
+                row["name_en"] = mp_name_en
+            if mp_barcode:
+                row["barcode"] = mp_barcode
+
+            my_price = mp_doc.get("sale_price") or mp_doc.get("price")
+            my_qty = mp_doc.get("quantity")
+            my_in_stock = mp_doc.get("in_stock")
+
+            # Override the headline Price column to show MY price (the previous
+            # value was the market average — misleading on a "my products" page).
+            if my_price is not None:
+                row["price"] = round(my_price, 2)
+            row["my_price"] = round(my_price, 2) if my_price is not None else None
+            row["my_quantity"] = int(my_qty) if my_qty is not None else None
+            row["my_in_stock"] = bool(my_in_stock) if my_in_stock is not None else None
+            row["my_stock_signal"] = get_stock_signal(
+                row["my_quantity"] if row["my_quantity"] is not None else 0,
+                in_stock=row["my_in_stock"],
+            ) if my_price is not None else None
+
+            # Competitor-only price stats (exclude own store)
+            comp_latest_prices = []
+            for sid, snaps in stores_data.items():
+                if sid == own_store_id or not snaps:
+                    continue
+                last = snaps[-1]
+                if last.get("price") is not None:
+                    comp_latest_prices.append(last["price"])
+            row["num_competitors"] = len(comp_latest_prices)
+            if comp_latest_prices:
+                comp_min = min(comp_latest_prices)
+                row["competitor_min_price"] = round(comp_min, 2)
+                row["competitor_max_price"] = round(max(comp_latest_prices), 2)
+                if my_price and my_price > 0:
+                    # Positive  → my_price is BELOW the cheapest competitor (I'm winning)
+                    # Negative  → a competitor undercuts me (I'm overpriced)
+                    row["vs_my_price_pct"] = round(((comp_min - my_price) / my_price) * 100, 1)
+                else:
+                    row["vs_my_price_pct"] = None
+            else:
+                row["competitor_min_price"] = None
+                row["competitor_max_price"] = None
+                row["vs_my_price_pct"] = None
 
         # Market position (Feb 2026) — own price lives in db.my_products (not in
         # product_snapshots), so we synthesize an entry for the own store using

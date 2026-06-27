@@ -80,6 +80,13 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
   - No new credentials needed — uses the existing public Zid Tier-1 crawl path. Schedule unchanged (every 6h via `_scheduled_own_sync`).
   - Verified end-to-end on preview: PRODUCTS TRACKED dropped from 3,802 (entire market) to 411 (own-store filtered for 90-day window); 14 SKUs auto-discovered from Petsy in the first triggered sync; 150 SKUs correctly soft-archived (Excel-imported SKUs that no longer appear on pets-houses.com). `/api/insights/sales` unchanged: still aggregates 4,131 products with Royal Canin as top brand.
 
+- **My Products table — own-store-first display (Feb 2026, in preview)** — Implements user requirement "this table should be MY store's product list, with market data shown in context around MY prices and MY stock — not generic market data where my store is just one anonymous seller".
+  - `server.py:/api/my-products` row builder enriched: when SKU is in `db.my_products`, overrides display fields with own-store values: `name_ar`, `name_en`, `barcode`, and headline `price` come from `db.my_products`; adds new fields `my_price`, `my_quantity`, `my_in_stock`, `my_stock_signal` (derived via existing `get_stock_signal()`), `competitor_min_price`, `competitor_max_price`, `vs_my_price_pct = (comp_min − my_price) / my_price × 100` (positive → I'm cheaper, negative → competitor undercuts), `num_competitors` (= sellers excluding own store).
+  - Sales/revenue estimates remain market-wide (unchanged per spec); only the UI label changes.
+  - `MyProductsPage.jsx` columns updated: `Price → My Price` (with `Mkt: 95-150` subtitle from competitor range), `vs Lowest → vs My Price` (sortable on `vs_my_price_pct`; green/red colour flipped to match new sign convention; tooltip explains direction), `Sellers → Competitors` (uses `num_competitors`), `Stock → My Stock` (uses `my_stock_signal` + shows `{qty} in stock` underneath the badge), `Est. Sales` and `Revenue` headers prefixed with `Mkt.` and tooltips clarify market-wide context.
+  - i18n keys updated EN+AR. New per-row testids: `vs-my-price-{sku}`, `my-stock-qty-{sku}`.
+  - Verified on preview with real data: Schesir Can Baby Salmon 70g shows My Price 8.05 SAR / Mkt 9.52 / +18.3% (I'm cheaper, green), 4 in stock (LOW), 1 competitor; Dr. Elsey's 8.16Kg shows My 82.8 / Mkt 75-86.89 / -9.4% (undercut, red), 10 in stock (MEDIUM), 3 competitors. `/api/insights/sales` regression-checked → still 4,131 products, 1.88M SAR rev, Royal Canin top brand. No other endpoint affected.
+
 ## Backlog
 - **P1** Resend email integration (alerts + weekly digest)
 - **P1** Multi-tenant role-based access

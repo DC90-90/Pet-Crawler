@@ -217,11 +217,11 @@ export default function MyProductsPage() {
                 { key: "name_en", label: "col_product", sortable: true },
                 { key: "sku", label: "col_sku", sortable: false },
                 { key: "price", label: "col_price", sortable: true },
-                { key: "vs_lowest_pct", label: "col_vs_low", sortable: true },
+                { key: "vs_my_price_pct", label: "col_vs_low", sortable: true },
                 { key: "qty_sold_est", label: "col_sales", sortable: true },
                 { key: "revenue_est", label: "col_revenue", sortable: true },
-                { key: "num_sellers", label: "col_sellers", sortable: true },
-                { key: "stock_signal", label: "col_stock", sortable: false },
+                { key: "num_competitors", label: "col_sellers", sortable: true },
+                { key: "my_stock_signal", label: "col_stock", sortable: false },
                 { key: "confidence_score", label: "col_confidence", sortable: true },
               ].map((col) => (
                 <TableHead key={col.key}
@@ -334,20 +334,44 @@ export default function MyProductsPage() {
                   <TableCell>
                     <div>
                       <span className="text-sm font-semibold text-white metric-number">{p.price} {t("sar")}</span>
-                      {p.min_price !== p.max_price && (
-                        <p className="text-[10px] text-[#A1E4DB]">{p.min_price}-{p.max_price}</p>
+                      {p.competitor_min_price != null && p.competitor_max_price != null && p.competitor_min_price !== p.competitor_max_price && (
+                        <p className="text-[10px] text-[#A1E4DB]" title={isRTL ? "نطاق سعر المنافسين" : "Competitor price range"}>
+                          {isRTL ? "السوق" : "Mkt"}: {p.competitor_min_price}–{p.competitor_max_price}
+                        </p>
+                      )}
+                      {p.competitor_min_price != null && p.competitor_max_price === p.competitor_min_price && (
+                        <p className="text-[10px] text-[#A1E4DB]">
+                          {isRTL ? "السوق" : "Mkt"}: {p.competitor_min_price}
+                        </p>
                       )}
                     </div>
                   </TableCell>
                   <TableCell>
-                    <span className={`text-xs font-semibold ${p.vs_lowest_pct > 0 ? "text-[#EF4444]" : "text-[#10B981]"}`}>
-                      {p.vs_lowest_pct > 0 ? "+" : ""}{p.vs_lowest_pct}%
-                    </span>
+                    {p.vs_my_price_pct == null ? (
+                      <span className="text-xs text-[#A1E4DB] opacity-60" title={isRTL ? "لا توجد بيانات منافس" : "No competitor data"}>—</span>
+                    ) : (
+                      <span
+                        className={`text-xs font-semibold ${p.vs_my_price_pct >= 0 ? "text-[#10B981]" : "text-[#EF4444]"}`}
+                        title={p.vs_my_price_pct >= 0 ? (isRTL ? "سعرك أقل من أرخص منافس" : "Your price is below the cheapest competitor") : (isRTL ? "هناك منافس يقدم سعرًا أقل منك" : "A competitor is undercutting you")}
+                        data-testid={`vs-my-price-${p.sku}`}
+                      >
+                        {p.vs_my_price_pct > 0 ? "+" : ""}{p.vs_my_price_pct}%
+                      </span>
+                    )}
                   </TableCell>
-                  <TableCell><span className="text-sm font-semibold text-white metric-number">{p.qty_sold_est.toLocaleString()}</span></TableCell>
-                  <TableCell><span className="text-sm font-semibold text-white metric-number">{p.revenue_est.toLocaleString()} {t("sar")}</span></TableCell>
-                  <TableCell><Badge className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]">{p.num_sellers}</Badge></TableCell>
-                  <TableCell><StockBadge signal={p.stock_signal} /></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-white metric-number" title={isRTL ? "تقدير مبيعات السوق" : "Market-wide sales estimate"}>{p.qty_sold_est.toLocaleString()}</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-white metric-number" title={isRTL ? "تقدير إيرادات السوق" : "Market-wide revenue estimate"}>{p.revenue_est.toLocaleString()} {t("sar")}</span></TableCell>
+                  <TableCell><Badge className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]" title={isRTL ? "عدد المنافسين الذين يبيعون نفس المنتج" : "Number of competitors selling this product"}>{p.num_competitors != null ? p.num_competitors : Math.max(0, (p.num_sellers || 0) - 1)}</Badge></TableCell>
+                  <TableCell>
+                    <div className="flex flex-col gap-0.5">
+                      <StockBadge signal={p.my_stock_signal || p.stock_signal} />
+                      {p.my_quantity != null && (
+                        <span className="text-[10px] text-[#A1E4DB] font-mono" data-testid={`my-stock-qty-${p.sku}`}>
+                          {p.my_quantity} {isRTL ? "متوفر" : "in stock"}
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell><ConfBadge tier={p.source_tier} score={p.confidence_score} /></TableCell>
                 </TableRow>
                 );
