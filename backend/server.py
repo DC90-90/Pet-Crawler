@@ -1775,8 +1775,10 @@ async def my_products(
     store_name_by_id = {s["id"]: s.get("name", "") for s in await db.stores.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(200)}
     matches_by_my_sku = {}
     if own_store_id:
-        async for m in db.product_matches.find({}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}):
-            matches_by_my_sku.setdefault(m["my_sku"], []).append((m["competitor_sku"], m["competitor_store_id"]))
+        async for m in db.product_matches.find({}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1, "confidence": 1, "match_method": 1}):
+            matches_by_my_sku.setdefault(m["my_sku"], []).append((
+                m["competitor_sku"], m["competitor_store_id"], m.get("confidence", 0), m.get("match_method"),
+            ))
 
     for p in products:
         stores_data = by_sku.get(p["sku"], {})
@@ -1861,15 +1863,30 @@ async def my_products(
                 in_stock=row["my_in_stock"],
             ) if my_price is not None else None
 
-            # Competitor-only price stats (exclude own store)
+            # Competitor stats — use the matcher's link table (db.product_matches),
+            # NOT raw SKU equality on db.product_snapshots. SKU strings differ
+            # between stores (e.g. own "8005852750068" vs Petsy "8005852750068-…C")
+            # so the only reliable join is via the matcher's barcode-resolved
+            # link.
             comp_latest_prices = []
-            for sid, snaps in stores_data.items():
-                if sid == own_store_id or not snaps:
+            best_match_confidence = 0
+            best_match_tier = None
+            distinct_comp_stores = set()
+            for tup in matches_by_my_sku.get(p["sku"], []):
+                comp_sku, comp_store_id = tup[0], tup[1]
+                match_conf = tup[2] if len(tup) > 2 else 0
+                comp_snaps = by_sku.get(comp_sku, {}).get(comp_store_id, [])
+                if not comp_snaps:
                     continue
-                last = snaps[-1]
-                if last.get("price") is not None:
-                    comp_latest_prices.append(last["price"])
-            row["num_competitors"] = len(comp_latest_prices)
+                latest = comp_snaps[-1]
+                if latest.get("price") is None:
+                    continue
+                comp_latest_prices.append(latest["price"])
+                distinct_comp_stores.add(comp_store_id)
+                if match_conf > best_match_confidence:
+                    best_match_confidence = match_conf
+                    best_match_tier = latest.get("source_tier")
+            row["num_competitors"] = len(distinct_comp_stores)
             if comp_latest_prices:
                 comp_min = min(comp_latest_prices)
                 row["competitor_min_price"] = round(comp_min, 2)
@@ -1884,6 +1901,15 @@ async def my_products(
                 row["competitor_min_price"] = None
                 row["competitor_max_price"] = None
                 row["vs_my_price_pct"] = None
+
+            # Override confidence + tier with the matcher's view when we have a
+            # linked competitor. This is what the user sees in the Conf. column —
+            # the trust level of the price comparison, not the trust of the own-
+            # store snapshot (which is always tier 0 / 99 by definition).
+            if best_match_confidence > 0:
+                row["confidence_score"] = int(best_match_confidence)
+                if best_match_tier is not None:
+                    row["source_tier"] = best_match_tier
 
             # Own-store sales estimate (Feb 2026) — needed for the four KPI cards
             # at the top of "My Products". `_estimate_sales_from_snapshots` is the
