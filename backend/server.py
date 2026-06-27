@@ -1661,6 +1661,7 @@ async def my_products(
     sort_order: str = Query("desc"),
     limit: int = Query(100, ge=1, le=500, description="Max products per page"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
+    own_only: bool = Query(True, description="Restrict results to SKUs present in db.my_products (your own store). The MyProducts page sets this to True (default); /api/insights/sales calls this function internally with own_only=False to retain market-wide aggregation."),
     user=Depends(get_user)
 ):
     # Resolve date window
@@ -1708,13 +1709,30 @@ async def my_products(
             {"name_en": {"$regex": search, "$options": "i"}},
             {"sku": {"$regex": search, "$options": "i"}},
         ]
+
+    # Own-store gate (Feb 2026): when own_only=True, restrict to SKUs that exist
+    # in db.my_products — i.e. your live + archived pets-houses.com catalog. Soft-
+    # archived rows (present_on_store=False) are kept in the result so the UI can
+    # surface "Not on store" badges without losing history.
+    if own_only:
+        own_skus_list = await db.my_products.distinct("sku")
+        if own_skus_list:
+            prod_query["sku"] = {"$in": own_skus_list}
+        else:
+            # No own catalog yet — return empty rather than the entire market
+            prod_query["sku"] = {"$in": []}
     products = await db.products.find(prod_query, {"_id": 0}).to_list(5000)
 
     # Pull SKU → product_url from my_products (user's own store) and store domains for fallback search URLs
-    my_products_docs = await db.my_products.find({}, {"_id": 0, "sku": 1, "product_url": 1, "price": 1, "sale_price": 1, "last_synced_at": 1}).to_list(20000)
+    my_products_docs = await db.my_products.find(
+        {},
+        {"_id": 0, "sku": 1, "product_url": 1, "price": 1, "sale_price": 1, "last_synced_at": 1,
+         "present_on_store": 1, "last_seen_on_store": 1, "discovered_via": 1},
+    ).to_list(20000)
     my_url_by_sku = {p["sku"]: p.get("product_url") for p in my_products_docs if p.get("product_url")}
     my_skus_set = {p["sku"] for p in my_products_docs if p.get("sku")}
     my_price_lookup = {p["sku"]: p for p in my_products_docs}
+    my_presence_lookup = {p["sku"]: p for p in my_products_docs}
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "domain": 1})
     own_domain = own_store.get("domain") if own_store else None
     store_domains = {s["id"]: s.get("domain") for s in await db.stores.find({}, {"_id": 0, "id": 1, "domain": 1}).to_list(200) if s.get("domain")}
@@ -1762,6 +1780,13 @@ async def my_products(
                     url = f"https://{fd}/search?keyword={p['sku']}"
         row["product_url"] = url
         row["is_my_product"] = p["sku"] in my_skus_set
+        # Auto-sync presence flags (Feb 2026): exposed so the frontend can render
+        # an "ARCHIVED" / "Not on store" badge on rows whose SKU has vanished
+        # from pets-houses.com without being deleted from db.my_products.
+        _mp = my_presence_lookup.get(p["sku"]) or {}
+        row["present_on_store"] = _mp.get("present_on_store") if _mp else None
+        row["last_seen_on_store"] = _mp.get("last_seen_on_store")
+        row["discovered_via"] = _mp.get("discovered_via")
 
         # Market position (Feb 2026) — own price lives in db.my_products (not in
         # product_snapshots), so we synthesize an entry for the own store using
@@ -2525,6 +2550,7 @@ async def insights_sales(
         sort_order=sort_order,
         limit=5000,
         offset=0,
+        own_only=False,  # Insights/Sales aggregates the whole market — keep filter off (filter scope #5a)
         user=user,
     )
     src_products = data.get("products", []) or []

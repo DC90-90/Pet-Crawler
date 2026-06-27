@@ -1296,13 +1296,16 @@ async def sync_own_store_prices(db, store=None):
             my_by_barcode[str(mp["barcode"]).strip()] = mp["sku"]
 
     # ── Match + update ──
-    updated, not_found = 0, 0
+    updated, not_found, discovered = 0, 0, 0
+    seen_skus = set()  # SKUs touched by THIS sync — used to mark presence flag
     sync_ts = datetime.now(timezone.utc).isoformat()
     UPDATE_FIELDS_NEVER_OVERWRITE = {  # noqa: F841 — documentation only
         "sku", "barcode", "name_ar", "name_en", "description_ar", "description_en",
         "categories_ar", "categories_en", "images", "product_page_url",
         "is_own_store", "store_id", "imported_at",
     }
+
+    own_store_id = store.get("id")
 
     for raw in all_raw:
         norm = _normalize_raw_product(raw, store["name"])
@@ -1321,7 +1324,45 @@ async def sync_own_store_prices(db, store=None):
             target_sku = my_by_barcode[crawled_sku]
 
         if not target_sku:
-            not_found += 1
+            # Feb 2026: previously this branch silently discarded the product.
+            # New behaviour (per user request "auto-add new SKUs from store"):
+            # upsert a fresh my_products row using all normalized metadata from
+            # the Zid crawl. We never overwrite an existing row this way — the
+            # `not_found` lookups above guarantee this SKU is genuinely new.
+            new_doc = {
+                "id": str(uuid.uuid4()),
+                "sku": crawled_sku,
+                "barcode": crawled_barcode or "",
+                "name_ar": norm.get("name_ar", ""),
+                "name_en": norm.get("name_ar", ""),  # Zid only ships one name field
+                "image_url": norm.get("img_url", ""),
+                "product_url": norm.get("product_url", ""),
+                "price": round(norm["price"], 2),
+                "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
+                "quantity": int(norm["qty"]),
+                "in_stock": bool(norm["in_stock"]),
+                "is_own_store": True,
+                "store_id": own_store_id,
+                "imported_at": sync_ts,
+                "first_seen_on_store": sync_ts,
+                "last_seen_on_store": sync_ts,
+                "present_on_store": True,
+                "last_synced_at": sync_ts,
+                "sync_source": "zid_auto_discovery",
+                "discovered_via": "auto_sync",
+            }
+            await db.my_products.update_one(
+                {"sku": crawled_sku},
+                {"$setOnInsert": new_doc},
+                upsert=True,
+            )
+            # Keep the in-memory lookups consistent for the rest of the loop
+            my_by_sku[crawled_sku] = crawled_sku
+            if _is_valid_ean(crawled_barcode):
+                my_by_barcode[crawled_barcode] = crawled_sku
+            seen_skus.add(crawled_sku)
+            discovered += 1
+            not_found += 1  # preserved for backwards-compat metric
             continue
 
         update_doc = {
@@ -1331,13 +1372,27 @@ async def sync_own_store_prices(db, store=None):
             "in_stock": bool(norm["in_stock"]),
             "last_synced_at": sync_ts,
             "sync_source": "zid_crawler",
+            "present_on_store": True,
+            "last_seen_on_store": sync_ts,
         }
         await db.my_products.update_one({"sku": target_sku}, {"$set": update_doc})
+        seen_skus.add(target_sku)
         updated += 1
+
+    # ── Mark every my_products row NOT seen in this crawl as archived ──
+    # Soft-archive only: row + history are preserved, but `present_on_store=False`
+    # lets the UI badge them as "Removed from store" without filtering them out.
+    archived = 0
+    if all_raw:  # safety: skip archival if the crawl returned nothing (likely upstream block)
+        res = await db.my_products.update_many(
+            {"sku": {"$nin": list(seen_skus)}},
+            {"$set": {"present_on_store": False, "last_archive_check": sync_ts}},
+        )
+        archived = res.modified_count or 0
 
     duration = (datetime.now(timezone.utc) - started_at).total_seconds()
     crawl_log["products_updated"] = updated
-    crawl_log["products_new"] = 0  # never creates new my_products rows
+    crawl_log["products_new"] = discovered
     crawl_log["snapshots_created"] = 0
     if not all_raw:
         crawl_log["error"] = (crawl_log.get("error") or "") + " | own-store crawl returned 0 items"
@@ -1351,16 +1406,23 @@ async def sync_own_store_prices(db, store=None):
             "own_store_sync_updated": updated,
             "own_store_sync_not_found": not_found,
             "own_store_sync_crawled": crawled,
+            "own_store_sync_discovered": discovered,
+            "own_store_sync_archived": archived,
         }},
     )
 
-    logger.info(f"[OwnSync] Done in {duration:.1f}s — crawled={crawled}, updated={updated}, not_found={not_found}")
+    logger.info(
+        f"[OwnSync] Done in {duration:.1f}s — crawled={crawled}, updated={updated}, "
+        f"discovered={discovered}, archived={archived}, not_found={not_found}"
+    )
 
     return {
         "store": store["name"],
         "domain": store.get("domain"),
         "crawled": crawled,
         "updated": updated,
+        "discovered": discovered,
+        "archived": archived,
         "not_found": not_found,
         "synced_at": sync_ts,
         "duration_seconds": round(duration, 1),
@@ -1368,7 +1430,7 @@ async def sync_own_store_prices(db, store=None):
         "tier_used": crawl_log.get("tier_used"),
         "http_status": 200 if winning_endpoint else 0,
         "products_found": crawled,
-        "products_new": 0,
+        "products_new": discovered,
         "products_updated": updated,
         "snapshots_created": 0,
         "error": crawl_log.get("error"),

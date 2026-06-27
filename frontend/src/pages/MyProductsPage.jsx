@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
-import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink } from "lucide-react";
+import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -47,6 +47,9 @@ export default function MyProductsPage() {
   const [selectedSku, setSelectedSku] = useState(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
+  // Auto-sync from pets-houses.com (Feb 2026)
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
 
   const categories = data.categories || [...new Set(data.products.map((p) => p.category))].sort();
 
@@ -87,6 +90,29 @@ export default function MyProductsPage() {
     window.open(`${API_BASE}/export/products?days=${days}`, "_blank");
   };
 
+  // Trigger an on-demand sync from pets-houses.com (Zid public crawl).
+  // Re-fetches the product table after a short delay so any newly discovered
+  // SKUs become visible without a hard refresh.
+  const handleSyncFromStore = async () => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncMsg(isRTL ? "بدأت المزامنة من المتجر..." : "Sync started from your store…");
+    try {
+      const { data } = await api.post("/import/sync-own-store");
+      setSyncMsg(
+        isRTL
+          ? `جاري المزامنة من ${data.domain || "pets-houses.com"} — قد يستغرق حتى دقيقتين`
+          : `Syncing from ${data.domain || "pets-houses.com"} — this can take up to ~2 min`
+      );
+      // Poll once after 20s and again after 60s to refresh the table when sync completes
+      setTimeout(fetchData, 20_000);
+      setTimeout(() => { fetchData(); setSyncMsg(isRTL ? "اكتملت المزامنة" : "Sync complete"); setSyncing(false); }, 60_000);
+    } catch (e) {
+      setSyncMsg((isRTL ? "فشل في المزامنة: " : "Sync failed: ") + (e?.response?.data?.detail || e?.message || "unknown"));
+      setSyncing(false);
+    }
+  };
+
   const kpis = data.kpis || {};
 
   return (
@@ -97,10 +123,25 @@ export default function MyProductsPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-white">{t("nav_products")}</h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "السوق السعودي، مفكّك" : "Saudi Market, Decoded"}</p>
         </div>
-        <button onClick={handleExport} className="rounded-full bg-transparent border border-white/10 text-white hover:bg-white/5 transition-all px-4 py-2 text-xs font-medium flex items-center gap-1.5" data-testid="export-csv-btn">
-          <Download className="w-3.5 h-3.5" />{t("btn_export")}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSyncFromStore}
+            disabled={syncing}
+            className="rounded-full bg-transparent border border-[#1E988E]/40 text-[#6AC1B5] hover:bg-[#1E988E]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all px-4 py-2 text-xs font-medium flex items-center gap-1.5"
+            data-testid="sync-from-store-btn"
+            title={isRTL ? "سحب فوري لقائمة منتجاتك من متجرك على Zid" : "Pull your current product list from your Zid store"}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
+            {syncing ? (isRTL ? "تتم المزامنة..." : "Syncing…") : (isRTL ? "مزامنة من المتجر" : "Sync from Store")}
+          </button>
+          <button onClick={handleExport} className="rounded-full bg-transparent border border-white/10 text-white hover:bg-white/5 transition-all px-4 py-2 text-xs font-medium flex items-center gap-1.5" data-testid="export-csv-btn">
+            <Download className="w-3.5 h-3.5" />{t("btn_export")}
+          </button>
+        </div>
       </div>
+      {syncMsg && (
+        <div className="text-xs text-[#A1E4DB] -mt-2" data-testid="sync-status-msg">{syncMsg}</div>
+      )}
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -230,6 +271,16 @@ export default function MyProductsPage() {
                             </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
                             <SkuLine sku={p.sku} barcode={p.barcode} className="mt-0.5" />
+                            {p.present_on_store === false && (
+                              <span className="inline-block mt-1 text-[9px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30" data-testid={`archived-badge-${p.sku}`}>
+                                {isRTL ? "غير موجود في المتجر" : "Not on store"}
+                              </span>
+                            )}
+                            {p.discovered_via === "auto_sync" && p.present_on_store !== false && (
+                              <span className="inline-block mt-1 ms-1 text-[9px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded-full bg-[#1E988E]/15 text-[#6AC1B5] border border-[#1E988E]/30" title={isRTL ? "تمت إضافته تلقائيًا من متجرك" : "Auto-discovered from your store"} data-testid={`autosynced-badge-${p.sku}`}>
+                                {isRTL ? "تمت المزامنة" : "Auto-synced"}
+                              </span>
+                            )}
                             {p.market_position && (
                               <div className="mt-1">
                                 <MarketPositionBadge mp={p.market_position} testIdPrefix={`mp-${p.sku}`} />
@@ -244,6 +295,16 @@ export default function MyProductsPage() {
                             </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
                             <SkuLine sku={p.sku} barcode={p.barcode} className="mt-0.5" />
+                            {p.present_on_store === false && (
+                              <span className="inline-block mt-1 text-[9px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30" data-testid={`archived-badge-${p.sku}`}>
+                                {isRTL ? "غير موجود في المتجر" : "Not on store"}
+                              </span>
+                            )}
+                            {p.discovered_via === "auto_sync" && p.present_on_store !== false && (
+                              <span className="inline-block mt-1 ms-1 text-[9px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded-full bg-[#1E988E]/15 text-[#6AC1B5] border border-[#1E988E]/30" title={isRTL ? "تمت إضافته تلقائيًا من متجرك" : "Auto-discovered from your store"} data-testid={`autosynced-badge-${p.sku}`}>
+                                {isRTL ? "تمت المزامنة" : "Auto-synced"}
+                              </span>
+                            )}
                             {p.market_position && (
                               <div className="mt-1">
                                 <MarketPositionBadge mp={p.market_position} testIdPrefix={`mp-${p.sku}`} />
