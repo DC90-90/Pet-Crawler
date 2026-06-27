@@ -1939,7 +1939,8 @@ async def my_products(
                     "confidence_score": 99,
                     "crawled_at": mp_row.get("last_synced_at") or datetime.now(timezone.utc),
                 }]
-                for comp_sku, comp_store_id in matches_by_my_sku.get(p["sku"], []):
+                for tup in matches_by_my_sku.get(p["sku"], []):
+                    comp_sku, comp_store_id = tup[0], tup[1]
                     comp_snaps = by_sku.get(comp_sku, {}).get(comp_store_id, [])
                     if not comp_snaps:
                         continue
