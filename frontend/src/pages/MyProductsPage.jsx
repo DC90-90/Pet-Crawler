@@ -148,12 +148,14 @@ export default function MyProductsPage() {
          knows whether the dashboard reflects today's market or last month's snapshot. */}
       <DataFreshnessBanner />
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* KPI Cards (Feb 2026 — revenue split into two cards so the user can
+         see BOTH what the market earns and what they actually take home) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {[
           { key: "kpi_products", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_units_sold", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_revenue", val: `${(kpis.total_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
+          { key: "kpi_mkt_revenue", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
+          { key: "kpi_my_revenue", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, icon: TrendingDown, accent: "#F59E0B" },
         ].map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
