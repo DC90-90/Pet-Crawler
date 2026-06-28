@@ -108,17 +108,24 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
   2. **SKU + barcode search** in `/api/my-products`, `/api/products`, `/api/my-products-list`: previously the `$or` regex only covered `name_ar / name_en / sku`, and the user input was passed straight to MongoDB as a regex — so searching for a 13-digit barcode either returned 10 unrelated products (when the SKU regex partially matched) or 0 (when the SKU column on the catalog row was different from the barcode). Fix: added `barcode` to the `$or` list AND wrapped the user input in `re.escape()` so a raw barcode value like `8005852569199` (or `.*`) is treated as a literal string match. For `/api/my-products` with `own_only=True`, the search additionally scans `db.my_products` directly (sku / barcode / name_ar / name_en) so newly-synced SKUs without a `db.products` catalog row are still findable. Verified by testing agent iteration_16: exact-SKU search now returns 1 product (was 10 unrelated), partial-prefix `8005852` returns Schesir family, `.*` returns 0 (no regex injection), name search regression intact.
   - New tests: `/app/backend/tests/test_iteration16_freshness_search.py` (8 cases — 4 for `/data-freshness` shape, 4 for search behaviour).
 
+- **KPI two-card split + Hobba deactivation + manual crawl backfill (Feb 2026, verified iter17, ready for production deploy)**
+  1. **KPI two-card split** on `/api/my-products` (own_only=True). The single ambiguous "REVENUE (EST.)" card was splitting two distinct concepts under one label (my_price × market_units vs market_price × market_units). Now returns explicit fields:
+     - `market_revenue` = Σ revenue_est across rows (market_price × market_units) — what the entire market earns on the user's catalogue
+     - `my_revenue` = Σ my_price × my_units_sold — what the user's store actually earns
+     - Legacy `total_revenue` field retained for backward compat (= sum my_price × market_units) but no longer surfaced in the KPI strip.
+     - Frontend `MyProductsPage.jsx` now renders **5 KPI cards** via `lg:grid-cols-5`: PRODUCTS TRACKED, UNITS SOLD (EST.), MKT. REVENUE (EST.), MY REVENUE (EST.), AVG. MARKET SHARE. i18n keys `kpi_mkt_revenue` + `kpi_my_revenue` added in en/ar.
+  2. **Hobba deactivated** via `PUT /api/stores/{id}` with `is_active=false`. Reason: upstream `hobbapet.com` has been returning HTTP 500 since April 2026 (documented in handoff). Hobba is now filtered from `/api/data-freshness.stores[]` (which requires `is_active=true`), so the banner bucket flipped from "stale" (71-day bottleneck) back to "today".
+  3. **Manual crawl backfill** — triggered all 11 active competitor stores via parallel `/api/stores/{id}/crawl` calls. 10 of 11 succeeded (Hobba was the failure, now deactivated). 19,952 new snapshots written. Matcher re-run after backfill: `product_matches` grew 1,927 → 2,258 (+331 links covering +83 own-store SKUs). KPI numbers on 90D: 184 → 1,178 units / 3,927 → 28,401 SAR market revenue / 41.3% → 30.2% market share.
+
 ## Backlog
-- **P1** Resend email integration (alerts + weekly digest) — needs user API key
-- **P1** Brand extraction at ingestion (93% empty `brand` → "Unknown" pollution in top-brands analytics; does NOT affect matching or category filter) — DEPRIORITIZED per user, will revisit later
-- **P1** Multi-tenant role-based access
-- **P0** Refactor: `server.py` is critically large (>4,900 lines). API routes must be extracted into a `routes/` directory (auth, products, insights, alerts, stores, crawler, baseline, price-intel, my-products, discounts, scanner, admin) — scheduled AFTER all data-quality/UX fixes per user direction
-- **P2** Webhook notifications (Slack/Telegram)
-- **P2** Sprint 2: `curl_cffi` backend integration (Cloudflare bypass via TLS mimicry)
-- **P2** Sprint 2: Sitemap discovery (~60× faster crawls)
-- **P3** Mahally barcode enrichment (Apify, needs user API key)
-- **P3** Auto platform detection (`detect_platform()` HEAD-probe for new stores)
-- **P3** Crawler soft-block detector — Salla 200-OK with `data: []` should abort writing empty snapshots
+- **P1 (queued)** Resend email integration — waiting on user API key
+- **P1 (deprioritized per user)** Brand extraction at ingestion (does NOT affect matching or category filter, only top-brand analytics)
+- **P1 (data hygiene, flagged iter17)** Clean up leftover test stores `TEST_Regression_Store` + `Test Store` from db.stores (or `is_active=false`) — they currently show as "no data" in the expanded freshness banner
+- **P1 (flagged iter17)** Update or skip iter16 tests `test_own_store_is_today` and `test_competitors_stale` — assertions baked in the pre-crawl state and now fail since data flipped
+- **P1 (flagged iter17, optional)** Tune `/api/insights/summary.avg_confidence` — currently 93.7 (spec target ≥95). Either raise `MIN_AGGREGATION_CONFIDENCE` to ~92 or compute avg over Tier-1 only.
+- **P0** Refactor `server.py` (>4,995 lines) into `routes/` — important for stability; queued AFTER all data-quality/UX fixes per user direction
+- **P2** Webhook notifications, `curl_cffi` Cloudflare bypass, Sitemap discovery
+- **P3** Mahally Apify enrichment, auto platform detection, Salla soft-block detector, manual "Trigger Crawl Now" button next to Data Freshness banner
 
 ## Credentials
 - **Super Admin (god mode, immutable)**: `a.disi@taqueen.sa` / `Ahmaddc90@`
