@@ -122,12 +122,17 @@ export default function DataFreshnessBanner({ className = "" }) {
     return null; // Fail silently — banner is informational, not blocking
   }
 
-  const { overall, stores = [], next_run, crawl_paused } = data;
+  const { overall, stores = [], next_run, crawl_paused, sync_health } = data;
   const bucket = overall?.bucket || "no_data";
-  const style = BUCKET_STYLES[bucket];
+  const baseStyle = BUCKET_STYLES[bucket];
+  // sync_health.alarm overrides the bucket color — silent-failure alarms must
+  // always be visible regardless of how recent the crawl data is.
+  const syncAlarm = sync_health?.alarm || null;
+  const style = syncAlarm ? BUCKET_STYLES.stale : baseStyle;
   const Icon = style.Icon;
-  const ageDays = overall?.age_days;
-  const message = MESSAGE[bucket]?.[isRTL ? "ar" : "en"] || "";
+  const message = syncAlarm
+    ? (isRTL ? `تنبيه المزامنة: ${syncAlarm}` : `Sync alarm: ${syncAlarm}`)
+    : (MESSAGE[bucket]?.[isRTL ? "ar" : "en"] || "");
 
   // Count problem stores
   const staleCount = stores.filter((s) => !s.is_own_store && s.bucket === "stale").length;
@@ -186,6 +191,23 @@ export default function DataFreshnessBanner({ className = "" }) {
               {crawl_paused && (
                 <span data-testid="freshness-paused" style={{ color: "#FBBF24" }}>
                   {isRTL ? "السحب موقوف" : "Crawls paused"}
+                </span>
+              )}
+              {sync_health?.last_run && (
+                <span data-testid="freshness-sync-last-run">
+                  {isRTL ? "آخر مزامنة: " : "Last sync: "}
+                  <span className="font-mono">{formatRelative(sync_health.last_run, isRTL)}</span>
+                  {sync_health.last_sync_status === "error" && (
+                    <span className="ms-1" style={{ color: "#EF4444" }} data-testid="freshness-sync-sync-error">⚠ sync</span>
+                  )}
+                  {sync_health.last_match_status === "error" && (
+                    <span className="ms-1" style={{ color: "#EF4444" }} data-testid="freshness-sync-match-error">⚠ match</span>
+                  )}
+                </span>
+              )}
+              {sync_health?.scheduler_running === false && (
+                <span data-testid="freshness-scheduler-dead" style={{ color: "#EF4444" }}>
+                  {isRTL ? "المجدول متوقف" : "Scheduler stopped"}
                 </span>
               )}
             </div>

@@ -1,0 +1,79 @@
+{
+  "summary": "Iteration 18 verifies the sync-hardening + fair-share bundle. Backend 11/11 pytest pass (sync_health block present, /api/import/run-matching writes a sync_runs row with sync_status='skipped' + match_status='ok' + match_added=1102, alarm flips from 'Own-store sync has never run since last deploy' to null after the run, fair-share fallback removed — null market_share_pct when num_competitors<1, new KPIs matched_products=49 and market_coverage_pct=2.4 at 90D, avg_market_share computed only over matched rows). Frontend: DataFreshnessBanner mounts on /, /price-intel, /scanner with all new sync_health testids correctly rendering (freshness-sync-last-run='Last sync: 3 min ago' visible; freshness-sync-sync-error / freshness-sync-match-error / freshness-scheduler-dead all correctly ABSENT now that alarm is null). MyProductsPage shows all 6 KPI cards (kpi-kpi_products, kpi_units_sold, kpi_mkt_revenue, kpi_my_revenue, kpi_market_share, kpi_market_coverage) in lg:grid-cols-6 grid. Coverage card sub-text 'kpi-kpi_market_coverage-sub' shows '49 / 2081' at 90D and the accent icon flips RED (rgb(239,68,68)) because coverage 2.4% < 20% threshold. Regression: 15 endpoint smoke + iter16 regex-escape search still 200/clean.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/my-products?days=90",
+        "issue": "avg_market_share=0.0 at 90D — honest value (matched_products=49 but my_units in matched set sums to 0). The previous 30.2% was inflated by fair-share imputation, so this drop is EXPECTED per the bundle spec, not a regression. Worth flagging because the headline KPI is now 0% which may surprise users; the new Market Coverage card (2.4%) is the data-quality counterweight."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "My Products — DataFreshnessBanner",
+        "issues": [
+          "Banner currently renders bucket='this_week' (yellow-ish) because no recent competitor crawl ran — not a bug. The sync_health.alarm-overrides-color path (red on alarm) was not exercisable end-to-end at test time because alarm is null; the override IS implemented in DataFreshnessBanner.jsx (line ~131) and uses BUCKET_STYLES.stale (red) when syncAlarm truthy, so the code path is correct by inspection but not by observation in this run."
+        ]
+      },
+      {
+        "screen": "My Products — date range filter",
+        "issues": ["Still uses browser-default <input type='date'> instead of shadcn calendar — minor carry-over from prior iterations, not introduced by this bundle."]
+      }
+    ]
+  },
+  "passed_tests": [
+    "Backend: 11/11 pytest pass in test_iteration18_sync_hardening.py (130s)",
+    "Backend: /api/data-freshness now contains sync_health with all 10 spec keys (last_run, last_run_age_hours, last_sync_status, last_match_status, last_sync_updated, last_match_added, next_run_expected, scheduler_running, is_stale, alarm)",
+    "Backend: BEFORE manual trigger sync_health.last_run=None and alarm='Own-store sync has never run since last deploy' (correct cold-start state per spec)",
+    "Backend: POST /api/import/run-matching returns 200 status='running'; AFTER ~107s a sync_runs row appears with kind='manual_match_only', sync_status='skipped', sync_updated=0, match_status='ok', match_added=1102, duration_secs=107.2 — schema matches spec exactly",
+    "Backend: AFTER successful match sync_health.alarm=null, last_sync_status='skipped', last_match_status='ok', last_match_added=1102, next_run_expected is future ISO timestamp, scheduler_running=true, is_stale=false",
+    "Backend: /api/my-products?days=90&limit=500 — zero rows with market_share_pct=100 from num_competitors<1 fallback (old bug removed); rows with num_competitors>=1 AND qty_sold_est>0 have numeric market_share_pct + has_market_data=true; all other rows have market_share_pct=null + has_market_data=false",
+    "Backend: kpis at 90D = {total_products:2081, total_units_sold:1178, market_revenue:28401.15, my_revenue:39.15, avg_market_share:0.0, my_units_sold:5, matched_products:49, market_coverage_pct:2.4, total_revenue:30801.98} — matched/coverage match spec (≈50/2.4%); avg_market_share computed only across matched rows confirmed: Σmy_units(matched)=0 / Σmarket_units(matched)>0 = 0.0",
+    "Backend: null_share count ≈ no_data_qualifier count within ±2 tolerance — fair-share contract holds",
+    "Backend: 15 regression endpoints (insights/discounts/scanner/health/scheduler) all 200; iter16 regex-escape '.*' returns 0 products",
+    "Frontend [/]: data-freshness-banner present, bucket=this_week",
+    "Frontend [/]: freshness-sync-last-run testid renders 'Last sync: 3 min ago' — proves sync_health surfacing reaches the UI",
+    "Frontend [/]: freshness-sync-sync-error, freshness-sync-match-error, freshness-scheduler-dead testids correctly ABSENT (alarm null + statuses ok)",
+    "Frontend [/]: All 6 KPI testids present (kpi-kpi_products, kpi-kpi_units_sold, kpi-kpi_mkt_revenue, kpi-kpi_my_revenue, kpi-kpi_market_share, kpi-kpi_market_coverage)",
+    "Frontend [/]: KPI grid wrapper has class 'grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3' — 6-column desktop layout confirmed",
+    "Frontend [/]: kpi-kpi_market_coverage-sub renders '49 / 2081' at 90D (matches backend matched_products/total_products)",
+    "Frontend [/]: Coverage card icon color = rgb(239,68,68) RED at 90D (2.4% < 20% threshold) — accent flip working",
+    "Frontend [/, /price-intel, /scanner]: data-freshness-banner mounted on all three pages",
+    "Frontend: 0 console errors/warnings during the sweep"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration18_sync_hardening.py",
+    "/app/test_reports/pytest/iteration18_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: Surface the new avg_market_share=0% reality in a tooltip on the KPI card so users understand it's computed over the 49 matched rows only, not all 2081. Otherwise stakeholders may report 'KPI regression' the same way they did with the inflated 30.2%.",
+    "OPTIONAL (could not be exercised end-to-end in this run): The alarm→RED override on the banner is implemented but was not observable because the alarm is null. If wanted, a follow-up test could insert a fake sync_runs row with sync_status='error' to verify the banner flips red — out of scope for this iteration."
+  ],
+  "critical_code_review_comments": [
+    "_run_sync_and_match (server.py ~3951) is implemented exactly per spec: two INDEPENDENT try blocks for sync and match, persistent log to db.sync_runs with all 13 fields including kind/started_at/finished_at/duration_secs, sync_status defaults to 'skipped' so manual_match_only is correctly tagged without a sync attempt. All three call sites (POST /api/import/run-matching, POST /api/import/sync-own-store, _scheduled_own_sync 6h job) route through it — verified by code inspection.",
+    "sync_health alarm priority order (scheduler down → job unregistered → never run → stale > 12h → sync error → match error) is sensible and matches spec.",
+    "Fair-share fix on /api/my-products is clean: 100% imputation removed; null/has_market_data=false signal lets UI show '—' instead of misleading numbers; avg_market_share now an honest weighted ratio over matched rows only.",
+    "Frontend coverage-card RED accent uses 'rgb(239,68,68)' which is Tailwind's red-500 — good contrast against the dark glass card background.",
+    "Banner code path syncAlarm→BUCKET_STYLES.stale (red) is correctly defined at DataFreshnessBanner.jsx:131 but couldn't be observed live because alarm cleared after the test run. Worth a synthetic regression test that POSTs a known-bad sync_runs row to verify the red override fires."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration18_sync_hardening.py (new — 11 tests covering sync_runs persistence, sync_health structure, alarm clearing after run-matching, fair-share contract, new KPIs matched_products + market_coverage_pct, regression smoke)"
+  ],
+  "success_rate": {
+    "backend": "100% (11/11 pytest pass)",
+    "frontend": "100% (banner present on 3 pages, all 6 KPI testids found, lg:grid-cols-6 confirmed, sub-text '49 / 2081' at 90D, coverage card flips RED when <20%, 0 console errors)"
+  },
+  "test_credentials": {
+    "super_admin_email": "a.disi@taqueen.sa",
+    "super_admin_password": "Ahmaddc90@"
+  },
+  "seed_data_creation": "None — but the manual POST /api/import/run-matching created the FIRST row in db.sync_runs collection (kind=manual_match_only, sync_status=skipped, match_status=ok, match_added=1102). This is now persisted state for next iteration.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 18 verified both bundles end-to-end. db.sync_runs now contains at least 1 row from the manual trigger during this test — next iteration's /api/data-freshness will NOT show 'Own-store sync has never run since last deploy' alarm anymore (it'll show the elapsed time or null). If you need to retest the alarm path for cold-start, drop the sync_runs collection or insert a fake error row. The avg_market_share=0% at 90D is HONEST per the new contract — do NOT flag as regression. matched_products=49 / market_coverage_pct=2.4% are the new headline data-quality KPIs and match spec exactly.",
+  "rca_of_the_issue": "Production regression (118 units / 1,637 SAR / 92.4% share) root cause was the fair-share fallback (assign 100% share to products with num_competitors=0) magnifying a silent matcher chain failure. Bundle A makes future silent failures visible via db.sync_runs persistence + sync_health alarm on /api/data-freshness + RED override on the banner. Bundle B removes the fallback so an empty matcher chain now reports honest 0% / null instead of falsely inflated 92.4%. Both bundles verified working on preview."
+}

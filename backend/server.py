@@ -1284,11 +1284,70 @@ async def data_freshness(user=Depends(get_user)):
             if next_run_dt is None or nr < next_run_dt:
                 next_run_dt = nr
 
+    # ── sync_health (Feb 2026 hardening) ──
+    # Combines two signals so silent failures become visible:
+    #   1. db.sync_runs — exception traces from inside the chain (modes 1 & 2)
+    #   2. APScheduler next_run_time + age-of-last-run — catches dead scheduler
+    #      or wiped state after a pod restart (modes 3 & 4) even when zero
+    #      sync_runs rows exist.
+    sync_health = {
+        "last_run": None,
+        "last_run_age_hours": None,
+        "last_sync_status": None,
+        "last_match_status": None,
+        "last_sync_updated": 0,
+        "last_match_added": 0,
+        "next_run_expected": None,
+        "scheduler_running": bool(scheduler.running),
+        "is_stale": False,  # True if last_run is older than 2× the 6h interval (12h)
+        "alarm": None,  # Human-readable reason if banner should flip red
+    }
+    try:
+        last_run = await db.sync_runs.find_one({}, sort=[("started_at", -1)])
+    except Exception:
+        last_run = None
+    if last_run:
+        started = last_run.get("started_at")
+        if isinstance(started, datetime):
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            sync_health["last_run"] = started.isoformat()
+            age_h = (now - started).total_seconds() / 3600
+            sync_health["last_run_age_hours"] = round(age_h, 1)
+            sync_health["is_stale"] = age_h > 12  # 2× the 6h schedule
+        sync_health["last_sync_status"] = last_run.get("sync_status")
+        sync_health["last_match_status"] = last_run.get("match_status")
+        sync_health["last_sync_updated"] = int(last_run.get("sync_updated") or 0)
+        sync_health["last_match_added"] = int(last_run.get("match_added") or 0)
+
+    # APScheduler liveness for own_store_sync job
+    sync_job = scheduler.get_job("own_store_sync") if scheduler.running else None
+    if sync_job and sync_job.next_run_time:
+        nr = sync_job.next_run_time
+        if nr.tzinfo is None:
+            nr = nr.replace(tzinfo=timezone.utc)
+        sync_health["next_run_expected"] = nr.isoformat()
+
+    # Compose alarm — banner uses this to flip red
+    if not sync_health["scheduler_running"]:
+        sync_health["alarm"] = "Scheduler is not running"
+    elif sync_job is None:
+        sync_health["alarm"] = "own_store_sync job is not registered"
+    elif sync_health["last_run"] is None:
+        sync_health["alarm"] = "Own-store sync has never run since last deploy"
+    elif sync_health["is_stale"]:
+        sync_health["alarm"] = f"Last sync was {sync_health['last_run_age_hours']}h ago (expected every 6h)"
+    elif sync_health["last_sync_status"] == "error":
+        sync_health["alarm"] = "Last sync failed — check sync_runs for traceback"
+    elif sync_health["last_match_status"] == "error":
+        sync_health["alarm"] = "Last matcher run failed — check sync_runs for traceback"
+
     return {
         "overall": overall,
         "stores": stores_out,
         "next_run": next_run_dt.isoformat() if next_run_dt else None,
         "crawl_paused": crawl_paused,
+        "sync_health": sync_health,
         "checked_at": now.isoformat(),
     }
 
@@ -2120,12 +2179,15 @@ async def my_products(
     reverse = sort_order == "desc"
     result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
 
-    # Per-row market share (Feb 2026, v2): fraction of THIS SKU's market sales
-    # captured by the user's store. Uses actual own-store snapshot deltas when
-    # available, falls back to a *fair-share* estimate (1 / (num_competitors + 1))
-    # when own-store data is too sparse to compute a real delta — this is the
-    # only path that produces a meaningful non-zero value before enough daily
-    # snapshots accumulate.
+    # Per-row market share (Feb 2026, v3 — honest data):
+    # Previously, products with num_competitors=0 received a "fair-share" fallback
+    # that assigned them 100% share. That treated absence of data as monopoly,
+    # which silently inflated avg_market_share (production hit 92.4% during a
+    # silent matcher failure). The honest contract now:
+    #   • If num_competitors >= 1 AND we have market_units > 0 → real ratio
+    #   • Else → market_share_pct = None ("—" in UI), has_market_data = False
+    # The KPI avg_market_share below is computed ONLY over rows with
+    # has_market_data=True so unmatched/uncrawled SKUs don't distort the number.
     for r in result:
         market_units_for_sku = r.get("qty_sold_est") or 0
         my_units_for_sku = r.get("my_units_sold") or 0
@@ -2133,33 +2195,29 @@ async def my_products(
         if n_comp is None:
             n_comp = max(0, (r.get("num_sellers") or 0) - 1)
         r["market_size"] = market_units_for_sku
-        if market_units_for_sku > 0:
-            if my_units_for_sku > 0:
-                share = (my_units_for_sku / market_units_for_sku) * 100
-            else:
-                # Fair-share fallback: 1 / (competitors + me)
-                share = 100.0 / max(1, (n_comp + 1))
-                # Also surface the fair-share value as "estimated my units" so
-                # the KPI aggregation downstream uses something non-zero
-                r["my_units_sold"] = round(market_units_for_sku / max(1, (n_comp + 1)))
-                r["my_share_is_estimate"] = True
-            r["market_share_pct"] = round(share, 1)
+        if n_comp >= 1 and market_units_for_sku > 0:
+            r["market_share_pct"] = round((my_units_for_sku / market_units_for_sku) * 100, 1)
+            r["has_market_data"] = True
+            r["my_share_is_estimate"] = False
         else:
-            r["market_share_pct"] = 0
+            r["market_share_pct"] = None
+            r["has_market_data"] = False
+            r["my_share_is_estimate"] = False
 
     total_count = len(result)
     # KPI totals — when own_only=True (the My Products page):
     #   • Units Sold (Est.)     — total MARKET units across all sellers of YOUR products
-    #     (Σ qty_sold_est). Reflects market velocity for YOUR catalogue.
-    #   • Mkt. Revenue (Est.)   — what the entire market earns on those products at
-    #     each seller's own price (Σ revenue_est). = `market_revenue`.
-    #   • My Revenue (Est.)     — what YOUR store actually earns:
-    #     Σ my_price × my_units_sold. = `my_revenue`.
-    #   • Avg. Market Share     — fraction you actually capture:
-    #     Σ my_units_sold ÷ Σ market_units × 100.
-    # The legacy `total_revenue` field (my_price × market_units) is kept for backward
-    # compatibility but is no longer surfaced in the new two-card KPI strip.
+    #   • Mkt. Revenue (Est.)   — what the market earns at each seller's own price
+    #   • My Revenue (Est.)     — what YOUR store earns (my_price × my_units_sold)
+    #   • Avg. Market Share     — Σmy ÷ Σmarket × 100, ONLY across matched rows
+    #     (Feb 2026 honest-data fix — unmatched products excluded so they don't
+    #     inflate the average)
+    #   • Market Coverage       — "N matched / Total" — visibility into how much
+    #     of your catalogue actually has competitor signal
+    matched_rows = [r for r in result if r.get("has_market_data")]
     total_my_units = sum((r.get("my_units_sold") or 0) for r in result)
+    total_my_units_matched = sum((r.get("my_units_sold") or 0) for r in matched_rows)
+    total_market_units_matched = sum((r.get("qty_sold_est") or 0) for r in matched_rows)
     if own_only:
         total_revenue_at_my_prices = sum(
             ((r.get("my_price") or r.get("price") or 0) * (r.get("qty_sold_est") or 0))
@@ -2169,14 +2227,20 @@ async def my_products(
             ((r.get("my_price") or r.get("price") or 0) * (r.get("my_units_sold") or 0))
             for r in result
         )
+        avg_market_share_honest = (
+            round((total_my_units_matched / total_market_units_matched) * 100, 1)
+            if total_market_units_matched > 0 else 0
+        )
         kpis = {
             "total_products": total_count,
             "total_units_sold": int(total_sold),
-            # New canonical revenue fields surfaced by the FE (Feb 2026 split):
             "market_revenue": round(total_rev, 2),
             "my_revenue": round(my_revenue, 2),
-            "avg_market_share": round((total_my_units / total_sold) * 100, 1) if total_sold > 0 else 0,
+            "avg_market_share": avg_market_share_honest,
             "my_units_sold": int(total_my_units),
+            # NEW Feb 2026 — market data coverage so user sees the data-quality bar
+            "matched_products": len(matched_rows),
+            "market_coverage_pct": round((len(matched_rows) / total_count) * 100, 1) if total_count > 0 else 0,
             # Legacy alias — kept so older clients keep working until they migrate.
             "total_revenue": round(total_revenue_at_my_prices, 2),
         }
@@ -3814,13 +3878,17 @@ async def import_products(file: UploadFile = File(...), user=Depends(get_user)):
 
 
 @router.post("/import/run-matching")
-async def trigger_matching(user=Depends(get_user)):
-    """Run the matching engine for all imported my_products (background)."""
+async def trigger_matching(background: BackgroundTasks, user=Depends(get_user)):
+    """Run the matching engine for all imported my_products (background).
+
+    Feb 2026: now goes through the unified sync_runs logging pipeline so the
+    /api/data-freshness sync_health endpoint can surface match-only failures
+    the same way it surfaces sync failures.
+    """
     count = await db.my_products.count_documents({})
     if count == 0:
         raise HTTPException(400, "No products imported yet")
-    # Run in background
-    asyncio.create_task(_background_matching())
+    background.add_task(_run_sync_and_match, "manual_match_only")
     return {"message": f"Matching started for {count} products", "status": "running"}
 
 async def _background_matching():
@@ -3876,18 +3944,76 @@ async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_u
     if not own:
         raise HTTPException(400, "No store flagged is_own_store=True. Set the flag on your store first.")
 
-    async def _run_sync_and_match():
+    background.add_task(_run_sync_and_match, "manual")
+    return {"message": "Sync started", "status": "running", "store": own.get("name"), "domain": own.get("domain")}
+
+
+async def _run_sync_and_match(kind: str):
+    """Run own-store sync and matcher with decoupled error handling + persistent logging.
+
+    Feb 2026 hardening (P1, addresses silent-failure drift):
+      • Each invocation writes ONE row to db.sync_runs with the full timeline.
+      • Sync and matcher have INDEPENDENT try/except blocks — a sync failure
+        no longer skips the matcher (it can still run against existing data),
+        and a matcher failure doesn't erase the record of a successful sync.
+      • Stored fields drive the `/api/data-freshness` sync_health banner so
+        silent failures become visible without grepping supervisor logs.
+
+    `kind` is "scheduled" (6h cron), "manual" (user pressed Sync from Store),
+    or "manual_match_only" (user pressed Run Matching without resyncing).
+    """
+    started = datetime.now(timezone.utc)
+    run = {
+        "id": str(uuid.uuid4()),
+        "kind": kind,
+        "started_at": started,
+        "finished_at": None,
+        "sync_status": "skipped",
+        "sync_updated": 0,
+        "sync_discovered": 0,
+        "sync_archived": 0,
+        "sync_error": None,
+        "match_status": "skipped",
+        "match_added": 0,
+        "match_error": None,
+        "duration_secs": 0.0,
+    }
+
+    # ── SYNC step — independent try/except so a failure here doesn't skip the matcher ──
+    if kind != "manual_match_only":
         try:
             res = await sync_own_store_prices(db)
-            logger.info(f"[OwnSync/bg] {res}")
-            # Re-run matching so Price Intel reflects the new own-store prices
-            stats = await run_matching_for_all(db)
-            logger.info(f"[OwnSync/bg] re-matching complete: {stats}")
+            run["sync_status"] = "ok"
+            run["sync_updated"] = int(res.get("updated") or 0)
+            run["sync_discovered"] = int(res.get("discovered") or 0)
+            run["sync_archived"] = int(res.get("archived") or 0)
+            logger.info(f"[SyncMatch/{kind}] sync OK: updated={run['sync_updated']} discovered={run['sync_discovered']} archived={run['sync_archived']}")
         except Exception as e:
-            logger.error(f"[OwnSync/bg] failed: {e}")
+            run["sync_status"] = "error"
+            run["sync_error"] = str(e)[:500]
+            logger.exception(f"[SyncMatch/{kind}] sync FAILED")
 
-    background.add_task(_run_sync_and_match)
-    return {"message": "Sync started", "status": "running", "store": own.get("name"), "domain": own.get("domain")}
+    # ── MATCH step — runs even if sync failed; matcher can re-link existing data ──
+    try:
+        stats = await run_matching_for_all(db)
+        run["match_status"] = "ok"
+        run["match_added"] = int(stats.get("matched") or stats.get("added") or 0)
+        logger.info(f"[SyncMatch/{kind}] match OK: added={run['match_added']}")
+    except Exception as e:
+        run["match_status"] = "error"
+        run["match_error"] = str(e)[:500]
+        logger.exception(f"[SyncMatch/{kind}] match FAILED")
+
+    finished = datetime.now(timezone.utc)
+    run["finished_at"] = finished
+    run["duration_secs"] = round((finished - started).total_seconds(), 2)
+
+    try:
+        await db.sync_runs.insert_one(run)
+    except Exception as e:
+        logger.error(f"[SyncMatch/{kind}] failed to persist sync_runs row: {e}")
+
+    return run
 
 
 @router.get("/price-intel/dashboard")
@@ -4844,13 +4970,10 @@ async def startup():
         scheduler.start()
     scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0, id="weekly_digest", replace_existing=True)
     # Own-store price sync every 6h (Feb 2026)
+    # Uses the shared _run_sync_and_match helper so the scheduled and manual
+    # paths share identical error handling + sync_runs logging.
     async def _scheduled_own_sync():
-        try:
-            res = await sync_own_store_prices(db)
-            logger.info(f"[Scheduler] Own-store sync: {res.get('updated')} updated / {res.get('not_found')} unmatched")
-            await run_matching_for_all(db)
-        except Exception as e:
-            logger.error(f"[Scheduler] Own-store sync failed: {e}")
+        await _run_sync_and_match("scheduled")
     scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
     logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync")
 

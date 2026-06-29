@@ -149,14 +149,18 @@ export default function MyProductsPage() {
       <DataFreshnessBanner />
 
       {/* KPI Cards (Feb 2026 — revenue split into two cards so the user can
-         see BOTH what the market earns and what they actually take home) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+         see BOTH what the market earns and what they actually take home.
+         Sixth card added: Market Coverage = matched products / total — surfaces
+         the data-quality bar so a low avg_market_share isn't read as "we're losing"
+         when the truth is "we don't have competitor data on most of the catalogue") */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
           { key: "kpi_products", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_units_sold", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_mkt_revenue", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_my_revenue", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, icon: TrendingDown, accent: "#F59E0B" },
+          { key: "kpi_market_coverage", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
         ].map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
             <div className="flex items-center justify-between mb-2">
@@ -164,6 +168,7 @@ export default function MyProductsPage() {
               <k.icon className="w-4 h-4" style={{ color: k.accent }} />
             </div>
             <p className="text-2xl font-bold tracking-tighter text-white metric-number animate-countUp">{k.val}</p>
+            {k.sub && <p className="text-[11px] text-[#A1E4DB] font-mono mt-0.5" data-testid={`kpi-${k.key}-sub`}>{k.sub}</p>}
           </div>
         ))}
       </div>
