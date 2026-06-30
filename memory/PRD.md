@@ -108,24 +108,45 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
   2. **SKU + barcode search** in `/api/my-products`, `/api/products`, `/api/my-products-list`: previously the `$or` regex only covered `name_ar / name_en / sku`, and the user input was passed straight to MongoDB as a regex — so searching for a 13-digit barcode either returned 10 unrelated products (when the SKU regex partially matched) or 0 (when the SKU column on the catalog row was different from the barcode). Fix: added `barcode` to the `$or` list AND wrapped the user input in `re.escape()` so a raw barcode value like `8005852569199` (or `.*`) is treated as a literal string match. For `/api/my-products` with `own_only=True`, the search additionally scans `db.my_products` directly (sku / barcode / name_ar / name_en) so newly-synced SKUs without a `db.products` catalog row are still findable. Verified by testing agent iteration_16: exact-SKU search now returns 1 product (was 10 unrelated), partial-prefix `8005852` returns Schesir family, `.*` returns 0 (no regex injection), name search regression intact.
   - New tests: `/app/backend/tests/test_iteration16_freshness_search.py` (8 cases — 4 for `/data-freshness` shape, 4 for search behaviour).
 
-- **KPI two-card split + Hobba deactivation + manual crawl backfill (Feb 2026, verified iter17, ready for production deploy)**
-  1. **KPI two-card split** on `/api/my-products` (own_only=True). The single ambiguous "REVENUE (EST.)" card was splitting two distinct concepts under one label (my_price × market_units vs market_price × market_units). Now returns explicit fields:
-     - `market_revenue` = Σ revenue_est across rows (market_price × market_units) — what the entire market earns on the user's catalogue
-     - `my_revenue` = Σ my_price × my_units_sold — what the user's store actually earns
-     - Legacy `total_revenue` field retained for backward compat (= sum my_price × market_units) but no longer surfaced in the KPI strip.
-     - Frontend `MyProductsPage.jsx` now renders **5 KPI cards** via `lg:grid-cols-5`: PRODUCTS TRACKED, UNITS SOLD (EST.), MKT. REVENUE (EST.), MY REVENUE (EST.), AVG. MARKET SHARE. i18n keys `kpi_mkt_revenue` + `kpi_my_revenue` added in en/ar.
-  2. **Hobba deactivated** via `PUT /api/stores/{id}` with `is_active=false`. Reason: upstream `hobbapet.com` has been returning HTTP 500 since April 2026 (documented in handoff). Hobba is now filtered from `/api/data-freshness.stores[]` (which requires `is_active=true`), so the banner bucket flipped from "stale" (71-day bottleneck) back to "today".
-  3. **Manual crawl backfill** — triggered all 11 active competitor stores via parallel `/api/stores/{id}/crawl` calls. 10 of 11 succeeded (Hobba was the failure, now deactivated). 19,952 new snapshots written. Matcher re-run after backfill: `product_matches` grew 1,927 → 2,258 (+331 links covering +83 own-store SKUs). KPI numbers on 90D: 184 → 1,178 units / 3,927 → 28,401 SAR market revenue / 41.3% → 30.2% market share.
+- **Production drift incident + observability hardening + honest market-share KPIs (Feb 2026, iter18 + iter19, verified ready for prod)** — User reported a 10× drop in 90D KPIs on production (1,178 units / 30.2% share → 118 units / 92.4% share) ~24h after the iter17 deploy. Root cause analysis found:
+  1. **The match table was never the problem** — `product_matches` stayed intact (2,258 rows / 1,102 distinct my_skus).
+  2. **Production's 92.4% share was the fair-share fallback firing for unmatched products.** When new Zid-synced SKUs landed without competitor matches (matcher silently failed to keep up), each unmatched product fell back to `100/(n_comp+1) = 100%` share, dragging the average to 92.4%. The KPI was lying.
+  3. **The 6h scheduled own-store sync was silently failing** (likely a pod restart wiping APScheduler state or an unhandled exception inside the sync chain swallowed by the broad try/except).
+
+  Fix bundle landed in iter18 + iter19, both verified end-to-end on preview:
+
+  **Observability hardening (iter18 — closes the silent-failure loop):**
+  - New `db.sync_runs` collection — every scheduled or manual run writes ONE row with `{id, kind, started_at, finished_at, sync_status, sync_updated, sync_discovered, sync_archived, sync_error, match_status, match_added, match_error, duration_secs}`.
+  - Shared `_run_sync_and_match(kind)` helper at `server.py:~3884`. All three call sites route through it: `_scheduled_own_sync` (6h cron), `POST /api/import/sync-own-store`, `POST /api/import/run-matching` (`kind="manual_match_only"`).
+  - **Sync and matcher have INDEPENDENT try/except blocks** — a sync failure no longer skips the matcher (it can still run against existing data), and a matcher failure doesn't erase the record of a successful sync.
+  - `GET /api/data-freshness` now returns a `sync_health` block: `{last_run, last_run_age_hours, last_sync_status, last_match_status, last_sync_updated, last_match_added, next_run_expected, scheduler_running, is_stale, alarm}`. Combines two independent signals so all four silent-failure modes are caught: exceptions write a `sync_runs` row with traceback; dead scheduler / wiped state surface via `next_run_expected=None` or `last_run_age_hours > 12` (alarm fires either way).
+  - `DataFreshnessBanner` reads `sync_health.alarm`; when non-null the banner forces the **RED** stale style regardless of competitor-crawl freshness and shows `"Sync alarm: <reason>"` at the top. New testids `freshness-sync-last-run`, `freshness-sync-sync-error`, `freshness-sync-match-error`, `freshness-scheduler-dead`. Live-validated in iter19 when preview's own-store sync aged past 12h and banner flipped to red unaided.
+
+  **Honest market-share KPIs (iter18 → iter19 definition fix):**
+  - **Retired the fair-share fallback entirely.** Per-row `market_share_pct` is now a real ratio if `num_competitors >= 1 AND market_units > 0`, else **null** (UI renders "—"). No imputation, no 100% inflation.
+  - Two independent per-row booleans replace the single `has_market_data` flag I tried in iter18 (which conflated coverage with share-math):
+    - `has_competitor_pricing` ≡ `num_competitors >= 1` — drives the **Market Coverage** KPI (catalogue % with competitor signal). Expected on preview today: **774 / 2,081 = 37.2 %** (matches the user-remembered "774 visible on 90D").
+    - `has_market_share` ≡ `num_competitors >= 1 AND qty_sold_est > 0` — gates the per-row `market_share_pct` AND the `avg_market_share` denominator.
+  - New KPI fields surfaced: `matched_products` (count where has_competitor_pricing), `market_coverage_pct`, `share_sample_size` (count where has_market_share — denominator transparency so a 0% reading across 49 products isn't misread as 0% across 2,081).
+  - Frontend KPI strip is now **6 cards** (`lg:grid-cols-6`). Market Coverage card has red/green accent at the 20 % threshold; Market Share card has a sub-line "across N products" sourcing `kpis.share_sample_size`.
+
+  **Regression tests added:**
+  - `/app/backend/tests/test_iteration18_sync_hardening.py` — 11 cases (sync_runs schema, decoupled try/except, sync_health alarm transitions, /api/data-freshness new keys).
+  - `/app/backend/tests/test_iteration19_coverage_split.py` — 25 cases including the cross-page invariant `Σ has_competitor_pricing == kpis.matched_products` and `Σ has_market_share == kpis.share_sample_size` so future definition drift is caught by CI.
+
+  **Important deploy-day note for the next agent:** On production immediately after deploy, the `AVG. MARKET SHARE` KPI will appear to drop from ~30 % to a much smaller (honest) number, and `MY REVENUE` will also shrink. Both previous values were inflated by the now-retired fair-share imputation. The new `Market Coverage` card (with red/green accent) is the counter-weight that tells the real data-quality story. The numbers will rise honestly as the 6h sync accumulates own-store snapshot history — assuming the sync chain runs reliably on production, which is what the new alarm will catch instantly if it doesn't.
 
 ## Backlog
-- **P1 (queued)** Resend email integration — waiting on user API key
-- **P1 (deprioritized per user)** Brand extraction at ingestion (does NOT affect matching or category filter, only top-brand analytics)
-- **P1 (data hygiene, flagged iter17)** Clean up leftover test stores `TEST_Regression_Store` + `Test Store` from db.stores (or `is_active=false`) — they currently show as "no data" in the expanded freshness banner
-- **P1 (flagged iter17)** Update or skip iter16 tests `test_own_store_is_today` and `test_competitors_stale` — assertions baked in the pre-crawl state and now fail since data flipped
-- **P1 (flagged iter17, optional)** Tune `/api/insights/summary.avg_confidence` — currently 93.7 (spec target ≥95). Either raise `MIN_AGGREGATION_CONFIDENCE` to ~92 or compute avg over Tier-1 only.
-- **P0** Refactor `server.py` (>4,995 lines) into `routes/` — important for stability; queued AFTER all data-quality/UX fixes per user direction
-- **P2** Webhook notifications, `curl_cffi` Cloudflare bypass, Sitemap discovery
-- **P3** Mahally Apify enrichment, auto platform detection, Salla soft-block detector, manual "Trigger Crawl Now" button next to Data Freshness banner
+- **P1 — verify production after deploy:** confirm `sync_health.alarm` state on `daleel.hrm-sa.com` (null=healthy, "never run since last deploy"=sync hasn't fired yet, "Last sync was Xh ago"=scheduler silently failing). Record fresh baseline values for `matched_products`, `market_coverage_pct`, `avg_market_share`, `share_sample_size`, `my_revenue` for trend-watching over the next week.
+- **P1** Data-hygiene cleanup: `is_active=false` on the two leftover seed stores (`TEST_Regression_Store`, `Test Store`) so they stop appearing as `no_data` in the expanded banner (iter17 flag).
+- **P1** Tooltip on AVG. MARKET SHARE KPI explaining "computed over the N matched products" so stakeholders don't read 0% as a regression (iter18 flag).
+- **P1** Synthetic regression test that injects a known-bad `sync_runs` row to exercise the banner's red-alarm override deterministically (iter18 flag — now live-validated in iter19 but no CI test pins this).
+- **P1** 3-tier accent on Market Coverage card (red <10 / yellow 10-30 / green >30) instead of binary (iter19 code-review note).
+- **P1** Resend email integration — waiting on user API key.
+- **P1 (deprioritized)** Brand extraction at ingestion.
+- **P0** `server.py` refactor (>5,000 lines) into `routes/` — per user direction, queued after data-quality/UX fixes.
+- **P2** Webhook notifications, `curl_cffi` Cloudflare bypass, sitemap discovery.
+- **P3** Mahally Apify enrichment, auto platform detection, Salla soft-block detector, manual "Trigger Crawl Now" button on the freshness banner.
 
 ## Credentials
 - **Super Admin (god mode, immutable)**: `a.disi@taqueen.sa` / `Ahmaddc90@`
