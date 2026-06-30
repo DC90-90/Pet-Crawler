@@ -1,0 +1,57 @@
+{
+  "summary": "Iter20 API-contract regression: 27/28 of new tests PASS (1 skipped — conditional invariant only runs if catalogue<=500 rows; covered by iter19 sweep). All 57 pre-existing iter18/19/20 unit tests still PASS (test_competitor_count_union, test_matcher_pack_indicator, test_iteration18_sync_hardening, test_iteration19_coverage_split). Beaphar (SKU 8711231124985) end-to-end verified live: num_competitors>=6, num_priced_competitors>=6, competitor_min_price in [35,45], competitor_max_price in [43,53], has_competitor_pricing=True. Row payload contract holds: num_priced_competitors present on all rows, has_competitor_pricing is correctly gated on num_priced_competitors>=1 (not num_competitors), has_market_data field stays REMOVED (iter19 invariant), num_priced_competitors is always <= num_competitors (subset invariant). KPI block at days=90 within iter20 widened tolerances: matched_products in [870,910], market_coverage_pct in [41.0,44.0], share_sample_size in [50,70]. No fair-share 100% leakage detected. Matcher heal state verified READ-ONLY from db: product_matches>=2250 rows, >=1100 distinct my_sku, Beaphar has >=7 barcode-method matches with confidence=99, sync_runs has at least one match_status=ok row. Iter18 /api/data-freshness sync_health block still intact (last_run/last_run_age_hours/last_sync_status/last_match_status). Smoke test of 9 unrelated endpoints (/api/insights/summary, leaderboard, top-sellers, trending, gaps, price-wars, sales, /api/discounts/top-pct, /api/scanner/opportunities) all return 200 with valid JSON — no regression from the my_products row-builder changes. Zid-suffix edge case via API doesn't crash and doesn't inflate counts.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "Backend: 27/28 new iter20 API-contract tests PASS (1 skipped on conditional invariant covered elsewhere)",
+    "Backend: 11/11 test_competitor_count_union.py (iter20 union fix) PASS",
+    "Backend: 10/10 test_matcher_pack_indicator.py (iter20 word-boundary fix) PASS",
+    "Backend: 11/11 test_iteration18_sync_hardening.py (iter18 has_market_share rename) PASS",
+    "Backend: 25/25 test_iteration19_coverage_split.py (iter19 KPI baselines updated to 888/42.7%/59) PASS",
+    "Backend: Beaphar 8711231124985 via API — num_competitors>=6, num_priced_competitors>=6, has_competitor_pricing=True, prices in expected range",
+    "Backend: has_competitor_pricing correctly gated on num_priced_competitors>=1 (not num_competitors) — verified across 500 rows",
+    "Backend: num_priced_competitors subset of num_competitors invariant holds (500-row sweep)",
+    "Backend: has_market_data field stays REMOVED (verified across 50 rows)",
+    "Backend: KPI block at days=90 within widened iter20 tolerances",
+    "Backend: db.product_matches >=2250 rows / >=1100 distinct my_sku, Beaphar has >=7 barcode confidence=99 matches",
+    "Backend: db.sync_runs has match_status=ok row from heal",
+    "Backend: /api/data-freshness sync_health block intact",
+    "Backend: All 9 unrelated insights/discounts/scanner endpoints return 200 + valid JSON (no my_products row-builder regression)"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration20_api_contract.py",
+    "/app/test_reports/pytest/iteration20_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py lines ~2079-2150 (barcode-safe union) — the two-source merge (matches set + by_sku[barcode_candidates] set) is provably additive: barcode_candidates only ever gates IN, never OUT. Test test_market_coverage_is_additive_only enforces this across the full catalogue.",
+    "server.py lines ~2217-2245 (has_competitor_pricing gate) — uses num_priced_competitors>=1 as the boolean. This is the right contract because the previous gate on num_competitors would have flipped TRUE for stores that carry the product but have no in-window price (OOS without price, expired snapshots), inflating matched_products by a different definition.",
+    "matcher.py:_has_pack_indicator (lines 117-140) — PACK_TOKEN_SPLIT_RE excludes letter characters by design so compound Arabic words like 'متعددة' (multiple) and 'كرتونية' (cardboard-adj) stay as one token. The regex includes ×, [], (), |, /, _, -, comma, dot, semicolon, colon — exhaustive enough that hand-curated test cases (Backpack/package/متعدد/كرتونية) all pass.",
+    "Test test_iteration20_api_contract.py:TestKpiBlockIter20 uses widened tolerances (±~25 on matched_products, ±~1.5 on market_coverage_pct, ±10 on share_sample_size) — these are intentionally loose to absorb day-to-day snapshot churn from the live crawler. If baselines need to be tightened, suggest doing it after one stable week of data.",
+    "PACK_KEYWORDS still includes 'عدد' (line 25). The word-boundary fix in _has_pack_indicator protects against substring collisions, but PACK_AR_RE (line 24) still matches 'عدد\\s*\\d+' via regex — that's correct since legitimate 'عدد 12' phrasing needs to fire. The two paths are independently safe.",
+    "test_iteration20_api_contract.py:test_iter19_kpi_invariant_matched_products has a skip-when-catalogue>500 branch. On preview the catalogue is ~2081 so it always skips. This is fine because iter19 already has the full-catalogue sweep; just noting for future maintainers."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration20_api_contract.py (NEW — 28 API-contract regression tests covering Beaphar e2e, row-payload contract, KPI block, matcher heal state, iter18/19 invariants, 9 unrelated endpoints smoke, Zid-suffix edge case)"
+  ],
+  "success_rate": {
+    "backend": "100% (27/27 ran-and-passed in iter20 new tests + 57/57 in pre-existing iter18/19/20 unit tests = 84/84 total)",
+    "frontend": "N/A (testing_type=backend only)"
+  },
+  "test_credentials": {
+    "super_admin_email": "a.disi@taqueen.sa",
+    "super_admin_password": "Ahmaddc90@"
+  },
+  "seed_data_creation": "None. The matcher heal was already run before this iteration; tests are READ-ONLY against db.product_matches and db.sync_runs.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter20 closed two related bugs: (a) barcode-safe union in /api/my-products row builder makes num_competitors reflect ALL stores carrying the product (via matches link table OR via in-window snapshot whose sku passes _is_valid_barcode and equals my_barcode/my_sku exactly), additive-only — coverage widened from 774/37.2%/49 (iter19) to ~888/42.7%/59 (iter20); (b) matcher.py:_has_pack_indicator now tokenizes on whitespace+punctuation so Arabic compound words containing PACK_KEYWORDS as substrings (متعددة/كرتونية) no longer false-fire — this unblocked 24 previously-suppressed barcode matches including Beaphar's 7 new ones. The new num_priced_competitors field is the gate for has_competitor_pricing; iter19's has_market_data field stays REMOVED. KPI widening was additive-only — verified zero SKUs lost coverage. Pre-existing 57 unit tests + 27 new API-contract tests all pass. If the next iteration touches the my_products row builder, re-run /app/backend/tests/test_iteration20_api_contract.py (covers row contract + KPI block + 9 sibling endpoints). The matcher heal endpoint takes ~90s — do NOT trigger it during testing; just read db.product_matches and db.sync_runs.",
+  "rca_of_the_issue": "Two compounding root causes: (1) The matcher.py _has_pack_indicator function used naive substring matching against PACK_KEYWORDS, which included 'عدد' (Arabic for 'number/count'). The Beaphar Arabic name contains 'متعددة' (= 'multiple', a vitamin descriptor), which has 'عدد' as a substring — so matcher silently classified Beaphar as a multipack and SKIPPED Level-1 (barcode) matching for it. Result: only 1 SKU-method match instead of the 7+ legitimate barcode matches. Affected 58 of 2466 my_products (2.4%) by the same Arabic/English substring collision class. Fixed by tokenizing on whitespace+punctuation (PACK_TOKEN_SPLIT_RE) and checking keyword membership at the token level. (2) Even after the matcher heal, the /api/my-products row builder read num_competitors only from the stale product_matches link table. The detail panel read directly from product_snapshots so it could see the 6 Beaphar competitors immediately. Fixed by unioning the matches set with snapshot stores whose SKU passes _is_valid_barcode (^\\d{8,14}$) AND equals my_barcode/my_sku exactly. The exact-match + barcode-shape gate prevents Zid-suffix false positives (8005852750068-RUDC can never be unioned for 8005852750068 because the suffixed string is in a different by_sku bucket). Reproduction: GET /api/my-products?search=8711231124985 → before fix: num_competitors=0; after fix: num_competitors>=6, with prices ~40-48 SAR. Mitigation locked in by test_competitor_count_union.py (11 tests) + test_matcher_pack_indicator.py (10 tests) + test_iteration20_api_contract.py (28 tests)."
+}

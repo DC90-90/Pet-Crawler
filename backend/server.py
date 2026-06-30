@@ -2076,15 +2076,33 @@ async def my_products(
                 in_stock=row["my_in_stock"],
             ) if my_price is not None else None
 
-            # Competitor stats — use the matcher's link table (db.product_matches),
-            # NOT raw SKU equality on db.product_snapshots. SKU strings differ
-            # between stores (e.g. own "8005852750068" vs Petsy "8005852750068-…C")
-            # so the only reliable join is via the matcher's barcode-resolved
-            # link.
-            comp_latest_prices = []
+            # Competitor discovery — barcode-safe UNION of two sources:
+            #   (A) product_matches link table (matcher's truth — barcode at conf 99,
+            #       SKU equality at conf 95). Robust to suffix mismatches because
+            #       the matcher already resolved them.
+            #   (B) Direct snapshot lookup keyed by my barcode/EAN candidates.
+            #       Catches competitors the matcher hasn't linked yet (matcher
+            #       coverage gap) but ONLY when the SKU string itself passes the
+            #       NUMERIC_BARCODE_RE (^\d{8,14}$). This means a Zid suffix like
+            #       "8005852750068-RUDC" can NEVER match my EAN "8005852750068"
+            #       via this path (the suffixed string fails the regex). For
+            #       non-EAN proprietary SKUs (XYZ-001), the candidate set is
+            #       empty and we fall back to source A only.
+            # See /app/backend/tests/test_competitor_count_union.py for safety
+            # guarantees encoded as regression tests.
+            mp_barcode_field = str(mp_doc.get("barcode") or "").strip()
+            my_barcode_candidates = set()
+            if _is_valid_barcode(mp_barcode_field):
+                my_barcode_candidates.add(mp_barcode_field)
+            if _is_valid_barcode(p["sku"]):
+                my_barcode_candidates.add(p["sku"])
+
+            # Per-store "latest snapshot" map: store_id -> latest_snapshot_dict.
+            # First seed from matches (authoritative when present), then fill
+            # gaps from the barcode union (additive, dedupe by store_id).
+            competitor_latest_by_store = {}
             best_match_confidence = 0
             best_match_tier = None
-            distinct_comp_stores = set()
             for tup in matches_by_my_sku.get(p["sku"], []):
                 comp_sku, comp_store_id = tup[0], tup[1]
                 match_conf = tup[2] if len(tup) > 2 else 0
@@ -2092,14 +2110,31 @@ async def my_products(
                 if not comp_snaps:
                     continue
                 latest = comp_snaps[-1]
-                if latest.get("price") is None:
-                    continue
-                comp_latest_prices.append(latest["price"])
-                distinct_comp_stores.add(comp_store_id)
+                competitor_latest_by_store.setdefault(comp_store_id, latest)
                 if match_conf > best_match_confidence:
                     best_match_confidence = match_conf
                     best_match_tier = latest.get("source_tier")
-            row["num_competitors"] = len(distinct_comp_stores)
+            for bc in my_barcode_candidates:
+                for sid, snaps in by_sku.get(bc, {}).items():
+                    if sid == own_store_id or sid in competitor_latest_by_store:
+                        continue
+                    if not snaps:
+                        continue
+                    competitor_latest_by_store[sid] = snaps[-1]
+
+            # num_competitors = ALL stores that carry the product. OOS counts.
+            # Stores whose latest snapshot has price=None still count (the user
+            # explicitly wants this: stockout shouldn't drop a competitor from
+            # the count, only from the price comparison).
+            row["num_competitors"] = len(competitor_latest_by_store)
+
+            # Price comparison — only stores with a usable price. OOS competitors
+            # WITH a price ARE included (their price is a real market signal).
+            comp_latest_prices = [
+                snap["price"] for snap in competitor_latest_by_store.values()
+                if snap.get("price") is not None
+            ]
+            row["num_priced_competitors"] = len(comp_latest_prices)
             if comp_latest_prices:
                 comp_min = min(comp_latest_prices)
                 row["competitor_min_price"] = round(comp_min, 2)
@@ -2179,25 +2214,29 @@ async def my_products(
     reverse = sort_order == "desc"
     result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
 
-    # Per-row signals (Feb 2026, v4 — two-bucket honest model):
-    #   • has_competitor_pricing = num_competitors >= 1
+    # Per-row signals (Feb 2026, v5 — barcode-safe union model):
+    #   • has_competitor_pricing = num_priced_competitors >= 1
     #     (drives the Market Coverage KPI — "how much of my catalogue has
-    #     competitor pricing data?")
-    #   • has_market_share = has_competitor_pricing AND market_units > 0
-    #     (drives the per-row market_share_pct AND the avg_market_share KPI —
-    #     we can only compute a ratio when BOTH a competitor exists AND
-    #     velocity is non-zero, otherwise the math is undefined)
+    #     USABLE competitor pricing data?". OOS competitors with a price still
+    #     count; competitors with no price at all do not.)
+    #   • num_competitors (the count column) is the WIDER notion: every store
+    #     carrying the product, whether their latest snapshot is priced or not.
+    #     This is what the user sees in the "Competitors" column.
+    #   • has_market_share = num_priced_competitors >= 1 AND market_units > 0
+    #     (preserves the iter19 invariant: share_sample_size == Σ has_market_share)
     # The retired fair-share fallback (assigning 100% to unmatched products)
     # caused the production 92.4% inflation; removed entirely — no imputation.
     for r in result:
         market_units_for_sku = r.get("qty_sold_est") or 0
         my_units_for_sku = r.get("my_units_sold") or 0
-        n_comp = r.get("num_competitors")
-        if n_comp is None:
-            n_comp = max(0, (r.get("num_sellers") or 0) - 1)
+        n_priced = r.get("num_priced_competitors")
+        if n_priced is None:
+            # Non-own rows (own_only=False — /api/insights/sales) don't compute
+            # the priced subset; fall back to num_sellers - 1 as a coarse proxy.
+            n_priced = max(0, (r.get("num_sellers") or 0) - 1)
         r["market_size"] = market_units_for_sku
-        r["has_competitor_pricing"] = n_comp >= 1
-        if n_comp >= 1 and market_units_for_sku > 0:
+        r["has_competitor_pricing"] = n_priced >= 1
+        if n_priced >= 1 and market_units_for_sku > 0:
             r["market_share_pct"] = round((my_units_for_sku / market_units_for_sku) * 100, 1)
             r["has_market_share"] = True
         else:
@@ -3773,7 +3812,7 @@ async def trigger_digest(user=Depends(get_user)):
     return digest
 
 # ── My Products Import & Price Intelligence ─────────────────
-from matcher import match_my_product, run_matching_for_all
+from matcher import match_my_product, run_matching_for_all, _is_valid_barcode
 
 # MatchActionIn moved to /app/backend/models/schemas.py (Feb 2026 refactor)
 

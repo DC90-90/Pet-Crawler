@@ -129,16 +129,19 @@ def test_my_products_no_row_has_100_pct_fallback(my_products_90d):
 
 
 def test_my_products_null_share_when_no_competitors(my_products_90d):
+    """iter20: predicate now keyed on num_priced_competitors + has_market_share
+    (iter19 removed the iter18 has_market_data conflation field).
+    """
     products = my_products_90d["products"]
     for p in products:
-        n_comp = p.get("num_competitors") or 0
+        n_priced = p.get("num_priced_competitors") or 0
         qty = p.get("qty_sold_est") or 0
-        if n_comp >= 1 and qty > 0:
-            assert p.get("has_market_data") is True, f"row {p.get('sku')} should have market data"
+        if n_priced >= 1 and qty > 0:
+            assert p.get("has_market_share") is True, f"row {p.get('sku')} should have market share"
             assert isinstance(p.get("market_share_pct"), (int, float)), f"row {p.get('sku')} share should be numeric"
         else:
-            assert p.get("market_share_pct") is None, f"row {p.get('sku')} should have null share (n_comp={n_comp}, qty={qty})"
-            assert p.get("has_market_data") is False
+            assert p.get("market_share_pct") is None, f"row {p.get('sku')} should have null share (n_priced={n_priced}, qty={qty})"
+            assert p.get("has_market_share") is False
 
 
 def test_my_products_kpis_have_matched_and_coverage(my_products_90d):

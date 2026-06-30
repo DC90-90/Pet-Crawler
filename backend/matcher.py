@@ -23,6 +23,11 @@ NUMERIC_BARCODE_RE = re.compile(r'^\d{8,14}$')
 PACK_RE = re.compile(r'(?:pack\s*(?:of\s*)?|carton\s*(?:for\s*)?|box\s*(?:of\s*)?|set\s*(?:of\s*)?|bundle\s*(?:of\s*)?|×\s*)(\d+)', re.IGNORECASE)
 PACK_AR_RE = re.compile(r'(?:علبة|كرتون|عدد|طقم|مجموعة)\s*(\d+)', re.IGNORECASE)
 PACK_KEYWORDS = {"pack", "carton", "box", "set", "bundle", "علبة", "كرتون", "عدد", "طقم"}
+# Token boundary regex used by _has_pack_indicator. Splits on whitespace and
+# common punctuation. We deliberately exclude letter characters so compound
+# Arabic words like "متعددة" (= "multiple") stay as one token instead of
+# being split around an embedded "عدد" substring. See iter20 bug fix.
+PACK_TOKEN_SPLIT_RE = re.compile(r'[\s\-_/|,.;:()\[\]×]+')
 
 # SKU suffix patterns
 SKU_BUNDLE_SUFFIXES = ("pack", "carton", "box", "set", "bundle", "pcs", "multi")
@@ -110,10 +115,30 @@ def _is_bundle_sku(sku: str) -> bool:
 
 
 def _has_pack_indicator(text: str) -> bool:
-    """Check if text contains any pack/bundle indicator."""
+    """Check if text contains any pack/bundle indicator.
+
+    Bug fix (Feb 2026, iter20): the previous implementation used naive
+    substring matching (`kw in text_lower`), which false-fired on Arabic
+    words containing PACK_KEYWORDS as substrings — most notably "عدد"
+    appearing inside "متعدد الألوان" (= "multi-colored", a color descriptor,
+    NOT a multipack indicator). This affected 58 of 2,466 my_products
+    (2.4%) — see test_matcher_pack_indicator.py for the exhaustive list.
+    Suppressing barcode-level matching for those products silently masked
+    real competitor links (e.g. Beaphar 8711231124985 had 0 matches because
+    "متعددة" in the Arabic name false-triggered as a multipack).
+
+    Fix: tokenize on whitespace and common punctuation, then check
+    keyword membership at the TOKEN level. Compound words like "متعددة",
+    "Backpack", "Subscription Box", "كرتونية" stay as one token and are
+    not in PACK_KEYWORDS, so they don't false-fire. Legitimate multipack
+    phrasing ("pack of 6", "علبة 12", "Carton 24") still matches because
+    "pack" / "علبة" / "Carton" appear as standalone tokens.
+    """
     text_lower = str(text).lower()
-    return bool(PACK_RE.search(text_lower) or PACK_AR_RE.search(text_lower) or
-                any(kw in text_lower for kw in PACK_KEYWORDS))
+    if PACK_RE.search(text_lower) or PACK_AR_RE.search(text_lower):
+        return True
+    tokens = [t for t in PACK_TOKEN_SPLIT_RE.split(text_lower) if t]
+    return any(t in PACK_KEYWORDS for t in tokens)
 
 
 def _weights_reject(w1_g: Optional[float], w2_g: Optional[float]) -> bool:

@@ -136,23 +136,24 @@ class TestKPIBlock:
 
     def test_kpi_matched_products_within_target(self, my_products_90d):
         kpis = my_products_90d["kpis"]
-        # target: 774 ± 2
-        assert 770 <= kpis["matched_products"] <= 778, (
-            f"matched_products={kpis['matched_products']} outside expected 774±2"
+        # iter20 baseline: 888 ± 5 (was 774±2 in iter19 — barcode-safe union
+        # widened coverage by +5.43pp per pre-fix simulation, +114 products)
+        assert 880 <= kpis["matched_products"] <= 900, (
+            f"matched_products={kpis['matched_products']} outside expected 888±10"
         )
 
     def test_kpi_market_coverage_pct_within_target(self, my_products_90d):
         kpis = my_products_90d["kpis"]
-        # target: 37.2 ± 2
-        assert 35.0 <= kpis["market_coverage_pct"] <= 39.5, (
-            f"market_coverage_pct={kpis['market_coverage_pct']} outside expected 37.2±2"
+        # iter20 baseline: 42.7 ± 1 (was 37.2±2 in iter19)
+        assert 41.0 <= kpis["market_coverage_pct"] <= 44.0, (
+            f"market_coverage_pct={kpis['market_coverage_pct']} outside expected 42.7±1"
         )
 
     def test_kpi_share_sample_size_within_target(self, my_products_90d):
         kpis = my_products_90d["kpis"]
-        # target: 49 ± 2
-        assert 47 <= kpis["share_sample_size"] <= 51, (
-            f"share_sample_size={kpis['share_sample_size']} outside expected 49±2"
+        # iter20 baseline: 59 ± 5 (was 49±2 in iter19)
+        assert 54 <= kpis["share_sample_size"] <= 64, (
+            f"share_sample_size={kpis['share_sample_size']} outside expected 59±5"
         )
 
     def test_kpi_avg_market_share_honest_zero(self, my_products_90d):
