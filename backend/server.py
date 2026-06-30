@@ -2179,15 +2179,16 @@ async def my_products(
     reverse = sort_order == "desc"
     result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
 
-    # Per-row market share (Feb 2026, v3 — honest data):
-    # Previously, products with num_competitors=0 received a "fair-share" fallback
-    # that assigned them 100% share. That treated absence of data as monopoly,
-    # which silently inflated avg_market_share (production hit 92.4% during a
-    # silent matcher failure). The honest contract now:
-    #   • If num_competitors >= 1 AND we have market_units > 0 → real ratio
-    #   • Else → market_share_pct = None ("—" in UI), has_market_data = False
-    # The KPI avg_market_share below is computed ONLY over rows with
-    # has_market_data=True so unmatched/uncrawled SKUs don't distort the number.
+    # Per-row signals (Feb 2026, v4 — two-bucket honest model):
+    #   • has_competitor_pricing = num_competitors >= 1
+    #     (drives the Market Coverage KPI — "how much of my catalogue has
+    #     competitor pricing data?")
+    #   • has_market_share = has_competitor_pricing AND market_units > 0
+    #     (drives the per-row market_share_pct AND the avg_market_share KPI —
+    #     we can only compute a ratio when BOTH a competitor exists AND
+    #     velocity is non-zero, otherwise the math is undefined)
+    # The retired fair-share fallback (assigning 100% to unmatched products)
+    # caused the production 92.4% inflation; removed entirely — no imputation.
     for r in result:
         market_units_for_sku = r.get("qty_sold_est") or 0
         my_units_for_sku = r.get("my_units_sold") or 0
@@ -2195,29 +2196,32 @@ async def my_products(
         if n_comp is None:
             n_comp = max(0, (r.get("num_sellers") or 0) - 1)
         r["market_size"] = market_units_for_sku
+        r["has_competitor_pricing"] = n_comp >= 1
         if n_comp >= 1 and market_units_for_sku > 0:
             r["market_share_pct"] = round((my_units_for_sku / market_units_for_sku) * 100, 1)
-            r["has_market_data"] = True
-            r["my_share_is_estimate"] = False
+            r["has_market_share"] = True
         else:
             r["market_share_pct"] = None
-            r["has_market_data"] = False
-            r["my_share_is_estimate"] = False
+            r["has_market_share"] = False
+        r["my_share_is_estimate"] = False  # fair-share fallback retired
 
     total_count = len(result)
     # KPI totals — when own_only=True (the My Products page):
-    #   • Units Sold (Est.)     — total MARKET units across all sellers of YOUR products
-    #   • Mkt. Revenue (Est.)   — what the market earns at each seller's own price
-    #   • My Revenue (Est.)     — what YOUR store earns (my_price × my_units_sold)
-    #   • Avg. Market Share     — Σmy ÷ Σmarket × 100, ONLY across matched rows
-    #     (Feb 2026 honest-data fix — unmatched products excluded so they don't
-    #     inflate the average)
-    #   • Market Coverage       — "N matched / Total" — visibility into how much
-    #     of your catalogue actually has competitor signal
-    matched_rows = [r for r in result if r.get("has_market_data")]
+    #   • Units Sold (Est.)     — Σ qty_sold_est across all rows (market velocity for YOUR catalogue)
+    #   • Mkt. Revenue (Est.)   — Σ revenue_est (market_price × market_units)
+    #   • My Revenue (Est.)     — Σ my_price × my_units_sold (what YOU actually earn)
+    #   • Avg. Market Share     — Σmy ÷ Σmarket × 100, ONLY across rows with
+    #                             has_market_share=True (need both a match AND velocity)
+    #   • Market Coverage       — products with has_competitor_pricing / total — answers
+    #                             "how much of my catalogue has competitor pricing?"
+    #   • Share Sample Size     — N (rows used in avg_market_share denominator) —
+    #                             surfaces the denominator transparently so 0% over 49
+    #                             products isn't read the same as 0% over 2,081
+    pricing_rows = [r for r in result if r.get("has_competitor_pricing")]
+    share_rows = [r for r in result if r.get("has_market_share")]
     total_my_units = sum((r.get("my_units_sold") or 0) for r in result)
-    total_my_units_matched = sum((r.get("my_units_sold") or 0) for r in matched_rows)
-    total_market_units_matched = sum((r.get("qty_sold_est") or 0) for r in matched_rows)
+    total_my_units_share = sum((r.get("my_units_sold") or 0) for r in share_rows)
+    total_market_units_share = sum((r.get("qty_sold_est") or 0) for r in share_rows)
     if own_only:
         total_revenue_at_my_prices = sum(
             ((r.get("my_price") or r.get("price") or 0) * (r.get("qty_sold_est") or 0))
@@ -2228,8 +2232,8 @@ async def my_products(
             for r in result
         )
         avg_market_share_honest = (
-            round((total_my_units_matched / total_market_units_matched) * 100, 1)
-            if total_market_units_matched > 0 else 0
+            round((total_my_units_share / total_market_units_share) * 100, 1)
+            if total_market_units_share > 0 else 0
         )
         kpis = {
             "total_products": total_count,
@@ -2238,9 +2242,12 @@ async def my_products(
             "my_revenue": round(my_revenue, 2),
             "avg_market_share": avg_market_share_honest,
             "my_units_sold": int(total_my_units),
-            # NEW Feb 2026 — market data coverage so user sees the data-quality bar
-            "matched_products": len(matched_rows),
-            "market_coverage_pct": round((len(matched_rows) / total_count) * 100, 1) if total_count > 0 else 0,
+            # Market data coverage — answers "do we have competitor pricing on this product?"
+            "matched_products": len(pricing_rows),
+            "market_coverage_pct": round((len(pricing_rows) / total_count) * 100, 1) if total_count > 0 else 0,
+            # Share sample size — N of rows used in the avg_market_share calculation.
+            # Lets the UI render "Across 49 of 2,081" so the user understands the denominator.
+            "share_sample_size": len(share_rows),
             # Legacy alias — kept so older clients keep working until they migrate.
             "total_revenue": round(total_revenue_at_my_prices, 2),
         }

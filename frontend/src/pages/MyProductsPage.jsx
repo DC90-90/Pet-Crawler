@@ -159,7 +159,7 @@ export default function MyProductsPage() {
           { key: "kpi_units_sold", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_mkt_revenue", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_my_revenue", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, icon: TrendingDown, accent: "#F59E0B" },
+          { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, sub: kpis.share_sample_size != null ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : null, icon: TrendingDown, accent: "#F59E0B" },
           { key: "kpi_market_coverage", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
         ].map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>

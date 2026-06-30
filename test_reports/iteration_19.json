@@ -1,0 +1,63 @@
+{
+  "summary": "Iteration 19 verifies the Market Coverage definition split fix. Backend 25/25 pytest pass. Per-row signals confirmed: has_market_data field is REMOVED, has_competitor_pricing (num_competitors>=1) and has_market_share (num_competitors>=1 AND qty_sold_est>0) are both present as booleans on every row. Subset invariant holds (has_market_share=true ⇒ has_competitor_pricing=true). market_share_pct is numeric iff has_market_share=true, else null; no rows leak market_share_pct=100 from the retired fair-share fallback. KPI block at days=90 hits EXACT targets: matched_products=774, market_coverage_pct=37.2, share_sample_size=49, avg_market_share=0.0, my_revenue=39.15, market_revenue=28401.15, total_products=2081. Cross-page consistency (5 pages, offsets 0/500/1000/1500/2000) confirms per-row counts match KPI aggregates exactly: 774 has_competitor_pricing rows == kpis.matched_products, 49 has_market_share rows == kpis.share_sample_size, 2081 total rows == kpis.total_products. Matcher health unchanged: 2258 product_matches rows / 1102 distinct my_skus / iter18 manual_match_only sync_runs row preserved. Frontend (/, 90D): kpi-kpi_market_coverage reads '37.2%' with sub '774 / 2081' (NOT '2.4%' / '49 / 2081'), accent icon flipped to GREEN rgb(16,185,129) per the >=20% threshold. kpi-kpi_market_share reads '0%' with sub-text testid kpi-kpi_market_share-sub showing 'across 49 products'. All 6 KPI testids and data-freshness-banner present; 0 console errors. Regression: SKU regex-escape (.*→0 results), /api/data-freshness sync_health structure, /api/insights/sales all 200/clean.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "Backend: 25/25 pytest pass in test_iteration19_coverage_split.py (5.76s)",
+    "Backend: db.product_matches preserved — 2258 rows, 1102 distinct my_sku",
+    "Backend: db.sync_runs.manual_match_only row from iter18 preserved with match_status=ok, match_added=1102",
+    "Backend: has_market_data field REMOVED from /api/my-products row payload (verified across first 50 rows)",
+    "Backend: has_competitor_pricing + has_market_share both present as bool on every row",
+    "Backend: Subset invariant (has_market_share=true ⇒ has_competitor_pricing=true) holds across all 2081 rows",
+    "Backend: market_share_pct=null iff has_market_share=false (zero violations)",
+    "Backend: market_share_pct numeric iff has_market_share=true (zero violations)",
+    "Backend: Zero rows with market_share_pct=100 + num_competitors<1 — fair-share fallback fully retired",
+    "Backend: KPIs at 90D = {total_products:2081, matched_products:774, market_coverage_pct:37.2, share_sample_size:49, avg_market_share:0.0, my_revenue:39.15, market_revenue:28401.15, my_units_sold:5, total_revenue:30801.98} — all within ±2 of spec targets",
+    "Backend: market_coverage_pct math validates (774/2081*100 = 37.2 ✓)",
+    "Backend: Cross-page sweep (5 pages, limit=500) — Σ rows = 2081 = kpis.total_products; Σ has_competitor_pricing=true = 774 = kpis.matched_products; Σ has_market_share=true = 49 = kpis.share_sample_size — per-row and aggregate match EXACTLY",
+    "Backend: /api/data-freshness sync_health block intact with all 7 critical keys",
+    "Backend: iter16 regex-escape regression — search='.*' returns total=0",
+    "Backend: /api/insights/sales?days=90 returns 200",
+    "Frontend [/]: kpi-kpi_market_coverage value='37.2%', sub='774 / 2081' (matches backend)",
+    "Frontend [/]: kpi-kpi_market_coverage icon color=rgb(16,185,129) GREEN — accent flipped correctly at 37.2% (>=20% threshold)",
+    "Frontend [/]: kpi-kpi_market_share value='0%', kpi-kpi_market_share-sub testid renders 'across 49 products'",
+    "Frontend [/]: All 6 KPI testids present (kpi_products, kpi_units_sold, kpi_mkt_revenue, kpi_my_revenue, kpi_market_share, kpi_market_coverage)",
+    "Frontend [/]: data-freshness-banner mounted; alarm path now observable — banner shows 'Sync alarm: Last sync was 12.5h ago (expected every 6h)' because iter18's manual sync aged past the 12h stale threshold (this exercises the syncAlarm→RED override code path that iter18 could not validate live)",
+    "Frontend [/]: 0 console errors / 0 warnings during the sweep"
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration19_coverage_split.py",
+    "/app/test_reports/pytest/iteration19_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py lines ~2192-2206 (per-row signal block) is clean: two-bucket logic is explicit, comments document WHY the field split was needed (production 92.4% inflation RCA), no fallback can re-introduce 100% inflation because the only branch that sets market_share_pct is gated on n_comp>=1 AND market_units_for_sku>0.",
+    "server.py line ~2247 market_coverage_pct uses len(pricing_rows)/total_count — correctly counts the 'has competitor pricing' set, not the more restrictive 'has share' set. This is the iter18→iter19 fix in one line.",
+    "server.py line ~2250 share_sample_size = len(share_rows) transparently surfaces the denominator of avg_market_share so a 0.0 reading over 49 products isn't misread as a 0.0 reading over 2081.",
+    "MyProductsPage.jsx line ~163 coverage accent flip: `(kpis.market_coverage_pct ?? 0) < 20 ? RED : GREEN` is a simple binary threshold — works for the current 37.2 vs 2.4 polarity but a 3-tier (red <10, yellow 10-30, green >30) would communicate data-quality progression better. Not blocking.",
+    "MyProductsPage.jsx line ~162 share sub-text correctly null-guards on `kpis.share_sample_size != null` so older clients without the new KPI field won't crash — good defensive coding."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration19_coverage_split.py (new — 25 tests across matcher health, per-row signals, KPI block, cross-page consistency, regression smoke)"
+  ],
+  "success_rate": {
+    "backend": "100% (25/25 pytest pass)",
+    "frontend": "100% (coverage card 37.2% / 774 / 2081 / GREEN accent confirmed; share card sub 'across 49 products' confirmed; 0 console errors)"
+  },
+  "test_credentials": {
+    "super_admin_email": "a.disi@taqueen.sa",
+    "super_admin_password": "Ahmaddc90@"
+  },
+  "seed_data_creation": "None. The pre-existing iter18 manual_match_only sync_runs row is preserved.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter19 splits the Market Coverage KPI into two honest signals — coverage (774/2081=37.2%, 'do we have competitor pricing?') vs share-sample (49 rows, 'do we have BOTH a match AND velocity to compute share?'). Both backend and frontend confirmed end-to-end on preview. The kpi-kpi_market_share-sub testid is NEW in iter19 and renders 'across N products'. The retired has_market_data field MUST NOT come back. NOTE: as of this run the DataFreshnessBanner is now showing a RED 'Sync alarm: Last sync was 12.5h ago' because iter18's manual sync aged past 12h — this finally validates iter18's untested alarm→RED override path. If the next iteration triggers another sync, the banner will return to normal (yellow this_week bucket).",
+  "rca_of_the_issue": "Iter18 conflated 'has at least one competitor match' (~774 products) with 'has BOTH match AND non-zero qty_sold_est' (~49 products) into a single has_market_data field, then used that single field for both the per-row market_share_pct gate AND the market_coverage_pct numerator. Result: market_coverage_pct came out as 49/2081=2.4% when the correct answer (matcher coverage of the catalogue) is 774/2081=37.2%. Iter19 splits into two booleans (has_competitor_pricing for coverage, has_market_share for the share ratio) so coverage and share-sample-size are independent metrics that can't drift again. Cross-page consistency test (per-row count == server-side aggregate) makes future definition drift caught by CI."
+}
