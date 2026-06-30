@@ -373,7 +373,17 @@ export default function MyProductsPage() {
                   </TableCell>
                   <TableCell><span className="text-sm font-semibold text-white metric-number" title={isRTL ? "تقدير مبيعات السوق" : "Market-wide sales estimate"}>{p.qty_sold_est.toLocaleString()}</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-white metric-number" title={isRTL ? "تقدير إيرادات السوق" : "Market-wide revenue estimate"}>{p.revenue_est.toLocaleString()} {t("sar")}</span></TableCell>
-                  <TableCell><Badge className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]" title={isRTL ? "عدد المنافسين الذين يبيعون نفس المنتج" : "Number of competitors selling this product"}>{p.num_competitors != null ? p.num_competitors : Math.max(0, (p.num_sellers || 0) - 1)}</Badge></TableCell>
+                  <TableCell>
+                    <Badge
+                      className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]"
+                      title={isRTL
+                        ? `${(p.num_competitors ?? Math.max(0, (p.num_sellers || 0) - 1))} منافس يبيع المنتج · ${(p.num_priced_competitors ?? p.num_competitors ?? 0)} لديه سعر حالي. المنافسون بدون سعر (مخزون نافد بدون سعر) يُحتسبون في العمود لكن لا يدخلون في حساب السعر.`
+                        : `${(p.num_competitors ?? Math.max(0, (p.num_sellers || 0) - 1))} carry this product · ${(p.num_priced_competitors ?? p.num_competitors ?? 0)} have a current price. Competitors with no price (OOS without a listed price) still count here but don't drive vs-my-price.`}
+                      data-testid={`competitors-badge-${p.sku}`}
+                    >
+                      {p.num_competitors != null ? p.num_competitors : Math.max(0, (p.num_sellers || 0) - 1)}
+                    </Badge>
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-col gap-0.5">
                       <StockBadge signal={p.my_stock_signal || p.stock_signal} />
