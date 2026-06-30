@@ -137,16 +137,40 @@ Fonts: `Space Grotesk` (EN headings, uppercase, letter-spacing 0.05em), `Inter` 
   **Important deploy-day note for the next agent:** On production immediately after deploy, the `AVG. MARKET SHARE` KPI will appear to drop from ~30 % to a much smaller (honest) number, and `MY REVENUE` will also shrink. Both previous values were inflated by the now-retired fair-share imputation. The new `Market Coverage` card (with red/green accent) is the counter-weight that tells the real data-quality story. The numbers will rise honestly as the 6h sync accumulates own-store snapshot history — assuming the sync chain runs reliably on production, which is what the new alarm will catch instantly if it doesn't.
 
 ## Backlog
-- **P1 — verify production after deploy:** confirm `sync_health.alarm` state on `daleel.hrm-sa.com` (null=healthy, "never run since last deploy"=sync hasn't fired yet, "Last sync was Xh ago"=scheduler silently failing). Record fresh baseline values for `matched_products`, `market_coverage_pct`, `avg_market_share`, `share_sample_size`, `my_revenue` for trend-watching over the next week.
-- **P1** Data-hygiene cleanup: `is_active=false` on the two leftover seed stores (`TEST_Regression_Store`, `Test Store`) so they stop appearing as `no_data` in the expanded banner (iter17 flag).
-- **P1** Tooltip on AVG. MARKET SHARE KPI explaining "computed over the N matched products" so stakeholders don't read 0% as a regression (iter18 flag).
-- **P1** Synthetic regression test that injects a known-bad `sync_runs` row to exercise the banner's red-alarm override deterministically (iter18 flag — now live-validated in iter19 but no CI test pins this).
-- **P1** 3-tier accent on Market Coverage card (red <10 / yellow 10-30 / green >30) instead of binary (iter19 code-review note).
-- **P1** Resend email integration — waiting on user API key.
-- **P1 (deprioritized)** Brand extraction at ingestion.
-- **P0** `server.py` refactor (>5,000 lines) into `routes/` — per user direction, queued after data-quality/UX fixes.
-- **P2** Webhook notifications, `curl_cffi` Cloudflare bypass, sitemap discovery.
-- **P3** Mahally Apify enrichment, auto platform detection, Salla soft-block detector, manual "Trigger Crawl Now" button on the freshness banner.
+- 🟡 **OPEN — DEFERRED BY USER (iter19 follow-up, paused mid-session)** Three production-vs-preview discrepancies observed on 90D after the iter19 deploy:
+  1. **Mkt. Revenue / My Revenue values look swapped or mis-mapped** on production. Preview verified `market_revenue = 28,401.15 SAR`, `my_revenue = 39.15 SAR` (verified by iter19 testing agent, all 25 pytest pass, all 6 frontend testids confirm correct mapping). Production card values reportedly appear to be swapped.
+  2. **Market Coverage = 12 % (250 / 2,090)** on production vs **37.2 % (774 / 2,081)** verified on preview.
+  3. **Share Sample Size = 7 products** on production vs **49 products** on preview.
+
+  Note the catalogue size delta too: 2,090 (prod) vs 2,081 (preview). Production picked up 9 newer Zid-synced SKUs sometime after preview's last sync — consistent with the original "+9" observation that kicked off this whole investigation.
+
+  **Most likely root causes (do NOT diagnose without checking sync_runs first):**
+  - (a) Production matcher hasn't run since the most recent Zid sync → the +9 new SKUs are unmatched, AND a chunk of previously-matched SKUs may have been swept by an unrelated wipe.
+  - (b) The deployed build doesn't actually contain iter19 — possible if a deploy step was missed, the build was cached, or the rollout didn't pick up the latest commit. The "swap-looking" Mkt./My revenue is a strong tell: the iter18 code path (where the FE rendered `kpis.total_revenue` instead of `kpis.market_revenue`) would visually look exactly like a swap.
+  - (c) Some prod-only data state we haven't accounted for (e.g., production has a separate `db.product_matches` whose rows were never backfilled to iter19 expectations).
+
+  **Diagnostic checklist when resuming (in this order — DO NOT skip steps):**
+  1. **First**: pull `db.sync_runs` from production (admin-only MongoDB read, or wire a temporary `GET /api/admin/sync-runs` endpoint that returns the last 10 rows). Confirm whether the post-deploy `kind="scheduled"` or `kind="manual"` run completed cleanly — if `match_status="error"` or no row exists since the deploy, that's root cause (a).
+  2. **Second**: hit `GET /api/data-freshness` on production and inspect the `sync_health` block. Specifically `last_run` timestamp, `last_match_status`, `last_match_added`, `alarm`. If `alarm` is non-null, the banner should already be showing the reason — collect that string from the user.
+  3. **Third**: hit `GET /api/my-products?days=90&limit=1` on production with super-admin token and dump the `kpis` block. If the keys `share_sample_size` and `matched_products` are MISSING from the response, that's root cause (b) — the deployed build is pre-iter19. If they're present but values are weird, root cause is (a) or (c).
+  4. **Fourth, only after the above**: spot-check a single product row in the response and verify both `has_competitor_pricing` AND `has_market_share` booleans are present. Iter18 had `has_market_data` (removed in iter19). If the response still contains `has_market_data`, deploy didn't pick up iter19.
+  5. **Fifth**: if matcher is the issue, the manual fix is the UI button "Run Matching" on the Import page (calls `POST /api/import/run-matching`). The chain will write a `sync_runs` row and the banner alarm will clear within ~2 min.
+
+  **Resume context:**
+  - User explicitly paused mid-session (mid-day, time-constrained). They asked NOT to code-change anything. The next agent must not assume "go-ahead" — wait for the user to revisit this item.
+  - When user does revisit, run the diagnostic checklist above BEFORE proposing a fix. The fix depends on which root cause is confirmed.
+  - User's note re passwords: do NOT include credentials in any chat-visible commands. They regenerated their super-admin password after the last incident; current credentials live in `/app/memory/test_credentials.md`.
+  - Production URL has changed since iter19 was authored: was `https://daleel.hrm-sa.com`, now `https://saudi-pets-monitor.emergent.host` (per latest deploy notification). Update any production-targeted runbooks/docs accordingly.
+
+- **P1** Resend email integration — waiting on user API key
+- **P1 (deprioritized)** Brand extraction at ingestion
+- **P1** Data-hygiene cleanup: `is_active=false` on the two leftover seed stores (`TEST_Regression_Store`, `Test Store`) so they stop appearing as `no_data` in the expanded banner (iter17 flag)
+- **P1** Tooltip on AVG. MARKET SHARE KPI explaining "computed over the N matched products" (iter18 flag)
+- **P1** Synthetic regression test that injects a known-bad `sync_runs` row to exercise the banner's red-alarm override deterministically (iter18 flag — live-validated in iter19 but no CI test pins this)
+- **P1** 3-tier accent on Market Coverage card (red <10 / yellow 10-30 / green >30) instead of binary (iter19 code-review note)
+- **P0** `server.py` refactor (>5,000 lines) into `routes/` — per user direction, queued after data-quality/UX fixes
+- **P2** Webhook notifications, `curl_cffi` Cloudflare bypass, sitemap discovery
+- **P3** Mahally Apify enrichment, auto platform detection, Salla soft-block detector, manual "Trigger Crawl Now" button on the freshness banner
 
 ## Credentials
 - **Super Admin (god mode, immutable)**: `a.disi@taqueen.sa` / `Ahmaddc90@`
