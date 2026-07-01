@@ -1871,47 +1871,33 @@ async def my_products(
         since = datetime.now(timezone.utc) - timedelta(days=days)
         snap_query = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
         effective_days = days
-    # iter21 (Feb 2026) — SCALABILITY FIX for the .to_list(50000) silent
-    # truncation bug that caused monotonicity violations on production
-    # (e.g. Carnilove SKU 8595602527212: num_competitors=1 at 30D but =2 at
-    # 90D because raw snapshots in 30D exceeded 50k and MongoDB returned
-    # an arbitrary 50k in natural order, dropping some competitor rows).
-    # Root fix: use $group aggregation to pre-collapse by (sku, store_id).
-    # Result: one document per (sku, store_id) pair — bounded by CATALOGUE
-    # size (N_skus × N_stores ≈ 35k on preview, ≈ 40k on prod), NOT by raw
-    # snapshot count. Full sorted snapshot history is preserved inside the
-    # 'snaps' array of each group, so downstream compute_product_metrics
-    # and _estimate_sales_from_snapshots still work unchanged.
-    pipeline = [
-        {"$match": snap_query},
-        {"$sort": {"crawled_at": 1}},
-        {"$group": {
-            "_id": {"sku": "$sku", "store_id": "$store_id"},
-            "snaps": {"$push": {
-                "sku": "$sku",
-                "store_id": "$store_id",
-                "store_name": "$store_name",
-                "crawled_at": "$crawled_at",
-                "price": "$price",
-                "original_price": "$original_price",
-                "discount_pct": "$discount_pct",
-                "qty_available": "$qty_available",
-                "in_stock": "$in_stock",
-                "sold_count": "$sold_count",
-                "confidence_score": "$confidence_score",
-                "source_tier": "$source_tier",
-                "product_url": "$product_url",
-            }},
-        }},
-    ]
-    groups = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(200000)
+    # iter21 HOTFIX (Feb 2026) — TEMPORARY REVERT of the $group aggregation
+    # to the iter20 .find().to_list(50000) implementation. Reason: the
+    # aggregation pipeline was returning HTTP 500 on production at 90D
+    # (~1M+ snapshots) because the server-side $sort stage timed out /
+    # blew memory even with allowDiskUse=True. Preview scale (~271k) never
+    # hit it. Reverting until we ship the proper fix (removed $sort +
+    # per-group array slice + load-tested at prod scale). This restores
+    # iter20 behaviour EXACTLY for this query — same known-good code.
+    # Follow-up TODO: re-architect using $group without $sort, sort each
+    # group's array in Python (bounded, cheap).
+    snapshots = await db.product_snapshots.find(
+        snap_query,
+        {
+            "_id": 0, "sku": 1, "store_id": 1, "store_name": 1,
+            "crawled_at": 1, "price": 1, "original_price": 1, "discount_pct": 1,
+            "qty_available": 1, "in_stock": 1, "sold_count": 1,
+            "confidence_score": 1, "source_tier": 1, "product_url": 1,
+        },
+    ).to_list(50000)
 
-    # Reshape into by_sku[sku][store_id] = [sorted snaps] — same downstream
-    # contract as before. The $sort in the pipeline ensures ascending order.
+    # Group snapshots by sku, then by store
     by_sku = {}
-    for g in groups:
-        key = g["_id"]
-        by_sku.setdefault(key["sku"], {})[key["store_id"]] = g["snaps"]
+    for s in snapshots:
+        by_sku.setdefault(s["sku"], {}).setdefault(s["store_id"], []).append(s)
+    for sku in by_sku:
+        for sid in by_sku[sku]:
+            by_sku[sku][sid].sort(key=lambda x: x["crawled_at"])
 
     # Get all products
     prod_query = {}
