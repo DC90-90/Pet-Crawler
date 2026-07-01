@@ -20,10 +20,13 @@ import time
 import pytest
 import requests
 from pymongo import MongoClient
+from dotenv import load_dotenv
+
+load_dotenv("/app/backend/.env")
 
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.environ.get("DB_NAME", "test_database")
+MONGO_URL = os.environ["MONGO_URL"]
+DB_NAME = os.environ["DB_NAME"]
 
 EMAIL = "a.disi@taqueen.sa"
 PASSWORD = "Ahmaddc90@"
@@ -60,11 +63,14 @@ def my_products_90d(session):
 class TestMatcherHealth:
     def test_product_matches_row_count(self, mongo):
         total = mongo.product_matches.count_documents({})
-        assert total >= 2200, f"expected ~2258 product_matches, got {total}"
+        # iter21 baseline: 2453 (was 2258 — matcher price-ratio hard-reject
+        # removed, so aggressive-discount competitors now land in the table)
+        assert total >= 2400, f"expected ~2453 product_matches, got {total}"
 
     def test_product_matches_distinct_my_skus(self, mongo):
         distinct = len(mongo.product_matches.distinct("my_sku"))
-        assert distinct >= 1090, f"expected ~1102 distinct my_skus, got {distinct}"
+        # iter21 baseline: 1150 (was 1102)
+        assert distinct >= 1140, f"expected ~1150 distinct my_skus, got {distinct}"
 
     def test_sync_runs_iter18_row_preserved(self, mongo):
         rows = list(mongo.sync_runs.find({"kind": "manual_match_only"}))
@@ -136,24 +142,26 @@ class TestKPIBlock:
 
     def test_kpi_matched_products_within_target(self, my_products_90d):
         kpis = my_products_90d["kpis"]
-        # iter20 baseline: 888 ± 5 (was 774±2 in iter19 — barcode-safe union
-        # widened coverage by +5.43pp per pre-fix simulation, +114 products)
-        assert 880 <= kpis["matched_products"] <= 900, (
-            f"matched_products={kpis['matched_products']} outside expected 888±10"
+        # iter21 baseline: 1057 ± 20 (was 888±10 in iter20 — the 50k truncation
+        # fix exposed +169 more matched products that were hidden by silent
+        # snapshot truncation on the 90D window)
+        assert 1030 <= kpis["matched_products"] <= 1090, (
+            f"matched_products={kpis['matched_products']} outside expected 1057±30"
         )
 
     def test_kpi_market_coverage_pct_within_target(self, my_products_90d):
         kpis = my_products_90d["kpis"]
-        # iter20 baseline: 42.7 ± 1 (was 37.2±2 in iter19)
-        assert 41.0 <= kpis["market_coverage_pct"] <= 44.0, (
-            f"market_coverage_pct={kpis['market_coverage_pct']} outside expected 42.7±1"
+        # iter21 baseline: 50.8 ± 2 (was 42.7±1 in iter20)
+        assert 48.5 <= kpis["market_coverage_pct"] <= 53.0, (
+            f"market_coverage_pct={kpis['market_coverage_pct']} outside expected 50.8±2"
         )
 
     def test_kpi_share_sample_size_within_target(self, my_products_90d):
         kpis = my_products_90d["kpis"]
-        # iter20 baseline: 59 ± 5 (was 49±2 in iter19)
-        assert 54 <= kpis["share_sample_size"] <= 64, (
-            f"share_sample_size={kpis['share_sample_size']} outside expected 59±5"
+        # iter21 baseline: 319 ± 20 (was 59±5 in iter20 — the 50k truncation
+        # was hiding most of the share-eligible rows on the 90D window)
+        assert 290 <= kpis["share_sample_size"] <= 360, (
+            f"share_sample_size={kpis['share_sample_size']} outside expected 319±30"
         )
 
     def test_kpi_avg_market_share_honest_zero(self, my_products_90d):

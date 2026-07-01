@@ -154,11 +154,17 @@ class TestRowPayloadContract:
 # ── KPI block at days=90 (widened iter20 baselines) ─────────
 
 
-class TestKpiBlockIter20:
-    """Iter20 widened the coverage baseline by ~5pp due to the union fix:
-    matched_products: 774 → ~888
-    market_coverage_pct: 37.2 → ~42.7
-    share_sample_size: 49 → ~59
+class TestKpiBlockIter21:
+    """Iter21 (Feb 2026) — the aggregation fix that replaced the .to_list(50000)
+    silent truncation exposed the TRUE 90D KPIs that were previously
+    hidden by dropping ~82% of the 90D snapshot data. All three counters
+    shifted up substantially. This is a data-completeness fix, not a
+    formula change.
+      matched_products: 888 → ~1057
+      market_coverage_pct: 42.7 → ~50.8
+      share_sample_size: 59 → ~319
+      total_units_sold: ~1178 → ~19232
+      market_revenue: ~28k → ~524k
     """
 
     def test_kpi_keys_present(self, client):
@@ -175,20 +181,19 @@ class TestKpiBlockIter20:
         r = client.get(f"{BASE_URL}/api/my-products",
                        params={"days": 90, "limit": 1}, timeout=20)
         mp = r.json()["kpis"]["matched_products"]
-        # Tolerance ±25 to be lenient; spec says ~888 ±10
-        assert 870 <= mp <= 910, f"matched_products expected ~888, got {mp}"
+        assert 1020 <= mp <= 1100, f"matched_products expected ~1057, got {mp}"
 
     def test_market_coverage_pct(self, client):
         r = client.get(f"{BASE_URL}/api/my-products",
                        params={"days": 90, "limit": 1}, timeout=20)
         cov = r.json()["kpis"]["market_coverage_pct"]
-        assert 41.0 <= cov <= 44.0, f"market_coverage_pct expected ~42.7, got {cov}"
+        assert 48.5 <= cov <= 53.0, f"market_coverage_pct expected ~50.8, got {cov}"
 
     def test_share_sample_size(self, client):
         r = client.get(f"{BASE_URL}/api/my-products",
                        params={"days": 90, "limit": 1}, timeout=20)
         sss = r.json()["kpis"]["share_sample_size"]
-        assert 50 <= sss <= 70, f"share_sample_size expected ~59, got {sss}"
+        assert 285 <= sss <= 360, f"share_sample_size expected ~319, got {sss}"
 
     def test_no_fair_share_100_leakage(self, client):
         """No row should have market_share_pct=100 with num_competitors=0
@@ -200,6 +205,31 @@ class TestKpiBlockIter20:
         viol = [r["sku"] for r in rows
                 if r.get("market_share_pct") == 100 and (r.get("num_competitors") or 0) == 0]
         assert not viol, f"Fair-share 100% leakage on {viol[:5]}"
+
+    def test_monotonicity_across_windows(self, client):
+        """iter21 truncation fix invariant: num_competitors must be monotonic
+        (non-decreasing) as the time window widens. Pre-fix the 30D window
+        would sometimes return FEWER competitors than 7D because MongoDB's
+        natural-order .to_list(50000) dropped different snapshots on each
+        call.
+        """
+        SKU = "8595602527212"  # Carnilove — the canonical regression case
+        prev = None
+        for days in (7, 14, 30, 90):
+            r = client.get(f"{BASE_URL}/api/my-products",
+                           params={"days": days, "search": SKU, "limit": 5},
+                           timeout=15)
+            assert r.status_code == 200
+            row = next((p for p in r.json().get("products", [])
+                        if p.get("sku") == SKU), None)
+            assert row is not None, f"Carnilove not in response @ days={days}"
+            n = row.get("num_competitors") or 0
+            if prev is not None:
+                assert n >= prev, (
+                    f"Monotonicity violated: days={days} num_competitors={n} "
+                    f"is less than previous window value {prev}"
+                )
+            prev = n
 
 
 # ── Matcher heal verification (READ-ONLY — do not re-trigger) ──

@@ -1,0 +1,53 @@
+{
+  "summary": "Iter21 pre-deploy API-level regression: 24/24 tests PASS against live preview endpoint. Aggregation refactor (bug 1) verified end-to-end — monotonicity holds strictly on Carnilove [(7,2)(14,2)(30,2)(90,3)] and Beaphar [(7,6)(14,6)(30,6)(90,8)], plus 5/5 randomly-picked own-store SKUs. 90D KPIs land dead-on the new baselines: matched_products=1057, market_coverage_pct=50.8, share_sample_size=319, total_units_sold=19232, market_revenue=523,816.65 SAR. Beaphar 30D still shows num_competitors=6, num_priced_competitors=6, prices [40.0, 48.0]. Matcher price-ratio fix (bug 2) verified in db: Carnilove has 2 barcode-method matches with confidence=99 and none carry SUSPICIOUS_PRICE; globally zero barcode-method matches carry that flag. Matcher heal thresholds met: product_matches=2453 total / 1150 distinct my_skus (>=2400/1140). Iter19 KPI invariant verified over the full 2081-row catalogue via pagination: matched_products EXACTLY equals rows with has_competitor_pricing=true, and share_sample_size EXACTLY equals rows with has_market_share=true. All 11 sibling endpoints return 200 + valid JSON. Performance is excellent — /api/my-products?days=90&limit=500 completes in 2.62s (<20s budget), /api/insights/sales?days=90 completes in 0.22s (<25s budget). data-freshness sync_health block intact. Zid-suffix safety unchanged.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/my-products?own_only=true", "issue": "The own_only=true query param appears to be silently ignored — server returns the mixed catalogue in `products` while KPIs stay unchanged. Tests filter client-side via is_my_product=True. Not a regression from iter21 but worth confirming whether own_only was ever a supported param."},
+      {"endpoint": "db.sync_runs", "issue": "The `manual_match_only` boolean field referenced in the review request is NOT persisted on sync_runs documents. The equivalent state is (sync_status='skipped' AND match_status='ok' AND match_added>=1100), and there are 5 such recent runs. Consider persisting `manual_match_only=True` explicitly if downstream code or docs reference it."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "passed_tests": [
+    "Response shape: 14 required fields present on 50 sampled rows (sku, name_en, name_ar, my_price, num_competitors, num_priced_competitors, has_competitor_pricing, competitor_min_price, competitor_max_price, vs_my_price_pct, market_share_pct, has_market_share, qty_sold_est, num_sellers).",
+    "Carnilove (8595602527212) monotonic: [(7,2)(14,2)(30,2)(90,3)] — impossible before iter21.",
+    "Beaphar (8711231124985) monotonic + prices intact: [(7,6)(14,6)(30,6)(90,8)], competitor_min_price=40.0, competitor_max_price=48.0 on 30D.",
+    "5 random own-store SKUs monotonic across 7D/14D/30D/90D (e.g. 8858788709286 [(7,1)(14,1)(30,1)(90,3)], 8057507370381 [(7,3)(14,3)(30,3)(90,4)]).",
+    "90D KPI baselines: matched_products=1057, market_coverage_pct=50.8, share_sample_size=319, total_units_sold=19232, market_revenue=523,816.65 SAR.",
+    "iter19 KPI invariant (full-catalogue): matched_products (1057) == count(has_competitor_pricing) and share_sample_size (319) == count(has_market_share) across all 2081 rows.",
+    "Carnilove product_matches: 2 rows, method='barcode', confidence=99, no SUSPICIOUS_PRICE flag.",
+    "GLOBAL: zero barcode-method product_matches carry SUSPICIOUS_PRICE (Level-2-only scope verified).",
+    "Matcher heal: product_matches total=2453 (>=2400), distinct my_skus=1150 (>=1140), 5 sync_runs with match_status='ok' and match_added in [1101, 1150].",
+    "/api/data-freshness sync_health has last_run/last_sync_status/last_match_status/alarm.",
+    "11 sibling endpoints 200+JSON: insights/summary, insights/leaderboard, insights/top-sellers, insights/trending, insights/gaps, insights/price-wars, discounts/top-pct, scanner/opportunities, data-freshness, products/8595602527212/full, products/8711231124985/full.",
+    "Performance: /api/my-products?days=90&limit=500 = 2.62s (<20s), /api/insights/sales?days=90 = 0.22s (<25s).",
+    "Zid-suffix safety: search for '8005852750068-RUDC' does not crash and does not inflate counts."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iteration21_predeploy_api.py",
+    "/app/test_reports/pytest/iteration21_predeploy.xml"
+  ],
+  "action_items": [
+    "Verify whether /api/my-products?own_only=true is intended to filter server-side. Currently the param is silently ignored (returns full catalogue). If unintended, add a filter or drop the param from consumers.",
+    "Optional: persist `manual_match_only=True` on sync_runs docs when only the matcher runs (not sync). Currently code relies on the (skipped + match_ok + added) triple, which works but obscures intent."
+  ],
+  "critical_code_review_comments": [
+    "server.py my_products() aggregation refactor is correct — Carnilove monotonicity [(7,2)(14,2)(30,2)(90,3)] proves the $group by (sku,store_id) preserves full history without truncation. 500 row limit + 2453 total matches → the pipeline is stable well within Mongo's per-stage 100MB working set.",
+    "matcher.py SUSPICIOUS_PRICE gating to Level-2 only is verified by a global DB scan: zero barcode matches carry the flag. This is defensible — barcode equality is definitive same-product evidence, so aggressive discount doesn't invalidate the match.",
+    "iter19 invariant test now paginates through the full catalogue (2081 rows) — previous implementation asserted only against the 500-row page which would have masked drift. Consider using this pagination pattern for future KPI invariants.",
+    "Performance headroom is very healthy (2.6s vs 20s budget on my_products@90D). The aggregation is not going to be the bottleneck in production either. insights/sales@90D at 0.22s suggests it caches or uses a different code path — verify it truly hits the my_products aggregation with own_only=False as claimed by the review request."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration21_predeploy_api.py (NEW — 24 API-level pre-deploy regression tests)"
+  ],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "N/A (backend-only per request)"},
+  "test_credentials": {
+    "super_admin_email": "a.disi@taqueen.sa",
+    "super_admin_password": "Ahmaddc90@"
+  },
+  "seed_data_creation": "None. Tests are read-only against the live preview endpoint and MongoDB. Matcher heal was NOT triggered (already run before this iteration).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter21 closed two bugs: (1) /api/my-products aggregation refactor eliminates the .to_list(50000) silent truncation. Monotonicity is now guaranteed — Carnilove pre-fix showed 2@7D but 1@30D, post-fix shows [2,2,2,3] across [7,14,30,90] as expected. (2) Matcher price-ratio hard-rejects removed for Level-1 (barcode) and Level-2 (SKU); SUSPICIOUS_PRICE flag scoped to Level-2 only. Verified in db.product_matches — 2453 total across 1150 distinct my_skus, zero barcode matches with SUSPICIOUS_PRICE. 90D KPIs are the TRUE post-truncation numbers: 1057/50.8%/319/19232 units/523816 SAR. Response shape uses key `products` (not `rows`). The `own_only=true` query param seems to be a no-op; test filters client-side via is_my_product=True. `manual_match_only` field is not persisted on sync_runs; equivalent state is sync_status='skipped'+match_status='ok'+match_added>=1100. If next iteration touches my_products or matcher, re-run /app/backend/tests/test_iteration21_predeploy_api.py — all 24 tests should stay green. Do NOT trigger POST /api/import/run-matching — heal is already done.",
+  "rca_of_the_issue": "Iter21 shipped two coupled fixes with independent RCAs. (1) TRUNCATION: server.py my_products() row builder loaded product_snapshots via .to_list(50000). On production 90D windows the snapshot count exceeded 50k, so Motor silently truncated — the (sku, store_id) pairs that ended up dropped were non-deterministic (Mongo cursor order isn't stable across queries). This produced the observed anti-monotonic Carnilove case (2 competitors at 7D but only 1 at 30D — the 30D pull happened to drop the second store's snapshots). Fix: replace the flat find+.to_list with a $group aggregation that pre-collapses to one document per (sku, store_id) carrying (min_price, max_price, latest_snapshot). Grouped doc count is bounded by distinct pairs (~35k) which is well under any hard limit and comfortably within Motor's default 100MB working set. Verified: monotonicity now holds strictly on Carnilove, Beaphar, and 5 random own-store SKUs. (2) PRICE RATIO: matcher.py Level-1 rejected barcode matches when price_ratio > 2.0×, Level-2 rejected SKU matches when ratio > 1.5×. Aggressive discounts (Carnilove 2.93 SAR vs 15 SAR market = 5.1× ratio) triggered false rejects even when the barcode was identical (definitive same-product evidence). Fix: remove the hard rejects; keep the informational SUSPICIOUS_PRICE flag but scope it to Level-2 (SKU) only, since barcode equality alone is enough to trust the match regardless of price gap. Verified: Carnilove now has 2 barcode matches at confidence=99 with no flags, and globally zero barcode matches in db.product_matches carry SUSPICIOUS_PRICE. Mitigation locked in by /app/backend/tests/test_iteration21_predeploy_api.py (24 tests) + the previously-added test_iteration21_truncation_and_ratio.py."
+}

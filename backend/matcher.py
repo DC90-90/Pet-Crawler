@@ -235,13 +235,17 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
             c_weight_g = _extract_weight_grams(c_name)
             if _weights_reject(my_weight_g, c_weight_g):
                 continue
-            # Price-ratio sanity for barcode matches: ≤ 2.0× (catches mis-tagged barcodes)
-            my_price = float(my_product.get("sale_price") or my_product.get("price") or 0)
-            comp_price = float(snap.get("price", 0))
-            if my_price > 0 and comp_price > 0:
-                ratio = max(my_price, comp_price) / min(my_price, comp_price)
-                if ratio > 2.0:
-                    continue
+            # iter21 (Feb 2026) — REMOVED the previous "price ratio > 2.0 →
+            # skip" hard-reject for barcode matches. Rationale: barcode/EAN
+            # equality is definitive proof of same-product (that's the whole
+            # point of an international barcode). A price gap doesn't disprove
+            # sameness — it usually means one side runs a deep discount or the
+            # other side is at MRP. Aggressive user discounts (e.g. Carnilove
+            # 2.93 SAR vs market 13–22 SAR) were being silently dropped from
+            # product_matches, breaking Price Intel and Market Position for
+            # every product they discounted. No new flag is added for L1
+            # either — a mis-tagged barcode is a crawler ingestion bug to
+            # fix at source, not a per-match annotation to spam every day.
             conf = 100 if c_sku in confirmed else 99
             matches.append(_build_match(my_product, snap, c_prod, conf, "barcode"))
             matched_skus.add(c_sku)
@@ -278,14 +282,14 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
         if _weights_reject(my_weight_g, c_weight_g):
             continue
 
-        # Price-ratio sanity for SKU matches: ≤ 1.5×
-        my_price = float(my_product.get("sale_price") or my_product.get("price") or 0)
-        comp_price = float(snap.get("price", 0))
-        if my_price > 0 and comp_price > 0:
-            ratio = max(my_price, comp_price) / min(my_price, comp_price)
-            if ratio > 1.5:
-                continue
-
+        # iter21 (Feb 2026) — REPLACED the previous "price ratio > 1.5 →
+        # skip" hard-reject with the existing SUSPICIOUS_PRICE flag surfaced
+        # by _build_match (fires when abs(diff_pct) > 40%). SKU-string
+        # equality is a weaker signal than barcode equality — SKUs are
+        # proprietary strings, so a large price gap on a Level-2 match is
+        # genuinely worth annotating. But we no longer HIDE the match:
+        # user's real competitors land in product_matches, and the flag
+        # gives the UI a subtle "review this" indicator.
         conf = 100 if c_sku in confirmed else 95
         matches.append(_build_match(my_product, snap, c_prod, conf, "sku"))
         matched_skus.add(c_sku)
@@ -308,7 +312,13 @@ def _build_match(my_prod, snap, comp_prod, confidence, method):
     diff_pct = round((diff_sar / my_price) * 100, 1) if my_price > 0 else 0
 
     flags = []
-    if abs(diff_pct) > 40:
+    # iter21 (Feb 2026): SUSPICIOUS_PRICE flag fires only for Level-2 (SKU
+    # string) matches. Barcode/EAN equality is definitive same-product
+    # evidence, so a large price gap on a barcode match is legitimate
+    # discount noise (aggressive user discount OR competitor at MRP), not
+    # a data-quality signal. SKU-string equality is weaker so a >40% gap
+    # is genuinely worth annotating for the user's review.
+    if method == "sku" and abs(diff_pct) > 40:
         flags.append("SUSPICIOUS_PRICE")
 
     return {
