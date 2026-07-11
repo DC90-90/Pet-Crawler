@@ -25,6 +25,7 @@ from crawlers import (
     extract_brand, guess_category, guess_animal, extract_weight,
     sync_own_store_prices,
 )
+from store_registry import ensure_stores as registry_ensure_stores
 from cryptography.fernet import Fernet, InvalidToken
 
 # ── Refactored modules (Feb 2026) ───────────────────────────
@@ -527,6 +528,12 @@ EXTRA_PRODUCT_TEMPLATES = [
 async def seed_database():
     if await db.stores.count_documents({}) > 0:
         return
+    # Real-data deployments must set SEED_DEMO_DATA=false: the demo seed writes
+    # synthetic products/snapshots that would pollute live crawl analytics.
+    # Stores are seeded by ensure_stores() (store_registry.py) either way.
+    if os.environ.get("SEED_DEMO_DATA", "true").lower() in ("false", "0", "no"):
+        logger.info("SEED_DEMO_DATA=false — skipping synthetic demo seed")
+        return
     logger.info("Seeding Daleel database...")
     random.seed(42)
     now = datetime.now(timezone.utc)
@@ -618,100 +625,12 @@ async def seed_database():
 
 
 async def ensure_stores():
-    """Ensure all required stores exist and have correct configuration."""
-    # Stores that should route Tier 1/2/3 traffic through the Saudi residential
-    # proxy (Webshare). Hardcoded list — bandwidth is finite (50 GB/month) so we
-    # explicitly opt-in per domain rather than proxy everything.
-    proxy_stores = {"cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa", "lanapets.com", "zarafaksa.com", "caty-store.com"}
-    required_stores = [
-        {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
-        {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
-        {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "use_storefront_categories": True, "tier1_only": False},
-        {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products"},
-        {"name": "Aleef", "domain": "aleef.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
-        {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
-        {"name": "Petsy", "domain": "petsysa.com", "platform": "zid", "priority": 2, "working_endpoint": "/api/v1/products"},
-        {"name": "Panda Store", "domain": "matjarpanda.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
-        {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
-        {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
-    ]
-    now = datetime.now(timezone.utc)
-    added = 0
-    for s in required_stores:
-        existing = await db.stores.find_one({"domain": s["domain"]})
-        if not existing:
-            await db.stores.insert_one({
-                "id": str(uuid.uuid4()), "name": s["name"], "domain": s["domain"],
-                "platform": s["platform"], "base_url": f"https://{s['domain']}",
-                "crawl_frequency_hrs": 12 if s["priority"] == 1 else 24,
-                "buyer_account_enc": "", "is_active": True, "priority": s["priority"],
-                "working_endpoint": s.get("working_endpoint", ""),
-                "tier1_only": bool(s.get("tier1_only", False)),
-                "use_storefront_categories": bool(s.get("use_storefront_categories", False)),
-                "use_proxy": s["domain"] in proxy_stores,
-                "last_crawled_at": "", "created_at": now.isoformat(),
-            })
-            added += 1
-            logger.info(f"[Stores] Added: {s['name']} ({s['domain']})")
-        else:
-            # Update platform/working_endpoint/tier1_only/use_storefront_categories/use_proxy if changed
-            updates = {}
-            if existing.get("platform") != s["platform"]:
-                updates["platform"] = s["platform"]
-            if s.get("working_endpoint") and existing.get("working_endpoint") != s["working_endpoint"]:
-                updates["working_endpoint"] = s["working_endpoint"]
-            desired_tier1_only = bool(s.get("tier1_only", False))
-            if bool(existing.get("tier1_only", False)) != desired_tier1_only:
-                updates["tier1_only"] = desired_tier1_only
-            desired_storefront = bool(s.get("use_storefront_categories", False))
-            if bool(existing.get("use_storefront_categories", False)) != desired_storefront:
-                updates["use_storefront_categories"] = desired_storefront
-            desired_proxy = s["domain"] in proxy_stores
-            if bool(existing.get("use_proxy", False)) != desired_proxy:
-                updates["use_proxy"] = desired_proxy
-            if updates:
-                await db.stores.update_one({"domain": s["domain"]}, {"$set": updates})
-                logger.info(f"[Stores] Updated config for {s['name']}: {updates}")
+    """Ensure all required stores exist and have correct configuration.
 
-    # Ensure use_proxy is also set for stores that already exist in DB but aren't
-    # in required_stores (e.g. Lana Pets was added externally via ingest API).
-    for domain in proxy_stores:
-        await db.stores.update_one(
-            {"domain": domain, "use_proxy": {"$ne": True}},
-            {"$set": {"use_proxy": True}},
-        )
-    # Defensive: every other store explicitly off
-    await db.stores.update_many(
-        {"domain": {"$nin": list(proxy_stores)}, "use_proxy": {"$exists": False}},
-        {"$set": {"use_proxy": False}},
-    )
-
-    # Diagnostic recovery (Feb 2026) — Caty was deactivated earlier due to persistent
-    # 404s. Re-enable it now that it's routed through the Saudi proxy.
-    await db.stores.update_one(
-        {"domain": "caty-store.com"},
-        {"$set": {"is_active": True}},
-    )
-
-    # Mark pets-houses.com as own store
-    await db.stores.update_one(
-        {"domain": "pets-houses.com"},
-        {"$set": {"is_own_store": True}},
-    )
-
-    # Fix Cute Pets domain (cutepets.com → cutepets.com.sa) if old entry exists
-    old_cute = await db.stores.find_one({"domain": "cutepets.com"})
-    new_cute = await db.stores.find_one({"domain": "cutepets.com.sa"})
-    if old_cute and new_cute:
-        # Delete old entry if new one exists
-        await db.stores.delete_one({"domain": "cutepets.com"})
-        logger.info("[Stores] Removed old cutepets.com entry (replaced by cutepets.com.sa)")
-    elif old_cute and not new_cute:
-        await db.stores.update_one({"domain": "cutepets.com"}, {"$set": {"domain": "cutepets.com.sa", "platform": "salla", "base_url": "https://cutepets.com.sa", "working_endpoint": "/en/api/v1/products"}})
-        logger.info("[Stores] Updated cutepets.com → cutepets.com.sa")
-
-    if added:
-        logger.info(f"[Stores] Added {added} new stores")
+    Store registry moved to store_registry.py (single source of truth shared
+    with run_market_crawl.py). This wrapper keeps the startup call site stable.
+    """
+    await registry_ensure_stores(db)
 
 # ── Auth Routes ─────────────────────────────────────────────
 @router.post("/auth/register")

@@ -266,3 +266,5 @@ credentials.json
 *.pem
 *.key
 .credentials
+state.json
+reports/
