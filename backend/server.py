@@ -4986,6 +4986,9 @@ async def startup():
         await db.product_snapshots.create_index([("crawled_at", -1), ("store_id", 1)])
         await db.product_snapshots.create_index([("crawled_at", -1), ("sku", 1)])
         await db.product_snapshots.create_index([("crawled_at", -1), ("confidence_score", 1)])
+        # iter22 (Jul 2026) — matcher lookup fix: index-backed sort for
+        # _build_competitor_lookups at production scale.
+        await db.product_snapshots.create_index([("store_id", 1), ("sku", 1), ("crawled_at", -1)])
         await db.proxy_usage.create_index("crawled_at")
         await db.products.create_index("sku", unique=True)
         await db.products.create_index("category")
