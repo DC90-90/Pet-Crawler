@@ -26,6 +26,7 @@ from crawlers import (
     sync_own_store_prices,
 )
 from cryptography.fernet import Fernet, InvalidToken
+from store_registry import ensure_stores as registry_ensure_stores
 
 # ── Refactored modules (Feb 2026) ───────────────────────────
 from models import (
@@ -527,6 +528,12 @@ EXTRA_PRODUCT_TEMPLATES = [
 async def seed_database():
     if await db.stores.count_documents({}) > 0:
         return
+    # Real-data deployments must set SEED_DEMO_DATA=false: the demo seed writes
+    # synthetic products/snapshots that would pollute live crawl analytics.
+    # Stores are seeded by ensure_stores() (store_registry.py) either way.
+    if os.environ.get("SEED_DEMO_DATA", "true").lower() in ("false", "0", "no"):
+        logger.info("SEED_DEMO_DATA=false — skipping synthetic demo seed")
+        return
     logger.info("Seeding Daleel database...")
     random.seed(42)
     now = datetime.now(timezone.utc)
@@ -618,100 +625,12 @@ async def seed_database():
 
 
 async def ensure_stores():
-    """Ensure all required stores exist and have correct configuration."""
-    # Stores that should route Tier 1/2/3 traffic through the Saudi residential
-    # proxy (Webshare). Hardcoded list — bandwidth is finite (50 GB/month) so we
-    # explicitly opt-in per domain rather than proxy everything.
-    proxy_stores = {"cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa", "lanapets.com", "zarafaksa.com", "caty-store.com"}
-    required_stores = [
-        {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
-        {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
-        {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "use_storefront_categories": True, "tier1_only": False},
-        {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products"},
-        {"name": "Aleef", "domain": "aleef.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
-        {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
-        {"name": "Petsy", "domain": "petsysa.com", "platform": "zid", "priority": 2, "working_endpoint": "/api/v1/products"},
-        {"name": "Panda Store", "domain": "matjarpanda.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
-        {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
-        {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "use_storefront_categories": True, "tier1_only": False},
-    ]
-    now = datetime.now(timezone.utc)
-    added = 0
-    for s in required_stores:
-        existing = await db.stores.find_one({"domain": s["domain"]})
-        if not existing:
-            await db.stores.insert_one({
-                "id": str(uuid.uuid4()), "name": s["name"], "domain": s["domain"],
-                "platform": s["platform"], "base_url": f"https://{s['domain']}",
-                "crawl_frequency_hrs": 12 if s["priority"] == 1 else 24,
-                "buyer_account_enc": "", "is_active": True, "priority": s["priority"],
-                "working_endpoint": s.get("working_endpoint", ""),
-                "tier1_only": bool(s.get("tier1_only", False)),
-                "use_storefront_categories": bool(s.get("use_storefront_categories", False)),
-                "use_proxy": s["domain"] in proxy_stores,
-                "last_crawled_at": "", "created_at": now.isoformat(),
-            })
-            added += 1
-            logger.info(f"[Stores] Added: {s['name']} ({s['domain']})")
-        else:
-            # Update platform/working_endpoint/tier1_only/use_storefront_categories/use_proxy if changed
-            updates = {}
-            if existing.get("platform") != s["platform"]:
-                updates["platform"] = s["platform"]
-            if s.get("working_endpoint") and existing.get("working_endpoint") != s["working_endpoint"]:
-                updates["working_endpoint"] = s["working_endpoint"]
-            desired_tier1_only = bool(s.get("tier1_only", False))
-            if bool(existing.get("tier1_only", False)) != desired_tier1_only:
-                updates["tier1_only"] = desired_tier1_only
-            desired_storefront = bool(s.get("use_storefront_categories", False))
-            if bool(existing.get("use_storefront_categories", False)) != desired_storefront:
-                updates["use_storefront_categories"] = desired_storefront
-            desired_proxy = s["domain"] in proxy_stores
-            if bool(existing.get("use_proxy", False)) != desired_proxy:
-                updates["use_proxy"] = desired_proxy
-            if updates:
-                await db.stores.update_one({"domain": s["domain"]}, {"$set": updates})
-                logger.info(f"[Stores] Updated config for {s['name']}: {updates}")
+    """Ensure all required stores exist and have correct configuration.
 
-    # Ensure use_proxy is also set for stores that already exist in DB but aren't
-    # in required_stores (e.g. Lana Pets was added externally via ingest API).
-    for domain in proxy_stores:
-        await db.stores.update_one(
-            {"domain": domain, "use_proxy": {"$ne": True}},
-            {"$set": {"use_proxy": True}},
-        )
-    # Defensive: every other store explicitly off
-    await db.stores.update_many(
-        {"domain": {"$nin": list(proxy_stores)}, "use_proxy": {"$exists": False}},
-        {"$set": {"use_proxy": False}},
-    )
-
-    # Diagnostic recovery (Feb 2026) — Caty was deactivated earlier due to persistent
-    # 404s. Re-enable it now that it's routed through the Saudi proxy.
-    await db.stores.update_one(
-        {"domain": "caty-store.com"},
-        {"$set": {"is_active": True}},
-    )
-
-    # Mark pets-houses.com as own store
-    await db.stores.update_one(
-        {"domain": "pets-houses.com"},
-        {"$set": {"is_own_store": True}},
-    )
-
-    # Fix Cute Pets domain (cutepets.com → cutepets.com.sa) if old entry exists
-    old_cute = await db.stores.find_one({"domain": "cutepets.com"})
-    new_cute = await db.stores.find_one({"domain": "cutepets.com.sa"})
-    if old_cute and new_cute:
-        # Delete old entry if new one exists
-        await db.stores.delete_one({"domain": "cutepets.com"})
-        logger.info("[Stores] Removed old cutepets.com entry (replaced by cutepets.com.sa)")
-    elif old_cute and not new_cute:
-        await db.stores.update_one({"domain": "cutepets.com"}, {"$set": {"domain": "cutepets.com.sa", "platform": "salla", "base_url": "https://cutepets.com.sa", "working_endpoint": "/en/api/v1/products"}})
-        logger.info("[Stores] Updated cutepets.com → cutepets.com.sa")
-
-    if added:
-        logger.info(f"[Stores] Added {added} new stores")
+    Store registry moved to store_registry.py (single source of truth shared
+    with run_market_crawl.py). This wrapper keeps the startup call site stable.
+    """
+    await registry_ensure_stores(db)
 
 # ── Auth Routes ─────────────────────────────────────────────
 @router.post("/auth/register")
@@ -1297,6 +1216,8 @@ async def data_freshness(user=Depends(get_user)):
         "last_match_status": None,
         "last_sync_updated": 0,
         "last_match_added": 0,
+        "last_sync_source": None,
+        "last_sync_warning": None,
         "next_run_expected": None,
         "scheduler_running": bool(scheduler.running),
         "is_stale": False,  # True if last_run is older than 2× the 6h interval (12h)
@@ -1319,6 +1240,8 @@ async def data_freshness(user=Depends(get_user)):
         sync_health["last_match_status"] = last_run.get("match_status")
         sync_health["last_sync_updated"] = int(last_run.get("sync_updated") or 0)
         sync_health["last_match_added"] = int(last_run.get("match_added") or 0)
+        sync_health["last_sync_source"] = last_run.get("sync_source")
+        sync_health["last_sync_warning"] = last_run.get("sync_warning")
 
     # APScheduler liveness for own_store_sync job
     sync_job = scheduler.get_job("own_store_sync") if scheduler.running else None
@@ -1339,6 +1262,11 @@ async def data_freshness(user=Depends(get_user)):
         sync_health["alarm"] = f"Last sync was {sync_health['last_run_age_hours']}h ago (expected every 6h)"
     elif sync_health["last_sync_status"] == "error":
         sync_health["alarm"] = "Last sync failed — check sync_runs for traceback"
+    elif sync_health["last_sync_status"] == "degraded" or sync_health.get("last_sync_warning"):
+        sync_health["alarm"] = sync_health.get("last_sync_warning") or (
+            "Own-store sync fell back to public crawl — sold counters are not being "
+            "captured and My Revenue / Units Sold KPIs will stall"
+        )
     elif sync_health["last_match_status"] == "error":
         sync_health["alarm"] = "Last matcher run failed — check sync_runs for traceback"
 
@@ -3972,7 +3900,7 @@ async def import_status(user=Depends(get_user)):
     confirmed_count = await db.product_matches.count_documents({"manually_confirmed": True})
     blacklist_count = await db.match_blacklist.count_documents({})
     job = await db.matching_jobs.find_one({"job": "latest"}, {"_id": 0})
-    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "name": 1, "domain": 1, "last_own_store_sync": 1, "own_store_sync_updated": 1, "own_store_sync_not_found": 1, "own_store_sync_crawled": 1})
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "name": 1, "domain": 1, "last_own_store_sync": 1, "own_store_sync_updated": 1, "own_store_sync_not_found": 1, "own_store_sync_crawled": 1, "own_store_sync_source": 1, "own_store_sync_warning": 1})
     return {
         "my_products": my_count,
         "total_matches": match_count,
@@ -3987,6 +3915,10 @@ async def import_status(user=Depends(get_user)):
                 "own_store_sync_updated": own.get("own_store_sync_updated", 0),
                 "own_store_sync_not_found": own.get("own_store_sync_not_found", 0),
                 "own_store_sync_crawled": own.get("own_store_sync_crawled", 0),
+                # zid_api | public_crawl — public_crawl with creds configured means
+                # sold counters aren't captured and own-sales KPIs are stalling.
+                "own_store_sync_source": own.get("own_store_sync_source"),
+                "own_store_sync_warning": own.get("own_store_sync_warning") or None,
             }
             if own else None
         ),
@@ -4043,7 +3975,13 @@ async def _run_sync_and_match(kind: str):
             run["sync_updated"] = int(res.get("updated") or 0)
             run["sync_discovered"] = int(res.get("discovered") or 0)
             run["sync_archived"] = int(res.get("archived") or 0)
-            logger.info(f"[SyncMatch/{kind}] sync OK: updated={run['sync_updated']} discovered={run['sync_discovered']} archived={run['sync_archived']}")
+            run["sync_source"] = res.get("source")
+            run["sync_warning"] = res.get("warning")
+            if run["sync_warning"]:
+                # Degraded, not ok: the sync "worked" but via public crawl while
+                # Zid creds are configured — own sales KPIs are stalling.
+                run["sync_status"] = "degraded"
+            logger.info(f"[SyncMatch/{kind}] sync OK: updated={run['sync_updated']} discovered={run['sync_discovered']} archived={run['sync_archived']} source={run['sync_source']}")
         except Exception as e:
             run["sync_status"] = "error"
             run["sync_error"] = str(e)[:500]

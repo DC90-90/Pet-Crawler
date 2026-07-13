@@ -1232,6 +1232,49 @@ def _is_valid_ean(val):
     return bool(val) and bool(_NUMERIC_BARCODE_RE.match(str(val).strip()))
 
 
+# Zid's Merchant API has exposed the cumulative sold counter under different
+# names across API versions/plans; probe them in priority order. Capturing this
+# is what powers the "My Revenue / Units Sold" KPIs via the estimator's
+# sold_count_diff method — before Feb 2026 own-store snapshots hardcoded
+# sold_count=0, which made own-store sales estimation structurally impossible.
+ZID_SOLD_FIELD_CANDIDATES = ("sold_quantity", "sold_count", "sales_count", "total_sold", "sold")
+
+
+def _extract_zid_sold_count(product: dict) -> int:
+    """Best-effort extraction of the cumulative units-sold counter from a Zid
+    Merchant API product payload. Returns 0 when absent or unparseable."""
+    for key in ZID_SOLD_FIELD_CANDIDATES:
+        val = product.get(key)
+        if val is None:
+            continue
+        try:
+            n = int(float(str(val).strip()))
+        except (ValueError, TypeError):
+            continue
+        if n >= 0:
+            return n
+    return 0
+
+
+def _own_sync_fallback_warning(zid_status: str):
+    """Return a user-facing warning when the own-store sync unexpectedly fell
+    back from the Zid Merchant API to the public crawl.
+
+    `missing_token` returns None — creds simply aren't configured, which is a
+    setup state, not a runtime failure. Any other non-ok status means creds ARE
+    configured but the API path failed, which silently zeroes the own-store
+    sales KPIs (no snapshots with sold counters get written) and must be
+    surfaced on the dashboard.
+    """
+    if zid_status in ("ok", "missing_token", None):
+        return None
+    return (
+        f"Own-store sync fell back to public crawl (Zid API status: {zid_status}). "
+        "Own snapshots with sold counters are NOT being written — 'My Revenue' and "
+        "'Units Sold' KPIs will stall until the Zid API connection is restored."
+    )
+
+
 async def _fetch_zid_api_catalog(db, store):
     """Fetch the full product catalogue from Zid's authenticated Merchant API.
 
@@ -1283,6 +1326,10 @@ async def _fetch_zid_api_catalog(db, store):
                         "sale_price": p.get("sale_price"),
                         "qty_available": 0 if p.get("is_infinite") else (p.get("quantity") or 0),
                         "in_stock": bool(p.get("is_infinite")) or ((p.get("quantity") or 0) > 0),
+                        # Cumulative units-sold counter — feeds the estimator's
+                        # sold_count_diff method (works even for is_infinite
+                        # products whose qty can never show depletion).
+                        "sold_count": _extract_zid_sold_count(p),
                         "img_url": ((p.get("images") or [{}])[0] or {}).get("origin") or ((p.get("images") or [{}])[0] or {}).get("image") or "",
                         "product_url": p.get("html_url") or "",
                         "_zid_id": p.get("id"),
@@ -1531,7 +1578,9 @@ async def sync_own_store_prices(db, store=None):
                 "discount_pct": 0,
                 "in_stock": in_stock,
                 "qty_available": int(qty),
-                "sold_count": 0,
+                # Real cumulative sold counter from the Zid Merchant API (was
+                # hardcoded 0 until Feb 2026, which zeroed all own-sales KPIs).
+                "sold_count": int(raw.get("sold_count") or 0),
                 "product_url": raw.get("product_url") or "",
                 "source_tier": 0,  # 0 = authenticated API (best signal we have)
                 "confidence_score": 99,
@@ -1564,6 +1613,13 @@ async def sync_own_store_prices(db, store=None):
         crawl_log["error"] = (crawl_log.get("error") or "") + " | own-store crawl returned 0 items"
     await _finalize_crawl_log(db, crawl_log, store["id"])
 
+    # Fallback alert (Feb 2026): creds configured but the Zid API path failed —
+    # own snapshots (and their sold counters) are not being written, which
+    # silently zeroes the My Revenue / Units Sold KPIs. Surface it everywhere.
+    sync_warning = _own_sync_fallback_warning(zid_status) if sync_source_label == "public_crawl" else None
+    if sync_warning:
+        logger.warning(f"[OwnSync] {sync_warning}")
+
     # Persist sync stats on the store doc for /api/import/status
     await db.stores.update_one(
         {"id": store["id"]},
@@ -1574,6 +1630,8 @@ async def sync_own_store_prices(db, store=None):
             "own_store_sync_crawled": crawled,
             "own_store_sync_discovered": discovered,
             "own_store_sync_archived": archived,
+            "own_store_sync_source": sync_source_label,
+            "own_store_sync_warning": sync_warning or "",
         }},
     )
 
@@ -1586,6 +1644,8 @@ async def sync_own_store_prices(db, store=None):
         "store": store["name"],
         "domain": store.get("domain"),
         "source": sync_source_label,
+        "zid_status": zid_status,
+        "warning": sync_warning,
         "crawled": crawled,
         "updated": updated,
         "discovered": discovered,
