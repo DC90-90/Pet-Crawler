@@ -89,6 +89,11 @@ class TestTruncationFix:
             r = client.get(f"{BASE_URL}/api/my-products",
                            params={"days": days, "search": BEAPHAR_SKU, "limit": 5},
                            timeout=15)
+            if r.status_code == 503:
+                # iter23 guard contract: market-wide-empty window alarms (503)
+                # instead of rendering an empty dashboard — skip the window.
+                assert "snapshot" in r.json().get("detail", "").lower()
+                continue
             row = next((p for p in r.json().get("products", [])
                         if p.get("sku") == BEAPHAR_SKU), None)
             assert row is not None
@@ -106,6 +111,10 @@ class TestTruncationFix:
             r = client.get(f"{BASE_URL}/api/my-products",
                            params={"days": days, "search": CARNILOVE_SKU, "limit": 5},
                            timeout=15)
+            if r.status_code == 503:
+                # iter23 guard contract (see beaphar sweep above).
+                assert "snapshot" in r.json().get("detail", "").lower()
+                continue
             row = next((p for p in r.json().get("products", [])
                         if p.get("sku") == CARNILOVE_SKU), None)
             assert row is not None

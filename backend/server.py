@@ -1799,33 +1799,6 @@ async def my_products(
         since = datetime.now(timezone.utc) - timedelta(days=days)
         snap_query = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
         effective_days = days
-    # iter21 HOTFIX (Feb 2026) — TEMPORARY REVERT of the $group aggregation
-    # to the iter20 .find().to_list(50000) implementation. Reason: the
-    # aggregation pipeline was returning HTTP 500 on production at 90D
-    # (~1M+ snapshots) because the server-side $sort stage timed out /
-    # blew memory even with allowDiskUse=True. Preview scale (~271k) never
-    # hit it. Reverting until we ship the proper fix (removed $sort +
-    # per-group array slice + load-tested at prod scale). This restores
-    # iter20 behaviour EXACTLY for this query — same known-good code.
-    # Follow-up TODO: re-architect using $group without $sort, sort each
-    # group's array in Python (bounded, cheap).
-    snapshots = await db.product_snapshots.find(
-        snap_query,
-        {
-            "_id": 0, "sku": 1, "store_id": 1, "store_name": 1,
-            "crawled_at": 1, "price": 1, "original_price": 1, "discount_pct": 1,
-            "qty_available": 1, "in_stock": 1, "sold_count": 1,
-            "confidence_score": 1, "source_tier": 1, "product_url": 1,
-        },
-    ).to_list(50000)
-
-    # Group snapshots by sku, then by store
-    by_sku = {}
-    for s in snapshots:
-        by_sku.setdefault(s["sku"], {}).setdefault(s["store_id"], []).append(s)
-    for sku in by_sku:
-        for sid in by_sku[sku]:
-            by_sku[sku][sid].sort(key=lambda x: x["crawled_at"])
 
     # Get all products
     prod_query = {}
@@ -1930,6 +1903,65 @@ async def my_products(
             matches_by_my_sku.setdefault(m["my_sku"], []).append((
                 m["competitor_sku"], m["competitor_store_id"], m.get("confidence", 0), m.get("match_method"),
             ))
+
+    # iter23 (Jul 2026) — PRODUCTION-SCALE FIX for the .to_list(50000) silent
+    # truncation (iter20→21→hotfix saga; see PRD). Key insight: by_sku is only
+    # ever read for (a) the rendered rows' own skus, (b) their matched
+    # competitor skus, and (c) their barcode/EAN candidates. Loading the whole
+    # market's snapshots was pure waste AND forced the 50k cap that
+    # arbitrarily dropped real competitor snapshots (verified on production:
+    # SKU 8005852750068 showed 0 competitors at days=7/14/90 while holding 2
+    # fresh matches). Fix: bound the query to exactly those skus with $in +
+    # the existing crawled_at window — served per-sku by the
+    # (sku, crawled_at) compound index. No server-side $sort/$group at all
+    # (iter21 postmortem rule), streamed instead of buffered, no row cap.
+    # Downstream contract (by_sku[sku][store_id] = chronologically sorted
+    # snapshot dicts) is unchanged.
+    relevant_skus = {p["sku"] for p in products if p.get("sku")}
+    for p_sku in list(relevant_skus):
+        for tup in matches_by_my_sku.get(p_sku, ()):
+            relevant_skus.add(tup[0])
+        _mp_doc = my_price_lookup.get(p_sku)
+        if _mp_doc:
+            _bc = str(_mp_doc.get("barcode") or "").strip()
+            if _is_valid_barcode(_bc):
+                relevant_skus.add(_bc)
+
+    snap_query["sku"] = {"$in": list(relevant_skus)}
+    by_sku = {}
+    snapshot_count = 0
+    cursor = db.product_snapshots.find(
+        snap_query,
+        {
+            "_id": 0, "sku": 1, "store_id": 1, "store_name": 1,
+            "crawled_at": 1, "price": 1, "original_price": 1, "discount_pct": 1,
+            "qty_available": 1, "in_stock": 1, "sold_count": 1,
+            "confidence_score": 1, "source_tier": 1, "product_url": 1,
+        },
+    )
+    async for s in cursor:
+        snapshot_count += 1
+        by_sku.setdefault(s["sku"], {}).setdefault(s["store_id"], []).append(s)
+    for sku in by_sku:
+        for sid in by_sku[sku]:
+            by_sku[sku][sid].sort(key=lambda x: x["crawled_at"])
+
+    # iter23 safety guard: alarm ONLY when the window itself is empty
+    # market-wide (crawlers/sync stalled) — NOT when a narrow search/filter
+    # simply has no snapshot history (that must render zero-metric rows as
+    # before). Rendering a silently-empty dashboard would make every metric
+    # read 0 and look like a business collapse.
+    if products and snapshot_count == 0:
+        window_has_data = await db.product_snapshots.find_one(
+            {"crawled_at": snap_query["crawled_at"]}, {"_id": 1}
+        )
+        if window_has_data is None and await db.product_snapshots.estimated_document_count() > 0:
+            raise HTTPException(
+                503,
+                f"No market snapshots exist in the selected window ({effective_days}d). "
+                "Crawlers/sync may be stalled — refusing to render an empty dashboard. "
+                "Check the data-freshness banner or /api/data-freshness.",
+            )
 
     for p in products:
         stores_data = by_sku.get(p["sku"], {})

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { toast } from "sonner";
 import { useI18n } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
 import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw } from "lucide-react";
@@ -67,7 +68,14 @@ export default function MyProductsPage() {
     else params.days = days;
     api.get("/my-products", { params })
       .then((r) => setData(r.data))
-      .catch(console.error)
+      .catch((err) => {
+        // iter23 stalled-crawler guard: surface the backend alarm instead of
+        // silently keeping stale/empty data.
+        if (err?.response?.status === 503 && err.response.data?.detail) {
+          toast.error(err.response.data.detail, { id: "my-products-stalled", duration: 8000 });
+        }
+        console.error(err);
+      })
       .finally(() => setLoading(false));
   }, [days, onDate, debouncedSearch, category, sortBy, sortOrder, page, pageSize]);
 
