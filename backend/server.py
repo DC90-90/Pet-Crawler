@@ -25,6 +25,7 @@ from crawlers import (
     extract_brand, guess_category, guess_animal, extract_weight,
     sync_own_store_prices,
 )
+from store_registry import ensure_stores as registry_ensure_stores
 from cryptography.fernet import Fernet, InvalidToken
 from store_registry import ensure_stores as registry_ensure_stores
 
