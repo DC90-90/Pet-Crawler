@@ -137,6 +137,19 @@ REQUIRED_STORES = [
 ]
 
 
+# ── Gated rollout (Jul 2026) ────────────────────────────────
+# Newly-discovered market stores ship INACTIVE so a deploy doesn't silently
+# expand the crawl surface (user decision: new stores onboard separately from
+# the iter22 matcher fix). Flip to True — or activate per-store via the UI —
+# when ready to onboard them.
+ACTIVATE_NEW_STORES = False
+LEGACY_ACTIVE_DOMAINS = {
+    "pets-houses.com", "cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa",
+    "mowkly.com", "aleef.com", "hobbapet.com", "petsysa.com",
+    "matjarpanda.com", "caty-store.com", "zarafaksa.com", "lanapets.com",
+}
+
+
 async def ensure_stores(db):
     """Ensure all required stores exist and have correct configuration."""
     now = datetime.now(timezone.utc)
@@ -148,7 +161,7 @@ async def ensure_stores(db):
                 "id": str(uuid.uuid4()), "name": s["name"], "domain": s["domain"],
                 "platform": s["platform"], "base_url": f"https://{s['domain']}",
                 "crawl_frequency_hrs": 12 if s["priority"] == 1 else 24,
-                "buyer_account_enc": "", "is_active": bool(s.get("is_active", True)), "priority": s["priority"],
+                "buyer_account_enc": "", "is_active": bool(s.get("is_active", True)) and (ACTIVATE_NEW_STORES or s["domain"] in LEGACY_ACTIVE_DOMAINS), "priority": s["priority"],
                 "working_endpoint": s.get("working_endpoint", ""),
                 "tier1_only": bool(s.get("tier1_only", False)),
                 "use_storefront_categories": bool(s.get("use_storefront_categories", False)),
