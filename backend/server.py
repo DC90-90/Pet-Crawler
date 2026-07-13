@@ -26,6 +26,7 @@ from crawlers import (
     sync_own_store_prices,
 )
 from store_registry import ensure_stores as registry_ensure_stores
+from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 from cryptography.fernet import Fernet, InvalidToken
 from store_registry import ensure_stores as registry_ensure_stores
 
@@ -1828,6 +1829,35 @@ async def my_products(
         for sid in by_sku[sku]:
             by_sku[sku][sid].sort(key=lambda x: x["crawled_at"])
 
+    # ── Own-store REAL orders (Feb 2026 rework) ─────────────────────────
+    # My Revenue / My Units come from the Zid orders ledger when available.
+    # The orders window mirrors the snapshot window with one deliberate
+    # difference: calendar-day params (on_date / date_from / date_to) are
+    # interpreted as KSA (Asia/Riyadh) days, because that is how the
+    # merchant's Zid dashboard buckets its daily totals — otherwise a
+    # "July 1" query can never reconcile with Zid's July 1 number.
+    orders_agg = None
+    if own_only:
+        if on_date:
+            o_start = datetime.fromisoformat(on_date).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ORDERS_KSA_TZ).astimezone(timezone.utc)
+            o_end = o_start + timedelta(days=1)
+        elif date_from or date_to:
+            o_start = (datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ORDERS_KSA_TZ).astimezone(timezone.utc)
+                       if date_from else datetime.now(timezone.utc) - timedelta(days=days))
+            o_end = ((datetime.fromisoformat(date_to).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ORDERS_KSA_TZ) + timedelta(days=1)).astimezone(timezone.utc)
+                     if date_to else datetime.now(timezone.utc))
+        else:
+            o_start = datetime.now(timezone.utc) - timedelta(days=days)
+            o_end = None
+        order_query = {"created_at": {"$gte": o_start, **({"$lt": o_end} if o_end else {})}}
+        order_docs = await db.own_store_orders.find(
+            order_query, {"_id": 0, "excluded": 1, "total": 1, "units": 1, "items": 1},
+        ).to_list(100000)
+        if order_docs:
+            _agg = aggregate_orders(order_docs)
+            if _agg["orders_count"] > 0:
+                orders_agg = _agg
+
     # Get all products
     prod_query = {}
     if category and category != "all":
@@ -2098,15 +2128,24 @@ async def my_products(
                 if best_match_tier is not None:
                     row["source_tier"] = best_match_tier
 
-            # Own-store sales estimate (Feb 2026) — needed for the four KPI cards
-            # at the top of "My Products". `_estimate_sales_from_snapshots` is the
-            # same canonical primitive used market-wide; here we feed it ONLY the
-            # own-store snapshot list to get *your* units, then multiply by your
-            # current selling price for revenue (per user spec).
-            own_snaps = stores_data.get(own_store_id, []) if own_store_id else []
-            my_units, _own_rev_from_snaps, _ = _estimate_sales_from_snapshots(own_snaps, effective_days)
-            row["my_units_sold"] = int(my_units or 0)
-            row["my_revenue_est"] = round((row["my_units_sold"] * (my_price or 0.0)), 2) if my_price else 0.0
+            # Own-store sales (Feb 2026, orders rework): REAL numbers from the
+            # Zid orders ledger (own_store_orders) whenever the window has
+            # order data — exact units and product-attributed revenue, immune
+            # to the stock-depletion blind spots. Falls back to the legacy
+            # snapshot estimator only when no orders exist in the window
+            # (backfill not run yet / Zid creds missing), so the dashboard
+            # degrades to the old behavior instead of zeros.
+            if orders_agg is not None:
+                sku_orders = orders_agg["by_sku"].get(p["sku"], {})
+                row["my_units_sold"] = int(sku_orders.get("units") or 0)
+                row["my_revenue_est"] = round(float(sku_orders.get("revenue") or 0.0), 2)
+                row["my_sales_source"] = "zid_orders"
+            else:
+                own_snaps = stores_data.get(own_store_id, []) if own_store_id else []
+                my_units, _own_rev_from_snaps, _ = _estimate_sales_from_snapshots(own_snaps, effective_days)
+                row["my_units_sold"] = int(my_units or 0)
+                row["my_revenue_est"] = round((row["my_units_sold"] * (my_price or 0.0)), 2) if my_price else 0.0
+                row["my_sales_source"] = "estimated"
         else:
             # Non-own row (only reachable when own_only=False — e.g. /api/insights/sales)
             row["my_units_sold"] = 0
@@ -2205,10 +2244,20 @@ async def my_products(
             ((r.get("my_price") or r.get("price") or 0) * (r.get("qty_sold_est") or 0))
             for r in result
         )
-        my_revenue = sum(
-            ((r.get("my_price") or r.get("price") or 0) * (r.get("my_units_sold") or 0))
-            for r in result
-        )
+        if orders_agg is not None:
+            # REAL ledger numbers. my_revenue = Σ order totals — the same
+            # figure the Zid dashboard shows (shipping/fees included), NOT the
+            # Σ of per-row line revenue (which excludes order-level charges).
+            my_revenue = orders_agg["revenue"]
+            my_units_kpi = orders_agg["units"]
+            my_revenue_source = "zid_orders"
+        else:
+            my_revenue = sum(
+                ((r.get("my_price") or r.get("price") or 0) * (r.get("my_units_sold") or 0))
+                for r in result
+            )
+            my_units_kpi = total_my_units
+            my_revenue_source = "estimated"
         avg_market_share_honest = (
             round((total_my_units_share / total_market_units_share) * 100, 1)
             if total_market_units_share > 0 else 0
@@ -2218,8 +2267,12 @@ async def my_products(
             "total_units_sold": int(total_sold),
             "market_revenue": round(total_rev, 2),
             "my_revenue": round(my_revenue, 2),
+            # "zid_orders" → exact ledger data (frontend drops the "(Est.)"
+            # suffix); "estimated" → legacy snapshot-depletion fallback.
+            "my_revenue_source": my_revenue_source,
+            "my_orders_count": orders_agg["orders_count"] if orders_agg else None,
             "avg_market_share": avg_market_share_honest,
-            "my_units_sold": int(total_my_units),
+            "my_units_sold": int(my_units_kpi),
             # Market data coverage — answers "do we have competitor pricing on this product?"
             "matched_products": len(pricing_rows),
             "market_coverage_pct": round((len(pricing_rows) / total_count) * 100, 1) if total_count > 0 else 0,
@@ -3901,9 +3954,24 @@ async def import_status(user=Depends(get_user)):
     confirmed_count = await db.product_matches.count_documents({"manually_confirmed": True})
     blacklist_count = await db.match_blacklist.count_documents({})
     job = await db.matching_jobs.find_one({"job": "latest"}, {"_id": 0})
-    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "name": 1, "domain": 1, "last_own_store_sync": 1, "own_store_sync_updated": 1, "own_store_sync_not_found": 1, "own_store_sync_crawled": 1, "own_store_sync_source": 1, "own_store_sync_warning": 1})
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "name": 1, "domain": 1, "last_own_store_sync": 1, "own_store_sync_updated": 1, "own_store_sync_not_found": 1, "own_store_sync_crawled": 1, "own_store_sync_source": 1, "own_store_sync_warning": 1, "last_orders_sync": 1, "orders_sync_status": 1})
+    # Live stats straight from the ledger collection (authoritative regardless
+    # of whether the scheduled or the manual path ingested them).
+    orders_total = await db.own_store_orders.count_documents({})
+    orders_excluded = await db.own_store_orders.count_documents({"excluded": True})
+    oldest_order = await db.own_store_orders.find_one({}, {"_id": 0, "created_at": 1}, sort=[("created_at", 1)])
+    newest_order = await db.own_store_orders.find_one({}, {"_id": 0, "created_at": 1}, sort=[("created_at", -1)])
+    orders_info = {
+        "total": orders_total,
+        "excluded": orders_excluded,
+        "oldest": (oldest_order or {}).get("created_at").isoformat() if (oldest_order or {}).get("created_at") else None,
+        "newest": (newest_order or {}).get("created_at").isoformat() if (newest_order or {}).get("created_at") else None,
+        "last_sync": (own or {}).get("last_orders_sync"),
+        "last_sync_status": (own or {}).get("orders_sync_status"),
+    }
     return {
         "my_products": my_count,
+        "orders": orders_info,
         "total_matches": match_count,
         "confirmed_matches": confirmed_count,
         "blacklisted": blacklist_count,
@@ -3937,6 +4005,43 @@ async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_u
     return {"message": "Sync started", "status": "running", "store": own.get("name"), "domain": own.get("domain")}
 
 
+@router.post("/import/sync-orders")
+async def trigger_orders_sync(background: BackgroundTasks, full: bool = Query(False, description="Full backfill: walk ALL order pages the Zid API will serve, not just the recent refresh window"), user=Depends(get_user)):
+    """Pull real orders from the Zid Merchant Orders API into own_store_orders.
+
+    Run once with ?full=true after deploying this feature so historical
+    windows (7D/14D/30D/90D) show real revenue; afterwards the 6-hourly
+    scheduled sync keeps it fresh incrementally.
+    """
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0})
+    if not own:
+        raise HTTPException(400, "No store flagged is_own_store=True. Set the flag on your store first.")
+
+    async def _run_orders(full_backfill: bool):
+        try:
+            res = await sync_own_store_orders(db, full_backfill=full_backfill)
+            await db.stores.update_one(
+                {"is_own_store": True},
+                {"$set": {
+                    "last_orders_sync": datetime.now(timezone.utc).isoformat(),
+                    "orders_sync_status": res.get("status"),
+                    "orders_sync_upserted": int(res.get("upserted") or 0),
+                    "orders_sync_oldest": res.get("oldest_seen"),
+                }},
+            )
+        except Exception:
+            logger.exception("[Orders] manual sync failed")
+            await db.stores.update_one(
+                {"is_own_store": True},
+                {"$set": {"orders_sync_status": "error",
+                          "last_orders_sync": datetime.now(timezone.utc).isoformat()}},
+            )
+
+    background.add_task(_run_orders, full)
+    return {"message": f"Orders sync started (full_backfill={full})", "status": "running",
+            "store": own.get("name"), "domain": own.get("domain")}
+
+
 async def _run_sync_and_match(kind: str):
     """Run own-store sync and matcher with decoupled error handling + persistent logging.
 
@@ -3965,6 +4070,9 @@ async def _run_sync_and_match(kind: str):
         "match_status": "skipped",
         "match_added": 0,
         "match_error": None,
+        "orders_status": "skipped",
+        "orders_upserted": 0,
+        "orders_error": None,
         "duration_secs": 0.0,
     }
 
@@ -3987,6 +4095,21 @@ async def _run_sync_and_match(kind: str):
             run["sync_status"] = "error"
             run["sync_error"] = str(e)[:500]
             logger.exception(f"[SyncMatch/{kind}] sync FAILED")
+
+    # ── ORDERS step (Feb 2026) — real Zid orders ledger for My Revenue.
+    # Independent try/except: an orders failure must not block the matcher,
+    # and vice versa. Incremental mode re-pulls the last 14 days so late
+    # cancellations/refunds correct history on every run.
+    if kind != "manual_match_only":
+        try:
+            ores = await sync_own_store_orders(db)
+            run["orders_status"] = ores.get("status", "unknown")
+            run["orders_upserted"] = int(ores.get("upserted") or 0)
+            logger.info(f"[SyncMatch/{kind}] orders {run['orders_status']}: upserted={run['orders_upserted']}")
+        except Exception as e:
+            run["orders_status"] = "error"
+            run["orders_error"] = str(e)[:500]
+            logger.exception(f"[SyncMatch/{kind}] orders sync FAILED")
 
     # ── MATCH step — runs even if sync failed; matcher can re-link existing data ──
     try:
@@ -4376,6 +4499,72 @@ async def admin_recent_snapshots(limit: int = Query(200, ge=1, le=1000), user=De
             s["crawled_at"] = ca.isoformat()
 
     return {"count": len(snaps), "snapshots": snaps}
+
+
+@router.get("/admin/snapshot-horizon")
+async def snapshot_horizon(days: int = Query(90), user=Depends(get_user)):
+    """Read-only diagnostic for the '30D and 90D look identical' symptom.
+
+    Answers two questions:
+      1. Does snapshot history genuinely stop N days back? → per-day counts.
+      2. Are older snapshots invisible because crawled_at was stored as an ISO
+         STRING in an earlier era? (A BSON string never matches a `$gte:
+         <datetime>` filter, silently excluding those rows from every window.)
+    """
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+
+    # BSON type split — the smoking gun if strings exist.
+    date_typed = await db.product_snapshots.count_documents({"crawled_at": {"$type": "date"}})
+    string_typed = await db.product_snapshots.count_documents({"crawled_at": {"$type": "string"}})
+    oldest_date = await db.product_snapshots.find_one(
+        {"crawled_at": {"$type": "date"}}, {"_id": 0, "crawled_at": 1}, sort=[("crawled_at", 1)])
+    newest_date = await db.product_snapshots.find_one(
+        {"crawled_at": {"$type": "date"}}, {"_id": 0, "crawled_at": 1}, sort=[("crawled_at", -1)])
+    string_sample = await db.product_snapshots.find_one(
+        {"crawled_at": {"$type": "string"}}, {"_id": 0, "crawled_at": 1, "store_name": 1, "sku": 1})
+
+    # Per-day histogram over date-typed snapshots, split own vs competitors.
+    own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_id = own_store_doc.get("id") if own_store_doc else None
+    per_day = {}
+    try:
+        pipeline = [
+            {"$match": {"crawled_at": {"$gte": since, "$type": "date"}}},
+            {"$group": {
+                "_id": {"day": {"$dateToString": {"format": "%Y-%m-%d", "date": "$crawled_at"}},
+                        "own": {"$eq": ["$store_id", own_id]}},
+                "n": {"$sum": 1},
+            }},
+        ]
+        async for g in db.product_snapshots.aggregate(pipeline, allowDiskUse=True):
+            day = g["_id"]["day"]
+            bucket = per_day.setdefault(day, {"own": 0, "competitors": 0})
+            bucket["own" if g["_id"]["own"] else "competitors"] += g["n"]
+    except Exception as e:
+        # Reduced-aggregation backends (FerretDB) may not support $dateToString;
+        # the type-split above still answers the headline question.
+        per_day = {"error": f"histogram unavailable on this backend: {str(e)[:200]}"}
+
+    return {
+        "checked_at": now.isoformat(),
+        "window_days": days,
+        "crawled_at_type_split": {
+            "date_typed": date_typed,
+            "string_typed": string_typed,
+            "verdict": (
+                "STRING-TYPED SNAPSHOTS EXIST — these are permanently invisible to every "
+                "dashboard window filter and explain a hard history horizon."
+                if string_typed > 0 else
+                "All crawled_at values are proper dates — identical 30D/90D numbers mean "
+                "history genuinely contains no qualifying deltas beyond the horizon."
+            ),
+        },
+        "oldest_date_typed": (oldest_date or {}).get("crawled_at"),
+        "newest_date_typed": (newest_date or {}).get("crawled_at"),
+        "string_typed_sample": string_sample,
+        "per_day_counts": per_day,
+    }
 
 
 @router.post("/admin/cleanup-own-snapshots")
@@ -4931,6 +5120,9 @@ async def startup():
         await db.proxy_usage.create_index("crawled_at")
         await db.products.create_index("sku", unique=True)
         await db.products.create_index("category")
+        # Real orders ledger (Feb 2026 My Revenue rework)
+        await db.own_store_orders.create_index("order_id", unique=True)
+        await db.own_store_orders.create_index([("created_at", -1)])
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
     # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.
