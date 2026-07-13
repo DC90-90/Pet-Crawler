@@ -6,7 +6,12 @@ CRITICAL: A wrong match is worse than no match.
 """
 import re, logging
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+# iter22 (Jul 2026): candidate snapshots for matching are bounded to this
+# window. Nothing older should influence a match, and the bound is what lets
+# the lookup aggregation survive production scale (~1M+ snapshot docs).
+MATCH_WINDOW_DAYS = 14
 
 logger = logging.getLogger(__name__)
 
@@ -355,8 +360,26 @@ def _dedupe_matches(matches):
 
 
 async def _build_competitor_lookups(db, own_store_id):
-    """Pre-build competitor snapshot and product lookups ONCE for batch matching."""
+    """Pre-build competitor snapshot and product lookups ONCE for batch matching.
+
+    iter22 (Jul 2026) — PRODUCTION-SCALE FIX. The previous pipeline ran
+    $sort + $group over the ENTIRE product_snapshots collection (no time
+    bound, no allowDiskUse). At production volume (~1M+ docs) it exceeded
+    MongoDB's 100MB in-memory stage limit and threw on every run — the
+    matcher had zero successful production runs since 2026-04-17. Fix:
+      1. $match bounds candidates to the last MATCH_WINDOW_DAYS days —
+         the range on crawled_at also lets the $sort ride the
+         (crawled_at, -1) index instead of sorting in memory.
+      2. allowDiskUse=True as a spill safety net for the $group stage.
+    Matching LOGIC is unchanged — same fields, same latest-per-(sku,store)
+    contract via $sort desc + $first.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=MATCH_WINDOW_DAYS)
+    match_stage = {"crawled_at": {"$gte": since}}
+    if own_store_id:
+        match_stage["store_id"] = {"$ne": own_store_id}
     pipeline = [
+        {"$match": match_stage},
         {"$sort": {"crawled_at": -1}},
         {"$group": {
             "_id": {"sku": "$sku", "store_id": "$store_id"},
@@ -371,10 +394,8 @@ async def _build_competitor_lookups(db, own_store_id):
             "crawled_at": {"$first": "$crawled_at"},
         }},
     ]
-    if own_store_id:
-        pipeline.insert(0, {"$match": {"store_id": {"$ne": own_store_id}}})
 
-    snapshots = await db.product_snapshots.aggregate(pipeline).to_list(100000)
+    snapshots = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(100000)
     products = {}
     async for p in db.products.find({}, {"_id": 0}):
         products[p["sku"]] = p
@@ -407,6 +428,16 @@ async def run_matching_for_all(db, progress_callback=None):
 
     # Pre-build lookups ONCE
     comp_snapshots, comp_products = await _build_competitor_lookups(db, own_store_id)
+
+    # iter22 safety guard: an empty candidate pool means the crawlers have
+    # produced NO snapshots inside the match window (stale/down/blocked).
+    # Rebuilding against it would wipe every non-confirmed match. Abort loudly
+    # instead — the error lands in sync_runs and the data-freshness alarm.
+    if not comp_snapshots:
+        raise RuntimeError(
+            f"Refusing to rebuild product_matches: 0 competitor snapshots in the last "
+            f"{MATCH_WINDOW_DAYS} days (crawlers stale or down). Existing matches left untouched."
+        )
 
     for i, mp in enumerate(my_products):
         matches = await match_my_product(db, mp, comp_snapshots, comp_products, own_store_id)

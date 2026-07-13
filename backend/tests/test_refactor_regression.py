@@ -20,8 +20,8 @@ if not BASE_URL:
     BASE_URL = "https://daleel-price-intel.preview.emergentagent.com"
 
 # Test credentials
-ADMIN_EMAIL = "admin@daleelpets.com"
-ADMIN_PASSWORD = "BGv8ZcRYrBTPlJFHHhZQ3Q"
+ADMIN_EMAIL = "a.disi@taqueen.sa"
+ADMIN_PASSWORD = "Ahmaddc90@"
 CRAWLER_TOKEN = "zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO"
 
 # Global session to avoid rate limiting
