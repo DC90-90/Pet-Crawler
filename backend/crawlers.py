@@ -1540,7 +1540,32 @@ async def sync_own_store_prices(db, store=None):
     # runs and inserts a snapshot. With Zid's API as our authoritative source,
     # we surface every product immediately via a synthetic source_tier=0 snapshot.
     snapshots_created = 0
+    snapshots_deduped = 0
     if sync_source_label == "zid_api" and all_raw:
+        # ── Change-only writes + daily heartbeat (iter24, Jul 2026) ──
+        # The 6h sync + daily crawl job wrote ~5.2 snapshots/SKU/day, ~80% of
+        # them byte-identical to the previous one. At 2,175 SKUs that's ~11.3k
+        # rows/day of pure duplication — the volume that pushed the 30D/90D
+        # dashboard windows past pod limits (Cloudflare 520). A snapshot is
+        # now written only when (price, qty, sold_count, in_stock) changed
+        # since the LAST snapshot written TODAY (UTC) — so the first sync of
+        # each day always writes (daily heartbeat). Downstream contracts that
+        # depend on a snapshot existing every day are preserved:
+        #   • compute_market_position's 7-day seller-freshness cutoff
+        #   • on_date single-day windows (every day has ≥1 own snapshot)
+        #   • sales estimator: dropping snapshots whose price/qty/sold values
+        #     are IDENTICAL to their predecessor cannot change positive-delta
+        #     sums or sold-counter diffs (equal-adjacent values contribute 0).
+        _today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        _todays_latest = {}
+        async for _snap in db.product_snapshots.find(
+            {"store_id": own_store_id, "crawled_at": {"$gte": _today_start}},
+            {"_id": 0, "sku": 1, "price": 1, "qty_available": 1, "sold_count": 1, "in_stock": 1, "crawled_at": 1},
+        ):
+            _prev = _todays_latest.get(_snap["sku"])
+            if _prev is None or _snap["crawled_at"] > _prev["crawled_at"]:
+                _todays_latest[_snap["sku"]] = _snap
+
         snap_docs = []
         prod_upserts = []
         for raw in all_raw:
@@ -1551,6 +1576,13 @@ async def sync_own_store_prices(db, store=None):
             qty = raw.get("qty_available") or 0
             in_stock = bool(raw.get("in_stock")) if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""
+            _prev = _todays_latest.get(sku)
+            _snapshot_unchanged_today = _prev is not None and (
+                round(float(_prev.get("price") or 0), 2) == round(float(price), 2)
+                and int(_prev.get("qty_available") or 0) == int(qty)
+                and int(_prev.get("sold_count") or 0) == int(raw.get("sold_count") or 0)
+                and bool(_prev.get("in_stock")) == in_stock
+            )
             # Upsert catalog row (idempotent — only sets if new, preserves history)
             prod_upserts.append({
                 "sku": sku,
@@ -1568,6 +1600,9 @@ async def sync_own_store_prices(db, store=None):
                     "brand": "",
                 },
             })
+            if _snapshot_unchanged_today:
+                snapshots_deduped += 1
+                continue  # values unchanged since the last snapshot today — no new row
             snap_docs.append({
                 "id": str(uuid.uuid4()),
                 "store_id": own_store_id,
@@ -1609,6 +1644,7 @@ async def sync_own_store_prices(db, store=None):
     crawl_log["products_updated"] = updated
     crawl_log["products_new"] = discovered
     crawl_log["snapshots_created"] = snapshots_created
+    crawl_log["snapshots_deduped"] = snapshots_deduped  # change-only writes (iter24)
     if not all_raw:
         crawl_log["error"] = (crawl_log.get("error") or "") + " | own-store crawl returned 0 items"
     await _finalize_crawl_log(db, crawl_log, store["id"])
