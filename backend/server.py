@@ -28,7 +28,6 @@ from crawlers import (
 from store_registry import ensure_stores as registry_ensure_stores
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 from cryptography.fernet import Fernet, InvalidToken
-from store_registry import ensure_stores as registry_ensure_stores
 
 # ── Refactored modules (Feb 2026) ───────────────────────────
 from models import (
@@ -75,7 +74,25 @@ def decrypt_value(ciphertext: str) -> str:
     return fernet.decrypt(ciphertext.encode()).decode()
 
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+# Atlas-friendly timeouts (Jul 2026 production deploy fix).
+# Local Mongo answers in <1 ms so preview never hits Motor's default
+# serverSelectionTimeoutMS=30_000. Production runs on MongoDB Atlas, which
+# occasionally needs 5–10 s on a cold cluster before the first response.
+# Without explicit bounds, EVERY startup-handler DB op could hang up to 30 s,
+# and the k8s readiness probe (which awaits /api/health, itself a DB call)
+# would time out cascade-style until the 4-minute deployment deadline —
+# exactly the failure signature we observed. We set:
+#   • serverSelectionTimeoutMS=5000 — fail fast if Atlas is unreachable.
+#   • connectTimeoutMS=10000       — accommodate a slow TLS/DNS handshake once.
+#   • socketTimeoutMS=45000        — long-enough ceiling for legit big reads.
+# These bounds don't change any query semantics — they only cap how long a
+# stalled network call may block the event loop before raising.
+client = AsyncIOMotorClient(
+    mongo_url,
+    serverSelectionTimeoutMS=5000,
+    connectTimeoutMS=10000,
+    socketTimeoutMS=45000,
+)
 db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
@@ -186,13 +203,23 @@ def is_super_admin_email(email: str) -> bool:
 # ── Health Endpoint ──────────────────────────────────────────
 @router.get("/health")
 async def health_check():
-    # MongoDB connection state
+    # The k8s readiness probe hits this endpoint. It MUST respond within a
+    # couple of seconds even when MongoDB is unreachable, otherwise the pod
+    # never becomes Ready and the deploy times out (Jul 2026 production deploy
+    # postmortem). Every Motor call below is wrapped in an asyncio timeout, and
+    # any failure just degrades the reported status — the probe still gets a
+    # fast HTTP 200 with a diagnostic body it can act on.
+    async def _timed(coro, timeout: float):
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except (asyncio.TimeoutError, Exception):
+            return None
+
+    # MongoDB connection state — hard 1.5 s ceiling.
     mongo_ok = False
-    try:
-        await client.admin.command("ping")
+    ping_result = await _timed(client.admin.command("ping"), timeout=1.5)
+    if ping_result is not None:
         mongo_ok = True
-    except Exception:
-        pass
 
     # APScheduler active jobs count
     jobs_count = len(scheduler.get_jobs()) if scheduler.running else 0
@@ -208,26 +235,30 @@ async def health_check():
     except Exception:
         pass
 
-    # Last successful crawl timestamp
+    # Last successful crawl timestamp — best-effort, capped at 1.5 s combined.
     last_crawl = None
-    try:
-        log = await db.crawl_logs.find_one(
-            {"tier_used": {"$exists": True}},
-            {"_id": 0, "completed_at": 1},
-            sort=[("completed_at", -1)],
+    if mongo_ok:
+        log = await _timed(
+            db.crawl_logs.find_one(
+                {"tier_used": {"$exists": True}},
+                {"_id": 0, "completed_at": 1},
+                sort=[("completed_at", -1)],
+            ),
+            timeout=1.5,
         )
         if log and log.get("completed_at"):
             last_crawl = log["completed_at"] if isinstance(log["completed_at"], str) else log["completed_at"].isoformat()
         else:
-            store = await db.stores.find_one(
-                {"last_crawled_at": {"$ne": "", "$exists": True}},
-                {"_id": 0, "last_crawled_at": 1},
-                sort=[("last_crawled_at", -1)],
+            store = await _timed(
+                db.stores.find_one(
+                    {"last_crawled_at": {"$ne": "", "$exists": True}},
+                    {"_id": 0, "last_crawled_at": 1},
+                    sort=[("last_crawled_at", -1)],
+                ),
+                timeout=1.5,
             )
             if store and store.get("last_crawled_at"):
                 last_crawl = store["last_crawled_at"]
-    except Exception:
-        pass
 
     # Server uptime
     uptime_secs = round(time.time() - SERVER_START_TIME, 1)
