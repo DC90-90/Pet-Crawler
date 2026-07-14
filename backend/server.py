@@ -27,6 +27,7 @@ from crawlers import (
 )
 from store_registry import ensure_stores as registry_ensure_stores
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
+from mahally import enrich_barcodes_from_mahally
 from cryptography.fernet import Fernet, InvalidToken
 from store_registry import ensure_stores as registry_ensure_stores
 
@@ -4604,6 +4605,35 @@ async def cleanup_own_snapshots(dry_run: bool = Query(False, description="If tru
         "deleted": result.deleted_count,
         "message": f"Removed {result.deleted_count} legacy own-store snapshots from {own_store['name']}",
     }
+
+
+@router.post("/admin/mahally/enrich")
+async def admin_mahally_enrich(
+    maxProducts: int = Query(300, ge=10, le=2000, description="Max Mahally pet products to discover per run"),
+    dryRun: bool = Query(True, description="If True, no DB writes — returns report only"),
+    minRatio: int = Query(92, ge=80, le=100, description="RapidFuzz token_set_ratio floor for match acceptance"),
+    user=Depends(require_super_admin),
+):
+    """Mahally barcode enrichment — super_admin only, dry-run by default.
+
+    Discovers Mahally pet products (browse root + pet subcategory tree +
+    known pet-store index pages), extracts their embedded barcode/SKU JSON,
+    and matches against db.products rows with empty barcode using three strict
+    guards (name ratio ≥ minRatio, brand token exact, size tokens exact). On a
+    wet run, writes barcode + barcode_source="mahally" + barcode_confidence +
+    barcode_enriched_at so every enrichment is reversible.
+
+    Response includes sample_matches (up to 20) and sample_near_misses
+    (up to 10, ratio ∈ [80, minRatio)) so the reviewer can spot-check the
+    guards before flipping dryRun=False.
+    """
+    report = await enrich_barcodes_from_mahally(
+        db,
+        max_products=maxProducts,
+        min_ratio=minRatio,
+        dry_run=dryRun,
+    )
+    return report
 
 
 @router.post("/crawler/ingest")
