@@ -1,5 +1,4 @@
 import { useEffect, useState, useCallback } from "react";
-import { toast } from "sonner";
 import { useI18n } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
 import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw } from "lucide-react";
@@ -68,14 +67,7 @@ export default function MyProductsPage() {
     else params.days = days;
     api.get("/my-products", { params })
       .then((r) => setData(r.data))
-      .catch((err) => {
-        // iter23 stalled-crawler guard: surface the backend alarm instead of
-        // silently keeping stale/empty data.
-        if (err?.response?.status === 503 && err.response.data?.detail) {
-          toast.error(err.response.data.detail, { id: "my-products-stalled", duration: 8000 });
-        }
-        console.error(err);
-      })
+      .catch(console.error)
       .finally(() => setLoading(false));
   }, [days, onDate, debouncedSearch, category, sortBy, sortOrder, page, pageSize]);
 
@@ -166,7 +158,9 @@ export default function MyProductsPage() {
           { key: "kpi_products", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_units_sold", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_mkt_revenue", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
-          { key: "kpi_my_revenue", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#10B981" },
+          // Real ledger data (Zid Orders API) drops the "(Est.)" suffix and
+          // shows the order count; the estimation fallback keeps the old label.
+          { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : null, icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, sub: kpis.share_sample_size != null ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : null, icon: TrendingDown, accent: "#F59E0B" },
           { key: "kpi_market_coverage", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
         ].map((k, i) => (
