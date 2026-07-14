@@ -1,0 +1,154 @@
+/* Layer order must be declared before imports (Tailwind v4 + HeroUI v3). */
+@layer theme, base, components, utilities;
+
+/* Tailwind v4 — must be first */
+@import "tailwindcss";
+
+/* HeroUI v3 core styles — must be after Tailwind */
+@import "@heroui/styles";
+
+/* Bespoke "Alpine" brand theme */
+@import "./theme.css" layer(theme);
+
+/* ---- Brand design tokens exposed as Tailwind utilities ---- */
+@theme {
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-sans: "Manrope", "Noto Sans Georgian", "IBM Plex Sans Arabic",
+    ui-sans-serif, system-ui, sans-serif;
+
+  --color-copper: var(--copper);
+  --color-copper-soft: oklch(0.82 0.07 66);
+  --color-glacier: var(--glacier);
+  --color-glacier-deep: oklch(0.5 0.06 232);
+  --color-alpine: oklch(0.42 0.062 165);
+  --color-alpine-deep: oklch(0.31 0.05 165);
+  --color-stone: oklch(0.26 0.008 150);
+  --color-mist: oklch(0.62 0.012 200);
+  --color-ivory: oklch(0.972 0.008 85);
+
+  /* Map HeroUI semantic CSS variables to Tailwind color utilities so
+     bg-background / text-foreground / text-muted / bg-surface / bg-accent /
+     bg-warning / text-*-foreground etc. always resolve in app code. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-foreground: var(--surface-foreground);
+  --color-overlay: var(--overlay);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-default: var(--default);
+  --color-border: var(--border);
+  --color-separator: var(--separator);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
+}
+
+/* ---- Base element styling ---- */
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+  body {
+    font-family: var(--font-sans);
+    text-rendering: optimizeLegibility;
+  }
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: var(--font-display);
+    font-optical-sizing: auto;
+    letter-spacing: -0.01em;
+  }
+  /* RTL: Arabic body font + logical mirroring handled by dir="rtl" */
+  [dir="rtl"] {
+    font-family: "IBM Plex Sans Arabic", var(--font-sans);
+  }
+}
+
+/* ---- App-level helpers ---- */
+@layer components {
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 0.75rem 1.25rem;
+    background: var(--accent);
+    color: var(--accent-foreground);
+    border-radius: 0 0 0.5rem 0;
+  }
+  .skip-link:focus {
+    left: 0;
+  }
+
+  /* Topographic hairline texture used sparingly on section dividers */
+  .topo-divider {
+    height: 2px;
+    background-image: repeating-linear-gradient(
+      90deg,
+      color-mix(in oklch, var(--copper) 55%, transparent) 0 14px,
+      transparent 14px 28px
+    );
+    opacity: 0.5;
+  }
+
+  /* Editorial content (rich text / articles) */
+  .prose-alpine {
+    line-height: 1.75;
+    max-width: 68ch;
+  }
+  .prose-alpine h2 {
+    font-family: var(--font-display);
+    font-size: 1.6rem;
+    margin: 2rem 0 0.75rem;
+  }
+  .prose-alpine p {
+    margin: 0 0 1rem;
+  }
+  .prose-alpine a {
+    color: var(--link);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+}
+
+/* Gentle, reduced-motion-aware reveal used by page sections */
+@layer utilities {
+  .reveal {
+    opacity: 0;
+    transform: translateY(12px);
+    animation: reveal-in 0.6s ease forwards;
+  }
+  @keyframes reveal-in {
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal {
+      opacity: 1;
+      transform: none;
+      animation: none;
+    }
+  }
+}

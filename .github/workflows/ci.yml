@@ -1,0 +1,99 @@
+name: CI
+
+# Continuous integration for Svaneti with Georgie.
+# Runs on every pull request and on pushes to main. This workflow does NOT deploy.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (ruff + pytest)
+    runs-on: ubuntu-latest
+    # Tests use mongomock-motor (in-process), so no MongoDB service is needed.
+    env:
+      USE_MOCK_DB: "true"
+      APP_ENV: development
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        working-directory: backend
+        run: ruff check .
+
+      - name: Test (pytest)
+        working-directory: backend
+        run: pytest -q
+
+  frontend:
+    name: Frontend (lint + typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint (eslint)
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Typecheck (tsc)
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build (vite)
+        working-directory: frontend
+        run: npm run build
+
+      # Light dependency audit — informational, never fails the build.
+      - name: Dependency audit (advisory)
+        working-directory: frontend
+        run: npm audit --audit-level=high || true
+
+  secret-scan:
+    name: Secret scan (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Advisory note: this repo relies on GitHub's push protection / secret
+      # scanning (enable it in repository Settings → Code security). No secrets
+      # are committed; .env is git-ignored and only .env.example ships (with
+      # placeholder values). For deeper scanning, add a dedicated tool such as
+      # gitleaks or trufflehog here. This job is intentionally non-blocking.
+      - name: Reminder
+        run: |
+          echo "Ensure GitHub secret scanning + push protection are enabled."
+          echo "Never commit .env or real credentials; use the platform secret manager."

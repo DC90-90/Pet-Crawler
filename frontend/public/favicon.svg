@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Svaneti with Georgie">
+  <rect width="64" height="64" rx="12" fill="#2f5142"/>
+  <!-- Svan tower + mountain silhouette -->
+  <path d="M8 46 L22 22 L30 34 L40 16 L56 46 Z" fill="#e9e2d0" opacity="0.9"/>
+  <rect x="27" y="20" width="8" height="26" fill="#c07b46"/>
+  <rect x="27" y="20" width="8" height="4" fill="#e9e2d0"/>
+  <path d="M8 46 h48 v6 a2 2 0 0 1 -2 2 H10 a2 2 0 0 1 -2 -2 Z" fill="#3c6552"/>
+</svg>

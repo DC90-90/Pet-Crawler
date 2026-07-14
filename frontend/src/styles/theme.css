@@ -1,0 +1,176 @@
+/* ==========================================================================
+   Alpine theme — Svaneti with Georgie
+   Premium mountain-tourism palette: deep alpine green (primary/accent),
+   warm ivory, charcoal stone, muted glacier blue, copper accent, mist gray.
+   Follows the HeroUI v3 CSS-variable contract (oklch color space).
+   ========================================================================== */
+@layer theme {
+  /* -------------------- Alpine Light -------------------- */
+  [data-theme="alpine"] {
+    color-scheme: light;
+
+    /* Primitives (stable across light/dark) */
+    --white: oklch(100% 0 0);
+    --black: oklch(0% 0 0);
+    --snow: oklch(0.985 0.006 85);
+    --eclipse: oklch(0.24 0.008 150);
+
+    /* Spacing & layout */
+    --spacing: 0.25rem;
+    --border-width: 1px;
+    --field-border-width: 1px;
+    --disabled-opacity: 0.5;
+    --ring-offset-width: 2px;
+    --cursor-interactive: pointer;
+    --cursor-disabled: not-allowed;
+
+    /* Radius */
+    --radius: 0.75rem;
+    --field-radius: calc(var(--radius) * 0.9);
+
+    /* Base */
+    --background: oklch(0.972 0.008 85); /* warm ivory */
+    --foreground: var(--eclipse);
+
+    /* Surface (non-overlay components) */
+    --surface: oklch(0.99 0.005 85);
+    --surface-foreground: var(--foreground);
+
+    /* Overlay (floating components) */
+    --overlay: var(--white);
+    --overlay-foreground: var(--foreground);
+
+    --muted: oklch(0.55 0.012 200); /* mist gray */
+
+    --scrollbar-thumb: color-mix(in oklch, var(--foreground) 15%, transparent);
+    --scrollbar-track: transparent;
+    --scrollbar-gutter: auto;
+    --scrollbar-width: thin;
+    --scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    --scrollbar: var(--scrollbar-thumb);
+
+    --default: oklch(0.93 0.008 150);
+    --default-foreground: var(--eclipse);
+
+    /* Accent = deep alpine green (primary action) */
+    --accent: oklch(0.42 0.062 165);
+    --accent-foreground: var(--snow);
+
+    /* Form fields */
+    --field-background: var(--white);
+    --field-foreground: var(--eclipse);
+    --field-placeholder: var(--muted);
+    --field-border: oklch(0.86 0.01 150);
+
+    /* Status */
+    --success: oklch(0.62 0.13 155);
+    --success-foreground: var(--snow);
+    --warning: oklch(0.78 0.145 72);
+    --warning-foreground: var(--eclipse);
+    --danger: oklch(0.58 0.2 25);
+    --danger-foreground: var(--snow);
+
+    /* Components */
+    --segment: var(--white);
+    --segment-foreground: var(--foreground);
+
+    /* Misc */
+    --border: oklch(0.88 0.008 150);
+    --separator: oklch(0.9 0.006 150);
+    --focus: var(--copper);
+    --link: oklch(0.4 0.06 165);
+
+    /* Brand extras (used by app utilities) */
+    --copper: oklch(0.66 0.12 56);
+    --glacier: oklch(0.74 0.05 232);
+
+    /* Shadows — soft, natural */
+    --surface-shadow:
+      0 2px 4px 0 rgba(28, 32, 26, 0.04), 0 1px 2px 0 rgba(28, 32, 26, 0.06),
+      0 0 1px 0 rgba(28, 32, 26, 0.06);
+    --overlay-shadow:
+      0 4px 16px 0 rgba(24, 28, 22, 0.08), 0 8px 24px 0 rgba(24, 28, 22, 0.09);
+    --field-shadow: 0 1px 2px 0 rgba(28, 32, 26, 0.05);
+
+    --skeleton-animation: shimmer;
+    --tooltip-delay: 1200ms;
+    --tooltip-close-delay: 400ms;
+  }
+
+  /* -------------------- Alpine Dark -------------------- */
+  [data-theme="alpine-dark"] {
+    color-scheme: dark;
+
+    --white: oklch(100% 0 0);
+    --black: oklch(0% 0 0);
+    --snow: oklch(0.97 0.006 85);
+    --eclipse: oklch(0.22 0.008 150);
+
+    --spacing: 0.25rem;
+    --border-width: 1px;
+    --field-border-width: 1px;
+    --disabled-opacity: 0.5;
+    --ring-offset-width: 2px;
+    --cursor-interactive: pointer;
+    --cursor-disabled: not-allowed;
+    --radius: 0.75rem;
+    --field-radius: calc(var(--radius) * 0.9);
+
+    /* Base — charcoal stone night */
+    --background: oklch(0.19 0.012 165);
+    --foreground: var(--snow);
+
+    --surface: oklch(0.235 0.012 165);
+    --surface-foreground: var(--foreground);
+
+    --overlay: oklch(0.255 0.012 165);
+    --overlay-foreground: var(--foreground);
+
+    --muted: oklch(0.68 0.012 200);
+
+    --scrollbar-thumb: color-mix(in oklch, var(--foreground) 16%, transparent);
+    --scrollbar-track: transparent;
+    --scrollbar-gutter: auto;
+    --scrollbar-width: thin;
+    --scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+    --scrollbar: var(--scrollbar-thumb);
+
+    --default: oklch(0.3 0.012 165);
+    --default-foreground: var(--snow);
+
+    /* Accent = lifted glacier-tinted alpine green for dark contrast */
+    --accent: oklch(0.72 0.09 165);
+    --accent-foreground: oklch(0.2 0.02 165);
+
+    --field-background: oklch(0.26 0.012 165);
+    --field-foreground: var(--foreground);
+    --field-placeholder: var(--muted);
+    --field-border: oklch(0.34 0.012 165);
+
+    --success: oklch(0.72 0.15 155);
+    --success-foreground: var(--eclipse);
+    --warning: oklch(0.82 0.14 76);
+    --warning-foreground: var(--eclipse);
+    --danger: oklch(0.62 0.2 25);
+    --danger-foreground: var(--snow);
+
+    --segment: oklch(0.3 0.012 165);
+    --segment-foreground: var(--foreground);
+
+    --border: oklch(0.32 0.012 165);
+    --separator: oklch(0.3 0.012 165);
+    --focus: var(--copper);
+    --link: oklch(0.78 0.08 165);
+
+    --copper: oklch(0.74 0.11 58);
+    --glacier: oklch(0.78 0.06 232);
+
+    --surface-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+    --overlay-shadow: 0 8px 28px 0 rgba(0, 0, 0, 0.5);
+    --field-shadow: 0 0 0 0 transparent;
+
+    --skeleton-animation: shimmer;
+    --tooltip-delay: 1200ms;
+    --tooltip-close-delay: 400ms;
+  }
+}
