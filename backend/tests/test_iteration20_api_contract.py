@@ -219,12 +219,6 @@ class TestKpiBlockIter21:
             r = client.get(f"{BASE_URL}/api/my-products",
                            params={"days": days, "search": SKU, "limit": 5},
                            timeout=15)
-            if r.status_code == 503:
-                # iter23 guard contract: a market-wide-empty window alarms
-                # (503) instead of rendering an empty dashboard. Legit on
-                # environments whose crawlers are stalled — skip the window.
-                assert "snapshot" in r.json().get("detail", "").lower()
-                continue
             assert r.status_code == 200
             row = next((p for p in r.json().get("products", [])
                         if p.get("sku") == SKU), None)

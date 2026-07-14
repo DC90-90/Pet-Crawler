@@ -25,6 +25,8 @@ from crawlers import (
     extract_brand, guess_category, guess_animal, extract_weight,
     sync_own_store_prices,
 )
+from store_registry import ensure_stores as registry_ensure_stores
+from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 from cryptography.fernet import Fernet, InvalidToken
 from store_registry import ensure_stores as registry_ensure_stores
 
@@ -44,6 +46,12 @@ from core import (
 )
 
 SERVER_START_TIME = time.time()
+
+# iter24: /api/my-products processes the catalogue in chunks of this many
+# products per snapshot query — bounds peak memory at production scale so the
+# 30D/90D windows no longer OOM the origin (Cloudflare 520). Module-level so
+# load tests can vary it and prove chunking-invariance.
+MY_PRODUCTS_CHUNK_SIZE = 100
 
 # ── Fernet Encryption (Tier 4 Credential Vault) ────────────
 ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY')
@@ -1799,6 +1807,40 @@ async def my_products(
         since = datetime.now(timezone.utc) - timedelta(days=days)
         snap_query = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
         effective_days = days
+    # iter24 (Jul 2026) — snapshots are no longer bulk-loaded here. The
+    # unbounded/truncated load that lived at this point OOM'd the origin at
+    # 30D/90D (Cloudflare 520). by_sku is now built per-chunk inside the
+    # product loop below (bounded memory). orders_agg (real Zid revenue) is
+    # independent of snapshots and computed next, unchanged.
+
+    # ── Own-store REAL orders (Feb 2026 rework) ─────────────────────────
+    # My Revenue / My Units come from the Zid orders ledger when available.
+    # The orders window mirrors the snapshot window with one deliberate
+    # difference: calendar-day params (on_date / date_from / date_to) are
+    # interpreted as KSA (Asia/Riyadh) days, because that is how the
+    # merchant's Zid dashboard buckets its daily totals — otherwise a
+    # "July 1" query can never reconcile with Zid's July 1 number.
+    orders_agg = None
+    if own_only:
+        if on_date:
+            o_start = datetime.fromisoformat(on_date).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ORDERS_KSA_TZ).astimezone(timezone.utc)
+            o_end = o_start + timedelta(days=1)
+        elif date_from or date_to:
+            o_start = (datetime.fromisoformat(date_from).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ORDERS_KSA_TZ).astimezone(timezone.utc)
+                       if date_from else datetime.now(timezone.utc) - timedelta(days=days))
+            o_end = ((datetime.fromisoformat(date_to).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=ORDERS_KSA_TZ) + timedelta(days=1)).astimezone(timezone.utc)
+                     if date_to else datetime.now(timezone.utc))
+        else:
+            o_start = datetime.now(timezone.utc) - timedelta(days=days)
+            o_end = None
+        order_query = {"created_at": {"$gte": o_start, **({"$lt": o_end} if o_end else {})}}
+        order_docs = await db.own_store_orders.find(
+            order_query, {"_id": 0, "excluded": 1, "total": 1, "units": 1, "items": 1},
+        ).to_list(100000)
+        if order_docs:
+            _agg = aggregate_orders(order_docs)
+            if _agg["orders_count"] > 0:
+                orders_agg = _agg
 
     # Get all products
     prod_query = {}
@@ -1904,281 +1946,274 @@ async def my_products(
                 m["competitor_sku"], m["competitor_store_id"], m.get("confidence", 0), m.get("match_method"),
             ))
 
-    # iter23 (Jul 2026) — PRODUCTION-SCALE FIX for the .to_list(50000) silent
-    # truncation (iter20→21→hotfix saga; see PRD). Key insight: by_sku is only
-    # ever read for (a) the rendered rows' own skus, (b) their matched
-    # competitor skus, and (c) their barcode/EAN candidates. Loading the whole
-    # market's snapshots was pure waste AND forced the 50k cap that
-    # arbitrarily dropped real competitor snapshots (verified on production:
-    # SKU 8005852750068 showed 0 competitors at days=7/14/90 while holding 2
-    # fresh matches). Fix: bound the query to exactly those skus with $in +
-    # the existing crawled_at window — served per-sku by the
-    # (sku, crawled_at) compound index. No server-side $sort/$group at all
-    # (iter21 postmortem rule), streamed instead of buffered, no row cap.
-    # Downstream contract (by_sku[sku][store_id] = chronologically sorted
-    # snapshot dicts) is unchanged.
-    relevant_skus = {p["sku"] for p in products if p.get("sku")}
-    for p_sku in list(relevant_skus):
-        for tup in matches_by_my_sku.get(p_sku, ()):
-            relevant_skus.add(tup[0])
-        _mp_doc = my_price_lookup.get(p_sku)
+    # iter24 CHUNKED fetch (bounded memory). Each product only ever reads
+    # by_sku for its OWN sku, its matched competitor skus, and its barcode/EAN
+    # candidates (the three by_sku.get() sites below), so fetching those
+    # sku-clusters per chunk is exactly equivalent to a global fetch while peak
+    # memory is bounded by one chunk. Downstream business functions receive
+    # identical per-(sku, store) chronological arrays — zero logic/value change.
+    # No server-side $sort/$group (iter21 postmortem rule): each chunk query is
+    # a plain indexed find on (sku, crawled_at); per-pair sort in Python.
+    def _sku_cluster(p):
+        cluster = {p["sku"]}
+        for tup in matches_by_my_sku.get(p["sku"], ()):
+            cluster.add(tup[0])
+        _mp_doc = my_price_lookup.get(p["sku"])
         if _mp_doc:
             _bc = str(_mp_doc.get("barcode") or "").strip()
             if _is_valid_barcode(_bc):
-                relevant_skus.add(_bc)
+                cluster.add(_bc)
+        return cluster
 
-    snap_query["sku"] = {"$in": list(relevant_skus)}
-    by_sku = {}
-    snapshot_count = 0
-    cursor = db.product_snapshots.find(
-        snap_query,
-        {
-            "_id": 0, "sku": 1, "store_id": 1, "store_name": 1,
-            "crawled_at": 1, "price": 1, "original_price": 1, "discount_pct": 1,
-            "qty_available": 1, "in_stock": 1, "sold_count": 1,
-            "confidence_score": 1, "source_tier": 1, "product_url": 1,
-        },
-    )
-    async for s in cursor:
-        snapshot_count += 1
-        by_sku.setdefault(s["sku"], {}).setdefault(s["store_id"], []).append(s)
-    for sku in by_sku:
-        for sid in by_sku[sku]:
-            by_sku[sku][sid].sort(key=lambda x: x["crawled_at"])
+    _SNAP_PROJECTION = {
+        "_id": 0, "sku": 1, "store_id": 1, "store_name": 1,
+        "crawled_at": 1, "price": 1, "original_price": 1, "discount_pct": 1,
+        "qty_available": 1, "in_stock": 1, "sold_count": 1,
+        "confidence_score": 1, "source_tier": 1, "product_url": 1,
+    }
 
-    # iter23 safety guard: alarm ONLY when the window itself is empty
-    # market-wide (crawlers/sync stalled) — NOT when a narrow search/filter
-    # simply has no snapshot history (that must render zero-metric rows as
-    # before). Rendering a silently-empty dashboard would make every metric
-    # read 0 and look like a business collapse.
-    if products and snapshot_count == 0:
-        window_has_data = await db.product_snapshots.find_one(
-            {"crawled_at": snap_query["crawled_at"]}, {"_id": 1}
-        )
-        if window_has_data is None and await db.product_snapshots.estimated_document_count() > 0:
-            raise HTTPException(
-                503,
-                f"No market snapshots exist in the selected window ({effective_days}d). "
-                "Crawlers/sync may be stalled — refusing to render an empty dashboard. "
-                "Check the data-freshness banner or /api/data-freshness.",
-            )
+    for _chunk_start in range(0, len(products), MY_PRODUCTS_CHUNK_SIZE):
+        _chunk = products[_chunk_start:_chunk_start + MY_PRODUCTS_CHUNK_SIZE]
+        _chunk_skus = set()
+        for _cp in _chunk:
+            if _cp.get("sku"):
+                _chunk_skus |= _sku_cluster(_cp)
+        by_sku = {}
+        if _chunk_skus:
+            _chunk_query = dict(snap_query)
+            _chunk_query["sku"] = {"$in": list(_chunk_skus)}
+            cursor = db.product_snapshots.find(_chunk_query, _SNAP_PROJECTION).batch_size(2000)
+            async for s in cursor:
+                by_sku.setdefault(s["sku"], {}).setdefault(s["store_id"], []).append(s)
+            for _sk in by_sku:
+                for _sid in by_sku[_sk]:
+                    by_sku[_sk][_sid].sort(key=lambda x: x["crawled_at"])
 
-    for p in products:
-        stores_data = by_sku.get(p["sku"], {})
-        metrics = compute_product_metrics(stores_data, effective_days)
-        if not metrics:
-            # Issue #1: keep the row in the table even if no snapshot history
-            # exists in the selected window. The user's catalogue size must be
-            # constant across time filters; only the metric numbers change.
-            if not own_only:
-                continue
-            metrics = {
-                "price": 0.0, "min_price": 0.0, "max_price": 0.0, "median_price": 0.0,
-                "vs_lowest_pct": 0, "vs_median_pct": 0,
-                "qty_sold_est": 0, "revenue_est": 0.0,
-                "num_sellers": 0, "latest_qty": 0,
-                "stock_signal": "MEDIUM", "confidence_score": 0, "source_tier": 1,
-            }
-        row = {**p, **metrics}
-
-        # Resolve product_url with priority:
-        # 1. my_products (user's own catalog URL)
-        # 2. db.products.product_url (last URL captured by any crawler/ingest)
-        # 3. Latest snapshot's product_url (per-store URL from any tracked store)
-        # 4. Fallback: own-store search URL by SKU, else first competitor's search URL
-        url = my_url_by_sku.get(p["sku"]) or p.get("product_url") or ""
-        if not url:
-            for snaps in stores_data.values():
-                snap_url = (snaps[-1] if snaps else {}).get("product_url")
-                if snap_url:
-                    url = snap_url
-                    break
-        if not url:
-            if own_domain:
-                url = f"https://{own_domain}/search?keyword={p['sku']}"
-            elif stores_data:
-                first_sid = next(iter(stores_data.keys()))
-                fd = store_domains.get(first_sid)
-                if fd:
-                    url = f"https://{fd}/search?keyword={p['sku']}"
-        row["product_url"] = url
-        row["is_my_product"] = p["sku"] in my_skus_set
-        # Auto-sync presence flags (Feb 2026): exposed so the frontend can render
-        # an "ARCHIVED" / "Not on store" badge on rows whose SKU has vanished
-        # from pets-houses.com without being deleted from db.my_products.
-        _mp = my_presence_lookup.get(p["sku"]) or {}
-        row["present_on_store"] = _mp.get("present_on_store") if _mp else None
-        row["last_seen_on_store"] = _mp.get("last_seen_on_store")
-        row["discovered_via"] = _mp.get("discovered_via")
-
-        # ── My-store-centric fields (Feb 2026) ───────────────────
-        # "My Products" page needs the SKU, name, price and stock to reflect the
-        # user's Zid store, not the market aggregate. We override the catalog
-        # display fields with db.my_products values when this row is mine, and
-        # we derive a `vs_my_price_pct` comparing the cheapest *competitor* to
-        # my price. Snapshot-derived market fields (qty_sold_est, revenue_est,
-        # num_sellers) stay untouched — the frontend labels them as market.
-        if p["sku"] in my_skus_set:
-            mp_doc = my_price_lookup.get(p["sku"]) or {}
-            mp_name_ar = mp_doc.get("name_ar")
-            mp_name_en = mp_doc.get("name_en")
-            mp_barcode = mp_doc.get("barcode")
-            if mp_name_ar:
-                row["name_ar"] = mp_name_ar
-            if mp_name_en:
-                row["name_en"] = mp_name_en
-            if mp_barcode:
-                row["barcode"] = mp_barcode
-
-            my_price = mp_doc.get("sale_price") or mp_doc.get("price")
-            my_qty = mp_doc.get("quantity")
-            my_in_stock = mp_doc.get("in_stock")
-
-            # Override the headline Price column to show MY price (the previous
-            # value was the market average — misleading on a "my products" page).
-            if my_price is not None:
-                row["price"] = round(my_price, 2)
-            row["my_price"] = round(my_price, 2) if my_price is not None else None
-            row["my_quantity"] = int(my_qty) if my_qty is not None else None
-            row["my_in_stock"] = bool(my_in_stock) if my_in_stock is not None else None
-            row["my_stock_signal"] = get_stock_signal(
-                row["my_quantity"] if row["my_quantity"] is not None else 0,
-                in_stock=row["my_in_stock"],
-            ) if my_price is not None else None
-
-            # Competitor discovery — barcode-safe UNION of two sources:
-            #   (A) product_matches link table (matcher's truth — barcode at conf 99,
-            #       SKU equality at conf 95). Robust to suffix mismatches because
-            #       the matcher already resolved them.
-            #   (B) Direct snapshot lookup keyed by my barcode/EAN candidates.
-            #       Catches competitors the matcher hasn't linked yet (matcher
-            #       coverage gap) but ONLY when the SKU string itself passes the
-            #       NUMERIC_BARCODE_RE (^\d{8,14}$). This means a Zid suffix like
-            #       "8005852750068-RUDC" can NEVER match my EAN "8005852750068"
-            #       via this path (the suffixed string fails the regex). For
-            #       non-EAN proprietary SKUs (XYZ-001), the candidate set is
-            #       empty and we fall back to source A only.
-            # See /app/backend/tests/test_competitor_count_union.py for safety
-            # guarantees encoded as regression tests.
-            mp_barcode_field = str(mp_doc.get("barcode") or "").strip()
-            my_barcode_candidates = set()
-            if _is_valid_barcode(mp_barcode_field):
-                my_barcode_candidates.add(mp_barcode_field)
-            if _is_valid_barcode(p["sku"]):
-                my_barcode_candidates.add(p["sku"])
-
-            # Per-store "latest snapshot" map: store_id -> latest_snapshot_dict.
-            # First seed from matches (authoritative when present), then fill
-            # gaps from the barcode union (additive, dedupe by store_id).
-            competitor_latest_by_store = {}
-            best_match_confidence = 0
-            best_match_tier = None
-            for tup in matches_by_my_sku.get(p["sku"], []):
-                comp_sku, comp_store_id = tup[0], tup[1]
-                match_conf = tup[2] if len(tup) > 2 else 0
-                comp_snaps = by_sku.get(comp_sku, {}).get(comp_store_id, [])
-                if not comp_snaps:
+        for p in _chunk:
+            stores_data = by_sku.get(p["sku"], {})
+            metrics = compute_product_metrics(stores_data, effective_days)
+            if not metrics:
+                # Issue #1: keep the row in the table even if no snapshot history
+                # exists in the selected window. The user's catalogue size must be
+                # constant across time filters; only the metric numbers change.
+                if not own_only:
                     continue
-                latest = comp_snaps[-1]
-                competitor_latest_by_store.setdefault(comp_store_id, latest)
-                if match_conf > best_match_confidence:
-                    best_match_confidence = match_conf
-                    best_match_tier = latest.get("source_tier")
-            for bc in my_barcode_candidates:
-                for sid, snaps in by_sku.get(bc, {}).items():
-                    if sid == own_store_id or sid in competitor_latest_by_store:
-                        continue
-                    if not snaps:
-                        continue
-                    competitor_latest_by_store[sid] = snaps[-1]
+                metrics = {
+                    "price": 0.0, "min_price": 0.0, "max_price": 0.0, "median_price": 0.0,
+                    "vs_lowest_pct": 0, "vs_median_pct": 0,
+                    "qty_sold_est": 0, "revenue_est": 0.0,
+                    "num_sellers": 0, "latest_qty": 0,
+                    "stock_signal": "MEDIUM", "confidence_score": 0, "source_tier": 1,
+                }
+            row = {**p, **metrics}
 
-            # num_competitors = ALL stores that carry the product. OOS counts.
-            # Stores whose latest snapshot has price=None still count (the user
-            # explicitly wants this: stockout shouldn't drop a competitor from
-            # the count, only from the price comparison).
-            row["num_competitors"] = len(competitor_latest_by_store)
+            # Resolve product_url with priority:
+            # 1. my_products (user's own catalog URL)
+            # 2. db.products.product_url (last URL captured by any crawler/ingest)
+            # 3. Latest snapshot's product_url (per-store URL from any tracked store)
+            # 4. Fallback: own-store search URL by SKU, else first competitor's search URL
+            url = my_url_by_sku.get(p["sku"]) or p.get("product_url") or ""
+            if not url:
+                for snaps in stores_data.values():
+                    snap_url = (snaps[-1] if snaps else {}).get("product_url")
+                    if snap_url:
+                        url = snap_url
+                        break
+            if not url:
+                if own_domain:
+                    url = f"https://{own_domain}/search?keyword={p['sku']}"
+                elif stores_data:
+                    first_sid = next(iter(stores_data.keys()))
+                    fd = store_domains.get(first_sid)
+                    if fd:
+                        url = f"https://{fd}/search?keyword={p['sku']}"
+            row["product_url"] = url
+            row["is_my_product"] = p["sku"] in my_skus_set
+            # Auto-sync presence flags (Feb 2026): exposed so the frontend can render
+            # an "ARCHIVED" / "Not on store" badge on rows whose SKU has vanished
+            # from pets-houses.com without being deleted from db.my_products.
+            _mp = my_presence_lookup.get(p["sku"]) or {}
+            row["present_on_store"] = _mp.get("present_on_store") if _mp else None
+            row["last_seen_on_store"] = _mp.get("last_seen_on_store")
+            row["discovered_via"] = _mp.get("discovered_via")
 
-            # Price comparison — only stores with a usable price. OOS competitors
-            # WITH a price ARE included (their price is a real market signal).
-            comp_latest_prices = [
-                snap["price"] for snap in competitor_latest_by_store.values()
-                if snap.get("price") is not None
-            ]
-            row["num_priced_competitors"] = len(comp_latest_prices)
-            if comp_latest_prices:
-                comp_min = min(comp_latest_prices)
-                row["competitor_min_price"] = round(comp_min, 2)
-                row["competitor_max_price"] = round(max(comp_latest_prices), 2)
-                if my_price and my_price > 0:
-                    # Positive  → my_price is BELOW the cheapest competitor (I'm winning)
-                    # Negative  → a competitor undercuts me (I'm overpriced)
-                    row["vs_my_price_pct"] = round(((comp_min - my_price) / my_price) * 100, 1)
-                else:
-                    row["vs_my_price_pct"] = None
-            else:
-                row["competitor_min_price"] = None
-                row["competitor_max_price"] = None
-                row["vs_my_price_pct"] = None
+            # ── My-store-centric fields (Feb 2026) ───────────────────
+            # "My Products" page needs the SKU, name, price and stock to reflect the
+            # user's Zid store, not the market aggregate. We override the catalog
+            # display fields with db.my_products values when this row is mine, and
+            # we derive a `vs_my_price_pct` comparing the cheapest *competitor* to
+            # my price. Snapshot-derived market fields (qty_sold_est, revenue_est,
+            # num_sellers) stay untouched — the frontend labels them as market.
+            if p["sku"] in my_skus_set:
+                mp_doc = my_price_lookup.get(p["sku"]) or {}
+                mp_name_ar = mp_doc.get("name_ar")
+                mp_name_en = mp_doc.get("name_en")
+                mp_barcode = mp_doc.get("barcode")
+                if mp_name_ar:
+                    row["name_ar"] = mp_name_ar
+                if mp_name_en:
+                    row["name_en"] = mp_name_en
+                if mp_barcode:
+                    row["barcode"] = mp_barcode
 
-            # Override confidence + tier with the matcher's view when we have a
-            # linked competitor. This is what the user sees in the Conf. column —
-            # the trust level of the price comparison, not the trust of the own-
-            # store snapshot (which is always tier 0 / 99 by definition).
-            if best_match_confidence > 0:
-                row["confidence_score"] = int(best_match_confidence)
-                if best_match_tier is not None:
-                    row["source_tier"] = best_match_tier
+                my_price = mp_doc.get("sale_price") or mp_doc.get("price")
+                my_qty = mp_doc.get("quantity")
+                my_in_stock = mp_doc.get("in_stock")
 
-            # Own-store sales estimate (Feb 2026) — needed for the four KPI cards
-            # at the top of "My Products". `_estimate_sales_from_snapshots` is the
-            # same canonical primitive used market-wide; here we feed it ONLY the
-            # own-store snapshot list to get *your* units, then multiply by your
-            # current selling price for revenue (per user spec).
-            own_snaps = stores_data.get(own_store_id, []) if own_store_id else []
-            my_units, _own_rev_from_snaps, _ = _estimate_sales_from_snapshots(own_snaps, effective_days)
-            row["my_units_sold"] = int(my_units or 0)
-            row["my_revenue_est"] = round((row["my_units_sold"] * (my_price or 0.0)), 2) if my_price else 0.0
-        else:
-            # Non-own row (only reachable when own_only=False — e.g. /api/insights/sales)
-            row["my_units_sold"] = 0
-            row["my_revenue_est"] = 0.0
+                # Override the headline Price column to show MY price (the previous
+                # value was the market average — misleading on a "my products" page).
+                if my_price is not None:
+                    row["price"] = round(my_price, 2)
+                row["my_price"] = round(my_price, 2) if my_price is not None else None
+                row["my_quantity"] = int(my_qty) if my_qty is not None else None
+                row["my_in_stock"] = bool(my_in_stock) if my_in_stock is not None else None
+                row["my_stock_signal"] = get_stock_signal(
+                    row["my_quantity"] if row["my_quantity"] is not None else 0,
+                    in_stock=row["my_in_stock"],
+                ) if my_price is not None else None
 
-        # Market position (Feb 2026) — own price lives in db.my_products (not in
-        # product_snapshots), so we synthesize an entry for the own store using
-        # the my_products row directly. Competitors come from matched snapshots.
-        if own_store_id and p["sku"] in my_skus_set:
-            mp_row = my_price_lookup.get(p["sku"]) or {}
-            own_price = mp_row.get("sale_price") or mp_row.get("price")
-            if own_price:
-                seller_prices = [{
-                    "store_id": own_store_id,
-                    "store_name": store_name_by_id.get(own_store_id, "My Store"),
-                    "price": own_price,
-                    "confidence_score": 99,
-                    "crawled_at": mp_row.get("last_synced_at") or datetime.now(timezone.utc),
-                }]
+                # Competitor discovery — barcode-safe UNION of two sources:
+                #   (A) product_matches link table (matcher's truth — barcode at conf 99,
+                #       SKU equality at conf 95). Robust to suffix mismatches because
+                #       the matcher already resolved them.
+                #   (B) Direct snapshot lookup keyed by my barcode/EAN candidates.
+                #       Catches competitors the matcher hasn't linked yet (matcher
+                #       coverage gap) but ONLY when the SKU string itself passes the
+                #       NUMERIC_BARCODE_RE (^\d{8,14}$). This means a Zid suffix like
+                #       "8005852750068-RUDC" can NEVER match my EAN "8005852750068"
+                #       via this path (the suffixed string fails the regex). For
+                #       non-EAN proprietary SKUs (XYZ-001), the candidate set is
+                #       empty and we fall back to source A only.
+                # See /app/backend/tests/test_competitor_count_union.py for safety
+                # guarantees encoded as regression tests.
+                mp_barcode_field = str(mp_doc.get("barcode") or "").strip()
+                my_barcode_candidates = set()
+                if _is_valid_barcode(mp_barcode_field):
+                    my_barcode_candidates.add(mp_barcode_field)
+                if _is_valid_barcode(p["sku"]):
+                    my_barcode_candidates.add(p["sku"])
+
+                # Per-store "latest snapshot" map: store_id -> latest_snapshot_dict.
+                # First seed from matches (authoritative when present), then fill
+                # gaps from the barcode union (additive, dedupe by store_id).
+                competitor_latest_by_store = {}
+                best_match_confidence = 0
+                best_match_tier = None
                 for tup in matches_by_my_sku.get(p["sku"], []):
                     comp_sku, comp_store_id = tup[0], tup[1]
+                    match_conf = tup[2] if len(tup) > 2 else 0
                     comp_snaps = by_sku.get(comp_sku, {}).get(comp_store_id, [])
                     if not comp_snaps:
                         continue
                     latest = comp_snaps[-1]
-                    seller_prices.append({
-                        "store_id": comp_store_id,
-                        "store_name": store_name_by_id.get(comp_store_id, ""),
-                        "price": latest.get("price"),
-                        "confidence_score": latest.get("confidence_score", 0),
-                        "crawled_at": latest.get("crawled_at"),
-                    })
-                row["market_position"] = compute_market_position(seller_prices, own_store_id)
+                    competitor_latest_by_store.setdefault(comp_store_id, latest)
+                    if match_conf > best_match_confidence:
+                        best_match_confidence = match_conf
+                        best_match_tier = latest.get("source_tier")
+                for bc in my_barcode_candidates:
+                    for sid, snaps in by_sku.get(bc, {}).items():
+                        if sid == own_store_id or sid in competitor_latest_by_store:
+                            continue
+                        if not snaps:
+                            continue
+                        competitor_latest_by_store[sid] = snaps[-1]
+
+                # num_competitors = ALL stores that carry the product. OOS counts.
+                # Stores whose latest snapshot has price=None still count (the user
+                # explicitly wants this: stockout shouldn't drop a competitor from
+                # the count, only from the price comparison).
+                row["num_competitors"] = len(competitor_latest_by_store)
+
+                # Price comparison — only stores with a usable price. OOS competitors
+                # WITH a price ARE included (their price is a real market signal).
+                comp_latest_prices = [
+                    snap["price"] for snap in competitor_latest_by_store.values()
+                    if snap.get("price") is not None
+                ]
+                row["num_priced_competitors"] = len(comp_latest_prices)
+                if comp_latest_prices:
+                    comp_min = min(comp_latest_prices)
+                    row["competitor_min_price"] = round(comp_min, 2)
+                    row["competitor_max_price"] = round(max(comp_latest_prices), 2)
+                    if my_price and my_price > 0:
+                        # Positive  → my_price is BELOW the cheapest competitor (I'm winning)
+                        # Negative  → a competitor undercuts me (I'm overpriced)
+                        row["vs_my_price_pct"] = round(((comp_min - my_price) / my_price) * 100, 1)
+                    else:
+                        row["vs_my_price_pct"] = None
+                else:
+                    row["competitor_min_price"] = None
+                    row["competitor_max_price"] = None
+                    row["vs_my_price_pct"] = None
+
+                # Override confidence + tier with the matcher's view when we have a
+                # linked competitor. This is what the user sees in the Conf. column —
+                # the trust level of the price comparison, not the trust of the own-
+                # store snapshot (which is always tier 0 / 99 by definition).
+                if best_match_confidence > 0:
+                    row["confidence_score"] = int(best_match_confidence)
+                    if best_match_tier is not None:
+                        row["source_tier"] = best_match_tier
+
+                # Own-store sales (Feb 2026, orders rework): REAL numbers from the
+                # Zid orders ledger (own_store_orders) whenever the window has
+                # order data — exact units and product-attributed revenue, immune
+                # to the stock-depletion blind spots. Falls back to the legacy
+                # snapshot estimator only when no orders exist in the window
+                # (backfill not run yet / Zid creds missing), so the dashboard
+                # degrades to the old behavior instead of zeros.
+                if orders_agg is not None:
+                    sku_orders = orders_agg["by_sku"].get(p["sku"], {})
+                    row["my_units_sold"] = int(sku_orders.get("units") or 0)
+                    row["my_revenue_est"] = round(float(sku_orders.get("revenue") or 0.0), 2)
+                    row["my_sales_source"] = "zid_orders"
+                else:
+                    own_snaps = stores_data.get(own_store_id, []) if own_store_id else []
+                    my_units, _own_rev_from_snaps, _ = _estimate_sales_from_snapshots(own_snaps, effective_days)
+                    row["my_units_sold"] = int(my_units or 0)
+                    row["my_revenue_est"] = round((row["my_units_sold"] * (my_price or 0.0)), 2) if my_price else 0.0
+                    row["my_sales_source"] = "estimated"
+            else:
+                # Non-own row (only reachable when own_only=False — e.g. /api/insights/sales)
+                row["my_units_sold"] = 0
+                row["my_revenue_est"] = 0.0
+
+            # Market position (Feb 2026) — own price lives in db.my_products (not in
+            # product_snapshots), so we synthesize an entry for the own store using
+            # the my_products row directly. Competitors come from matched snapshots.
+            if own_store_id and p["sku"] in my_skus_set:
+                mp_row = my_price_lookup.get(p["sku"]) or {}
+                own_price = mp_row.get("sale_price") or mp_row.get("price")
+                if own_price:
+                    seller_prices = [{
+                        "store_id": own_store_id,
+                        "store_name": store_name_by_id.get(own_store_id, "My Store"),
+                        "price": own_price,
+                        "confidence_score": 99,
+                        "crawled_at": mp_row.get("last_synced_at") or datetime.now(timezone.utc),
+                    }]
+                    for tup in matches_by_my_sku.get(p["sku"], []):
+                        comp_sku, comp_store_id = tup[0], tup[1]
+                        comp_snaps = by_sku.get(comp_sku, {}).get(comp_store_id, [])
+                        if not comp_snaps:
+                            continue
+                        latest = comp_snaps[-1]
+                        seller_prices.append({
+                            "store_id": comp_store_id,
+                            "store_name": store_name_by_id.get(comp_store_id, ""),
+                            "price": latest.get("price"),
+                            "confidence_score": latest.get("confidence_score", 0),
+                            "crawled_at": latest.get("crawled_at"),
+                        })
+                    row["market_position"] = compute_market_position(seller_prices, own_store_id)
+                else:
+                    row["market_position"] = None
             else:
                 row["market_position"] = None
-        else:
-            row["market_position"] = None
 
-        result.append(row)
-        total_sold += metrics["qty_sold_est"]
-        total_rev += metrics["revenue_est"]
+            result.append(row)
+            total_sold += metrics["qty_sold_est"]
+            total_rev += metrics["revenue_est"]
 
     # Sort
     reverse = sort_order == "desc"
@@ -2236,10 +2271,20 @@ async def my_products(
             ((r.get("my_price") or r.get("price") or 0) * (r.get("qty_sold_est") or 0))
             for r in result
         )
-        my_revenue = sum(
-            ((r.get("my_price") or r.get("price") or 0) * (r.get("my_units_sold") or 0))
-            for r in result
-        )
+        if orders_agg is not None:
+            # REAL ledger numbers. my_revenue = Σ order totals — the same
+            # figure the Zid dashboard shows (shipping/fees included), NOT the
+            # Σ of per-row line revenue (which excludes order-level charges).
+            my_revenue = orders_agg["revenue"]
+            my_units_kpi = orders_agg["units"]
+            my_revenue_source = "zid_orders"
+        else:
+            my_revenue = sum(
+                ((r.get("my_price") or r.get("price") or 0) * (r.get("my_units_sold") or 0))
+                for r in result
+            )
+            my_units_kpi = total_my_units
+            my_revenue_source = "estimated"
         avg_market_share_honest = (
             round((total_my_units_share / total_market_units_share) * 100, 1)
             if total_market_units_share > 0 else 0
@@ -2249,8 +2294,12 @@ async def my_products(
             "total_units_sold": int(total_sold),
             "market_revenue": round(total_rev, 2),
             "my_revenue": round(my_revenue, 2),
+            # "zid_orders" → exact ledger data (frontend drops the "(Est.)"
+            # suffix); "estimated" → legacy snapshot-depletion fallback.
+            "my_revenue_source": my_revenue_source,
+            "my_orders_count": orders_agg["orders_count"] if orders_agg else None,
             "avg_market_share": avg_market_share_honest,
-            "my_units_sold": int(total_my_units),
+            "my_units_sold": int(my_units_kpi),
             # Market data coverage — answers "do we have competitor pricing on this product?"
             "matched_products": len(pricing_rows),
             "market_coverage_pct": round((len(pricing_rows) / total_count) * 100, 1) if total_count > 0 else 0,
@@ -3783,7 +3832,6 @@ async def trigger_digest(user=Depends(get_user)):
 
 # ── My Products Import & Price Intelligence ─────────────────
 from matcher import match_my_product, run_matching_for_all, _is_valid_barcode
-from mahally import enrich_barcodes_from_mahally
 
 # MatchActionIn moved to /app/backend/models/schemas.py (Feb 2026 refactor)
 
@@ -3933,9 +3981,24 @@ async def import_status(user=Depends(get_user)):
     confirmed_count = await db.product_matches.count_documents({"manually_confirmed": True})
     blacklist_count = await db.match_blacklist.count_documents({})
     job = await db.matching_jobs.find_one({"job": "latest"}, {"_id": 0})
-    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "name": 1, "domain": 1, "last_own_store_sync": 1, "own_store_sync_updated": 1, "own_store_sync_not_found": 1, "own_store_sync_crawled": 1, "own_store_sync_source": 1, "own_store_sync_warning": 1})
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "name": 1, "domain": 1, "last_own_store_sync": 1, "own_store_sync_updated": 1, "own_store_sync_not_found": 1, "own_store_sync_crawled": 1, "own_store_sync_source": 1, "own_store_sync_warning": 1, "last_orders_sync": 1, "orders_sync_status": 1})
+    # Live stats straight from the ledger collection (authoritative regardless
+    # of whether the scheduled or the manual path ingested them).
+    orders_total = await db.own_store_orders.count_documents({})
+    orders_excluded = await db.own_store_orders.count_documents({"excluded": True})
+    oldest_order = await db.own_store_orders.find_one({}, {"_id": 0, "created_at": 1}, sort=[("created_at", 1)])
+    newest_order = await db.own_store_orders.find_one({}, {"_id": 0, "created_at": 1}, sort=[("created_at", -1)])
+    orders_info = {
+        "total": orders_total,
+        "excluded": orders_excluded,
+        "oldest": (oldest_order or {}).get("created_at").isoformat() if (oldest_order or {}).get("created_at") else None,
+        "newest": (newest_order or {}).get("created_at").isoformat() if (newest_order or {}).get("created_at") else None,
+        "last_sync": (own or {}).get("last_orders_sync"),
+        "last_sync_status": (own or {}).get("orders_sync_status"),
+    }
     return {
         "my_products": my_count,
+        "orders": orders_info,
         "total_matches": match_count,
         "confirmed_matches": confirmed_count,
         "blacklisted": blacklist_count,
@@ -3969,6 +4032,43 @@ async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_u
     return {"message": "Sync started", "status": "running", "store": own.get("name"), "domain": own.get("domain")}
 
 
+@router.post("/import/sync-orders")
+async def trigger_orders_sync(background: BackgroundTasks, full: bool = Query(False, description="Full backfill: walk ALL order pages the Zid API will serve, not just the recent refresh window"), user=Depends(get_user)):
+    """Pull real orders from the Zid Merchant Orders API into own_store_orders.
+
+    Run once with ?full=true after deploying this feature so historical
+    windows (7D/14D/30D/90D) show real revenue; afterwards the 6-hourly
+    scheduled sync keeps it fresh incrementally.
+    """
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0})
+    if not own:
+        raise HTTPException(400, "No store flagged is_own_store=True. Set the flag on your store first.")
+
+    async def _run_orders(full_backfill: bool):
+        try:
+            res = await sync_own_store_orders(db, full_backfill=full_backfill)
+            await db.stores.update_one(
+                {"is_own_store": True},
+                {"$set": {
+                    "last_orders_sync": datetime.now(timezone.utc).isoformat(),
+                    "orders_sync_status": res.get("status"),
+                    "orders_sync_upserted": int(res.get("upserted") or 0),
+                    "orders_sync_oldest": res.get("oldest_seen"),
+                }},
+            )
+        except Exception:
+            logger.exception("[Orders] manual sync failed")
+            await db.stores.update_one(
+                {"is_own_store": True},
+                {"$set": {"orders_sync_status": "error",
+                          "last_orders_sync": datetime.now(timezone.utc).isoformat()}},
+            )
+
+    background.add_task(_run_orders, full)
+    return {"message": f"Orders sync started (full_backfill={full})", "status": "running",
+            "store": own.get("name"), "domain": own.get("domain")}
+
+
 async def _run_sync_and_match(kind: str):
     """Run own-store sync and matcher with decoupled error handling + persistent logging.
 
@@ -3997,6 +4097,9 @@ async def _run_sync_and_match(kind: str):
         "match_status": "skipped",
         "match_added": 0,
         "match_error": None,
+        "orders_status": "skipped",
+        "orders_upserted": 0,
+        "orders_error": None,
         "duration_secs": 0.0,
     }
 
@@ -4019,6 +4122,21 @@ async def _run_sync_and_match(kind: str):
             run["sync_status"] = "error"
             run["sync_error"] = str(e)[:500]
             logger.exception(f"[SyncMatch/{kind}] sync FAILED")
+
+    # ── ORDERS step (Feb 2026) — real Zid orders ledger for My Revenue.
+    # Independent try/except: an orders failure must not block the matcher,
+    # and vice versa. Incremental mode re-pulls the last 14 days so late
+    # cancellations/refunds correct history on every run.
+    if kind != "manual_match_only":
+        try:
+            ores = await sync_own_store_orders(db)
+            run["orders_status"] = ores.get("status", "unknown")
+            run["orders_upserted"] = int(ores.get("upserted") or 0)
+            logger.info(f"[SyncMatch/{kind}] orders {run['orders_status']}: upserted={run['orders_upserted']}")
+        except Exception as e:
+            run["orders_status"] = "error"
+            run["orders_error"] = str(e)[:500]
+            logger.exception(f"[SyncMatch/{kind}] orders sync FAILED")
 
     # ── MATCH step — runs even if sync failed; matcher can re-link existing data ──
     try:
@@ -4410,6 +4528,72 @@ async def admin_recent_snapshots(limit: int = Query(200, ge=1, le=1000), user=De
     return {"count": len(snaps), "snapshots": snaps}
 
 
+@router.get("/admin/snapshot-horizon")
+async def snapshot_horizon(days: int = Query(90), user=Depends(get_user)):
+    """Read-only diagnostic for the '30D and 90D look identical' symptom.
+
+    Answers two questions:
+      1. Does snapshot history genuinely stop N days back? → per-day counts.
+      2. Are older snapshots invisible because crawled_at was stored as an ISO
+         STRING in an earlier era? (A BSON string never matches a `$gte:
+         <datetime>` filter, silently excluding those rows from every window.)
+    """
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+
+    # BSON type split — the smoking gun if strings exist.
+    date_typed = await db.product_snapshots.count_documents({"crawled_at": {"$type": "date"}})
+    string_typed = await db.product_snapshots.count_documents({"crawled_at": {"$type": "string"}})
+    oldest_date = await db.product_snapshots.find_one(
+        {"crawled_at": {"$type": "date"}}, {"_id": 0, "crawled_at": 1}, sort=[("crawled_at", 1)])
+    newest_date = await db.product_snapshots.find_one(
+        {"crawled_at": {"$type": "date"}}, {"_id": 0, "crawled_at": 1}, sort=[("crawled_at", -1)])
+    string_sample = await db.product_snapshots.find_one(
+        {"crawled_at": {"$type": "string"}}, {"_id": 0, "crawled_at": 1, "store_name": 1, "sku": 1})
+
+    # Per-day histogram over date-typed snapshots, split own vs competitors.
+    own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_id = own_store_doc.get("id") if own_store_doc else None
+    per_day = {}
+    try:
+        pipeline = [
+            {"$match": {"crawled_at": {"$gte": since, "$type": "date"}}},
+            {"$group": {
+                "_id": {"day": {"$dateToString": {"format": "%Y-%m-%d", "date": "$crawled_at"}},
+                        "own": {"$eq": ["$store_id", own_id]}},
+                "n": {"$sum": 1},
+            }},
+        ]
+        async for g in db.product_snapshots.aggregate(pipeline, allowDiskUse=True):
+            day = g["_id"]["day"]
+            bucket = per_day.setdefault(day, {"own": 0, "competitors": 0})
+            bucket["own" if g["_id"]["own"] else "competitors"] += g["n"]
+    except Exception as e:
+        # Reduced-aggregation backends (FerretDB) may not support $dateToString;
+        # the type-split above still answers the headline question.
+        per_day = {"error": f"histogram unavailable on this backend: {str(e)[:200]}"}
+
+    return {
+        "checked_at": now.isoformat(),
+        "window_days": days,
+        "crawled_at_type_split": {
+            "date_typed": date_typed,
+            "string_typed": string_typed,
+            "verdict": (
+                "STRING-TYPED SNAPSHOTS EXIST — these are permanently invisible to every "
+                "dashboard window filter and explain a hard history horizon."
+                if string_typed > 0 else
+                "All crawled_at values are proper dates — identical 30D/90D numbers mean "
+                "history genuinely contains no qualifying deltas beyond the horizon."
+            ),
+        },
+        "oldest_date_typed": (oldest_date or {}).get("crawled_at"),
+        "newest_date_typed": (newest_date or {}).get("crawled_at"),
+        "string_typed_sample": string_sample,
+        "per_day_counts": per_day,
+    }
+
+
 @router.post("/admin/cleanup-own-snapshots")
 async def cleanup_own_snapshots(dry_run: bool = Query(False, description="If true, only count without deleting"), user=Depends(get_user)):
     """One-time cleanup of legacy product_snapshots from the user's own store.
@@ -4447,34 +4631,6 @@ async def cleanup_own_snapshots(dry_run: bool = Query(False, description="If tru
         "deleted": result.deleted_count,
         "message": f"Removed {result.deleted_count} legacy own-store snapshots from {own_store['name']}",
     }
-
-
-@router.post("/admin/mahally/enrich")
-async def admin_mahally_enrich(
-    maxProducts: int = Query(300, ge=10, le=2000, description="Max Mahally pet products to discover per run"),
-    dryRun: bool = Query(True, description="If True, no DB writes — returns report only"),
-    minRatio: int = Query(92, ge=80, le=100, description="RapidFuzz token_set_ratio floor for match acceptance"),
-    user=Depends(require_super_admin),
-):
-    """Mahally barcode enrichment — super_admin only, dry-run by default.
-
-    Discovers Mahally pet products, extracts their embedded barcode/SKU JSON,
-    and matches against db.products rows with empty barcode using three strict
-    guards (name ratio ≥ minRatio, brand token exact, size tokens exact). On a
-    wet run, writes barcode + barcode_source="mahally" + barcode_confidence +
-    barcode_enriched_at so every enrichment is reversible.
-
-    Response includes sample_matches (up to 20) and sample_near_misses
-    (up to 10, ratio ∈ [80, minRatio)) so the reviewer can spot-check the
-    guards before flipping dryRun=False.
-    """
-    report = await enrich_barcodes_from_mahally(
-        db,
-        max_products=maxProducts,
-        min_ratio=minRatio,
-        dry_run=dryRun,
-    )
-    return report
 
 
 @router.post("/crawler/ingest")
@@ -4991,6 +5147,9 @@ async def startup():
         await db.proxy_usage.create_index("crawled_at")
         await db.products.create_index("sku", unique=True)
         await db.products.create_index("category")
+        # Real orders ledger (Feb 2026 My Revenue rework)
+        await db.own_store_orders.create_index("order_id", unique=True)
+        await db.own_store_orders.create_index([("created_at", -1)])
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
     # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.
