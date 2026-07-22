@@ -4,6 +4,7 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 from fastapi import FastAPI, APIRouter, Query, HTTPException, Request, Depends, Response, UploadFile, File, BackgroundTasks
+from fastapi.encoders import jsonable_encoder
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -946,6 +947,9 @@ async def scheduled_crawl_job(store_id: str):
     # Perf sprint Feb 2026 — invalidate insights/discounts TTL cache so the new
     # snapshots show up immediately on the dashboard instead of waiting up to 60s.
     cache_clear()
+    # iter25 — refresh the my-products dashboard cache. Debounced so the daily
+    # 44-store staggered crawl burst triggers ~1 recompute, not one per store.
+    await maybe_recompute_dashboard_cache(db)
 
 # ── Daily cron schedule (Feb 2026) ──────────────────────────
 # All active stores crawl ONCE per day at 04:00–04:55 KSA time (UTC+3 → 01:00–01:55 UTC),
@@ -1807,22 +1811,80 @@ MIN_SNAPSHOT_PAIRS_FOR_SALES = 2  # need at least 2 valid deltas before any sale
 # _estimate_sales_from_snapshots and compute_product_metrics moved to core/utils.py
 
 # ── Product Routes ──────────────────────────────────────────
-@router.get("/my-products")
-async def my_products(
-    days: int = Query(30),
-    on_date: Optional[str] = Query(None, description="Filter to a specific calendar day (YYYY-MM-DD); overrides 'days'"),
-    date_from: Optional[str] = Query(None, description="Inclusive lower-bound date (YYYY-MM-DD)"),
-    date_to: Optional[str] = Query(None, description="Inclusive upper-bound date (YYYY-MM-DD)"),
-    category: Optional[str] = Query(None),
-    animal_type: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    sort_by: str = Query("revenue_est"),
-    sort_order: str = Query("desc"),
-    limit: int = Query(100, ge=1, le=500, description="Max products per page"),
-    offset: int = Query(0, ge=0, description="Pagination offset"),
-    own_only: bool = Query(True, description="Restrict results to SKUs present in db.my_products (your own store). The MyProducts page sets this to True (default); /api/insights/sales calls this function internally with own_only=False to retain market-wide aggregation."),
-    user=Depends(get_user)
-):
+# ── Dashboard cache (iter25, Jul 2026) ──────────────────────────────────────
+# /api/my-products recomputes snapshot fetch + sales estimation across ~2,177
+# products x window on every request (~40s at 90D on production). The underlying
+# data only changes on the daily crawl + 6-hourly own-store sync, so the default
+# window views (7/14/30/90D, unfiltered) are precomputed into db.dashboard_cache
+# and served instantly. Filtered / on_date / search / own_only=False requests are
+# narrower and stay live. Cached values are byte-identical to live computation:
+# the cache stores the SAME `_my_products_dataset` output (jsonable-encoded so the
+# BSON round-trip can't perturb a value), and the endpoint applies the identical
+# sort + pagination on top.
+DASHBOARD_CACHE_STD_WINDOWS = (7, 14, 30, 90)
+DASHBOARD_CACHE_MAX_AGE_SECS = 24 * 3600  # beyond this, fall back to live compute
+_LAST_DASHBOARD_RECOMPUTE = None           # module-level debounce for crawl bursts
+
+
+def _dashboard_cache_key(days: int) -> str:
+    return f"my_products:v1:days={days}"
+
+
+async def _store_dashboard_cache(db, days, dataset):
+    """Persist one window's dataset (jsonable-encoded) with a fresh timestamp."""
+    now = datetime.now(timezone.utc)
+    await db.dashboard_cache.replace_one(
+        {"key": _dashboard_cache_key(days)},
+        {"key": _dashboard_cache_key(days), "window_days": days,
+         "computed_at": now, "dataset": jsonable_encoder(dataset)},
+        upsert=True,
+    )
+    return now
+
+
+async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
+    """Recompute + store the default my-products view for each standard window.
+
+    Runs after crawl / own-store sync / matcher completion. Each window is one
+    full `_my_products_dataset` pass (bounded memory via iter24 chunking); this
+    is the ~40s cost moved off the request path into the background."""
+    import time as _t
+    global _LAST_DASHBOARD_RECOMPUTE
+    stats = {}
+    for w in windows:
+        t0 = _t.time()
+        ds = await _my_products_dataset(db, w, None, None, None, None, None, None, True)
+        await _store_dashboard_cache(db, w, ds)
+        stats[w] = {"rows": ds["total"], "secs": round(_t.time() - t0, 2)}
+    _LAST_DASHBOARD_RECOMPUTE = datetime.now(timezone.utc)
+    logger.info(f"[DashboardCache] recomputed {list(windows)}: {stats}")
+    return stats
+
+
+async def maybe_recompute_dashboard_cache(db, min_interval_secs=600, force=False):
+    """Debounced recompute — force=True for definitive data changes (manual sync,
+    matcher run); debounced for the staggered daily crawl burst so 44 store
+    crawls trigger ~1 recompute, not 44. Never raises."""
+    global _LAST_DASHBOARD_RECOMPUTE
+    now = datetime.now(timezone.utc)
+    if (not force and _LAST_DASHBOARD_RECOMPUTE
+            and (now - _LAST_DASHBOARD_RECOMPUTE).total_seconds() < min_interval_secs):
+        return None
+    try:
+        return await recompute_dashboard_cache(db)
+    except Exception:
+        logger.exception("[DashboardCache] recompute failed — cache left stale, endpoint will fall back to live")
+        return None
+
+
+async def _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only):
+    """Compute the FULL my-products dataset — every enriched row + KPIs +
+    categories + total — for the given filters, WITHOUT sort or pagination.
+
+    Shared verbatim by the /my-products endpoint and the dashboard-cache
+    recompute so cached and live results are byte-identical: sort and
+    pagination are applied by the caller and are pure presentation (they do
+    not affect the KPIs, the per-row signals, or the category set)."""
     # Resolve date window
     if on_date:
         start = datetime.fromisoformat(on_date).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=timezone.utc)
@@ -2246,9 +2308,6 @@ async def my_products(
             total_sold += metrics["qty_sold_est"]
             total_rev += metrics["revenue_est"]
 
-    # Sort
-    reverse = sort_order == "desc"
-    result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
 
     # Per-row signals (Feb 2026, v5 — barcode-safe union model):
     #   • has_competitor_pricing = num_priced_competitors >= 1
@@ -2352,8 +2411,85 @@ async def my_products(
     # Distinct categories across the FULL filtered set (so the dropdown stays complete after pagination)
     categories_all = sorted({(r.get("category") or "") for r in result if r.get("category")})
     # Apply pagination AFTER sort + KPIs so totals remain accurate
+    return {"kpis": kpis, "rows": result, "total": total_count, "categories": categories_all}
+
+@router.get("/my-products")
+async def my_products(
+    days: int = Query(30),
+    on_date: Optional[str] = Query(None, description="Filter to a specific calendar day (YYYY-MM-DD); overrides 'days'"),
+    date_from: Optional[str] = Query(None, description="Inclusive lower-bound date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="Inclusive upper-bound date (YYYY-MM-DD)"),
+    category: Optional[str] = Query(None),
+    animal_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    sort_by: str = Query("revenue_est"),
+    sort_order: str = Query("desc"),
+    limit: int = Query(100, ge=1, le=500, description="Max products per page"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    own_only: bool = Query(True, description="Restrict results to SKUs present in db.my_products (your own store). The MyProducts page sets this to True (default); /api/insights/sales calls this function internally with own_only=False to retain market-wide aggregation."),
+    user=Depends(get_user)
+):
+    # iter25 — serve the default window views from db.dashboard_cache; keep
+    # filtered / on_date / search / own_only=False requests live (narrow + fast).
+    _cacheable = (
+        bool(own_only)
+        and not on_date and not date_from and not date_to
+        and (category in (None, "", "all"))
+        and (animal_type in (None, "", "all"))
+        and not search
+        and days in DASHBOARD_CACHE_STD_WINDOWS
+    )
+
+    dataset = None
+    cache_meta = {"source": "live_uncacheable", "computed_at": None, "age_seconds": None, "stale": False}
+
+    if _cacheable:
+        doc = None
+        try:
+            doc = await db.dashboard_cache.find_one({"key": _dashboard_cache_key(days)})
+        except Exception:
+            doc = None
+        if doc and doc.get("computed_at") is not None:
+            ca = doc["computed_at"]
+            if not isinstance(ca, datetime):
+                try:
+                    ca = datetime.fromisoformat(str(ca).replace("Z", "+00:00"))
+                except Exception:
+                    ca = None
+            if ca is not None:
+                if ca.tzinfo is None:
+                    ca = ca.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - ca).total_seconds()
+                if age <= DASHBOARD_CACHE_MAX_AGE_SECS and isinstance(doc.get("dataset"), dict):
+                    dataset = doc["dataset"]
+                    cache_meta = {"source": "cache", "computed_at": ca.isoformat(),
+                                  "age_seconds": round(age, 1), "stale": False}
+        if dataset is None:
+            # Miss, unparseable, or stale beyond 24h → compute live (current
+            # behavior) and best-effort refresh the cache. Never error.
+            dataset = await _my_products_dataset(db, days, None, None, None, None, None, None, True)
+            stamped = None
+            try:
+                stamped = await _store_dashboard_cache(db, days, dataset)
+            except Exception:
+                pass
+            cache_meta = {"source": "live_fallback",
+                          "computed_at": (stamped or datetime.now(timezone.utc)).isoformat(),
+                          "age_seconds": 0.0, "stale": False}
+    else:
+        dataset = await _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only)
+
+    # Sort (presentation) + pagination — identical to the pre-cache endpoint, so
+    # the response's computed values are byte-identical whether served from cache
+    # or live. `list(...)` avoids mutating a cached dataset's row order in place.
+    result = list(dataset["rows"])
+    reverse = sort_order == "desc"
+    result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
     paged = result[offset: offset + limit]
-    return {"kpis": kpis, "products": paged, "total": total_count, "limit": limit, "offset": offset, "categories": categories_all}
+    return {"kpis": dataset["kpis"], "products": paged, "total": dataset["total"],
+            "limit": limit, "offset": offset, "categories": dataset["categories"],
+            "cache": cache_meta}
+
 
 @router.get("/products")
 async def list_products(
@@ -3743,7 +3879,11 @@ async def store_profile(store_id: str, user=Depends(get_user)):
 # ── Export ──────────────────────────────────────────────────
 @router.get("/export/products")
 async def export_csv(days: int = Query(30), user=Depends(get_user)):
-    data = await my_products(days=days, category=None, animal_type=None, search=None, sort_by="revenue_est", sort_order="desc", user=user)
+    # Explicit None for the date params — when my_products() is called as a plain
+    # function (not via HTTP) the unset Query(None) defaults are FieldInfo objects
+    # (truthy), which would wrongly trigger the on_date branch. (Pre-existing;
+    # surfaced during the iter25 refactor.)
+    data = await my_products(days=days, on_date=None, date_from=None, date_to=None, category=None, animal_type=None, search=None, sort_by="revenue_est", sort_order="desc", limit=10_000_000, offset=0, own_only=True, user=user)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["SKU", "Name (AR)", "Name (EN)", "Category", "Price (SAR)", "Min Price", "Max Price", "Est. Sales", "Est. Revenue", "Sellers", "Stock Signal", "Confidence"])
@@ -4188,6 +4328,11 @@ async def _run_sync_and_match(kind: str):
         await db.sync_runs.insert_one(run)
     except Exception as e:
         logger.error(f"[SyncMatch/{kind}] failed to persist sync_runs row: {e}")
+
+    # iter25 — own-store sync / matcher run is a definitive data change (incl. the
+    # manual "Sync from Store" and "Run Matching" buttons, which route through
+    # here). Force a dashboard-cache recompute so My Products reflects it at once.
+    run["dashboard_cache"] = "recomputed" if await maybe_recompute_dashboard_cache(db, force=True) else "skipped"
 
     return run
 
@@ -5181,6 +5326,8 @@ async def startup():
         # Real orders ledger (Feb 2026 My Revenue rework)
         await db.own_store_orders.create_index("order_id", unique=True)
         await db.own_store_orders.create_index([("created_at", -1)])
+        # Dashboard cache (iter25) — one doc per standard window, keyed uniquely.
+        await db.dashboard_cache.create_index("key", unique=True)
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
     # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.
@@ -5224,6 +5371,16 @@ async def startup():
         await _run_sync_and_match("scheduled")
     scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
     logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync")
+
+    # iter25 — warm the my-products dashboard cache in the background so the first
+    # request after a deploy/restart is fast instead of paying the live-compute
+    # cost. Fire-and-forget: never blocks startup, failures fall back to live.
+    async def _warm_dashboard_cache():
+        try:
+            await recompute_dashboard_cache(db)
+        except Exception:
+            logger.exception("[DashboardCache] startup warm-up failed (will populate on first request)")
+    asyncio.create_task(_warm_dashboard_cache())
 
     # ── Playwright Chromium AGGRESSIVE self-heal (Feb 2026 production deploy fix v2) ─
     # The previous probe-based version checked `chromium.executable_path` and skipped
