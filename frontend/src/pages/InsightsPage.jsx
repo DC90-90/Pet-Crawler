@@ -21,7 +21,14 @@ const RANGE_OPTIONS = [7, 14, 30, 90];
 // React Query helper — fetches one endpoint, returns the data array/object or empty fallback.
 const fetchInsight = (path, params) => async () => {
   try {
-    const { data } = await api.get(path, { params });
+    const res = await api.get(path, { params });
+    const data = res.data;
+    // iter26 — surface the dashboard-cache freshness (X-Cache-Computed-At header)
+    // by stashing it on dict responses; consumed for the "Metrics as of" line.
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+      const ca = res.headers?.["x-cache-computed-at"];
+      if (ca) data._cache_computed_at = ca;
+    }
     return data;
   } catch (_e) {
     return null;
@@ -29,7 +36,7 @@ const fetchInsight = (path, params) => async () => {
 };
 
 export default function InsightsPage() {
-  const { t } = useI18n();
+  const { t, isRTL } = useI18n();
   const navigate = useNavigate();
   const [days, setDays] = useState(30);
   const [dateFrom, setDateFrom] = useState("");
@@ -70,6 +77,12 @@ export default function InsightsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_insights")}</h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">{t("subtitle")}</p>
+          {summary?._cache_computed_at && (
+            <p className="text-[11px] text-[#6AC1B5] mt-0.5 font-mono" data-testid="insights-cache-freshness">
+              {isRTL ? "المؤشرات محدثة حتى" : "Metrics as of"}{" "}
+              {new Date(summary._cache_computed_at).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
+            </p>
+          )}
         </div>
         <div className="flex gap-2 items-center" data-testid="insights-date-range">
           <Button variant="outline" size="sm" onClick={() => setDigestOpen(true)} className="rounded-md text-xs h-7" data-testid="digest-btn">
