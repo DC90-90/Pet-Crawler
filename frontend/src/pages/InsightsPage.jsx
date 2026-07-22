@@ -29,7 +29,7 @@ const fetchInsight = (path, params) => async () => {
 };
 
 export default function InsightsPage() {
-  const { t } = useI18n();
+  const { t, isRTL } = useI18n();
   const navigate = useNavigate();
   const [days, setDays] = useState(30);
   const [dateFrom, setDateFrom] = useState("");
@@ -64,12 +64,24 @@ export default function InsightsPage() {
 
   if (loading) return <div className="p-6 text-sm text-[#A1E4DB]" data-testid="insights-loading">{t("loading")}</div>;
 
+  // iter27 — honest cache freshness: when the dashboard was served from the
+  // precomputed cache, surface when the metrics were last recomputed. All
+  // insights endpoints share the same window so a single indicator on
+  // /insights/summary represents the whole page's freshness.
+  const cacheMeta = summary?.cache;
+
   return (
     <div className="p-6 space-y-5" data-testid="insights-page">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_insights")}</h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">{t("subtitle")}</p>
+          {cacheMeta?.source === "cache" && cacheMeta?.computed_at && (
+            <p className="text-[11px] text-[#6AC1B5] mt-1 font-mono" data-testid="insights-cache-freshness">
+              {isRTL ? "المؤشرات محدثة حتى" : "Metrics as of"}{" "}
+              {new Date(cacheMeta.computed_at).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
+            </p>
+          )}
         </div>
         <div className="flex gap-2 items-center" data-testid="insights-date-range">
           <Button variant="outline" size="sm" onClick={() => setDigestOpen(true)} className="rounded-md text-xs h-7" data-testid="digest-btn">

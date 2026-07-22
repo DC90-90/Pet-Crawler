@@ -1,0 +1,41 @@
+{
+  "summary": "iter27 (Insights + Price Intel persistent cache) verified end-to-end. 10/10 in-process pytest cases in test_iter27_insights_cache.py + test_dashboard_cache.py PASS (cache byte-identical to live, days=45 uncacheable, non-default variants bypass, 24h staleness → live_fallback, recompute plan covers all 10 endpoints). Against the LIVE preview URL: 36/36 pytest cases PASS in 2.52s — every insights endpoint (summary, leaderboard, top-sellers, trending, gaps, price-wars, restock-opportunities, sales) returns 200 under 2s for days=7/14/30/90. /insights/summary?days=30 cache envelope: source=cache, computed_at ISO, age_seconds, stale flag present. /insights/summary?days=45 returns cache.source='live_uncacheable' as specified. /price-intel/dashboard returns 200 with cache envelope and all required keys (action_required, my_advantages, full_table, unverified, summary, confidence_distribution). /api/my-products?days=30 preserves iter25 envelope (cache/kpis/products/total/categories). top-sellers with a real store_id bypasses cache and still returns 200. Frontend: logged in as super_admin, /insights renders 'Metrics as of 22 Jul 2026, 16:46' via data-testid=insights-cache-freshness; /price-intel renders same via data-testid=price-intel-cache-freshness. All Insights sections present (Leaderboard, Top Sellers, Trending, Gaps, Price Wars, Restock, Sales) plus Data Freshness + Market Position cards. No console/page errors on either page.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "passed_tests": [
+    "test_iter27_insights_cache.py: 6/6 in-process tests PASS (byte-identical cache, list-endpoint cache, price-intel cache, non-default bypass, stale fallback, recompute registry).",
+    "test_dashboard_cache.py: 4/4 PASS (iter25 regression preserved).",
+    "test_iter27_live.py: 36/36 PASS against https://daleel-price-intel.preview.emergentagent.com in 2.52s total.",
+    "/api/insights/summary days∈{7,14,30,90}: 200, cache.source='cache', <2s.",
+    "/api/insights/summary?days=45: 200, cache.source='live_uncacheable'.",
+    "/api/insights/{leaderboard,top-sellers,trending,gaps,price-wars,restock-opportunities,sales}?days=7|14|30|90: 200 in <2s (28 combinations).",
+    "/api/insights/top-sellers?days=30&store_id=<real>: 200, bypasses cache (goes live).",
+    "/api/price-intel/dashboard: 200, cache envelope + all 6 top-level keys, <2s.",
+    "/api/my-products?days=30: iter25 envelope preserved (cache/kpis/products/total/categories).",
+    "Frontend /insights renders insights-cache-freshness label and all 7 named sections + Data Freshness + Market Position.",
+    "Frontend /price-intel renders price-intel-cache-freshness label; no error elements detected."
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_iter27_insights_cache.py",
+    "/app/backend/tests/test_iter27_live.py",
+    "/app/backend/tests/test_dashboard_cache.py",
+    "/app/test_reports/pytest/iter27_iter25.xml",
+    "/app/test_reports/pytest/iter27_live.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py has grown past ~5500 lines — consider splitting insights/price-intel/cache modules into their own files. Not blocking iter27.",
+    "FastAPI on_event('startup'/'shutdown') decorators are deprecated (DeprecationWarnings during pytest). Move to lifespan handlers when convenient.",
+    "Cache envelope shape is clean and consistent (source/computed_at/age_seconds/stale). Good hygiene for downstream observability."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter27_live.py (NEW — 36 live-preview HTTP tests)"
+  ],
+  "success_rate": {"backend": "100% (10/10 in-process + 36/36 live)", "frontend": "100% (Insights + Price Intel pages)"},
+  "test_credentials": {"super_admin_email": "a.disi@taqueen.sa", "super_admin_password": "Ahmaddc90@"},
+  "seed_data_creation": "None on production DB. In-process tests seed their own isolated DB (test_iter27_insights_cache / test_dashboard_cache).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter27 shipped a persistent MongoDB-backed dashboard_cache extension covering /insights/summary + /insights/{leaderboard,top-sellers,trending,gaps,price-wars,restock,sales} + /price-intel/dashboard, alongside the pre-existing /my-products cache from iter25. Cache envelope on summary + price-intel/dashboard: {source: 'cache'|'live_fallback'|'live_uncacheable', computed_at, age_seconds, stale}. Non-standard windows (e.g. days=45), custom store_id, or custom date_from/date_to bypass cache and emit source='live_uncacheable'. TTL = 24h. Startup warm-up + post-crawl/sync/matcher hooks recompute all 37 endpoint×window docs. Regression suite: /app/backend/tests/test_iter27_insights_cache.py (6) + /app/backend/tests/test_iter27_live.py (36) + /app/backend/tests/test_dashboard_cache.py (4). All 46 tests currently green.",
+  "rca_of_the_issue": "N/A — no bugs found."
+}

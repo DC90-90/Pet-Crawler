@@ -91,6 +91,12 @@ export default function PriceIntelPage() {
       <div>
         <h1 className="text-2xl font-semibold text-white">{isRTL ? "استخبارات الأسعار" : "Price Intelligence"}</h1>
         <p className="text-sm text-[#A1E4DB]">{isRTL ? "مقارنة أسعار منتجاتك مع المنافسين" : "Compare your prices against competitors"}</p>
+        {data.cache?.source === "cache" && data.cache?.computed_at && (
+          <p className="text-[11px] text-[#6AC1B5] mt-1 font-mono" data-testid="price-intel-cache-freshness">
+            {isRTL ? "المؤشرات محدثة حتى" : "Metrics as of"}{" "}
+            {new Date(data.cache.computed_at).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
+          </p>
+        )}
       </div>
 
       <DataFreshnessBanner />

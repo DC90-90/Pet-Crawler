@@ -49,6 +49,8 @@ async def _seed(db):
     ])
     await db.product_matches.insert_many([
         {"my_sku": s, "competitor_sku": s, "competitor_store_id": ("c1" if i % 2 else "c2"),
+         "competitor_store_name": ("Comp1" if i % 2 else "Comp2"),
+         "competitor_price": round(10 + i*3.5 + 2, 2), "competitor_in_stock": True,
          "confidence": 99, "match_method": "barcode"} for i, s in enumerate(skus[:25])
     ])
     snaps = []
@@ -151,12 +153,26 @@ def test_recompute_populates_all_windows():
         server.db = db
         await _seed(db)
         stats = await server.recompute_dashboard_cache(db)
-        assert set(stats.keys()) == {7, 14, 30, 90}
+        # iter27 — recompute now covers my_products + 8 insights + 1 price_intel.
+        # Each windowed endpoint stores 4 rows (7/14/30/90); price_intel is windowless.
+        my_products_keys = {f"my_products@{w}" for w in (7, 14, 30, 90)}
+        assert my_products_keys.issubset(stats.keys()), stats.keys()
+        assert "price_intel_dashboard" in stats
         for w in (7, 14, 30, 90):
             doc = await db.dashboard_cache.find_one({"key": server._dashboard_cache_key(w)})
             assert doc and doc["window_days"] == w and isinstance(doc["dataset"], dict)
             assert doc["dataset"]["total"] == 40
-        print("PASS: recompute populated all standard windows")
+        # New endpoints also populate their cache docs
+        for endpoint in ("insights_summary", "insights_leaderboard", "insights_top_sellers",
+                         "insights_trending", "insights_gaps", "insights_price_wars",
+                         "insights_restock", "insights_sales"):
+            for w in (7, 14, 30, 90):
+                doc = await db.dashboard_cache.find_one({"key": server._cache_key(endpoint, w)})
+                assert doc is not None, f"missing cache for {endpoint}@{w}"
+                assert doc["endpoint"] == endpoint and doc["window_days"] == w
+        pi_doc = await db.dashboard_cache.find_one({"key": server._cache_key("price_intel_dashboard")})
+        assert pi_doc is not None
+        print(f"PASS: recompute populated {len(stats)} endpoint×window entries")
     asyncio.run(main())
 
 
