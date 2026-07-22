@@ -193,12 +193,21 @@ async def main():
     print("PASS: all windows render full catalogue; units monotone:", u)
 
     # Chunking-invariance: giant single chunk (≡ iter23's one global query)
-    # must produce byte-identical output to production chunking.
+    # must produce byte-identical output to production chunking. iter25 note:
+    # wipe the dashboard cache before each call so BOTH recompute live with the
+    # chunk size under test (otherwise the 2nd call would be served from the
+    # cache the 1st populated, defeating the comparison). Ignore the additive
+    # 'cache' meta key in the diff.
+    def _no_cache_key(r):
+        return {k: v for k, v in r.items() if k != "cache"}
+    await db.dashboard_cache.delete_many({})
     server.MY_PRODUCTS_CHUNK_SIZE = 10**9
     one_chunk = await call(days=30)
+    await db.dashboard_cache.delete_many({})
     server.MY_PRODUCTS_CHUNK_SIZE = 100
     chunked = await call(days=30)
-    a, b = json.dumps(one_chunk, default=str, sort_keys=True), json.dumps(chunked, default=str, sort_keys=True)
+    a = json.dumps(_no_cache_key(one_chunk), default=str, sort_keys=True)
+    b = json.dumps(_no_cache_key(chunked), default=str, sort_keys=True)
     assert a == b, "chunked output differs from single-query output"
     print("PASS: chunked output byte-identical to single-query output (30D)")
 
