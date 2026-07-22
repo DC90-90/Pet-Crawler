@@ -148,6 +148,15 @@ export default function MyProductsPage() {
          knows whether the dashboard reflects today's market or last month's snapshot. */}
       <DataFreshnessBanner />
 
+      {/* iter25 — honest cache freshness: when these KPIs were served from the
+         precomputed dashboard cache, show when it was last recomputed. */}
+      {data.cache?.source === "cache" && data.cache?.computed_at && (
+        <p className="text-[11px] text-[#6AC1B5] -mt-2 font-mono" data-testid="cache-freshness">
+          {isRTL ? "المؤشرات محدثة حتى" : "Metrics as of"}{" "}
+          {new Date(data.cache.computed_at).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
+        </p>
+      )}
+
       {/* KPI Cards (Feb 2026 — revenue split into two cards so the user can
          see BOTH what the market earns and what they actually take home.
          Sixth card added: Market Coverage = matched products / total — surfaces
