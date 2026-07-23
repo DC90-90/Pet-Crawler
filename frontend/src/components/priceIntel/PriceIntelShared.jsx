@@ -6,7 +6,7 @@ export const CONFIDENCE_LEVELS = [
   { min: 95, label: "SKU Match", labelAr: "مطابقة SKU", icon: Lock, color: "#1E988E", bg: "bg-[#1E988E]/15 text-[#1E988E]", desc: "Exact SKU identifier match between stores", descAr: "مطابقة معرف SKU بالضبط بين المتاجر" },
   { min: 85, label: "Strong Name", labelAr: "اسم قوي", icon: Type, color: "#1E988E", bg: "bg-[#1E988E]/15 text-[#1E988E]", desc: "5+ name tokens match with weight/pack verification", descAr: "5+ كلمات مطابقة مع تحقق من الوزن والتعبئة" },
   { min: 80, label: "Good Name", labelAr: "اسم جيد", icon: Type, color: "#F59E0B", bg: "bg-[#F59E0B]/15 text-[#F59E0B]", desc: "4 name tokens match — review recommended", descAr: "4 كلمات مطابقة — يُنصح بالمراجعة" },
-  { min: 75, label: "Baseline", labelAr: "بيانات أساسية", icon: FileText, color: "#F59E0B", bg: "bg-[#F59E0B]/15 text-[#F59E0B]", desc: "MySKUwatch estimated data — expires May 17", descAr: "بيانات MySKUwatch تقديرية — تنتهي 17 مايو" },
+  { min: 75, label: "Baseline", labelAr: "بيانات أساسية", icon: FileText, color: "#F59E0B", bg: "bg-[#F59E0B]/15 text-[#F59E0B]", desc: "MySkuWatch snapshot — 17 Apr 2026 (historical, not live)", descAr: "لقطة MySkuWatch — 17 أبريل 2026 (تاريخية، غير محدثة)" },
   { min: 70, label: "Weak Name", labelAr: "اسم ضعيف", icon: AlertCircle, color: "#EF4444", bg: "bg-[#EF4444]/15 text-[#EF4444]", desc: "3 tokens match only — likely needs manual review", descAr: "3 كلمات فقط — يحتاج مراجعة يدوية غالباً" },
 ];
 

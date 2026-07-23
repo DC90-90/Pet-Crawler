@@ -104,42 +104,90 @@ export function ConfidenceGuidePanel({ isRTL }) {
   );
 }
 
-export function MarketPositionWidget({ leaderboard, isRTL }) {
-  if (!leaderboard?.my_store_baseline) return null;
+// iter32 — the "Your Store Performance" card and the market-position headline now
+// read LIVE sources (my-products KPIs + insights/summary), never the frozen
+// market_intelligence_baseline literals from the April MySkuWatch import. The
+// static leaderboard list remains but is explicitly labeled as that snapshot.
+export function MarketPositionWidget({ leaderboard, myKpis, summary, isRTL }) {
+  if (!leaderboard?.my_store_baseline && !myKpis && !summary) return null;
+  const mp = summary?.market_position_summary;
+  const pct = mp && mp.ranked_products > 0 && mp.avg_percentile != null ? mp.avg_percentile : null;
+  // Same verdict semantics + tone as the Insights page Market Position card, so
+  // the two pages give ONE answer to "where do I rank".
+  const verdict = pct == null ? null
+    : pct < 33 ? (isRTL ? "أرخص من معظم السوق" : "cheaper than most of the market")
+    : pct < 50 ? (isRTL ? "غالباً تحت وسيط السوق" : "mostly below the market median")
+    : pct < 66 ? (isRTL ? "غالباً فوق وسيط السوق" : "mostly above the market median")
+    : (isRTL ? "أغلى من معظم السوق" : "expensive vs the market");
+  const tone = pct == null ? "#A1E4DB" : pct < 50 ? "#6AC1B5" : pct < 66 ? "#A1E4DB" : "#FBBF24";
+  const isLedger = myKpis?.my_revenue_source === "zid_orders";
+  const snapshotLabel = isRTL ? "لقطة MySkuWatch — 17 أبريل 2026" : "MySkuWatch snapshot — 17 Apr 2026";
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div className="glass-card p-5">
         <div className="flex items-center gap-2 mb-3">
           <Trophy className="w-5 h-5 text-[#F59E0B]" />
           <h3 className="text-sm font-semibold text-white">{isRTL ? "ترتيبك في السوق" : "Market Position"}</h3>
-          <Badge className="text-[8px] bg-[#F59E0B]/10 text-[#F59E0B] border-0 ms-auto">Baseline data (expires May 17)</Badge>
         </div>
-        <div className="flex items-end gap-1 mb-3">
-          <span className="text-4xl font-bold text-[#F59E0B] metric-number">#{leaderboard.my_store_baseline.market_rank}</span>
-          <span className="text-[#A1E4DB] text-sm mb-1">of {leaderboard.my_store_baseline.market_total_stores} stores</span>
-        </div>
-        <div className="space-y-1.5">
-          {leaderboard.leaderboard?.slice(0, 7).map((e) => (
-            <div key={e.rank} className={`flex items-center gap-2 text-xs py-1 px-2 rounded-lg ${e.is_my_store ? "bg-[#1E988E]/10 border border-[#1E988E]/20" : ""}`}>
-              <span className="text-[#A1E4DB] w-5 text-right">#{e.rank}</span>
-              <span className={`flex-1 ${e.is_my_store ? "text-[#1E988E] font-semibold" : "text-white"}`}>{e.store_domain}</span>
-              <span className="text-[#A1E4DB]">{e.relative_size}</span>
+        {pct != null ? (
+          <div className="mb-3" data-testid="pi-live-percentile">
+            <div className="flex items-end gap-2">
+              <span className="text-4xl font-bold metric-number" style={{ color: tone }}>P{pct}</span>
+              <span className="text-[#A1E4DB] text-sm mb-1">{isRTL ? "متوسط المئين السعري" : "avg. price percentile"}</span>
             </div>
-          ))}
-          {leaderboard.leaderboard?.length > 7 && (
-            <div className="text-[10px] text-[#A1E4DB] text-center pt-1">
-              ... + {leaderboard.leaderboard.length - 7} more stores (you are #{leaderboard.my_store_baseline.market_rank})
-            </div>
-          )}
-        </div>
+            <p className="text-[11px] mt-1" style={{ color: tone }}>
+              {isRTL ? "أنت " : "You're "}{verdict} · {mp.ranked_products.toLocaleString()} {isRTL ? "منتج مصنف" : "products ranked"}
+            </p>
+          </div>
+        ) : (
+          <p className="text-[11px] text-[#A1E4DB] mb-3">{isRTL ? "لا توجد بيانات تصنيف حية بعد" : "No live ranking data yet"}</p>
+        )}
+        {leaderboard?.leaderboard?.length > 0 && (
+          <div className="space-y-1.5">
+            <Badge className="text-[8px] bg-[#F59E0B]/10 text-[#F59E0B] border-0">{snapshotLabel}</Badge>
+            {leaderboard.leaderboard.slice(0, 7).map((e) => (
+              <div key={e.rank} className={`flex items-center gap-2 text-xs py-1 px-2 rounded-lg ${e.is_my_store ? "bg-[#1E988E]/10 border border-[#1E988E]/20" : ""}`}>
+                <span className="text-[#A1E4DB] w-5 text-right">#{e.rank}</span>
+                <span className={`flex-1 ${e.is_my_store ? "text-[#1E988E] font-semibold" : "text-white"}`}>{e.store_domain}</span>
+                <span className="text-[#A1E4DB]">{e.relative_size}</span>
+              </div>
+            ))}
+            {leaderboard.leaderboard.length > 7 && leaderboard.my_store_baseline && (
+              <div className="text-[10px] text-[#A1E4DB] text-center pt-1">
+                ... + {leaderboard.leaderboard.length - 7} more stores ({isRTL ? "ترتيب اللقطة" : "snapshot rank"} #{leaderboard.my_store_baseline.market_rank})
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="glass-card p-5">
-        <h3 className="text-sm font-semibold text-white mb-3">{isRTL ? "أداء متجرك" : "Your Store Performance"}</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div><p className="text-[9px] uppercase text-[#A1E4DB] tracking-wider">Est. Revenue (14d)</p><p className="text-xl font-bold text-[#1E988E] metric-number">{leaderboard.my_store_baseline.est_revenue_sar?.toLocaleString()} SAR</p></div>
-          <div><p className="text-[9px] uppercase text-[#A1E4DB] tracking-wider">Est. Units Sold</p><p className="text-xl font-bold text-white metric-number">{leaderboard.my_store_baseline.est_units_sold?.toLocaleString()}</p></div>
-          <div><p className="text-[9px] uppercase text-[#A1E4DB] tracking-wider">Active Products</p><p className="text-xl font-bold text-white metric-number">{leaderboard.my_store_baseline.total_products?.toLocaleString()}</p></div>
-          <div><p className="text-[9px] uppercase text-[#A1E4DB] tracking-wider">Price Spread</p><p className="text-xl font-bold text-[#F59E0B] metric-number">{leaderboard.my_store_baseline.median_price_spread_pct}%</p></div>
+        <h3 className="text-sm font-semibold text-white mb-3">{isRTL ? "أداء متجرك (14 يوم)" : "Your Store Performance (14d)"}</h3>
+        <div className="grid grid-cols-2 gap-4" data-testid="pi-store-performance-live">
+          <div>
+            <p className="text-[9px] uppercase text-[#A1E4DB] tracking-wider">
+              {isLedger ? (isRTL ? "الإيرادات (14 يوم)" : "Revenue (14d)") : (isRTL ? "الإيرادات المقدرة (14 يوم)" : "Est. Revenue (14d)")}
+            </p>
+            <p className="text-xl font-bold text-[#1E988E] metric-number">
+              {myKpis?.my_revenue != null ? `${myKpis.my_revenue.toLocaleString()} SAR` : "—"}
+            </p>
+            {isLedger && myKpis?.my_orders_count != null && (
+              <p className="text-[9px] text-[#6AC1B5]">{myKpis.my_orders_count.toLocaleString()} {isRTL ? "طلب · سجل زد" : "orders · Zid ledger"}</p>
+            )}
+          </div>
+          <div>
+            <p className="text-[9px] uppercase text-[#A1E4DB] tracking-wider">
+              {isLedger ? (isRTL ? "الوحدات المباعة" : "Units Sold") : (isRTL ? "الوحدات المباعة (تقديري)" : "Est. Units Sold")}
+            </p>
+            <p className="text-xl font-bold text-white metric-number">{myKpis?.my_units_sold != null ? myKpis.my_units_sold.toLocaleString() : "—"}</p>
+          </div>
+          <div>
+            <p className="text-[9px] uppercase text-[#A1E4DB] tracking-wider">{isRTL ? "المنتجات النشطة" : "Active Products"}</p>
+            <p className="text-xl font-bold text-white metric-number">{myKpis?.total_products != null ? myKpis.total_products.toLocaleString() : "—"}</p>
+          </div>
+          <div>
+            <p className="text-[9px] uppercase text-[#A1E4DB] tracking-wider">{isRTL ? "وسيط فرق السعر" : "Median Price Spread"}</p>
+            <p className="text-xl font-bold text-[#F59E0B] metric-number">{summary?.median_spread != null ? `${summary.median_spread.toLocaleString()} SAR` : "—"}</p>
+          </div>
         </div>
       </div>
     </div>

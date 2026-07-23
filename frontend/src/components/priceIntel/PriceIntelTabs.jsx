@@ -144,7 +144,7 @@ function CatalogGapsTable({ gaps, isRTL }) {
     <div className="glass-card overflow-hidden">
       <div className="px-4 py-3 border-b border-white/5 bg-[#1E988E]/5">
         <p className="text-xs text-[#1E988E]">{isRTL ? "منتجات رائجة لا تبيعها — فرص إيرادات فورية" : "Trending products you DON'T sell — immediate revenue opportunities"}</p>
-        <Badge className="text-[8px] bg-[#F59E0B]/10 text-[#F59E0B] border-0 mt-1">Includes baseline data (expires May 17)</Badge>
+        <Badge className="text-[8px] bg-[#F59E0B]/10 text-[#F59E0B] border-0 mt-1">{isRTL ? "يتضمن لقطة MySkuWatch — 17 أبريل 2026" : "Includes MySkuWatch snapshot — 17 Apr 2026"}</Badge>
       </div>
       <Table className="dense-table">
         <TableHeader><TableRow>
