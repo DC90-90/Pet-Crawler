@@ -919,6 +919,8 @@ async def scheduled_crawl_job(store_id: str):
     # iter25 — refresh the my-products dashboard cache. Debounced so the daily
     # 44-store staggered crawl burst triggers ~1 recompute, not one per store.
     await maybe_recompute_dashboard_cache(db)
+    # iter26 — refresh the Insights / Price-Intel page caches (same debounce).
+    await maybe_recompute_page_caches(db)
 
 # ── Daily cron schedule (Feb 2026) ──────────────────────────
 # All active stores crawl ONCE per day at 04:00–04:55 KSA time (UTC+3 → 01:00–01:55 UTC),
@@ -1846,6 +1848,136 @@ async def maybe_recompute_dashboard_cache(db, min_interval_secs=600, force=False
         return None
 
 
+# ── Generic page cache (iter26, Jul 2026) ───────────────────────────────────
+# iter25 cached /api/my-products. iter26 extends the SAME db.dashboard_cache
+# collection to the Insights and Price-Intel page endpoints. Those return bare
+# lists as well as dicts, so a body-level `cache` key (as my_products uses)
+# would change the shape / break byte-identicality for list responses. Instead
+# the cache metadata rides in RESPONSE HEADERS (X-Cache-*), leaving every body
+# byte-identical to live. The stored payload IS the final endpoint body
+# (jsonable-encoded), so serving from cache == serving live.
+_LAST_PAGE_CACHE_RECOMPUTE = None
+
+
+def _page_cache_key(base: str, days=None) -> str:
+    return f"{base}:v1:days={days}" if days is not None else f"{base}:v1"
+
+
+async def _store_page_cache(db, base, days, payload):
+    now = datetime.now(timezone.utc)
+    await db.dashboard_cache.replace_one(
+        {"key": _page_cache_key(base, days)},
+        {"key": _page_cache_key(base, days), "base": base, "window_days": days,
+         "computed_at": now, "payload": jsonable_encoder(payload)},
+        upsert=True,
+    )
+    return now
+
+
+async def _serve_page_cache(db, base, days, compute, cacheable=True):
+    """Serve `base` (optionally per `days`) from db.dashboard_cache.
+
+    `compute` is a zero-arg async callable returning the endpoint body. Returns
+    (body, meta) where meta = {source, computed_at, age_seconds, stale}. On
+    miss / unparseable / stale-beyond-24h → compute live + best-effort refresh.
+    Never raises from the cache layer (only `compute` may)."""
+    now = datetime.now(timezone.utc)
+    if not cacheable:
+        return await compute(), {"source": "live_uncacheable", "computed_at": None, "age_seconds": None, "stale": False}
+    doc = None
+    try:
+        doc = await db.dashboard_cache.find_one({"key": _page_cache_key(base, days)})
+    except Exception:
+        doc = None
+    if doc is not None and doc.get("computed_at") is not None and "payload" in doc:
+        ca = doc["computed_at"]
+        if not isinstance(ca, datetime):
+            try:
+                ca = datetime.fromisoformat(str(ca).replace("Z", "+00:00"))
+            except Exception:
+                ca = None
+        if ca is not None:
+            if ca.tzinfo is None:
+                ca = ca.replace(tzinfo=timezone.utc)
+            age = (now - ca).total_seconds()
+            if age <= DASHBOARD_CACHE_MAX_AGE_SECS:
+                return doc["payload"], {"source": "cache", "computed_at": ca.isoformat(),
+                                        "age_seconds": round(age, 1), "stale": False}
+    body = await compute()
+    stamped = None
+    try:
+        stamped = await _store_page_cache(db, base, days, body)
+    except Exception:
+        pass
+    return body, {"source": "live_fallback", "computed_at": (stamped or now).isoformat(),
+                  "age_seconds": 0.0, "stale": False}
+
+
+def _apply_cache_headers(response, meta):
+    """Attach X-Cache-* headers so the frontend can show 'Metrics as of <time>'
+    without altering the (byte-identical) response body."""
+    if response is None:
+        return
+    response.headers["X-Cache-Source"] = str(meta.get("source"))
+    if meta.get("computed_at"):
+        response.headers["X-Cache-Computed-At"] = str(meta["computed_at"])
+    if meta.get("age_seconds") is not None:
+        response.headers["X-Cache-Age-Seconds"] = str(meta["age_seconds"])
+    response.headers["X-Cache-Stale"] = "true" if meta.get("stale") else "false"
+    response.headers["Access-Control-Expose-Headers"] = "X-Cache-Source, X-Cache-Computed-At, X-Cache-Age-Seconds, X-Cache-Stale"
+
+
+# Registry of (cache_base, per-window?, compute-factory) filled in after the
+# compute helpers are defined (see _register_page_caches below the endpoints).
+_WINDOW_CACHE_SPECS = []   # list of (base, compute(db, days))
+_SINGLE_CACHE_SPECS = []   # list of (base, compute(db))
+
+
+async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
+    """Recompute + store every Insights / Price-Intel cache entry. Each spec is
+    a bounded aggregation (iter26 hardening); a failure in one endpoint is
+    logged and skipped so one bad aggregation can't hang the whole recompute."""
+    import time as _t
+    global _LAST_PAGE_CACHE_RECOMPUTE
+    stats = {}
+    for base, compute in _WINDOW_CACHE_SPECS:
+        for w in windows:
+            t0 = _t.time()
+            try:
+                payload = await compute(db, w)
+                await _store_page_cache(db, base, w, payload)
+                stats[f"{base}#{w}"] = round(_t.time() - t0, 2)
+            except Exception as e:
+                stats[f"{base}#{w}"] = f"ERROR: {str(e)[:80]}"
+                logger.exception(f"[PageCache] recompute failed for {base} @ {w}d")
+    for base, compute in _SINGLE_CACHE_SPECS:
+        t0 = _t.time()
+        try:
+            payload = await compute(db)
+            await _store_page_cache(db, base, None, payload)
+            stats[base] = round(_t.time() - t0, 2)
+        except Exception as e:
+            stats[base] = f"ERROR: {str(e)[:80]}"
+            logger.exception(f"[PageCache] recompute failed for {base}")
+    _LAST_PAGE_CACHE_RECOMPUTE = datetime.now(timezone.utc)
+    logger.info(f"[PageCache] recomputed insights/price-intel: {stats}")
+    return stats
+
+
+async def maybe_recompute_page_caches(db, min_interval_secs=600, force=False):
+    global _LAST_PAGE_CACHE_RECOMPUTE
+    now = datetime.now(timezone.utc)
+    if (not force and _LAST_PAGE_CACHE_RECOMPUTE
+            and (now - _LAST_PAGE_CACHE_RECOMPUTE).total_seconds() < min_interval_secs):
+        return None
+    try:
+        return await recompute_page_caches(db)
+    except Exception:
+        logger.exception("[PageCache] recompute failed — caches left stale, endpoints fall back to live")
+        return None
+
+
+
 async def _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only):
     """Compute the FULL my-products dataset — every enriched row + KPIs +
     categories + total — for the given filters, WITHOUT sort or pagination.
@@ -2716,9 +2848,7 @@ async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_use
     return {"velocity": velocity_data, "avg_daily": avg_velocity, "total_units": total_units}
 
 # ── Insights Routes ─────────────────────────────────────────
-@router.get("/insights/summary")
-@ttl_cache(60)
-async def insights_summary(days: int = Query(30), user=Depends(get_user)):
+async def _insights_summary_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # P1 data accuracy guard (Feb 2026): all dashboard aggregations require
@@ -2757,12 +2887,17 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     ]
 
     # Run all 5 queries in parallel
+    # iter26 — allowDiskUse=True on every aggregation so the $sort/$group stages
+    # spill to disk instead of blowing the 100MB in-memory limit at production
+    # scale (1M+ snapshots). Each pipeline already leads with the windowed
+    # base_match (index-backed by (crawled_at, ...)). This is the iter22 matcher
+    # hardening applied to the Insights aggregations.
     total_skus, drops_result, gaps_result, spreads, conf_result = await asyncio.gather(
         db.products.count_documents({}),
-        db.product_snapshots.aggregate(pipeline_drops).to_list(1),
-        db.product_snapshots.aggregate(pipeline_gaps).to_list(1),
-        db.product_snapshots.aggregate(pipeline_spread).to_list(500),
-        db.product_snapshots.aggregate(pipeline_conf).to_list(1),
+        db.product_snapshots.aggregate(pipeline_drops, allowDiskUse=True).to_list(1),
+        db.product_snapshots.aggregate(pipeline_gaps, allowDiskUse=True).to_list(1),
+        db.product_snapshots.aggregate(pipeline_spread, allowDiskUse=True).to_list(500),
+        db.product_snapshots.aggregate(pipeline_conf, allowDiskUse=True).to_list(1),
     )
 
     price_drops = drops_result[0]["drops"] if drops_result else random.randint(8, 25)
@@ -2777,9 +2912,14 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
     day_24h = now - timedelta(hours=24)
     day_7d = now - timedelta(days=7)
     day_30d = now - timedelta(days=30)
+    # iter26 — the freshness breakdown intentionally spans ALL history (it buckets
+    # each (sku,store)'s latest snapshot into today/week/month/stale), so it can't
+    # window-match. But the old `$sort desc + $group $first` sorted the ENTIRE
+    # collection (the ~10s timeout culprit). `$group $max` yields the identical
+    # latest timestamp with NO sort stage — a byte-identical, index-friendlier
+    # rewrite — plus allowDiskUse as a safety net.
     freshness_pipeline = [
-        {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "latest": {"$first": "$crawled_at"}}},
+        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "latest": {"$max": "$crawled_at"}}},
         {"$group": {
             "_id": None,
             "total": {"$sum": 1},
@@ -2789,7 +2929,7 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
             "stale": {"$sum": {"$cond": [{"$lt": ["$latest", day_30d]}, 1, 0]}},
         }},
     ]
-    fr_rows = await db.product_snapshots.aggregate(freshness_pipeline).to_list(1)
+    fr_rows = await db.product_snapshots.aggregate(freshness_pipeline, allowDiskUse=True).to_list(1)
     fr = fr_rows[0] if fr_rows else {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
     fr_total = max(fr.get("total", 0), 1)
     freshness_breakdown = {
@@ -2898,9 +3038,7 @@ async def insights_summary(days: int = Query(30), user=Depends(get_user)):
         "market_position_summary": market_position_summary,
     }
 
-@router.get("/insights/leaderboard")
-@ttl_cache(60)
-async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
+async def _insights_leaderboard_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # Get store name lookup
@@ -2973,9 +3111,7 @@ async def insights_leaderboard(days: int = Query(30), user=Depends(get_user)):
     leaderboard.sort(key=lambda x: (-x["revenue_est"], -x["products"]))
     return leaderboard
 
-@router.get("/insights/top-sellers")
-@ttl_cache(60)
-async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = Query(None), user=Depends(get_user)):
+async def _insights_top_sellers_compute(db, days, store_id):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     match = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
     if store_id and store_id != "all":
@@ -3006,9 +3142,7 @@ async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = 
     sellers.sort(key=lambda x: x["units_sold"], reverse=True)
     return sellers[:20]
 
-@router.get("/insights/trending")
-@ttl_cache(60)
-async def insights_trending(days: int = Query(30), user=Depends(get_user)):
+async def _insights_trending_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     snapshots = await db.product_snapshots.find(
         {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}, {"_id": 0}
@@ -3049,9 +3183,7 @@ async def insights_trending(days: int = Query(30), user=Depends(get_user)):
     trending.sort(key=lambda x: x["total_sales"], reverse=True)
     return trending
 
-@router.get("/insights/gaps")
-@ttl_cache(60)
-async def insights_gaps(days: int = Query(30), user=Depends(get_user)):
+async def _insights_gaps_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     total_stores = await db.stores.count_documents({"is_active": True})
     pipeline = [
@@ -3066,7 +3198,7 @@ async def insights_gaps(days: int = Query(30), user=Depends(get_user)):
         {"$sort": {"missing_count": -1}},
         {"$limit": 15},
     ]
-    gaps = await db.product_snapshots.aggregate(pipeline).to_list(15)
+    gaps = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(15)  # iter26
     result = []
     for g in gaps:
         product = await db.products.find_one({"sku": g["sku"]}, {"_id": 0})
@@ -3078,9 +3210,7 @@ async def insights_gaps(days: int = Query(30), user=Depends(get_user)):
             })
     return result
 
-@router.get("/insights/price-wars")
-@ttl_cache(60)
-async def insights_price_wars(days: int = Query(30), user=Depends(get_user)):
+async def _insights_price_wars_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     pipeline = [
         # Feb 2026 fix — restrict to recent snapshots so months-old prices
@@ -3095,7 +3225,7 @@ async def insights_price_wars(days: int = Query(30), user=Depends(get_user)):
         {"$sort": {"spread_pct": -1}},
         {"$limit": 10},
     ]
-    wars = await db.product_snapshots.aggregate(pipeline).to_list(10)
+    wars = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(10)  # iter26
     result = []
     for w in wars:
         product = await db.products.find_one({"sku": w["sku"]}, {"_id": 0})
@@ -3107,9 +3237,7 @@ async def insights_price_wars(days: int = Query(30), user=Depends(get_user)):
             })
     return result
 
-@router.get("/insights/restock-opportunities")
-@ttl_cache(60)
-async def insights_restock(days: int = Query(30), user=Depends(get_user)):
+async def _insights_restock_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     pipeline = [
         # Feb 2026 fix — restrict to recent snapshots so historical
@@ -3120,7 +3248,7 @@ async def insights_restock(days: int = Query(30), user=Depends(get_user)):
         {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "in_stock": {"$first": "$in_stock"}, "store_name": {"$first": "$store_name"}, "qty": {"$first": "$qty_available"}}},
         {"$group": {"_id": "$_id.sku", "stores": {"$push": {"store": "$store_name", "in_stock": "$in_stock", "qty": "$qty"}}}},
     ]
-    data = await db.product_snapshots.aggregate(pipeline).to_list(length=None)
+    data = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(length=None)  # iter26
     result = []
     for d in data:
         oos_stores = [s["store"] for s in d["stores"] if not s["in_stock"]]
@@ -3140,16 +3268,7 @@ async def insights_restock(days: int = Query(30), user=Depends(get_user)):
 # Wraps the existing my_products() so sales-estimation logic is reused
 # verbatim, then adds a Top-Brands aggregation + market-share %.
 # Read-only. Does not modify any existing endpoint, calculation or DB doc.
-@router.get("/insights/sales")
-@ttl_cache(60)
-async def insights_sales(
-    days: int = Query(30),
-    date_from: Optional[str] = Query(None, description="YYYY-MM-DD (inclusive)"),
-    date_to: Optional[str] = Query(None, description="YYYY-MM-DD (inclusive)"),
-    search: Optional[str] = Query(None, description="Filter by product name, SKU or brand"),
-    sort: str = Query("revenue_desc", description="sales_desc|sales_asc|revenue_desc|revenue_asc"),
-    user=Depends(get_user),
-):
+async def _insights_sales_compute(db, days, date_from, date_to, search, sort, user):
     sort_map = {
         "sales_desc":   ("qty_sold_est", "desc"),
         "sales_asc":    ("qty_sold_est", "asc"),
@@ -4302,12 +4421,13 @@ async def _run_sync_and_match(kind: str):
     # manual "Sync from Store" and "Run Matching" buttons, which route through
     # here). Force a dashboard-cache recompute so My Products reflects it at once.
     run["dashboard_cache"] = "recomputed" if await maybe_recompute_dashboard_cache(db, force=True) else "skipped"
+    # iter26 — Insights / Price-Intel caches also reflect the sync/matcher change.
+    run["page_caches"] = "recomputed" if await maybe_recompute_page_caches(db, force=True) else "skipped"
 
     return run
 
 
-@router.get("/price-intel/dashboard")
-async def price_intel_dashboard(user=Depends(get_user)):
+async def _price_intel_dashboard_compute(db):
     """Price Intelligence Dashboard — all sections."""
     now = datetime.now(timezone.utc)
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
@@ -5252,6 +5372,124 @@ async def root():
     return {"message": "Daleel API — دليل"}
 
 # ── App Setup ───────────────────────────────────────────────
+
+# ── iter26 cache-serving endpoints (Insights + Price Intel) ─────────────────
+# Bodies are byte-identical to the pre-cache endpoints; cache metadata rides in
+# X-Cache-* response headers (see _apply_cache_headers). The default window
+# views (7/14/30/90D, unfiltered) are served from db.dashboard_cache; anything
+# narrower (store_id filter, date range, search, non-default sort, non-standard
+# window) stays live via the same compute helper.
+_INSIGHTS_STD = DASHBOARD_CACHE_STD_WINDOWS
+
+
+@router.get("/insights/summary")
+async def insights_summary(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+    body, meta = await _serve_page_cache(db, "insights/summary", days,
+                                         lambda: _insights_summary_compute(db, days), days in _INSIGHTS_STD)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/insights/leaderboard")
+async def insights_leaderboard(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+    body, meta = await _serve_page_cache(db, "insights/leaderboard", days,
+                                         lambda: _insights_leaderboard_compute(db, days), days in _INSIGHTS_STD)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/insights/top-sellers")
+async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = Query(None), response: Response = None, user=Depends(get_user)):
+    body, meta = await _serve_page_cache(db, "insights/top-sellers", days,
+                                         lambda: _insights_top_sellers_compute(db, days, store_id),
+                                         store_id is None and days in _INSIGHTS_STD)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/insights/trending")
+async def insights_trending(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+    body, meta = await _serve_page_cache(db, "insights/trending", days,
+                                         lambda: _insights_trending_compute(db, days), days in _INSIGHTS_STD)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/insights/gaps")
+async def insights_gaps(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+    body, meta = await _serve_page_cache(db, "insights/gaps", days,
+                                         lambda: _insights_gaps_compute(db, days), days in _INSIGHTS_STD)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/insights/price-wars")
+async def insights_price_wars(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+    body, meta = await _serve_page_cache(db, "insights/price-wars", days,
+                                         lambda: _insights_price_wars_compute(db, days), days in _INSIGHTS_STD)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/insights/restock-opportunities")
+async def insights_restock(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+    body, meta = await _serve_page_cache(db, "insights/restock-opportunities", days,
+                                         lambda: _insights_restock_compute(db, days), days in _INSIGHTS_STD)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/insights/sales")
+async def insights_sales(days: int = Query(30),
+                         date_from: Optional[str] = Query(None, description="YYYY-MM-DD (inclusive)"),
+                         date_to: Optional[str] = Query(None, description="YYYY-MM-DD (inclusive)"),
+                         search: Optional[str] = Query(None, description="Filter by product name, SKU or brand"),
+                         sort: str = Query("revenue_desc", description="sales_desc|sales_asc|revenue_desc|revenue_asc"),
+                         response: Response = None, user=Depends(get_user)):
+    # Normalize unset params to plain values. Over HTTP FastAPI already resolves
+    # these; this makes in-process calls (tests, internal callers) robust — when
+    # called without these kwargs the defaults are Query FieldInfo objects
+    # (truthy), which would wrongly flip `cacheable` off and then reach
+    # my_products' fromisoformat(). Same class as the iter25 export_csv fix.
+    date_from = date_from if isinstance(date_from, str) else None
+    date_to = date_to if isinstance(date_to, str) else None
+    search = search if isinstance(search, str) else None
+    sort = sort if isinstance(sort, str) else "revenue_desc"
+    cacheable = (not date_from and not date_to and not search and sort == "revenue_desc" and days in _INSIGHTS_STD)
+    body, meta = await _serve_page_cache(db, "insights/sales", days,
+                                         lambda: _insights_sales_compute(db, days, date_from, date_to, search, sort, user),
+                                         cacheable)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/price-intel/dashboard")
+async def price_intel_dashboard(response: Response = None, user=Depends(get_user)):
+    body, meta = await _serve_page_cache(db, "price-intel/dashboard", None,
+                                         lambda: _price_intel_dashboard_compute(db), True)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+# Register cache specs for background recompute. insights/sales gets a synthetic
+# super_admin user (my_products only uses it for the auth dependency, which is
+# bypassed for in-process calls).
+_CACHE_USER = {"id": "cache", "email": "cache@internal", "role": "super_admin"}
+_WINDOW_CACHE_SPECS.extend([
+    ("insights/summary", lambda db, d: _insights_summary_compute(db, d)),
+    ("insights/leaderboard", lambda db, d: _insights_leaderboard_compute(db, d)),
+    ("insights/top-sellers", lambda db, d: _insights_top_sellers_compute(db, d, None)),
+    ("insights/trending", lambda db, d: _insights_trending_compute(db, d)),
+    ("insights/gaps", lambda db, d: _insights_gaps_compute(db, d)),
+    ("insights/price-wars", lambda db, d: _insights_price_wars_compute(db, d)),
+    ("insights/restock-opportunities", lambda db, d: _insights_restock_compute(db, d)),
+    ("insights/sales", lambda db, d: _insights_sales_compute(db, d, None, None, None, "revenue_desc", _CACHE_USER)),
+])
+_SINGLE_CACHE_SPECS.extend([
+    ("price-intel/dashboard", lambda db: _price_intel_dashboard_compute(db)),
+])
+
+
 app.include_router(router)
 
 cors_origins = os.environ.get('CORS_ORIGINS', '*')
@@ -5349,6 +5587,11 @@ async def startup():
             await recompute_dashboard_cache(db)
         except Exception:
             logger.exception("[DashboardCache] startup warm-up failed (will populate on first request)")
+        # iter26 — warm the Insights / Price-Intel caches too.
+        try:
+            await recompute_page_caches(db)
+        except Exception:
+            logger.exception("[PageCache] startup warm-up failed (will populate on first request)")
     asyncio.create_task(_warm_dashboard_cache())
 
     # ── Playwright Chromium AGGRESSIVE self-heal (Feb 2026 production deploy fix v2) ─
