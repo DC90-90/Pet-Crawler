@@ -2848,7 +2848,42 @@ async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_use
     return {"velocity": velocity_data, "avg_daily": avg_velocity, "total_units": total_units}
 
 # ── Insights Routes ─────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# TEMPORARY DIAGNOSTIC (iter27) — /api/insights/summary 500 hunter.
+# Production returns 500 and we cannot read runtime logs. This instrumentation
+# tracks which stage of _insights_summary_compute is executing (per-request via
+# a ContextVar, so concurrent requests don't clobber each other) and lets the
+# thin endpoint return the real error to a super_admin as a 200 JSON payload.
+# TO REMOVE: set INSIGHTS_SUMMARY_DIAGNOSTIC = False (kills the payload; endpoint
+# reverts to a normal 500 for everyone), or delete this block + the `_diag_stage`
+# lines in the compute + the try/except in the insights_summary endpoint.
+# It does NOT change the success path — the .set() calls are inert on success
+# and the response stays byte-identical.
+import contextvars as _contextvars
+import traceback as _traceback
+
+INSIGHTS_SUMMARY_DIAGNOSTIC = True
+_INSIGHTS_SUMMARY_STAGE = _contextvars.ContextVar("_insights_summary_stage", default="init")
+
+
+def _diag_stage(name):
+    if INSIGHTS_SUMMARY_DIAGNOSTIC:
+        _INSIGHTS_SUMMARY_STAGE.set(name)
+
+
+def _insights_summary_diag_payload(exc, tb):
+    return {
+        "error": True,
+        "exception_type": type(exc).__name__,
+        "exception_message": str(exc),
+        "traceback": (tb or "")[-2000:],
+        "failed_stage": _INSIGHTS_SUMMARY_STAGE.get(),
+    }
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 async def _insights_summary_compute(db, days):
+    _diag_stage("init")
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # P1 data accuracy guard (Feb 2026): all dashboard aggregations require
@@ -2892,14 +2927,34 @@ async def _insights_summary_compute(db, days):
     # scale (1M+ snapshots). Each pipeline already leads with the windowed
     # base_match (index-backed by (crawled_at, ...)). This is the iter22 matcher
     # hardening applied to the Insights aggregations.
-    total_skus, drops_result, gaps_result, spreads, conf_result = await asyncio.gather(
-        db.products.count_documents({}),
-        db.product_snapshots.aggregate(pipeline_drops, allowDiskUse=True).to_list(1),
-        db.product_snapshots.aggregate(pipeline_gaps, allowDiskUse=True).to_list(1),
-        db.product_snapshots.aggregate(pipeline_spread, allowDiskUse=True).to_list(500),
-        db.product_snapshots.aggregate(pipeline_conf, allowDiskUse=True).to_list(1),
-    )
+    _diag_stage("aggregations_parallel")
+    try:
+        total_skus, drops_result, gaps_result, spreads, conf_result = await asyncio.gather(
+            db.products.count_documents({}),
+            db.product_snapshots.aggregate(pipeline_drops, allowDiskUse=True).to_list(1),
+            db.product_snapshots.aggregate(pipeline_gaps, allowDiskUse=True).to_list(1),
+            db.product_snapshots.aggregate(pipeline_spread, allowDiskUse=True).to_list(500),
+            db.product_snapshots.aggregate(pipeline_conf, allowDiskUse=True).to_list(1),
+        )
+    except Exception:
+        # DIAGNOSTIC (error path only — no success-path impact): the gather masks
+        # WHICH of the 5 ran into trouble, so re-run them one at a time to pinpoint.
+        if INSIGHTS_SUMMARY_DIAGNOSTIC:
+            for _nm, _co in [
+                ("count_documents", lambda: db.products.count_documents({})),
+                ("pipeline_drops", lambda: db.product_snapshots.aggregate(pipeline_drops, allowDiskUse=True).to_list(1)),
+                ("pipeline_gaps", lambda: db.product_snapshots.aggregate(pipeline_gaps, allowDiskUse=True).to_list(1)),
+                ("pipeline_spread", lambda: db.product_snapshots.aggregate(pipeline_spread, allowDiskUse=True).to_list(500)),
+                ("pipeline_conf", lambda: db.product_snapshots.aggregate(pipeline_conf, allowDiskUse=True).to_list(1)),
+            ]:
+                try:
+                    await _co()
+                except Exception:
+                    _diag_stage(f"aggregations_parallel:{_nm}")
+                    break
+        raise
 
+    _diag_stage("post_aggregation_python")
     price_drops = drops_result[0]["drops"] if drops_result else random.randint(8, 25)
     product_gaps = gaps_result[0]["gaps"] if gaps_result else 0
     spread_vals = [s["spread"] for s in spreads if s["spread"] > 0]
@@ -2929,7 +2984,9 @@ async def _insights_summary_compute(db, days):
             "stale": {"$sum": {"$cond": [{"$lt": ["$latest", day_30d]}, 1, 0]}},
         }},
     ]
+    _diag_stage("freshness_pipeline")
     fr_rows = await db.product_snapshots.aggregate(freshness_pipeline, allowDiskUse=True).to_list(1)
+    _diag_stage("freshness_python")
     fr = fr_rows[0] if fr_rows else {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
     fr_total = max(fr.get("total", 0), 1)
     freshness_breakdown = {
@@ -2947,16 +3004,19 @@ async def _insights_summary_compute(db, days):
     # Market position summary (Feb 2026) — aggregate over my products that have
     # a computed market_position. Uses last-7-day, confidence>=75 snapshots
     # (filtering happens in compute_market_position).
+    _diag_stage("market_position:fetch_own_store")
     own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
     own_store_id = own_store_doc.get("id") if own_store_doc else None
     market_position_summary = None
     if own_store_id:
         # Read my_products directly (own prices don't live in product_snapshots)
+        _diag_stage("market_position:fetch_my_products")
         my_prods = await db.my_products.find({}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1, "last_synced_at": 1}).to_list(length=None)
         my_skus = [p["sku"] for p in my_prods]
         my_price_lookup = {p["sku"]: p for p in my_prods}
         if my_skus:
             # Build (my_sku -> [(comp_sku, comp_store_id), ...]) map
+            _diag_stage("market_position:fetch_matches")
             matches_by_my_sku = {}
             async for m in db.product_matches.find({"my_sku": {"$in": my_skus}}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}):
                 matches_by_my_sku.setdefault(m["my_sku"], []).append((m["competitor_sku"], m["competitor_store_id"]))
@@ -2966,7 +3026,9 @@ async def _insights_summary_compute(db, days):
             for entries in matches_by_my_sku.values():
                 for cs, _sid in entries:
                     relevant_skus.add(cs)
+            _diag_stage("market_position:fetch_store_names")
             store_name_by_id = {s["id"]: s.get("name", "") for s in await db.stores.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(200)}
+            _diag_stage("market_position:fetch_snapshots")
             latest_by_sku_store = {}
             async for sn in db.product_snapshots.find(
                 {"sku": {"$in": list(relevant_skus)}, "crawled_at": {"$gte": mp_since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
@@ -2976,6 +3038,7 @@ async def _insights_summary_compute(db, days):
                 if key not in latest_by_sku_store:
                     latest_by_sku_store[key] = sn
 
+            _diag_stage("market_position:loop")
             cheapest = most_expensive = below = above = at_median = 0
             ranked_count = 0
             percentile_sum = 0.0
@@ -3003,7 +3066,9 @@ async def _insights_summary_compute(db, days):
                         "confidence_score": sn.get("confidence_score", 0),
                         "crawled_at": sn.get("crawled_at"),
                     })
+                _diag_stage("compute_market_position")
                 mp = compute_market_position(seller_prices, own_store_id)
+                _diag_stage("market_position:loop")  # back to loop scope after the call returns
                 if not mp:
                     continue
                 ranked_count += 1
@@ -3018,6 +3083,7 @@ async def _insights_summary_compute(db, days):
                     above += 1
                 else:
                     at_median += 1
+            _diag_stage("market_position:build_summary")
             avg_percentile = round(percentile_sum / ranked_count, 1) if ranked_count else None
             market_position_summary = {
                 "ranked_products": ranked_count,
@@ -3030,6 +3096,7 @@ async def _insights_summary_compute(db, days):
                 "avg_percentile": avg_percentile,
             }
 
+    _diag_stage("build_response")
     return {
         "total_skus": total_skus, "price_drops": price_drops,
         "product_gaps": product_gaps, "median_spread": median_spread,
@@ -5384,8 +5451,18 @@ _INSIGHTS_STD = DASHBOARD_CACHE_STD_WINDOWS
 
 @router.get("/insights/summary")
 async def insights_summary(days: int = Query(30), response: Response = None, user=Depends(get_user)):
-    body, meta = await _serve_page_cache(db, "insights/summary", days,
-                                         lambda: _insights_summary_compute(db, days), days in _INSIGHTS_STD)
+    # TEMPORARY DIAGNOSTIC (iter27): on any failure of the serve/compute path,
+    # return the real error to a super_admin as a 200 JSON payload (production
+    # logs are unreadable). Everyone else — and when INSIGHTS_SUMMARY_DIAGNOSTIC
+    # is False — gets the normal 500 (re-raise). Success path is untouched.
+    try:
+        body, meta = await _serve_page_cache(db, "insights/summary", days,
+                                             lambda: _insights_summary_compute(db, days), days in _INSIGHTS_STD)
+    except Exception as _e:
+        _is_super = (user or {}).get("role") == "super_admin" or is_super_admin_email((user or {}).get("email", ""))
+        if INSIGHTS_SUMMARY_DIAGNOSTIC and _is_super:
+            return _insights_summary_diag_payload(_e, _traceback.format_exc())
+        raise
     _apply_cache_headers(response, meta)
     return body
 
