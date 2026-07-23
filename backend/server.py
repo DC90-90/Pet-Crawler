@@ -39,6 +39,7 @@ from models import (
 )
 from core import (
     PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
+    MAX_SOLD_COUNT_DELTA_PER_INTERVAL,
     MIN_AGGREGATION_CONFIDENCE,
     get_stock_signal, _coerce_num, _coerce_int,
     _estimate_sales_from_snapshots, compute_product_metrics,
@@ -2954,14 +2955,16 @@ async def _recompute_store_metrics(db, store_id):
     match the old unfiltered freshness $max. Accepted-only state (drops, per-day
     confidence sums, last accepted price/confidence) applies the confidence floor
     in Python — same predicate as the old $match."""
-    per_sku_day = {}   # sku -> {day_str: [max_crawled_at, price, confidence, in_stock, qty, store_name]} (latest ACCEPTED per day)
+    per_sku_day = {}   # sku -> {day_str: [max_crawled_at, price, confidence, in_stock, qty, store_name, sold_count]} (latest ACCEPTED per day)
     last_any = {}      # sku -> max crawled_at over ALL snapshots (freshness)
     last_priced = {}   # sku -> [max_crawled_at, price, store_name] over accepted snapshots with price > 0 (iter33)
+    last_sold_pos = {}    # sku -> max crawled_at over accepted priced snapshots with sold_count > 0 (iter34 leaderboard signal)
+    last_usable_qty = {}  # sku -> max crawled_at over accepted priced snapshots with 0 < qty <= 200 (iter34 leaderboard signal)
     day_conf = {}      # day_str -> [conf_sum, conf_count] over ALL accepted snapshots
     cursor = db.product_snapshots.find(
         {"store_id": store_id},
         {"_id": 0, "sku": 1, "price": 1, "crawled_at": 1, "confidence_score": 1,
-         "in_stock": 1, "qty_available": 1, "store_name": 1},
+         "in_stock": 1, "qty_available": 1, "store_name": 1, "sold_count": 1},
     )
     async for s in cursor:
         sku = s.get("sku")
@@ -2986,20 +2989,75 @@ async def _recompute_store_metrics(db, store_id):
             lp = last_priced.get(sku)
             if lp is None or ca > lp[0]:
                 last_priced[sku] = [ca, price, s.get("store_name") or ""]
+            # iter34 — leaderboard raw-signal detection ("does sales data exist at
+            # all for this store"), same predicates the old windowed scan used.
+            if (s.get("sold_count") or 0) > 0 and (sku not in last_sold_pos or ca > last_sold_pos[sku]):
+                last_sold_pos[sku] = ca
+            if 0 < (s.get("qty_available") or 0) <= 200 and (sku not in last_usable_qty or ca > last_usable_qty[sku]):
+                last_usable_qty[sku] = ca
         d = per_sku_day.setdefault(sku, {})
         cur = d.get(day)
         if cur is None or ca > cur[0]:
-            d[day] = [ca, price, conf, s.get("in_stock"), s.get("qty_available"), s.get("store_name") or ""]
+            d[day] = [ca, price, conf, s.get("in_stock"), s.get("qty_available"), s.get("store_name") or "",
+                      s.get("sold_count")]
 
     day_drops = {}            # day_str -> drop-event count
-    for daymap in per_sku_day.values():
+    sales_docs = []           # iter34 — per (sku, day) daily sales facts (sparse)
+    for sku, daymap in per_sku_day.items():
         days_sorted = sorted(daymap.keys())        # chronological calendar days
         prev_close = None
+        # iter34 sales-walk state. Bridging matches the old window-scan shape:
+        # deltas connect consecutive PRESENT (and, for the estimator's filtered
+        # qty method, consecutive VALID) daily closes. Price-0 closes are junk
+        # (crawler default) — skipped for sales facts, bridged over, exactly as
+        # the leaderboard's price>0 $match used to drop them mid-sequence.
+        prev_sold = prev_raw_qty = None
+        last_valid_qty = None
         for day in days_sorted:
-            close = daymap[day][1]
+            _ca, close, _conf, _ins, qty, _sname, sold = daymap[day]
             if prev_close is not None and close < prev_close:
                 day_drops[day] = day_drops.get(day, 0) + 1
             prev_close = close
+
+            if close is None or close <= 0:
+                continue                      # junk close — bridge over it
+            cur_sold = sold or 0
+            cur_raw = qty or 0
+            cur_valid = cur_raw if (cur_raw not in PLACEHOLDER_QTY_VALUES and cur_raw <= 200) else None
+
+            units_sold_d = units_qty_d = qty_drop_d = 0
+            if prev_sold is not None:
+                # sold_count cumulative counter — per-step clamp, same constant
+                # as _estimate_sales_from_snapshots Method 1.
+                delta = cur_sold - prev_sold
+                if delta > 0:
+                    units_sold_d = min(delta, MAX_SOLD_COUNT_DELTA_PER_INTERVAL)
+                # raw depletion (trending's definition: positive deltas, no filters)
+                raw_drop = prev_raw_qty - cur_raw
+                if raw_drop > 0:
+                    qty_drop_d = raw_drop
+            if last_valid_qty is not None and cur_valid is not None:
+                # filtered depletion — estimator Method 2 predicates (placeholder
+                # + >200 filters, positive deltas only, restocks contribute 0);
+                # the old window cap MAX_DAILY_SALES_PER_SKU*days becomes the
+                # equivalent-or-tighter per-day clamp.
+                vd = last_valid_qty - cur_valid
+                if vd > 0:
+                    units_qty_d = min(vd, MAX_DAILY_SALES_PER_SKU)
+            if cur_valid is not None:
+                last_valid_qty = cur_valid
+            prev_sold, prev_raw_qty = cur_sold, cur_raw
+
+            if units_sold_d or units_qty_d or qty_drop_d:
+                sales_docs.append({
+                    "_id": f"{store_id}|{sku}|{day}",
+                    "store_id": store_id, "sku": sku, "date": day,
+                    "units_sold": units_sold_d,
+                    "rev_sold": round(units_sold_d * close, 4),
+                    "units_qty": units_qty_d,
+                    "rev_qty": round(units_qty_d * close, 4),
+                    "qty_drop": qty_drop_d,
+                })
 
     coverage_docs = []        # one per sku seen at ANY confidence
     for sku, any_ca in last_any.items():
@@ -3007,7 +3065,7 @@ async def _recompute_store_metrics(db, store_id):
                "last_seen_any_at": any_ca}
         daymap = per_sku_day.get(sku)
         if daymap:
-            last_ca, last_price, last_conf, last_in_stock, last_qty, last_sname = daymap[max(daymap.keys())]
+            last_ca, last_price, last_conf, last_in_stock, last_qty, last_sname, _last_sold = daymap[max(daymap.keys())]
             doc.update({"last_seen_at": last_ca, "last_price": last_price,
                         "last_confidence": last_conf,
                         # iter33 — stock state of the same latest accepted crawl
@@ -3020,6 +3078,12 @@ async def _recompute_store_metrics(db, store_id):
             # iter33 — latest accepted crawl with price>0 (gaps / price-wars)
             doc.update({"last_priced_at": lp[0], "last_priced_price": lp[1],
                         "last_priced_store_name": lp[2]})
+        # iter34 — leaderboard raw-signal timestamps ("signal exists in window"
+        # ⟺ latest signal occurrence >= since, the usual coverage argument).
+        if sku in last_sold_pos:
+            doc["last_sold_pos_at"] = last_sold_pos[sku]
+        if sku in last_usable_qty:
+            doc["last_usable_qty_at"] = last_usable_qty[sku]
         coverage_docs.append(doc)
 
     # Rollups: replace this store's set atomically-enough for a background job
@@ -3039,7 +3103,12 @@ async def _recompute_store_metrics(db, store_id):
     await db.sku_store_coverage.delete_many({"store_id": store_id})
     if coverage_docs:
         await db.sku_store_coverage.insert_many(coverage_docs)
-    return {"store_id": store_id, "days_with_drops": len(day_drops), "pairs": len(coverage_docs)}
+    # iter34 — daily sales facts (sparse: only days with detected sales/depletion)
+    await db.sku_sales_daily.delete_many({"store_id": store_id})
+    if sales_docs:
+        await db.sku_sales_daily.insert_many(sales_docs)
+    return {"store_id": store_id, "days_with_drops": len(day_drops),
+            "pairs": len(coverage_docs), "sales_days": len(sales_docs)}
 
 
 async def recompute_all_store_metrics(db):
@@ -3065,10 +3134,18 @@ async def recompute_all_store_metrics(db):
             "pairs": sum(r["pairs"] for r in ok)}
 
 
+# iter34 — rollup schema version. Bump whenever _recompute_store_metrics gains
+# fields; startup compares against the stored marker and rebuilds everything on
+# mismatch. Replaces the per-field $exists probes that iter31/iter33 used
+# (which couldn't distinguish "legitimately absent" from "pre-upgrade").
+_METRIC_SCHEMA_VERSION = 34
+
+
 async def _maybe_backfill_store_metrics(db):
-    """One-time backfill: if the rollup/coverage collections are empty — or carry
-    the pre-iter31 schema (no last_seen_any_at / conf_count) — rebuild them for
-    all stores. Runs at startup (fire-and-forget)."""
+    """One-time backfill: if the rollup/coverage collections are empty, or the
+    stored schema version predates _METRIC_SCHEMA_VERSION (covers the iter31/
+    iter33/iter34 field additions), rebuild them for all stores. Runs at startup
+    (fire-and-forget)."""
     try:
         snaps = await db.product_snapshots.estimated_document_count()
         if not snaps:
@@ -3077,23 +3154,18 @@ async def _maybe_backfill_store_metrics(db):
         cov = await db.sku_store_coverage.estimated_document_count()
         needs = not (have and cov)
         if not needs:
-            # iter31 schema upgrade — iter30 built these collections without the
-            # freshness/confidence fields; ANY doc missing them forces a rebuild.
-            old_cov = await db.sku_store_coverage.find_one(
-                {"last_seen_any_at": {"$exists": False}}, {"_id": 1})
-            old_roll = await db.metric_daily_rollups.find_one(
-                {"conf_count": {"$exists": False}}, {"_id": 1})
-            # iter33 schema upgrade — stock fields on coverage. Keyed on docs that
-            # HAVE last_seen_at but MISS last_in_stock: every post-iter33 accepted
-            # pair carries both, while low-confidence-only pairs legitimately have
-            # neither (so they can't retrigger the rebuild forever).
-            old_cov33 = await db.sku_store_coverage.find_one(
-                {"last_seen_at": {"$exists": True}, "last_in_stock": {"$exists": False}}, {"_id": 1})
-            needs = old_cov is not None or old_roll is not None or old_cov33 is not None
+            marker = await db.metric_rollup_meta.find_one({"_id": "schema"})
+            needs = not marker or (marker.get("version") or 0) < _METRIC_SCHEMA_VERSION
         if not needs:
             return
         logger.info("[Metrics] backfilling rollups + coverage from snapshots…")
         stats = await recompute_all_store_metrics(db)
+        await db.metric_rollup_meta.update_one(
+            {"_id": "schema"},
+            {"$set": {"version": _METRIC_SCHEMA_VERSION,
+                      "updated_at": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
         logger.info("[Metrics] backfill complete: %s", stats)
     except Exception:
         logger.exception("[Metrics] startup backfill failed (will populate on next crawl)")
@@ -3218,6 +3290,43 @@ async def _restock_rows_from_coverage(db, since):
         {"$group": {"_id": "$sku",
                     "stores": {"$push": {"store": "$last_store_name", "in_stock": "$last_in_stock", "qty": "$last_qty"}}}},
     ], allowDiskUse=True).to_list(length=None)
+
+
+# ── iter34 read helper: windowed sales per (store, sku) from sku_sales_daily ──
+async def _sales_pairs_from_rollups(db, since, store_id=None):
+    """Per (store_id, sku): windowed units + revenue with the estimator's
+    method-exclusivity preserved per pair: if the pair had ANY positive
+    sold_count step in the window, the cumulative-counter figures are used and
+    qty depletion is ignored (exactly _estimate_sales_from_snapshots' Method 1
+    preference); otherwise the filtered qty-depletion figures. qty_drop (raw
+    depletion, trending's definition) is returned alongside."""
+    match = {"date": {"$gte": _metric_day_str(since)}}
+    if store_id:
+        match["store_id"] = store_id
+    # Streamed, projected find + Python sums. The window's sales docs are SPARSE
+    # (only days with detected sales) and ~100 bytes projected, so even a 90D
+    # window moves a few MB — one to two orders of magnitude lighter than the
+    # full-snapshot fetches this replaced. A find (vs a multi-accumulator
+    # $group) also runs identically on every backend, so the sandbox suite
+    # exercises this path end-to-end.
+    acc = {}
+    cursor = db.sku_sales_daily.find(
+        match, {"_id": 0, "store_id": 1, "sku": 1, "units_sold": 1, "rev_sold": 1,
+                "units_qty": 1, "rev_qty": 1, "qty_drop": 1}).batch_size(2000)
+    async for r in cursor:
+        a = acc.setdefault((r["store_id"], r["sku"]), [0, 0.0, 0, 0.0, 0])
+        a[0] += r["units_sold"]
+        a[1] += r["rev_sold"]
+        a[2] += r["units_qty"]
+        a[3] += r["rev_qty"]
+        a[4] += r["qty_drop"]
+    # Estimator Method-1 preference per pair: counter units win when any
+    # positive counter step existed in the window; else filtered qty depletion.
+    return [{"store_id": k[0], "sku": k[1],
+             "units": a[0] if a[0] > 0 else a[2],
+             "revenue": a[1] if a[0] > 0 else a[3],
+             "qty_drop": a[4]}
+            for k, a in acc.items()]
 
 
 async def _insights_summary_compute(db, days):
@@ -3419,40 +3528,46 @@ async def _insights_leaderboard_compute(db, days):
         if s.get("is_own_store"):
             own_store_id = s["id"]
 
-    # Fetch all snapshots in the window unbounded (Feb 2026 fix — previous
-    # to_list(100000) ascending-sort silently dropped the newest 46k+ docs)
-    # P1 confidence floor: exclude Tier-3 HTML scrape noise from leaderboard.
-    snapshots = await db.product_snapshots.find(
-        {"crawled_at": {"$gte": since}, "price": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
-        {"_id": 0, "store_id": 1, "sku": 1, "price": 1, "qty_available": 1, "sold_count": 1, "crawled_at": 1}
-    ).sort("crawled_at", 1).to_list(length=None)
+    # iter34 — served from the write-time rollups instead of fetching the ENTIRE
+    # window of snapshots into Python (to_list(None): ~400K docs at 30D, ~1M at
+    # 90D — the worst transfer-volume offender left). Per-store product counts
+    # and raw-signal detection come from sku_store_coverage (existence ⟺ latest
+    # occurrence >= since); units/revenue come from sku_sales_daily with the
+    # estimator's per-pair method preference preserved.
+    # Three $sum-only aggregations (portable, index-backed matches): per-store
+    # in-window product counts + raw-signal pair counts.
+    async def _per_store_count(field):
+        rows = await db.sku_store_coverage.aggregate([
+            {"$match": {field: {"$gte": since}}},
+            {"$group": {"_id": "$store_id", "n": {"$sum": 1}}},
+        ], allowDiskUse=True).to_list(length=None)
+        return {r["_id"]: r["n"] for r in rows}
 
-    # Group by store_id → sku → chronological snapshots
-    by_store = {}
-    for s in snapshots:
-        sid = s.get("store_id", "")
-        if sid == own_store_id:
-            continue
-        by_store.setdefault(sid, {}).setdefault(s["sku"], []).append(s)
+    products_by_store, sold_sig_by_store, qty_sig_by_store = await asyncio.gather(
+        _per_store_count("last_priced_at"),      # same price>0 + conf predicates as the old $match
+        _per_store_count("last_sold_pos_at"),
+        _per_store_count("last_usable_qty_at"),
+    )
+    cov_rows = [{"_id": sid, "products": n,
+                 "sold_sig": sold_sig_by_store.get(sid, 0),
+                 "qty_sig": qty_sig_by_store.get(sid, 0)}
+                for sid, n in products_by_store.items()]
+    sales_pairs = await _sales_pairs_from_rollups(db, since)
+    sales_by_store = {}
+    for p in sales_pairs:
+        acc = sales_by_store.setdefault(p["store_id"], [0, 0.0])
+        acc[0] += p["units"]
+        acc[1] += p["revenue"]
 
     leaderboard = []
-    for store_id, sku_data in by_store.items():
-        total_rev = 0.0
-        total_units = 0
-        total_products = len(sku_data)
-        has_sold_count_signal = False
-        has_usable_qty_signal = False
-        for sku, snap_list in sku_data.items():
-            units, revenue, _ = _estimate_sales_from_snapshots(snap_list, days)
-            total_units += units
-            total_rev += revenue
-            # Detect raw data availability — independent of whether revenue computed
-            if not has_sold_count_signal:
-                if any((sn.get("sold_count") or 0) > 0 for sn in snap_list):
-                    has_sold_count_signal = True
-            if not has_usable_qty_signal:
-                if any(0 < (sn.get("qty_available") or 0) <= 200 for sn in snap_list):
-                    has_usable_qty_signal = True
+    for row in cov_rows:
+        store_id = row["_id"] or ""
+        if store_id == own_store_id:
+            continue
+        total_products = row["products"]
+        has_sold_count_signal = row["sold_sig"] > 0
+        has_usable_qty_signal = row["qty_sig"] > 0
+        total_units, total_rev = sales_by_store.get(store_id, [0, 0.0])
 
         # Classify revenue status so the UI can show an honest label for Salla
         # stores that never expose sold_count (Feb 2026 UX fix).
@@ -3482,58 +3597,43 @@ async def _insights_leaderboard_compute(db, days):
     return leaderboard
 
 async def _insights_top_sellers_compute(db, days, store_id):
+    # iter34 — served from sku_sales_daily instead of an unprojected full-window
+    # snapshot fetch (to_list(None) of complete documents — the heaviest single
+    # read in the codebase). Per-pair estimation method preference preserved by
+    # _sales_pairs_from_rollups; per-sku totals sum across stores as before.
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    match = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
-    if store_id and store_id != "all":
-        match["store_id"] = store_id
-    snapshots = await db.product_snapshots.find(match, {"_id": 0}).sort("crawled_at", 1).to_list(length=None)
-
-    by_sku = {}
-    for s in snapshots:
-        by_sku.setdefault(s["sku"], {"store_snaps": {}})
-        by_sku[s["sku"]]["store_snaps"].setdefault(s["store_id"], []).append(s)
-
+    sid = store_id if store_id and store_id != "all" else None
+    pairs = await _sales_pairs_from_rollups(db, since, store_id=sid)
+    per_sku = {}
+    for p in pairs:
+        acc = per_sku.setdefault(p["sku"], [0, 0.0])
+        acc[0] += p["units"]
+        acc[1] += p["revenue"]
+    candidates = [(sku, u, r) for sku, (u, r) in per_sku.items() if u > 0]
+    # ONE batched product lookup (the old code did a find_one per selling sku).
+    prods = {p["sku"]: p async for p in db.products.find(
+        {"sku": {"$in": [c[0] for c in candidates]}}, {"_id": 0})}
     sellers = []
-    for sku, data in by_sku.items():
-        total_sold = 0
-        total_rev = 0.0
-        for sid, snaps in data["store_snaps"].items():
-            units, revenue, _ = _estimate_sales_from_snapshots(snaps, days)
-            total_sold += units
-            total_rev += revenue
-        if total_sold > 0:
-            product = await db.products.find_one({"sku": sku}, {"_id": 0})
-            if product:
-                sellers.append({
-                    "sku": sku, "name_ar": product["name_ar"], "name_en": product["name_en"],
-                    "category": product["category"], "brand": product["brand"],
-                    "units_sold": total_sold, "revenue_est": round(total_rev, 2),
-                })
+    for sku, total_sold, total_rev in candidates:
+        product = prods.get(sku)
+        if product:
+            sellers.append({
+                "sku": sku, "name_ar": product["name_ar"], "name_en": product["name_en"],
+                "category": product["category"], "brand": product["brand"],
+                "units_sold": total_sold, "revenue_est": round(total_rev, 2),
+            })
     sellers.sort(key=lambda x: x["units_sold"], reverse=True)
     return sellers[:20]
 
 async def _insights_trending_compute(db, days):
+    # iter34 — served from sku_sales_daily.qty_drop (raw positive depletion,
+    # trending's own definition — NOT the estimator's filtered/capped units)
+    # instead of an unprojected full-window snapshot fetch.
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    snapshots = await db.product_snapshots.find(
-        {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}, {"_id": 0}
-    ).sort("crawled_at", 1).to_list(length=None)
-
-    by_cat = {}
-    for s in snapshots:
-        by_cat.setdefault(s["sku"], []).append(s)
-
+    pairs = await _sales_pairs_from_rollups(db, since)
     sku_sales = {}
-    for sku, snaps in by_cat.items():
-        by_store = {}
-        for s in snaps:
-            by_store.setdefault(s["store_id"], []).append(s)
-        total = 0
-        for sid, st_snaps in by_store.items():
-            for i in range(1, len(st_snaps)):
-                d = st_snaps[i - 1].get("qty_available", 0) - st_snaps[i].get("qty_available", 0)
-                if d > 0:
-                    total += d
-        sku_sales[sku] = total
+    for p in pairs:
+        sku_sales[p["sku"]] = sku_sales.get(p["sku"], 0) + p["qty_drop"]
 
     # Get products and group by category
     products = await db.products.find({}, {"_id": 0}).to_list(500)
@@ -5935,6 +6035,11 @@ async def startup():
         await db.sku_store_coverage.create_index("sku")
         # iter33 — gaps / price-wars filter on the latest price>0 crawl
         await db.sku_store_coverage.create_index("last_priced_at")
+        # iter34 — daily sales facts (leaderboard / top-sellers / trending)
+        await db.sku_sales_daily.create_index("date")
+        await db.sku_sales_daily.create_index([("store_id", 1), ("date", 1)])
+        await db.sku_store_coverage.create_index("last_sold_pos_at")
+        await db.sku_store_coverage.create_index("last_usable_qty_at")
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
     # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.
