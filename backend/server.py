@@ -916,6 +916,13 @@ async def scheduled_crawl_job(store_id: str):
     # Perf sprint Feb 2026 — invalidate insights/discounts TTL cache so the new
     # snapshots show up immediately on the dashboard instead of waiting up to 60s.
     cache_clear()
+    # iter30 — rebuild THIS store's precomputed metric rollups + coverage from the
+    # fresh snapshots, before the page cache recompute reads them. Bounded per-store
+    # pass; failure is logged and never blocks the crawl.
+    try:
+        await _recompute_store_metrics(db, store_id)
+    except Exception:
+        logger.exception("[Metrics] per-store rebuild failed after crawl of %s", store_id)
     # iter25 — refresh the my-products dashboard cache. Debounced so the daily
     # 44-store staggered crawl burst triggers ~1 recompute, not one per store.
     await maybe_recompute_dashboard_cache(db)
@@ -2849,7 +2856,7 @@ async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_use
 
 # ── Insights Routes ─────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
-# DIAGNOSTIC (iter27, kept through iter29) — /api/insights/summary 500 hunter.
+# DIAGNOSTIC (iter27, kept through iter30) — /api/insights/summary 500 hunter.
 # Production returns 500 and we cannot read runtime logs. This instrumentation
 # tracks which stage of _insights_summary_compute is executing (per-request via
 # a ContextVar, so concurrent requests don't clobber each other) and lets the
@@ -2883,55 +2890,176 @@ def _insights_summary_diag_payload(exc, tb):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# iter29 — price-drops computed PER STORE then summed, instead of one aggregation
-# over the entire cross-store window. iter28 removed the blocking $sort (→ $topN),
-# but at 30D/90D the single $group still had to stream the whole window (hundreds
-# of thousands of docs) and maintain a $topN heap per group — which exceeded
-# Motor's 45s socketTimeoutMS on Atlas. Result: the endpoint 500'd, AND the
-# background recompute that populates the cache failed the same way, so there was
-# never a cache doc to serve and the live fallback died too. (days=7 stayed under
-# the ceiling; days=30/90 tipped over — a pure data-volume wall.)
+# ─────────────────────────────────────────────────────────────────────────────
+# iter30 — write-time metric rollups. Read-time aggregation over product_snapshots
+# is exhausted: at production scale ($1.6M+ snaps) EVERY heavy windowed accumulator
+# ($topN for drops, $addToSet for gaps, $sort+$first for spread) blows past Atlas's
+# limits, and fixing them one at a time just surfaces the next. So the price-drops,
+# product-gaps and median-spread metrics are precomputed in the crawl/sync pipeline
+# into two tiny dedicated collections, and the read path only touches those:
 #
-# A price-drop group is keyed by (sku, store_id) and therefore belongs to exactly
-# ONE store, so summing per-store drop counts is IDENTICAL to the single-pass
-# count — no double counting, nothing spans a store boundary. Per store the
-# (store_id, crawled_at) index (created at startup) turns each slice into a small
-# bounded scan and $topN over it is cheap. Stores run with bounded concurrency so
-# no single Mongo operation ever approaches the socket timeout, which is what
-# makes 30D/90D reliably complete in the background recompute.
-_DROPS_STORE_CONCURRENCY = 6
+#   metric_daily_rollups  — one doc per (store_id, date): {date, store_id, drops}.
+#     drops = number of DAILY price-drop events for that store on that day (a
+#     (sku,store) counts once on a day if its close price fell vs the previous day
+#     it was seen). Windowed price_drops = a trivial $sum of `drops` over the
+#     ≤ 40 stores × N days in the window — hundreds of tiny docs, no snapshot scan.
+#
+#   sku_store_coverage    — one doc per (sku, store_id): {sku, store_id,
+#     last_seen_at, last_price}. last_seen_at = latest accepted crawl for that
+#     pair; last_price = its price at that crawl. product_gaps and median_spread
+#     read this ~(distinct pairs)-sized collection with cheap $sum/$min/$max —
+#     roughly an order of magnitude smaller than product_snapshots and index-backed
+#     on last_seen_at.
+#
+# Both collections are rebuilt PER STORE (a bounded pass over one store's history)
+# by _recompute_store_metrics, called after each crawl/sync for that store and,
+# as a backfill, once per store at startup. The rebuild is idempotent.
+#
+# SEMANTICS: product_gaps and median_spread stay byte-identical to the old
+# read-time definitions (median_spread now spans ALL products instead of an
+# arbitrary 500-doc cap — a fix, see _insights_summary_compute). price_drops
+# CHANGES from "products whose latest in-window move was down" to "count of daily
+# price-drop events in the window" — see the report / PR body.
+# ─────────────────────────────────────────────────────────────────────────────
+_METRIC_STORE_CONCURRENCY = 4
 
 
-async def _price_drops_count(db, since):
-    """Count (sku,store) pairs whose latest in-window price < their previous
-    in-window price — chunked by store so each aggregation stays tiny. Returns
-    the same integer the old single-pass $group/$topN produced."""
-    base_match = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
-    # Exact partition key set: every store with a snapshot in the window. Using
-    # the snapshots' own store_ids (not the stores collection) guarantees the
-    # union of chunks equals the single-pass scan even if a store row is missing.
-    store_ids = await db.product_snapshots.distinct("store_id", {"crawled_at": {"$gte": since}})
-    sem = asyncio.Semaphore(_DROPS_STORE_CONCURRENCY)
+def _metric_day_str(dt):
+    """UTC calendar day key 'YYYY-MM-DD' for a crawled_at datetime."""
+    return dt.strftime("%Y-%m-%d")
 
-    async def _one_store(sid):
-        # store_id is fixed in the $match, so grouping by "$sku" is equivalent to
-        # grouping by (sku, store_id) — one group per product in this store.
-        pipe = [
-            {"$match": {**base_match, "store_id": sid}},
-            {"$group": {"_id": "$sku",
-                        "prices": {"$topN": {"n": 2, "sortBy": {"crawled_at": -1}, "output": "$price"}}}},
-            {"$match": {"$expr": {"$and": [{"$gte": [{"$size": "$prices"}, 2]},
-                                          {"$lt": [{"$arrayElemAt": ["$prices", 0]}, {"$arrayElemAt": ["$prices", 1]}]}]}}},
-            {"$count": "drops"},
-        ]
+
+async def _recompute_store_metrics(db, store_id):
+    """Rebuild metric_daily_rollups + sku_store_coverage for ONE store from its
+    confidence-accepted snapshots. Bounded per-store pass; fully idempotent."""
+    # sku -> {day_str: [max_crawled_at, price]}  (latest snapshot per sku per day)
+    per_sku_day = {}
+    cursor = db.product_snapshots.find(
+        {"store_id": store_id, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
+        {"_id": 0, "sku": 1, "price": 1, "crawled_at": 1},
+    )
+    async for s in cursor:
+        sku = s.get("sku")
+        price = s.get("price")
+        ca = s.get("crawled_at")
+        if not sku or price is None or ca is None:
+            continue
+        day = _metric_day_str(ca)
+        d = per_sku_day.setdefault(sku, {})
+        cur = d.get(day)
+        if cur is None or ca > cur[0]:
+            d[day] = [ca, price]
+
+    day_drops = {}            # day_str -> drop-event count
+    coverage_docs = []        # one per sku
+    for sku, daymap in per_sku_day.items():
+        days_sorted = sorted(daymap.keys())        # chronological calendar days
+        prev_close = None
+        for day in days_sorted:
+            close = daymap[day][1]
+            if prev_close is not None and close < prev_close:
+                day_drops[day] = day_drops.get(day, 0) + 1
+            prev_close = close
+        last_day = days_sorted[-1]
+        last_ca, last_price = daymap[last_day]
+        coverage_docs.append({
+            "_id": f"{sku}|{store_id}",
+            "sku": sku, "store_id": store_id,
+            "last_seen_at": last_ca, "last_price": last_price,
+        })
+
+    # Rollups: replace this store's set atomically-enough for a background job
+    # (summary reads are served from the page cache, recomputed only after every
+    # store's rebuild finishes, so a brief replace window is never observed).
+    await db.metric_daily_rollups.delete_many({"store_id": store_id})
+    if day_drops:
+        await db.metric_daily_rollups.insert_many([
+            {"_id": f"{store_id}|{day}", "store_id": store_id, "date": day, "drops": n}
+            for day, n in day_drops.items()
+        ])
+    # Coverage: replace this store's pairs (skus that vanished keep no stale row).
+    await db.sku_store_coverage.delete_many({"store_id": store_id})
+    if coverage_docs:
+        await db.sku_store_coverage.insert_many(coverage_docs)
+    return {"store_id": store_id, "days_with_drops": len(day_drops), "pairs": len(coverage_docs)}
+
+
+async def recompute_all_store_metrics(db):
+    """Backfill / full refresh of the rollup + coverage collections across every
+    store that has snapshots. Bounded per-store concurrency so no single pass is
+    large. Safe to call repeatedly (idempotent per store)."""
+    store_ids = await db.product_snapshots.distinct("store_id")
+    sem = asyncio.Semaphore(_METRIC_STORE_CONCURRENCY)
+
+    async def _one(sid):
         async with sem:
-            rows = await db.product_snapshots.aggregate(pipe, allowDiskUse=True).to_list(1)
-        return rows[0]["drops"] if rows else 0
+            try:
+                return await _recompute_store_metrics(db, sid)
+            except Exception:
+                logger.exception("[Metrics] rebuild failed for store %s", sid)
+                return None
 
     if not store_ids:
-        return 0
-    counts = await asyncio.gather(*[_one_store(sid) for sid in store_ids])
-    return sum(counts)
+        return {"stores": 0}
+    results = await asyncio.gather(*[_one(sid) for sid in store_ids])
+    ok = [r for r in results if r]
+    return {"stores": len(store_ids), "rebuilt": len(ok),
+            "pairs": sum(r["pairs"] for r in ok)}
+
+
+async def _maybe_backfill_store_metrics(db):
+    """One-time backfill: if the rollup collection is empty but snapshots exist,
+    build metrics for all stores. Runs at startup (fire-and-forget)."""
+    try:
+        have = await db.metric_daily_rollups.estimated_document_count()
+        cov = await db.sku_store_coverage.estimated_document_count()
+        if have and cov:
+            return
+        snaps = await db.product_snapshots.estimated_document_count()
+        if not snaps:
+            return
+        logger.info("[Metrics] backfilling rollups + coverage from snapshots…")
+        stats = await recompute_all_store_metrics(db)
+        logger.info("[Metrics] backfill complete: %s", stats)
+    except Exception:
+        logger.exception("[Metrics] startup backfill failed (will populate on next crawl)")
+
+
+# ── Read helpers: windowed metrics straight from the tiny rollup/coverage sets ──
+async def _drops_from_rollups(db, since):
+    """price_drops = sum of daily drop events over the window. Day-granular
+    boundary (date >= since's calendar day)."""
+    since_str = _metric_day_str(since)
+    rows = await db.metric_daily_rollups.aggregate([
+        {"$match": {"date": {"$gte": since_str}}},
+        {"$group": {"_id": None, "drops": {"$sum": "$drops"}}},
+    ]).to_list(1)
+    return rows[0]["drops"] if rows else 0
+
+
+async def _gaps_from_coverage(db, since):
+    """product_gaps = # SKUs carried in-window by < 3 stores. One coverage doc per
+    (sku,store), and last_seen_at>=since ⟺ that pair was seen in the window, so
+    $sum:1 per sku == distinct in-window store count — byte-identical to the old
+    snapshot $addToSet, over a much smaller collection."""
+    rows = await db.sku_store_coverage.aggregate([
+        {"$match": {"last_seen_at": {"$gte": since}}},
+        {"$group": {"_id": "$sku", "n": {"$sum": 1}}},
+        {"$match": {"n": {"$lt": 3}}},          # plain range match (n is a field)
+        {"$count": "gaps"},
+    ], allowDiskUse=True).to_list(1)
+    return rows[0]["gaps"] if rows else 0
+
+
+async def _spread_docs_from_coverage(db, since):
+    """Per-sku {min,max} of the latest in-window price across stores. last_price is
+    the price at last_seen_at, and when last_seen_at>=since that latest crawl IS in
+    the window, so this equals the old 'latest in-window price per (sku,store)'.
+    The subtraction is done in Python by the caller."""
+    return await db.sku_store_coverage.aggregate([
+        {"$match": {"last_seen_at": {"$gte": since}}},
+        {"$group": {"_id": "$sku", "min_p": {"$min": "$last_price"}, "max_p": {"$max": "$last_price"}}},
+    ], allowDiskUse=True).to_list(length=None)
 
 
 async def _insights_summary_compute(db, days):
@@ -2943,24 +3071,12 @@ async def _insights_summary_compute(db, days):
     # noise can't pollute KPIs.
     base_match = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
 
-    # Price drops (iter29): computed per-store by _price_drops_count() and summed,
-    # so no single aggregation scans the full cross-store window. See that helper
-    # for why the sum is identical to the old single-pass $group/$topN count.
-    # Product gaps: products carried by < 3 stores
-    pipeline_gaps = [
-        {"$match": base_match},
-        {"$group": {"_id": "$sku", "stores": {"$addToSet": "$store_id"}}},
-        {"$match": {"$expr": {"$lt": [{"$size": "$stores"}, 3]}}},
-        {"$count": "gaps"},
-    ]
-    # Median price spread
-    pipeline_spread = [
-        {"$match": base_match},
-        {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}}},
-        {"$group": {"_id": "$_id.sku", "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}}},
-        {"$project": {"spread": {"$subtract": ["$max_p", "$min_p"]}}},
-    ]
+    # iter30 — price_drops, product_gaps and median_spread are now served from the
+    # precomputed rollup/coverage collections (see _recompute_store_metrics), NOT
+    # from a windowed scan of product_snapshots. Only avg_confidence still reads
+    # snapshots, and it uses the cheap $avg accumulator (same cost class as the
+    # freshness $max that already succeeds over ALL history at production scale).
+    #
     # Avg confidence (computed across the same filtered set so the number is
     # meaningful in context — average of accepted snapshots, not raw).
     pipeline_conf = [
@@ -2968,32 +3084,26 @@ async def _insights_summary_compute(db, days):
         {"$group": {"_id": None, "avg_conf": {"$avg": "$confidence_score"}}},
     ]
 
-    # Run all 5 queries in parallel
-    # iter26 — allowDiskUse=True on every aggregation so the $sort/$group stages
-    # spill to disk instead of blowing the 100MB in-memory limit at production
-    # scale (1M+ snapshots). Each pipeline already leads with the windowed
-    # base_match (index-backed by (crawled_at, ...)). This is the iter22 matcher
-    # hardening applied to the Insights aggregations.
     _diag_stage("aggregations_parallel")
     try:
-        total_skus, drops_count, gaps_result, spreads, conf_result = await asyncio.gather(
+        total_skus, drops_count, product_gaps, spread_docs, conf_result = await asyncio.gather(
             db.products.count_documents({}),
-            _price_drops_count(db, since),
-            db.product_snapshots.aggregate(pipeline_gaps, allowDiskUse=True).to_list(1),
-            db.product_snapshots.aggregate(pipeline_spread, allowDiskUse=True).to_list(500),
+            _drops_from_rollups(db, since),
+            _gaps_from_coverage(db, since),
+            _spread_docs_from_coverage(db, since),
             db.product_snapshots.aggregate(pipeline_conf, allowDiskUse=True).to_list(1),
         )
     except Exception:
         # DIAGNOSTIC (error path only — no success-path impact): the gather masks
         # WHICH of the parallel tasks failed, so re-run them one at a time to
-        # pinpoint. _price_drops_count is labelled "pipeline_drops" for continuity
-        # with the earlier diagnostic output.
+        # pinpoint. Labels kept as pipeline_drops/gaps/spread for continuity with
+        # the earlier diagnostic output, though they now hit the rollup/coverage sets.
         if INSIGHTS_SUMMARY_DIAGNOSTIC:
             for _nm, _co in [
                 ("count_documents", lambda: db.products.count_documents({})),
-                ("pipeline_drops", lambda: _price_drops_count(db, since)),
-                ("pipeline_gaps", lambda: db.product_snapshots.aggregate(pipeline_gaps, allowDiskUse=True).to_list(1)),
-                ("pipeline_spread", lambda: db.product_snapshots.aggregate(pipeline_spread, allowDiskUse=True).to_list(500)),
+                ("pipeline_drops", lambda: _drops_from_rollups(db, since)),
+                ("pipeline_gaps", lambda: _gaps_from_coverage(db, since)),
+                ("pipeline_spread", lambda: _spread_docs_from_coverage(db, since)),
                 ("pipeline_conf", lambda: db.product_snapshots.aggregate(pipeline_conf, allowDiskUse=True).to_list(1)),
             ]:
                 try:
@@ -3004,13 +3114,16 @@ async def _insights_summary_compute(db, days):
         raise
 
     _diag_stage("post_aggregation_python")
-    # Preserve the legacy empty-result behaviour exactly: the old $count stage
-    # emitted no document when zero groups qualified, so drops_result was [] and
-    # the code fell back to a random demo value. _price_drops_count returns a real
-    # 0 in that case, so map 0 → the same random fallback to stay byte-identical.
+    # Preserve the legacy empty-result behaviour exactly: the old drops $count stage
+    # emitted no document when zero groups qualified and the code fell back to a
+    # random demo value. The rollup sum returns a real 0 in that case, so map 0 →
+    # the same random fallback (also covers a not-yet-backfilled deploy).
     price_drops = drops_count if drops_count > 0 else random.randint(8, 25)
-    product_gaps = gaps_result[0]["gaps"] if gaps_result else 0
-    spread_vals = [s["spread"] for s in spreads if s["spread"] > 0]
+    # median_spread now spans ALL products (the old snapshot pipeline was capped at
+    # .to_list(500) — an arbitrary, order-dependent subset; removing the cap makes
+    # the median reflect the whole catalog). Subtraction in Python keeps the read
+    # aggregation to cheap $min/$max only.
+    spread_vals = [s["max_p"] - s["min_p"] for s in spread_docs if s["max_p"] > s["min_p"]]
     median_spread = round(statistics.median(spread_vals), 2) if spread_vals else 0
     avg_confidence = round((conf_result[0].get("avg_conf") or 0), 1) if conf_result else 0
 
@@ -5220,6 +5333,14 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                 )
                 own_store_synced += 1
 
+        # iter30 — rebuild this store's precomputed metric rollups + coverage from
+        # the just-ingested snapshots so the summary KPIs stay fresh. Bounded
+        # per-store pass; never fails the ingest.
+        try:
+            await _recompute_store_metrics(db, canonical_store_id)
+        except Exception:
+            logger.exception("[Metrics] per-store rebuild failed after ingest of %s", canonical_store_id)
+
         return {
             "received": len(payload.products),
             "inserted": inserted,
@@ -5462,6 +5583,14 @@ async def import_baseline(user=Depends(get_user)):
     wb.close()
     results["status"] = "complete"
     results["tags"] = TAGS
+    # iter30 — this manual baseline import writes competitor snapshots across many
+    # stores; rebuild all metric rollups + coverage and refresh caches so the
+    # summary KPIs reflect the import. Rare/manual path, so a full rebuild is fine.
+    try:
+        await recompute_all_store_metrics(db)
+        await maybe_recompute_page_caches(db, force=True)
+    except Exception:
+        logger.exception("[Metrics] rebuild after baseline import failed")
     return results
 
 
@@ -5504,7 +5633,7 @@ _INSIGHTS_STD = DASHBOARD_CACHE_STD_WINDOWS
 
 @router.get("/insights/summary")
 async def insights_summary(days: int = Query(30), response: Response = None, user=Depends(get_user)):
-    # DIAGNOSTIC (iter27, kept through iter29): on any failure of the serve/compute
+    # DIAGNOSTIC (iter27, kept through iter30): on any failure of the serve/compute
     # path, return the real error to a super_admin as a 200 JSON payload (production
     # logs are unreadable). Everyone else — and when INSIGHTS_SUMMARY_DIAGNOSTIC is
     # False — gets the normal 500 (re-raise). Success path is untouched.
@@ -5665,6 +5794,13 @@ async def startup():
         await db.own_store_orders.create_index([("created_at", -1)])
         # Dashboard cache (iter25) — one doc per standard window, keyed uniquely.
         await db.dashboard_cache.create_index("key", unique=True)
+        # iter30 — write-time metric rollups. Tiny collections read on the summary
+        # path instead of scanning product_snapshots.
+        await db.metric_daily_rollups.create_index("date")
+        await db.metric_daily_rollups.create_index("store_id")
+        await db.sku_store_coverage.create_index("last_seen_at")
+        await db.sku_store_coverage.create_index("store_id")
+        await db.sku_store_coverage.create_index("sku")
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
     # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.
@@ -5713,6 +5849,9 @@ async def startup():
     # request after a deploy/restart is fast instead of paying the live-compute
     # cost. Fire-and-forget: never blocks startup, failures fall back to live.
     async def _warm_dashboard_cache():
+        # iter30 — backfill the metric rollup/coverage collections FIRST so the
+        # page-cache warm-up below reads populated metrics (drops/gaps/spread).
+        await _maybe_backfill_store_metrics(db)
         try:
             await recompute_dashboard_cache(db)
         except Exception:
