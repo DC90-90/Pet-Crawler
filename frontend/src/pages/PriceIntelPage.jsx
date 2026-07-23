@@ -24,6 +24,7 @@ export default function PriceIntelPage() {
   const [leaderboard, setLeaderboard] = useState(null);
   const [catalogGaps, setCatalogGaps] = useState([]);
   const [showGuide, setShowGuide] = useState(false);
+  const [cacheComputedAt, setCacheComputedAt] = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -36,6 +37,8 @@ export default function PriceIntelPage() {
       setData(r.data);
       setLeaderboard(lb.data);
       setCatalogGaps(gaps.data || []);
+      // iter26 — dashboard-cache freshness from the X-Cache-Computed-At header
+      setCacheComputedAt(r.headers?.["x-cache-computed-at"] || null);
     } catch {
       toast.error("Failed to load price intelligence");
     } finally {
@@ -91,10 +94,10 @@ export default function PriceIntelPage() {
       <div>
         <h1 className="text-2xl font-semibold text-white">{isRTL ? "استخبارات الأسعار" : "Price Intelligence"}</h1>
         <p className="text-sm text-[#A1E4DB]">{isRTL ? "مقارنة أسعار منتجاتك مع المنافسين" : "Compare your prices against competitors"}</p>
-        {data.cache?.source === "cache" && data.cache?.computed_at && (
-          <p className="text-[11px] text-[#6AC1B5] mt-1 font-mono" data-testid="price-intel-cache-freshness">
+        {cacheComputedAt && (
+          <p className="text-[11px] text-[#6AC1B5] mt-0.5 font-mono" data-testid="price-intel-cache-freshness">
             {isRTL ? "المؤشرات محدثة حتى" : "Metrics as of"}{" "}
-            {new Date(data.cache.computed_at).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
+            {new Date(cacheComputedAt).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
           </p>
         )}
       </div>
