@@ -25,18 +25,28 @@ export default function PriceIntelPage() {
   const [catalogGaps, setCatalogGaps] = useState([]);
   const [showGuide, setShowGuide] = useState(false);
   const [cacheComputedAt, setCacheComputedAt] = useState(null);
+  // iter32 — live sources for the "Your Store Performance" card (replaces the
+  // frozen market_intelligence_baseline literals from the April import).
+  const [myKpis, setMyKpis] = useState(null);
+  const [summary14, setSummary14] = useState(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [r, lb, gaps] = await Promise.all([
+      const [r, lb, gaps, mine, sum] = await Promise.all([
         api.get("/price-intel/dashboard"),
         api.get("/baseline/leaderboard").catch(() => ({ data: null })),
         api.get("/baseline/catalog-gaps").catch(() => ({ data: [] })),
+        // Both cached server-side (14 is a standard dashboard-cache window);
+        // limit=1 keeps the my-products payload to KPIs + one row.
+        api.get("/my-products", { params: { days: 14, limit: 1 } }).catch(() => ({ data: null })),
+        api.get("/insights/summary", { params: { days: 14 } }).catch(() => ({ data: null })),
       ]);
       setData(r.data);
       setLeaderboard(lb.data);
       setCatalogGaps(gaps.data || []);
+      setMyKpis(mine.data?.kpis || null);
+      setSummary14(sum.data || null);
       // iter26 — dashboard-cache freshness from the X-Cache-Computed-At header
       setCacheComputedAt(r.headers?.["x-cache-computed-at"] || null);
     } catch {
@@ -115,7 +125,7 @@ export default function PriceIntelPage() {
 
       {showGuide && <ConfidenceGuidePanel isRTL={isRTL} />}
 
-      <MarketPositionWidget leaderboard={leaderboard} isRTL={isRTL} />
+      <MarketPositionWidget leaderboard={leaderboard} myKpis={myKpis} summary={summary14} isRTL={isRTL} />
 
       <div className="flex gap-1 glass-card p-1.5">
         {tabs.map((t) => (
