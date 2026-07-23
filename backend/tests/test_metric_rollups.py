@@ -34,27 +34,32 @@ MONGO = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
 FLOOR = server.MIN_AGGREGATION_CONFIDENCE
 
 
-def _snap(store, sku, days_ago, price, conf=99):
+def _snap(store, sku, days_ago, price, conf=99, in_stock=True, qty=5):
     # distinct crawled_at per (store,sku,day); spread within the day is irrelevant
     # because the rollup keeps the LATEST price of each day.
     base = datetime.now(timezone.utc) - timedelta(days=days_ago)
     return {"id": f"{store}-{sku}-{days_ago}", "store_id": store, "sku": sku,
+            "store_name": f"{store}-name", "in_stock": in_stock, "qty_available": qty,
             "price": float(price), "confidence_score": conf,
             "crawled_at": base.replace(microsecond=days_ago * 1000)}
 
 
 # Controlled dataset with hand-computed expectations (all within the last 3 days).
 SNAPS = [
-    # S1 / sku A: 20 -> 10 (drop) -> 15 (rise)   => 1 drop event
+    # S1 / sku A: 20 -> 10 (drop) -> 15 (rise)   => 1 drop event; in stock
     _snap("S1", "A", 3, 20), _snap("S1", "A", 2, 10), _snap("S1", "A", 1, 15),
     # S1 / sku B: 50 -> 40 (drop)                 => 1 drop event
     _snap("S1", "B", 3, 50), _snap("S1", "B", 2, 40),
-    # S2 / sku A: 30 -> 25 (drop)                 => 1 drop event
-    _snap("S2", "A", 3, 30), _snap("S2", "A", 2, 25),
+    # S2 / sku A: 30 -> 25 (drop); LATEST is OOS  => restock candidate for A
+    _snap("S2", "A", 3, 30), _snap("S2", "A", 2, 25, in_stock=False, qty=0),
     # S2 / sku C: single day, floor confidence    => 0 drops, pulls avg down
     _snap("S2", "C", 2, 5, conf=FLOOR),
     # S3 / sku A: single day                      => 0
     _snap("S3", "A", 1, 22),
+    # iter33 — sku E: accepted but price 0 (crawler tiers CAN write price-0):
+    # counts for summary-gaps/freshness/restock (no price filter) but must be
+    # EXCLUDED from endpoint-gaps and price-wars (price>0 filter).
+    _snap("S1", "E", 2, 0),
     # low-confidence noise: would be a drop but must be EXCLUDED from accepted
     # metrics (drops/gaps/spread/conf) — yet still counted by FRESHNESS, which
     # never had a confidence filter.
@@ -62,17 +67,19 @@ SNAPS = [
     _snap("S1", "D", 2, 50, conf=max(0, FLOOR - 1)),
 ]
 # Expected (window covering all days):
-#   drops = 3  (S1/A, S1/B, S2/A)
-#   gaps  = 2  (B in 1 store, C in 1 store; A in 3 stores is NOT a gap; D excluded)
+#   drops = 3  (S1/A, S1/B, S2/A; E flat, D low-conf)
+#   summary gaps (no price filter) = 3: B(1 store), C(1), E(1); A in 3 stores no
+#   endpoint gaps (price>0, total_stores=3) = B, C only (E has no priced crawl)
 #   latest accepted price per (sku,store): A:{S1:15,S2:25,S3:22}=>spread 10;
-#     B:{S1:40}=>0; C:{S2:5}=>0  → median over >0 spreads = 10.0
-#   avg_confidence = snapshot-weighted mean over the 9 ACCEPTED snaps
-#   freshness: 6 pairs total (incl. low-conf D), all 1-3 days old → this_week=6
-EXPECT_DROPS, EXPECT_GAPS, EXPECT_SPREAD = 3, 2, 10.0
+#     B:{S1:40}=>0; C:{S2:5}=>0; E:{S1:0}=>0 → median over >0 spreads = 10.0
+#   avg_confidence = snapshot-weighted mean over the 10 ACCEPTED snaps
+#   freshness: 7 pairs total (incl. low-conf D + price-0 E) → this_week=7
+#   restock: sku A only (S2 OOS, S1+S3 in stock)
+EXPECT_DROPS, EXPECT_GAPS, EXPECT_SPREAD = 3, 3, 10.0
 _ACCEPTED_CONFS = [s["confidence_score"] for s in SNAPS if s["confidence_score"] >= FLOOR]
 EXPECT_CONF_AVG = sum(_ACCEPTED_CONFS) / len(_ACCEPTED_CONFS)
-EXPECT_PAIRS = 6          # 5 accepted pairs + S1/D (low-conf only)
-EXPECT_FRESH = {"total": 6, "today": 0, "this_week": 6, "this_month": 0, "stale": 0}
+EXPECT_PAIRS = 7          # 6 accepted pairs + S1/D (low-conf only)
+EXPECT_FRESH = {"total": 7, "today": 0, "this_week": 7, "this_month": 0, "stale": 0}
 
 
 async def _fresh_db(name):
@@ -138,6 +145,49 @@ async def _run_integration():
     lc = {(c["sku"], c["store_id"]): c.get("last_confidence") for c in coverage}
     assert lc[("C", "S2")] == FLOOR and lc[("A", "S1")] == 99
 
+    # ── iter33: stock + priced fields ──
+    cov_by_key = {(c["sku"], c["store_id"]): c for c in coverage}
+    a_s2 = cov_by_key[("A", "S2")]
+    assert a_s2["last_in_stock"] is False and a_s2["last_qty"] == 0
+    assert a_s2["last_store_name"] == "S2-name"
+    assert a_s2["last_priced_price"] == 25          # latest price>0 crawl
+    e_s1 = cov_by_key[("E", "S1")]
+    assert e_s1.get("last_price") == 0 and "last_seen_at" in e_s1
+    assert "last_priced_at" not in e_s1             # price-0 only → never priced
+    assert e_s1["last_in_stock"] is True
+
+    # endpoint-gaps (price>0, total_stores=3): B and C only — E excluded
+    ep_gaps = {}
+    for c in coverage:
+        lpa = c.get("last_priced_at")
+        if lpa is not None and _naive(lpa) >= since_naive:
+            ep_gaps[c["sku"]] = ep_gaps.get(c["sku"], 0) + 1
+    assert {k: v for k, v in ep_gaps.items() if v < 3} == {"B": 1, "C": 1}
+    # price-wars (>=3 priced stores): only A — min 15 / max 25 / spread 10
+    assert ep_gaps.get("A") == 3
+    # restock: only A has mixed stock state (S2 OOS; S1+S3 in stock)
+    mixed = {}
+    for c in coverage:
+        ls = c.get("last_seen_at")
+        if ls is not None and _naive(ls) >= since_naive:
+            m = mixed.setdefault(c["sku"], {"oos": [], "ins": []})
+            (m["ins"] if c["last_in_stock"] else m["oos"]).append(c["last_store_name"])
+    restock_skus = {k for k, m in mixed.items() if m["oos"] and m["ins"]}
+    assert restock_skus == {"A"}, restock_skus
+    assert mixed["A"]["oos"] == ["S2-name"] and sorted(mixed["A"]["ins"]) == ["S1-name", "S3-name"]
+
+    # real iter33 read helpers (where the shim supports the operators)
+    h_gr = await _try_helper(server._gaps_rows_from_coverage(db, since, 3))
+    if h_gr is not None:
+        assert {g["_id"]: g["num_stores"] for g in h_gr} == {"B": 1, "C": 1}
+    h_pw = await _try_helper(server._price_wars_rows_from_coverage(db, since))
+    if h_pw is not None:
+        assert len(h_pw) == 1 and h_pw[0]["sku"] == "A" and h_pw[0]["spread"] == 10
+    h_rs = await _try_helper(server._restock_rows_from_coverage(db, since))
+    if h_rs is not None:
+        rs = {r["_id"]: r["stores"] for r in h_rs}
+        assert "A" in rs and len(rs["A"]) == 3
+
     # gaps + spread from coverage (Python mirror of the read helpers)
     per_sku_stores, per_sku_prices = {}, {}
     for c in coverage:
@@ -201,6 +251,19 @@ async def _run_integration():
     upgraded = await db.sku_store_coverage.count_documents({"last_seen_any_at": {"$exists": True}})
     assert upgraded == EXPECT_PAIRS, f"schema-upgrade backfill missed docs ({upgraded})"
 
+    # ── iter33 schema-upgrade backfill: pre-iter33 docs (accepted fields but no
+    # last_in_stock) must trigger a rebuild; low-conf-only docs must NOT.
+    await db.sku_store_coverage.update_many({}, {"$unset": {"last_in_stock": ""}})
+    await server._maybe_backfill_store_metrics(db)
+    n_acc = await db.sku_store_coverage.count_documents({"last_seen_at": {"$exists": True}})
+    n_stock = await db.sku_store_coverage.count_documents({"last_in_stock": {"$exists": True}})
+    assert n_acc == n_stock == EXPECT_PAIRS - 1, (n_acc, n_stock)  # all but low-conf D
+    # and a healthy post-iter33 state must NOT retrigger (guard must ignore the
+    # low-conf-only doc that legitimately lacks the stock fields)
+    probe = await db.sku_store_coverage.find_one(
+        {"last_seen_at": {"$exists": True}, "last_in_stock": {"$exists": False}})
+    assert probe is None
+
 
 def test_integration_rollups_ferretdb():
     # asyncio.run (not get_event_loop) — robust to earlier tests closing the loop;
@@ -219,7 +282,11 @@ def test_summary_compute_never_touches_product_snapshots():
     assert "product_snapshots" not in code_of(server._insights_summary_compute)
     for h in (server._drops_from_rollups, server._gaps_from_coverage,
               server._spread_docs_from_coverage, server._conf_avg_from_rollups,
-              server._freshness_from_coverage):
+              server._freshness_from_coverage,
+              # iter33 — gaps / price-wars / restock endpoints + their helpers
+              server._insights_gaps_compute, server._insights_price_wars_compute,
+              server._insights_restock_compute, server._gaps_rows_from_coverage,
+              server._price_wars_rows_from_coverage, server._restock_rows_from_coverage):
         assert "product_snapshots" not in code_of(h), h.__name__
 
 
@@ -351,11 +418,90 @@ def _rand_snaps(rng):
         store = f"S{rng.randint(0, 5)}"
         sku = f"K{rng.randint(0, 8)}"
         days_ago = rng.randint(0, 45)
-        snaps.append({"store_id": store, "sku": sku,
-                      "price": float(rng.randint(5, 300)),
+        snaps.append({"store_id": store, "sku": sku, "store_name": f"{store}-name",
+                      # ~1 in 8 snapshots price 0 — crawler tiers can write these,
+                      # and the endpoint gaps/price-wars price>0 filter must hold
+                      "price": 0.0 if rng.random() < 0.125 else float(rng.randint(5, 300)),
+                      "in_stock": rng.random() < 0.7,
+                      "qty_available": rng.randint(0, 50),
                       "confidence_score": rng.choice([FLOOR, 99, max(0, FLOOR - 5)]),
                       "crawled_at": now - timedelta(days=days_ago, seconds=rng.randint(0, 80000))})
     return snaps
+
+
+# ── iter33 models: endpoint gaps / price-wars / restock, old vs coverage ──────
+def _pair_latest(snaps, since, need_priced):
+    """Latest in-window accepted snapshot per (sku,store); need_priced adds the
+    endpoints' price>0 predicate. OLD semantics: filter first, then latest."""
+    latest = {}
+    for s in snaps:
+        if s["confidence_score"] < FLOOR or s["crawled_at"] < since:
+            continue
+        if need_priced and not (s["price"] > 0):
+            continue
+        k = (s["sku"], s["store_id"])
+        if k not in latest or s["crawled_at"] > latest[k]["crawled_at"]:
+            latest[k] = s
+    return latest
+
+
+def _cov_pair_latest(snaps, since, need_priced):
+    """COVERAGE semantics: latest [priced] accepted snapshot OVERALL per pair,
+    then filter its timestamp into the window."""
+    latest = {}
+    for s in snaps:
+        if s["confidence_score"] < FLOOR:
+            continue
+        if need_priced and not (s["price"] > 0):
+            continue
+        k = (s["sku"], s["store_id"])
+        if k not in latest or s["crawled_at"] > latest[k]["crawled_at"]:
+            latest[k] = s
+    return {k: v for k, v in latest.items() if v["crawled_at"] >= since}
+
+
+def _gaps_rows_model(latest, total_stores):
+    per_sku = {}
+    for (sku, _st) in latest:
+        per_sku[sku] = per_sku.get(sku, 0) + 1
+    return {sku: n for sku, n in per_sku.items() if n < total_stores}
+
+
+def _wars_rows_model(latest):
+    per_sku = {}
+    for (sku, _st), s in latest.items():
+        per_sku.setdefault(sku, []).append((s["store_name"], s["price"]))
+    out = {}
+    for sku, entries in per_sku.items():
+        prices = [p for _n, p in entries]
+        if len(entries) >= 3 and min(prices) > 0:
+            out[sku] = (len(entries), min(prices), max(prices), tuple(sorted(entries)))
+    return out
+
+
+def _restock_rows_model(latest):
+    per_sku = {}
+    for (sku, _st), s in latest.items():
+        m = per_sku.setdefault(sku, {"oos": [], "ins": []})
+        (m["ins"] if s["in_stock"] else m["oos"]).append((s["store_name"], s["qty_available"]))
+    return {sku: (tuple(sorted(m["oos"])), tuple(sorted(m["ins"])))
+            for sku, m in per_sku.items() if m["oos"] and m["ins"]}
+
+
+def test_endpoint_gaps_wars_restock_match_old_definitions():
+    rng = random.Random(20260802)
+    now = datetime.now(timezone.utc)
+    for _ in range(3000):
+        snaps = _rand_snaps(rng)
+        since = now - timedelta(days=rng.choice([7, 14, 30, 90]))
+        total_stores = rng.randint(0, 6)
+        old_p = _pair_latest(snaps, since, need_priced=True)
+        cov_p = _cov_pair_latest(snaps, since, need_priced=True)
+        assert _gaps_rows_model(old_p, total_stores) == _gaps_rows_model(cov_p, total_stores)
+        assert _wars_rows_model(old_p) == _wars_rows_model(cov_p)
+        old_a = _pair_latest(snaps, since, need_priced=False)
+        cov_a = _cov_pair_latest(snaps, since, need_priced=False)
+        assert _restock_rows_model(old_a) == _restock_rows_model(cov_a)
 
 
 def test_coverage_gaps_and_spread_match_old_definitions():
