@@ -2909,14 +2909,22 @@ def _insights_summary_diag_payload(exc, tb):
 #     — the same snapshot-weighted mean the old windowed $avg produced.
 #
 #   sku_store_coverage    — one doc per (sku, store_id): {sku, store_id,
-#     last_seen_any_at, last_seen_at?, last_price?, last_confidence?}.
+#     last_seen_any_at, last_seen_at?, last_price?, last_confidence?,
+#     last_in_stock?, last_qty?, last_store_name?,
+#     last_priced_at?, last_priced_price?, last_priced_store_name?}.
 #     last_seen_any_at (iter31) = latest crawl over ALL snapshots (no confidence
 #     filter — the freshness breakdown never had one). last_seen_at/last_price/
-#     last_confidence = the latest ACCEPTED crawl and its price/confidence; absent
-#     when the pair has only low-confidence snapshots (so the accepted-only reads
-#     — gaps, spread, market-position — naturally exclude it, exactly like the old
-#     confidence-filtered pipelines did). ~(distinct pairs)-sized, an order of
-#     magnitude smaller than product_snapshots, index-backed on last_seen_at.
+#     last_confidence/last_in_stock/last_qty/last_store_name = the latest ACCEPTED
+#     crawl and its fields; absent when the pair has only low-confidence snapshots
+#     (so the accepted-only reads — gaps, spread, market-position, restock —
+#     naturally exclude it, exactly like the old confidence-filtered pipelines).
+#     last_priced_* (iter33) = the latest accepted crawl with price > 0 — needed
+#     because the /insights/gaps and /insights/price-wars endpoints filter
+#     price>0 and crawler tiers CAN write price-0 snapshots
+#     (_normalize_raw_product defaults price to 0), so "latest accepted" and
+#     "latest accepted priced" may be different snapshots. ~(distinct pairs)-
+#     sized, an order of magnitude smaller than product_snapshots, index-backed
+#     on last_seen_at / last_priced_at.
 #
 # Both collections are rebuilt PER STORE (a bounded pass over one store's history)
 # by _recompute_store_metrics, called after each crawl/sync for that store and,
@@ -2946,12 +2954,14 @@ async def _recompute_store_metrics(db, store_id):
     match the old unfiltered freshness $max. Accepted-only state (drops, per-day
     confidence sums, last accepted price/confidence) applies the confidence floor
     in Python — same predicate as the old $match."""
-    per_sku_day = {}   # sku -> {day_str: [max_crawled_at, price, confidence]} (latest ACCEPTED per day)
+    per_sku_day = {}   # sku -> {day_str: [max_crawled_at, price, confidence, in_stock, qty, store_name]} (latest ACCEPTED per day)
     last_any = {}      # sku -> max crawled_at over ALL snapshots (freshness)
+    last_priced = {}   # sku -> [max_crawled_at, price, store_name] over accepted snapshots with price > 0 (iter33)
     day_conf = {}      # day_str -> [conf_sum, conf_count] over ALL accepted snapshots
     cursor = db.product_snapshots.find(
         {"store_id": store_id},
-        {"_id": 0, "sku": 1, "price": 1, "crawled_at": 1, "confidence_score": 1},
+        {"_id": 0, "sku": 1, "price": 1, "crawled_at": 1, "confidence_score": 1,
+         "in_stock": 1, "qty_available": 1, "store_name": 1},
     )
     async for s in cursor:
         sku = s.get("sku")
@@ -2972,10 +2982,14 @@ async def _recompute_store_metrics(db, store_id):
         price = s.get("price")
         if price is None:
             continue
+        if price > 0:
+            lp = last_priced.get(sku)
+            if lp is None or ca > lp[0]:
+                last_priced[sku] = [ca, price, s.get("store_name") or ""]
         d = per_sku_day.setdefault(sku, {})
         cur = d.get(day)
         if cur is None or ca > cur[0]:
-            d[day] = [ca, price, conf]
+            d[day] = [ca, price, conf, s.get("in_stock"), s.get("qty_available"), s.get("store_name") or ""]
 
     day_drops = {}            # day_str -> drop-event count
     for daymap in per_sku_day.values():
@@ -2993,9 +3007,19 @@ async def _recompute_store_metrics(db, store_id):
                "last_seen_any_at": any_ca}
         daymap = per_sku_day.get(sku)
         if daymap:
-            last_ca, last_price, last_conf = daymap[max(daymap.keys())]
+            last_ca, last_price, last_conf, last_in_stock, last_qty, last_sname = daymap[max(daymap.keys())]
             doc.update({"last_seen_at": last_ca, "last_price": last_price,
-                        "last_confidence": last_conf})
+                        "last_confidence": last_conf,
+                        # iter33 — stock state of the same latest accepted crawl
+                        # (restock reads these; None/missing in_stock counts as
+                        # OOS exactly like the old $first + falsy check).
+                        "last_in_stock": last_in_stock, "last_qty": last_qty,
+                        "last_store_name": last_sname})
+        lp = last_priced.get(sku)
+        if lp:
+            # iter33 — latest accepted crawl with price>0 (gaps / price-wars)
+            doc.update({"last_priced_at": lp[0], "last_priced_price": lp[1],
+                        "last_priced_store_name": lp[2]})
         coverage_docs.append(doc)
 
     # Rollups: replace this store's set atomically-enough for a background job
@@ -3059,7 +3083,13 @@ async def _maybe_backfill_store_metrics(db):
                 {"last_seen_any_at": {"$exists": False}}, {"_id": 1})
             old_roll = await db.metric_daily_rollups.find_one(
                 {"conf_count": {"$exists": False}}, {"_id": 1})
-            needs = old_cov is not None or old_roll is not None
+            # iter33 schema upgrade — stock fields on coverage. Keyed on docs that
+            # HAVE last_seen_at but MISS last_in_stock: every post-iter33 accepted
+            # pair carries both, while low-confidence-only pairs legitimately have
+            # neither (so they can't retrigger the rebuild forever).
+            old_cov33 = await db.sku_store_coverage.find_one(
+                {"last_seen_at": {"$exists": True}, "last_in_stock": {"$exists": False}}, {"_id": 1})
+            needs = old_cov is not None or old_roll is not None or old_cov33 is not None
         if not needs:
             return
         logger.info("[Metrics] backfilling rollups + coverage from snapshots…")
@@ -3141,6 +3171,53 @@ async def _freshness_from_coverage(db, now):
         }},
     ], allowDiskUse=True).to_list(1)
     return rows[0] if rows else {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
+
+
+# ── iter33 read helpers: gaps / price-wars / restock straight from coverage ────
+# Window-filter correctness (same argument as iter30 spread): a pair's latest
+# [priced/accepted] crawl is >= every other [priced/accepted] crawl, so
+# "latest >= since" ⟺ "has ANY in-window [priced/accepted] crawl", and the
+# latest one is the exact snapshot the old $sort-desc + $group-$first selected.
+async def _gaps_rows_from_coverage(db, since, total_stores, limit=15):
+    """Top catalog gaps: skus carried by < total_stores stores in the window,
+    fewest-stores first. Sorting num_stores ASC is the identical ordering to the
+    old missing_count DESC (missing = total_stores - num_stores)."""
+    return await db.sku_store_coverage.aggregate([
+        {"$match": {"last_priced_at": {"$gte": since}}},
+        {"$group": {"_id": "$sku", "num_stores": {"$sum": 1}}},
+        {"$match": {"num_stores": {"$lt": total_stores}}},
+        {"$sort": {"num_stores": 1}},
+        {"$limit": limit},
+    ], allowDiskUse=True).to_list(limit)
+
+
+async def _price_wars_rows_from_coverage(db, since, limit=10):
+    """Per-sku latest price>0 per store → spread stats, widest spread_pct first.
+    Same stages the old snapshot pipeline ran AFTER its per-pair $first — the
+    $first itself is precomputed as last_priced_*."""
+    return await db.sku_store_coverage.aggregate([
+        {"$match": {"last_priced_at": {"$gte": since}}},
+        {"$group": {"_id": "$sku",
+                    "prices": {"$push": {"store": "$last_priced_store_name", "price": "$last_priced_price"}},
+                    "min_p": {"$min": "$last_priced_price"}, "max_p": {"$max": "$last_priced_price"},
+                    "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gte": 3}, "min_p": {"$gt": 0}}},
+        {"$project": {"sku": "$_id", "prices": 1,
+                      "spread": {"$subtract": ["$max_p", "$min_p"]},
+                      "spread_pct": {"$multiply": [{"$divide": [{"$subtract": ["$max_p", "$min_p"]}, "$min_p"]}, 100]}}},
+        {"$sort": {"spread_pct": -1}},
+        {"$limit": limit},
+    ], allowDiskUse=True).to_list(limit)
+
+
+async def _restock_rows_from_coverage(db, since):
+    """Per-sku stock state of the latest accepted crawl per store (no price
+    filter — the old restock $match had none)."""
+    return await db.sku_store_coverage.aggregate([
+        {"$match": {"last_seen_at": {"$gte": since}}},
+        {"$group": {"_id": "$sku",
+                    "stores": {"$push": {"store": "$last_store_name", "in_stock": "$last_in_stock", "qty": "$last_qty"}}}},
+    ], allowDiskUse=True).to_list(length=None)
 
 
 async def _insights_summary_compute(db, days):
@@ -3477,51 +3554,43 @@ async def _insights_trending_compute(db, days):
     return trending
 
 async def _insights_gaps_compute(db, days):
+    # iter33 — served from sku_store_coverage instead of a windowed snapshot scan
+    # ($match window → $sort → $group $addToSet — the exact shape that
+    # NetworkTimeout'd as pipeline_gaps at 14D; the pre-group $sort was a no-op
+    # anyway, $addToSet is order-insensitive). Same P1 confidence floor + price>0
+    # predicate, applied at rollup-build time via last_priced_at.
     since = datetime.now(timezone.utc) - timedelta(days=days)
     total_stores = await db.stores.count_documents({"is_active": True})
-    pipeline = [
-        # Feb 2026 fix — restrict to recent snapshots so dormant-store data
-        # from months ago doesn't corrupt the gap analysis.
-        # P1 confidence floor — Tier-3 noise stays out of the gap analysis.
-        {"$match": {"crawled_at": {"$gte": since}, "price": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
-        {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": "$sku", "stores": {"$addToSet": "$store_id"}}},
-        {"$match": {"$expr": {"$lt": [{"$size": "$stores"}, total_stores]}}},
-        {"$project": {"sku": "$_id", "num_stores": {"$size": "$stores"}, "missing_count": {"$subtract": [total_stores, {"$size": "$stores"}]}}},
-        {"$sort": {"missing_count": -1}},
-        {"$limit": 15},
-    ]
-    gaps = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(15)  # iter26
+    gaps = await _gaps_rows_from_coverage(db, since, total_stores)
+    # Batched product lookup (was N find_ones); row order and skip-if-missing
+    # behaviour preserved.
+    prods = {p["sku"]: p async for p in db.products.find(
+        {"sku": {"$in": [g["_id"] for g in gaps]}}, {"_id": 0})}
     result = []
     for g in gaps:
-        product = await db.products.find_one({"sku": g["sku"]}, {"_id": 0})
+        product = prods.get(g["_id"])
         if product:
+            missing = total_stores - g["num_stores"]
             result.append({
-                "sku": g["sku"], "name_ar": product["name_ar"], "name_en": product["name_en"],
+                "sku": g["_id"], "name_ar": product["name_ar"], "name_en": product["name_en"],
                 "category": product["category"], "num_stores": g["num_stores"],
-                "missing_count": g["missing_count"], "opportunity_score": round(g["missing_count"] / total_stores * 100),
+                "missing_count": missing, "opportunity_score": round(missing / total_stores * 100),
             })
     return result
 
 async def _insights_price_wars_compute(db, days):
+    # iter33 — served from sku_store_coverage: the old per-pair
+    # $sort desc → $group $first over the windowed snapshots is precomputed as
+    # last_priced_* at rollup-build time; the per-sku spread stages run unchanged
+    # over the tiny coverage set. Same window + price>0 + confidence predicates.
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    pipeline = [
-        # Feb 2026 fix — restrict to recent snapshots so months-old prices
-        # from dormant stores don't generate fake "price wars".
-        # P1 confidence floor — Tier-3 HTML scrapes excluded.
-        {"$match": {"crawled_at": {"$gte": since}, "price": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
-        {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "store_name": {"$first": "$store_name"}}},
-        {"$group": {"_id": "$_id.sku", "prices": {"$push": {"store": "$store_name", "price": "$price"}}, "min_p": {"$min": "$price"}, "max_p": {"$max": "$price"}, "count": {"$sum": 1}}},
-        {"$match": {"count": {"$gte": 3}, "min_p": {"$gt": 0}}},
-        {"$project": {"sku": "$_id", "prices": 1, "spread": {"$subtract": ["$max_p", "$min_p"]}, "spread_pct": {"$multiply": [{"$divide": [{"$subtract": ["$max_p", "$min_p"]}, "$min_p"]}, 100]}}},
-        {"$sort": {"spread_pct": -1}},
-        {"$limit": 10},
-    ]
-    wars = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(10)  # iter26
+    wars = await _price_wars_rows_from_coverage(db, since)
+    # Batched product lookup (was N find_ones); order + skip-if-missing preserved.
+    prods = {p["sku"]: p async for p in db.products.find(
+        {"sku": {"$in": [w["sku"] for w in wars]}}, {"_id": 0})}
     result = []
     for w in wars:
-        product = await db.products.find_one({"sku": w["sku"]}, {"_id": 0})
+        product = prods.get(w["sku"])
         if product:
             result.append({
                 "sku": w["sku"], "name_ar": product["name_ar"], "name_en": product["name_en"],
@@ -3531,29 +3600,32 @@ async def _insights_price_wars_compute(db, days):
     return result
 
 async def _insights_restock_compute(db, days):
+    # iter33 — served from sku_store_coverage: the per-pair latest-accepted stock
+    # state ($sort desc → $group $first over windowed snapshots) is precomputed
+    # as last_in_stock/last_qty/last_store_name. Same window + confidence
+    # predicates (no price filter — the old $match had none). Falsy/missing
+    # in_stock still counts as OOS.
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    pipeline = [
-        # Feb 2026 fix — restrict to recent snapshots so historical
-        # OOS/in-stock states don't generate stale recommendations.
-        # P1 confidence floor — exclude Tier-3 noise.
-        {"$match": {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
-        {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "in_stock": {"$first": "$in_stock"}, "store_name": {"$first": "$store_name"}, "qty": {"$first": "$qty_available"}}},
-        {"$group": {"_id": "$_id.sku", "stores": {"$push": {"store": "$store_name", "in_stock": "$in_stock", "qty": "$qty"}}}},
-    ]
-    data = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(length=None)  # iter26
-    result = []
+    data = await _restock_rows_from_coverage(db, since)
+    candidates = []
     for d in data:
         oos_stores = [s["store"] for s in d["stores"] if not s["in_stock"]]
         in_stock_stores = [s for s in d["stores"] if s["in_stock"]]
         if oos_stores and in_stock_stores:
-            product = await db.products.find_one({"sku": d["_id"]}, {"_id": 0})
-            if product:
-                result.append({
-                    "sku": d["_id"], "name_ar": product["name_ar"], "name_en": product["name_en"],
-                    "oos_stores": oos_stores, "oos_count": len(oos_stores),
-                    "in_stock_stores": [{"store": s["store"], "qty": s["qty"]} for s in in_stock_stores],
-                })
+            candidates.append((d["_id"], oos_stores, in_stock_stores))
+    # ONE batched product lookup — the old code did a find_one per candidate sku
+    # (N+1 over every sku with a mixed stock state, before the top-15 cut).
+    prods = {p["sku"]: p async for p in db.products.find(
+        {"sku": {"$in": [c[0] for c in candidates]}}, {"_id": 0})}
+    result = []
+    for sku, oos_stores, in_stock_stores in candidates:
+        product = prods.get(sku)
+        if product:
+            result.append({
+                "sku": sku, "name_ar": product["name_ar"], "name_en": product["name_en"],
+                "oos_stores": oos_stores, "oos_count": len(oos_stores),
+                "in_stock_stores": [{"store": s["store"], "qty": s["qty"]} for s in in_stock_stores],
+            })
     result.sort(key=lambda x: x["oos_count"], reverse=True)
     return result[:15]
 
@@ -5861,6 +5933,8 @@ async def startup():
         await db.sku_store_coverage.create_index("last_seen_at")
         await db.sku_store_coverage.create_index("store_id")
         await db.sku_store_coverage.create_index("sku")
+        # iter33 — gaps / price-wars filter on the latest price>0 crawl
+        await db.sku_store_coverage.create_index("last_priced_at")
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
     # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.
