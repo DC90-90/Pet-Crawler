@@ -2929,28 +2929,37 @@ def _insights_summary_diag_payload(exc, tb):
 # product-gaps and median-spread metrics are precomputed in the crawl/sync pipeline
 # into two tiny dedicated collections, and the read path only touches those:
 #
-#   metric_daily_rollups  — one doc per (store_id, date): {date, store_id, drops}.
+#   metric_daily_rollups  — one doc per (store_id, date) with ≥1 accepted snapshot:
+#     {date, store_id, drops, conf_sum, conf_count}.
 #     drops = number of DAILY price-drop events for that store on that day (a
 #     (sku,store) counts once on a day if its close price fell vs the previous day
 #     it was seen). Windowed price_drops = a trivial $sum of `drops` over the
 #     ≤ 40 stores × N days in the window — hundreds of tiny docs, no snapshot scan.
+#     conf_sum/conf_count (iter31) = Σ/# of confidence_score over EVERY accepted
+#     snapshot crawled that day, so windowed avg_confidence = Σconf_sum/Σconf_count
+#     — the same snapshot-weighted mean the old windowed $avg produced.
 #
 #   sku_store_coverage    — one doc per (sku, store_id): {sku, store_id,
-#     last_seen_at, last_price}. last_seen_at = latest accepted crawl for that
-#     pair; last_price = its price at that crawl. product_gaps and median_spread
-#     read this ~(distinct pairs)-sized collection with cheap $sum/$min/$max —
-#     roughly an order of magnitude smaller than product_snapshots and index-backed
-#     on last_seen_at.
+#     last_seen_any_at, last_seen_at?, last_price?, last_confidence?}.
+#     last_seen_any_at (iter31) = latest crawl over ALL snapshots (no confidence
+#     filter — the freshness breakdown never had one). last_seen_at/last_price/
+#     last_confidence = the latest ACCEPTED crawl and its price/confidence; absent
+#     when the pair has only low-confidence snapshots (so the accepted-only reads
+#     — gaps, spread, market-position — naturally exclude it, exactly like the old
+#     confidence-filtered pipelines did). ~(distinct pairs)-sized, an order of
+#     magnitude smaller than product_snapshots, index-backed on last_seen_at.
 #
 # Both collections are rebuilt PER STORE (a bounded pass over one store's history)
 # by _recompute_store_metrics, called after each crawl/sync for that store and,
 # as a backfill, once per store at startup. The rebuild is idempotent.
 #
-# SEMANTICS: product_gaps and median_spread stay byte-identical to the old
-# read-time definitions (median_spread now spans ALL products instead of an
-# arbitrary 500-doc cap — a fix, see _insights_summary_compute). price_drops
-# CHANGES from "products whose latest in-window move was down" to "count of daily
-# price-drop events in the window" — see the report / PR body.
+# SEMANTICS: product_gaps, median_spread, avg_confidence, freshness_breakdown and
+# the market-position 7d lookup stay byte-identical to the old read-time
+# definitions (median_spread now spans ALL products instead of an arbitrary
+# 500-doc cap — a fix, see _insights_summary_compute; avg_confidence windows by
+# calendar day like drops). price_drops CHANGED in iter30 from "products whose
+# latest in-window move was down" to "count of daily price-drop events in the
+# window" — see the iter30 PR body.
 # ─────────────────────────────────────────────────────────────────────────────
 _METRIC_STORE_CONCURRENCY = 4
 
@@ -2962,28 +2971,45 @@ def _metric_day_str(dt):
 
 async def _recompute_store_metrics(db, store_id):
     """Rebuild metric_daily_rollups + sku_store_coverage for ONE store from its
-    confidence-accepted snapshots. Bounded per-store pass; fully idempotent."""
-    # sku -> {day_str: [max_crawled_at, price]}  (latest snapshot per sku per day)
-    per_sku_day = {}
+    snapshots. Bounded per-store pass; fully idempotent.
+
+    Scans ALL of the store's snapshots (not just accepted): last_seen_any_at must
+    match the old unfiltered freshness $max. Accepted-only state (drops, per-day
+    confidence sums, last accepted price/confidence) applies the confidence floor
+    in Python — same predicate as the old $match."""
+    per_sku_day = {}   # sku -> {day_str: [max_crawled_at, price, confidence]} (latest ACCEPTED per day)
+    last_any = {}      # sku -> max crawled_at over ALL snapshots (freshness)
+    day_conf = {}      # day_str -> [conf_sum, conf_count] over ALL accepted snapshots
     cursor = db.product_snapshots.find(
-        {"store_id": store_id, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
-        {"_id": 0, "sku": 1, "price": 1, "crawled_at": 1},
+        {"store_id": store_id},
+        {"_id": 0, "sku": 1, "price": 1, "crawled_at": 1, "confidence_score": 1},
     )
     async for s in cursor:
         sku = s.get("sku")
-        price = s.get("price")
         ca = s.get("crawled_at")
-        if not sku or price is None or ca is None:
+        if not sku or ca is None:
+            continue
+        if sku not in last_any or ca > last_any[sku]:
+            last_any[sku] = ca
+        conf = s.get("confidence_score")
+        if conf is None or conf < MIN_AGGREGATION_CONFIDENCE:
             continue
         day = _metric_day_str(ca)
+        # Per-day confidence over every accepted snapshot (old pipeline_conf had no
+        # price predicate, so accumulate before the price check).
+        dc = day_conf.setdefault(day, [0.0, 0])
+        dc[0] += conf
+        dc[1] += 1
+        price = s.get("price")
+        if price is None:
+            continue
         d = per_sku_day.setdefault(sku, {})
         cur = d.get(day)
         if cur is None or ca > cur[0]:
-            d[day] = [ca, price]
+            d[day] = [ca, price, conf]
 
     day_drops = {}            # day_str -> drop-event count
-    coverage_docs = []        # one per sku
-    for sku, daymap in per_sku_day.items():
+    for daymap in per_sku_day.values():
         days_sorted = sorted(daymap.keys())        # chronological calendar days
         prev_close = None
         for day in days_sorted:
@@ -2991,22 +3017,30 @@ async def _recompute_store_metrics(db, store_id):
             if prev_close is not None and close < prev_close:
                 day_drops[day] = day_drops.get(day, 0) + 1
             prev_close = close
-        last_day = days_sorted[-1]
-        last_ca, last_price = daymap[last_day]
-        coverage_docs.append({
-            "_id": f"{sku}|{store_id}",
-            "sku": sku, "store_id": store_id,
-            "last_seen_at": last_ca, "last_price": last_price,
-        })
+
+    coverage_docs = []        # one per sku seen at ANY confidence
+    for sku, any_ca in last_any.items():
+        doc = {"_id": f"{sku}|{store_id}", "sku": sku, "store_id": store_id,
+               "last_seen_any_at": any_ca}
+        daymap = per_sku_day.get(sku)
+        if daymap:
+            last_ca, last_price, last_conf = daymap[max(daymap.keys())]
+            doc.update({"last_seen_at": last_ca, "last_price": last_price,
+                        "last_confidence": last_conf})
+        coverage_docs.append(doc)
 
     # Rollups: replace this store's set atomically-enough for a background job
     # (summary reads are served from the page cache, recomputed only after every
     # store's rebuild finishes, so a brief replace window is never observed).
+    all_days = set(day_conf) | set(day_drops)
     await db.metric_daily_rollups.delete_many({"store_id": store_id})
-    if day_drops:
+    if all_days:
         await db.metric_daily_rollups.insert_many([
-            {"_id": f"{store_id}|{day}", "store_id": store_id, "date": day, "drops": n}
-            for day, n in day_drops.items()
+            {"_id": f"{store_id}|{day}", "store_id": store_id, "date": day,
+             "drops": day_drops.get(day, 0),
+             "conf_sum": day_conf.get(day, [0.0, 0])[0],
+             "conf_count": day_conf.get(day, [0.0, 0])[1]}
+            for day in all_days
         ])
     # Coverage: replace this store's pairs (skus that vanished keep no stale row).
     await db.sku_store_coverage.delete_many({"store_id": store_id})
@@ -3039,15 +3073,25 @@ async def recompute_all_store_metrics(db):
 
 
 async def _maybe_backfill_store_metrics(db):
-    """One-time backfill: if the rollup collection is empty but snapshots exist,
-    build metrics for all stores. Runs at startup (fire-and-forget)."""
+    """One-time backfill: if the rollup/coverage collections are empty — or carry
+    the pre-iter31 schema (no last_seen_any_at / conf_count) — rebuild them for
+    all stores. Runs at startup (fire-and-forget)."""
     try:
-        have = await db.metric_daily_rollups.estimated_document_count()
-        cov = await db.sku_store_coverage.estimated_document_count()
-        if have and cov:
-            return
         snaps = await db.product_snapshots.estimated_document_count()
         if not snaps:
+            return
+        have = await db.metric_daily_rollups.estimated_document_count()
+        cov = await db.sku_store_coverage.estimated_document_count()
+        needs = not (have and cov)
+        if not needs:
+            # iter31 schema upgrade — iter30 built these collections without the
+            # freshness/confidence fields; ANY doc missing them forces a rebuild.
+            old_cov = await db.sku_store_coverage.find_one(
+                {"last_seen_any_at": {"$exists": False}}, {"_id": 1})
+            old_roll = await db.metric_daily_rollups.find_one(
+                {"conf_count": {"$exists": False}}, {"_id": 1})
+            needs = old_cov is not None or old_roll is not None
+        if not needs:
             return
         logger.info("[Metrics] backfilling rollups + coverage from snapshots…")
         stats = await recompute_all_store_metrics(db)
@@ -3093,49 +3137,75 @@ async def _spread_docs_from_coverage(db, since):
     ], allowDiskUse=True).to_list(length=None)
 
 
+async def _conf_avg_from_rollups(db, since):
+    """avg_confidence = Σconf_sum / Σconf_count over the window's rollup docs —
+    the same snapshot-weighted mean over accepted snapshots the old windowed
+    $avg produced (day-granular boundary, like drops). Returns None when no
+    accepted snapshots fall in the window (old: empty $group result)."""
+    since_str = _metric_day_str(since)
+    rows = await db.metric_daily_rollups.aggregate([
+        {"$match": {"date": {"$gte": since_str}}},
+        {"$group": {"_id": None, "s": {"$sum": "$conf_sum"}, "n": {"$sum": "$conf_count"}}},
+    ]).to_list(1)
+    if not rows or not rows[0].get("n"):
+        return None
+    return rows[0]["s"] / rows[0]["n"]
+
+
+async def _freshness_from_coverage(db, now):
+    """Freshness breakdown from coverage instead of a full-history snapshot group.
+    last_seen_any_at IS the old per-(sku,store) $max crawled_at (no confidence
+    filter, matching the old pipeline), already precomputed at write time — so
+    this is one streaming pass over ~(distinct pairs) tiny docs, no $group over
+    millions of snapshots. Buckets and totals are identical."""
+    day_24h = now - timedelta(hours=24)
+    day_7d = now - timedelta(days=7)
+    day_30d = now - timedelta(days=30)
+    rows = await db.sku_store_coverage.aggregate([
+        {"$group": {
+            "_id": None,
+            "total": {"$sum": 1},
+            "today": {"$sum": {"$cond": [{"$gte": ["$last_seen_any_at", day_24h]}, 1, 0]}},
+            "this_week": {"$sum": {"$cond": [{"$and": [{"$lt": ["$last_seen_any_at", day_24h]}, {"$gte": ["$last_seen_any_at", day_7d]}]}, 1, 0]}},
+            "this_month": {"$sum": {"$cond": [{"$and": [{"$lt": ["$last_seen_any_at", day_7d]}, {"$gte": ["$last_seen_any_at", day_30d]}]}, 1, 0]}},
+            "stale": {"$sum": {"$cond": [{"$lt": ["$last_seen_any_at", day_30d]}, 1, 0]}},
+        }},
+    ], allowDiskUse=True).to_list(1)
+    return rows[0] if rows else {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
+
+
 async def _insights_summary_compute(db, days):
     _diag_stage("init")
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # P1 data accuracy guard (Feb 2026): all dashboard aggregations require
-    # confidence_score >= MIN_AGGREGATION_CONFIDENCE so Tier-3 HTML scraping
-    # noise can't pollute KPIs.
-    base_match = {"crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
-
-    # iter30 — price_drops, product_gaps and median_spread are now served from the
-    # precomputed rollup/coverage collections (see _recompute_store_metrics), NOT
-    # from a windowed scan of product_snapshots. Only avg_confidence still reads
-    # snapshots, and it uses the cheap $avg accumulator (same cost class as the
-    # freshness $max that already succeeds over ALL history at production scale).
-    #
-    # Avg confidence (computed across the same filtered set so the number is
-    # meaningful in context — average of accepted snapshots, not raw).
-    pipeline_conf = [
-        {"$match": base_match},
-        {"$group": {"_id": None, "avg_conf": {"$avg": "$confidence_score"}}},
-    ]
-
+    # iter31 — this function NO LONGER touches product_snapshots. Every metric is
+    # served from the write-time rollup/coverage collections (see
+    # _recompute_store_metrics) or from small collections (products, stores,
+    # my_products, product_matches). The confidence floor
+    # (MIN_AGGREGATION_CONFIDENCE) is applied at rollup-build time, so the KPIs
+    # keep the P1 accuracy guard.
     _diag_stage("aggregations_parallel")
     try:
-        total_skus, drops_count, product_gaps, spread_docs, conf_result = await asyncio.gather(
+        total_skus, drops_count, product_gaps, spread_docs, conf_avg = await asyncio.gather(
             db.products.count_documents({}),
             _drops_from_rollups(db, since),
             _gaps_from_coverage(db, since),
             _spread_docs_from_coverage(db, since),
-            db.product_snapshots.aggregate(pipeline_conf, allowDiskUse=True).to_list(1),
+            _conf_avg_from_rollups(db, since),
         )
     except Exception:
         # DIAGNOSTIC (error path only — no success-path impact): the gather masks
         # WHICH of the parallel tasks failed, so re-run them one at a time to
-        # pinpoint. Labels kept as pipeline_drops/gaps/spread for continuity with
-        # the earlier diagnostic output, though they now hit the rollup/coverage sets.
+        # pinpoint. Labels kept as pipeline_drops/gaps/spread/conf for continuity
+        # with the earlier diagnostic output, though they all hit the
+        # rollup/coverage sets now.
         if INSIGHTS_SUMMARY_DIAGNOSTIC:
             for _nm, _co in [
                 ("count_documents", lambda: db.products.count_documents({})),
                 ("pipeline_drops", lambda: _drops_from_rollups(db, since)),
                 ("pipeline_gaps", lambda: _gaps_from_coverage(db, since)),
                 ("pipeline_spread", lambda: _spread_docs_from_coverage(db, since)),
-                ("pipeline_conf", lambda: db.product_snapshots.aggregate(pipeline_conf, allowDiskUse=True).to_list(1)),
+                ("pipeline_conf", lambda: _conf_avg_from_rollups(db, since)),
             ]:
                 try:
                     await _co()
@@ -3156,35 +3226,17 @@ async def _insights_summary_compute(db, days):
     # aggregation to cheap $min/$max only.
     spread_vals = [s["max_p"] - s["min_p"] for s in spread_docs if s["max_p"] > s["min_p"]]
     median_spread = round(statistics.median(spread_vals), 2) if spread_vals else 0
-    avg_confidence = round((conf_result[0].get("avg_conf") or 0), 1) if conf_result else 0
+    avg_confidence = round(conf_avg or 0, 1)
 
     # Data freshness breakdown (Feb 2026 — header card on Insights page).
     # Counts the LATEST snapshot per (sku, store_id) and buckets it by age.
+    # iter31 — served from sku_store_coverage.last_seen_any_at (the same per-pair
+    # $max, precomputed at write time) instead of a $group over every snapshot in
+    # history, which NetworkTimeout'd at production scale.
     now = datetime.now(timezone.utc)
-    day_24h = now - timedelta(hours=24)
-    day_7d = now - timedelta(days=7)
-    day_30d = now - timedelta(days=30)
-    # iter26 — the freshness breakdown intentionally spans ALL history (it buckets
-    # each (sku,store)'s latest snapshot into today/week/month/stale), so it can't
-    # window-match. But the old `$sort desc + $group $first` sorted the ENTIRE
-    # collection (the ~10s timeout culprit). `$group $max` yields the identical
-    # latest timestamp with NO sort stage — a byte-identical, index-friendlier
-    # rewrite — plus allowDiskUse as a safety net.
-    freshness_pipeline = [
-        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "latest": {"$max": "$crawled_at"}}},
-        {"$group": {
-            "_id": None,
-            "total": {"$sum": 1},
-            "today": {"$sum": {"$cond": [{"$gte": ["$latest", day_24h]}, 1, 0]}},
-            "this_week": {"$sum": {"$cond": [{"$and": [{"$lt": ["$latest", day_24h]}, {"$gte": ["$latest", day_7d]}]}, 1, 0]}},
-            "this_month": {"$sum": {"$cond": [{"$and": [{"$lt": ["$latest", day_7d]}, {"$gte": ["$latest", day_30d]}]}, 1, 0]}},
-            "stale": {"$sum": {"$cond": [{"$lt": ["$latest", day_30d]}, 1, 0]}},
-        }},
-    ]
     _diag_stage("freshness_pipeline")
-    fr_rows = await db.product_snapshots.aggregate(freshness_pipeline, allowDiskUse=True).to_list(1)
+    fr = await _freshness_from_coverage(db, now)
     _diag_stage("freshness_python")
-    fr = fr_rows[0] if fr_rows else {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
     fr_total = max(fr.get("total", 0), 1)
     freshness_breakdown = {
         "total_tracked": fr.get("total", 0),
@@ -3226,14 +3278,22 @@ async def _insights_summary_compute(db, days):
             _diag_stage("market_position:fetch_store_names")
             store_name_by_id = {s["id"]: s.get("name", "") for s in await db.stores.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(200)}
             _diag_stage("market_position:fetch_snapshots")
+            # iter31 — read the latest accepted price per (sku,store) from coverage
+            # instead of scanning + sorting 7d of snapshots. last_seen_at>=mp_since
+            # ⟺ the pair's latest accepted crawl is in the 7d window, and
+            # last_price/last_confidence belong to that same crawl — identical rows
+            # to the old sort-desc-first-wins scan.
             latest_by_sku_store = {}
-            async for sn in db.product_snapshots.find(
-                {"sku": {"$in": list(relevant_skus)}, "crawled_at": {"$gte": mp_since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
-                {"_id": 0, "sku": 1, "store_id": 1, "price": 1, "confidence_score": 1, "crawled_at": 1, "store_name": 1}
-            ).sort("crawled_at", -1):
-                key = (sn["sku"], sn["store_id"])
-                if key not in latest_by_sku_store:
-                    latest_by_sku_store[key] = sn
+            async for cov in db.sku_store_coverage.find(
+                {"sku": {"$in": list(relevant_skus)}, "last_seen_at": {"$gte": mp_since}},
+                {"_id": 0, "sku": 1, "store_id": 1, "last_price": 1, "last_confidence": 1, "last_seen_at": 1}
+            ):
+                latest_by_sku_store[(cov["sku"], cov["store_id"])] = {
+                    "sku": cov["sku"], "store_id": cov["store_id"],
+                    "price": cov.get("last_price"),
+                    "confidence_score": cov.get("last_confidence", 0),
+                    "crawled_at": cov.get("last_seen_at"),
+                }
 
             _diag_stage("market_position:loop")
             cheapest = most_expensive = below = above = at_median = 0

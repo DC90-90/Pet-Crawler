@@ -1,24 +1,26 @@
-"""iter30 — write-time metric rollups (price_drops / product_gaps / median_spread).
+"""iter30/iter31 — write-time metric rollups.
 
-The whole new path is FerretDB-compatible (find + Python + $sum/$min/$max/$count,
-no $topN/$addToSet/$push), so this is a REAL integration test against the sandbox
-Mongo shim, not a simulation:
+iter30 moved price_drops / product_gaps / median_spread off the read path;
+iter31 moved avg_confidence, the freshness breakdown and the market-position 7d
+snapshot fetch too. After iter31, _insights_summary_compute must not touch
+product_snapshots AT ALL — asserted below by tokenizing its source.
 
-  1. Seed a controlled set of product_snapshots (known stores/skus/days/prices).
-  2. Run the real server._recompute_store_metrics / recompute_all_store_metrics
-     to build metric_daily_rollups + sku_store_coverage.
-  3. Assert the real read helpers (_drops_from_rollups, _gaps_from_coverage,
-     _spread_docs_from_coverage) return the hand-computed values.
+The write-time rebuild (find + Python + insert) runs natively on the FerretDB
+sandbox shim, so the integration test exercises the REAL machinery against real
+Mongo: seed controlled snapshots → run the real rebuild → validate the built
+collections and (where the shim supports the operators) the real read helpers.
 
 Plus pure-Python cross-checks that the coverage-derived product_gaps and
-median_spread are byte-identical to the OLD snapshot-scan definitions, and that
-the daily-drop-event count is what price_drops now means.
+median_spread are byte-identical to the OLD snapshot-scan definitions.
 """
 import asyncio
+import io
+import inspect
 import os
 import random
 import statistics
 import sys
+import tokenize
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -49,20 +51,28 @@ SNAPS = [
     _snap("S1", "B", 3, 50), _snap("S1", "B", 2, 40),
     # S2 / sku A: 30 -> 25 (drop)                 => 1 drop event
     _snap("S2", "A", 3, 30), _snap("S2", "A", 2, 25),
-    # S2 / sku C: single day                      => 0
-    _snap("S2", "C", 2, 5),
+    # S2 / sku C: single day, floor confidence    => 0 drops, pulls avg down
+    _snap("S2", "C", 2, 5, conf=FLOOR),
     # S3 / sku A: single day                      => 0
     _snap("S3", "A", 1, 22),
-    # low-confidence noise: would be a drop but must be EXCLUDED entirely
+    # low-confidence noise: would be a drop but must be EXCLUDED from accepted
+    # metrics (drops/gaps/spread/conf) — yet still counted by FRESHNESS, which
+    # never had a confidence filter.
     _snap("S1", "D", 3, 100, conf=max(0, FLOOR - 1)),
     _snap("S1", "D", 2, 50, conf=max(0, FLOOR - 1)),
 ]
-# Expected (window covering all 3 days):
+# Expected (window covering all days):
 #   drops = 3  (S1/A, S1/B, S2/A)
-#   gaps  = 2  (B in 1 store, C in 1 store; A in 3 stores is NOT a gap)
-#   latest price per (sku,store): A:{S1:15,S2:25,S3:22}=>spread 10; B:{S1:40}=>0; C:{S2:5}=>0
-#   median_spread over spreads>0 = median([10]) = 10.0
+#   gaps  = 2  (B in 1 store, C in 1 store; A in 3 stores is NOT a gap; D excluded)
+#   latest accepted price per (sku,store): A:{S1:15,S2:25,S3:22}=>spread 10;
+#     B:{S1:40}=>0; C:{S2:5}=>0  → median over >0 spreads = 10.0
+#   avg_confidence = snapshot-weighted mean over the 9 ACCEPTED snaps
+#   freshness: 6 pairs total (incl. low-conf D), all 1-3 days old → this_week=6
 EXPECT_DROPS, EXPECT_GAPS, EXPECT_SPREAD = 3, 2, 10.0
+_ACCEPTED_CONFS = [s["confidence_score"] for s in SNAPS if s["confidence_score"] >= FLOOR]
+EXPECT_CONF_AVG = sum(_ACCEPTED_CONFS) / len(_ACCEPTED_CONFS)
+EXPECT_PAIRS = 6          # 5 accepted pairs + S1/D (low-conf only)
+EXPECT_FRESH = {"total": 6, "today": 0, "this_week": 6, "this_month": 0, "stale": 0}
 
 
 async def _fresh_db(name):
@@ -74,14 +84,18 @@ async def _fresh_db(name):
 
 async def _try_helper(coro):
     """Run a real read helper; return its value, or None if the FerretDB shim
-    lacks an accumulator the helper uses ($min/$max/$count/$sum). On Atlas these
-    all exist, so None only ever happens in the sandbox."""
+    lacks an operator the helper uses ($min/$max/$cond/$sum). On Atlas these all
+    exist, so None only ever happens in the sandbox."""
     try:
         return await coro
     except Exception as e:
         if "not implemented" in str(e).lower():
             return None
         raise
+
+
+def _naive(dt):
+    return dt.replace(tzinfo=None) if dt.tzinfo else dt
 
 
 async def _run_integration():
@@ -91,42 +105,68 @@ async def _run_integration():
     # natively on FerretDB, so this exercises the REAL machinery on real Mongo.
     stats = await server.recompute_all_store_metrics(db)
     assert stats["stores"] == 3, stats
+    assert stats["pairs"] == EXPECT_PAIRS, stats
 
-    since = datetime.now(timezone.utc) - timedelta(days=30)
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=30)
     since_str = server._metric_day_str(since)
+    since_naive = since.replace(tzinfo=None)
 
     # ── Validate the built collections directly (backend-independent) ──
     rollups = await db.metric_daily_rollups.find({}, {"_id": 0}).to_list(length=None)
-    drops = sum(r["drops"] for r in rollups if r["date"] >= since_str)
+    in_window = [r for r in rollups if r["date"] >= since_str]
+    drops = sum(r["drops"] for r in in_window)
     assert drops == EXPECT_DROPS, f"rollup drops {drops} != {EXPECT_DROPS}"
+    # iter31: per-day confidence sums — windowed snapshot-weighted mean
+    conf_sum = sum(r["conf_sum"] for r in in_window)
+    conf_count = sum(r["conf_count"] for r in in_window)
+    assert conf_count == len(_ACCEPTED_CONFS), conf_count
+    assert abs(conf_sum / conf_count - EXPECT_CONF_AVG) < 1e-9
 
     coverage = await db.sku_store_coverage.find({}, {"_id": 0}).to_list(length=None)
-    # low-confidence sku D must not appear anywhere
-    assert not any(c["sku"] == "D" for c in coverage)
-    # coverage.last_price = latest price per (sku,store)
-    lp = {(c["sku"], c["store_id"]): c["last_price"] for c in coverage}
+    assert len(coverage) == EXPECT_PAIRS
+    # iter31: low-conf sku D HAS a coverage doc (freshness counts it) but carries
+    # NO accepted fields (gaps/spread/market-position exclude it).
+    d_docs = [c for c in coverage if c["sku"] == "D"]
+    assert len(d_docs) == 1
+    assert "last_seen_any_at" in d_docs[0]
+    assert "last_seen_at" not in d_docs[0] and "last_price" not in d_docs[0]
+    # accepted pairs: last_price = latest accepted price; last_confidence present
+    lp = {(c["sku"], c["store_id"]): c.get("last_price") for c in coverage}
     assert lp[("A", "S1")] == 15 and lp[("A", "S2")] == 25 and lp[("A", "S3")] == 22
     assert lp[("B", "S1")] == 40 and lp[("C", "S2")] == 5
+    lc = {(c["sku"], c["store_id"]): c.get("last_confidence") for c in coverage}
+    assert lc[("C", "S2")] == FLOOR and lc[("A", "S1")] == 99
 
-    # Motor/FerretDB return BSON dates as offset-naive UTC; normalize for the
-    # Python-side window check (production compares server-side via $gte, unaffected).
-    since_naive = since.replace(tzinfo=None)
-
-    def _naive(dt):
-        return dt.replace(tzinfo=None) if dt.tzinfo else dt
-
-    per_sku_stores = {}
-    per_sku_prices = {}
+    # gaps + spread from coverage (Python mirror of the read helpers)
+    per_sku_stores, per_sku_prices = {}, {}
     for c in coverage:
-        if _naive(c["last_seen_at"]) >= since_naive:
-            per_sku_stores.setdefault(c["sku"], 0)
-            per_sku_stores[c["sku"]] += 1
+        ls = c.get("last_seen_at")
+        if ls is not None and _naive(ls) >= since_naive:
+            per_sku_stores[c["sku"]] = per_sku_stores.get(c["sku"], 0) + 1
             per_sku_prices.setdefault(c["sku"], []).append(c["last_price"])
     gaps = sum(1 for n in per_sku_stores.values() if n < 3)
     assert gaps == EXPECT_GAPS, f"coverage gaps {gaps} != {EXPECT_GAPS}"
     spreads = [max(v) - min(v) for v in per_sku_prices.values() if max(v) - min(v) > 0]
-    median_spread = round(statistics.median(spreads), 2) if spreads else 0
-    assert median_spread == EXPECT_SPREAD, f"coverage spread {median_spread} != {EXPECT_SPREAD}"
+    assert round(statistics.median(spreads), 2) == EXPECT_SPREAD
+
+    # freshness from coverage (Python mirror of _freshness_from_coverage)
+    day_24h = _naive(now - timedelta(hours=24))
+    day_7d = _naive(now - timedelta(days=7))
+    day_30d = _naive(now - timedelta(days=30))
+    fr = {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
+    for c in coverage:
+        la = _naive(c["last_seen_any_at"])
+        fr["total"] += 1
+        if la >= day_24h:
+            fr["today"] += 1
+        elif la >= day_7d:
+            fr["this_week"] += 1
+        elif la >= day_30d:
+            fr["this_month"] += 1
+        else:
+            fr["stale"] += 1
+    assert fr == EXPECT_FRESH, fr
 
     # ── Also run the REAL read helpers where the shim supports the operators ──
     h_drops = await _try_helper(server._drops_from_rollups(db, since))
@@ -139,6 +179,12 @@ async def _run_integration():
     if h_spread is not None:
         hv = [d["max_p"] - d["min_p"] for d in h_spread if d["max_p"] > d["min_p"]]
         assert round(statistics.median(hv), 2) == EXPECT_SPREAD
+    h_conf = await _try_helper(server._conf_avg_from_rollups(db, since))
+    if h_conf is not None:
+        assert abs(h_conf - EXPECT_CONF_AVG) < 1e-9, h_conf
+    h_fresh = await _try_helper(server._freshness_from_coverage(db, now))
+    if h_fresh is not None:
+        assert {k: h_fresh.get(k, 0) for k in EXPECT_FRESH} == EXPECT_FRESH
 
     # ── Idempotency: rebuild again → identical reads and no dup docs ──
     n_cov = await db.sku_store_coverage.count_documents({})
@@ -149,9 +195,32 @@ async def _run_integration():
     rollups2 = await db.metric_daily_rollups.find({}, {"_id": 0}).to_list(length=None)
     assert sum(r["drops"] for r in rollups2 if r["date"] >= since_str) == EXPECT_DROPS
 
+    # ── iter31 schema-upgrade backfill: strip the new fields → backfill rebuilds ──
+    await db.sku_store_coverage.update_many({}, {"$unset": {"last_seen_any_at": ""}})
+    await server._maybe_backfill_store_metrics(db)
+    upgraded = await db.sku_store_coverage.count_documents({"last_seen_any_at": {"$exists": True}})
+    assert upgraded == EXPECT_PAIRS, f"schema-upgrade backfill missed docs ({upgraded})"
+
 
 def test_integration_rollups_ferretdb():
-    asyncio.get_event_loop().run_until_complete(_run_integration())
+    # asyncio.run (not get_event_loop) — robust to earlier tests closing the loop;
+    # the Motor client is created inside the coroutine so it binds to this loop.
+    asyncio.run(_run_integration())
+
+
+def test_summary_compute_never_touches_product_snapshots():
+    """iter31 contract: _insights_summary_compute and every read helper it uses
+    must not reference product_snapshots in CODE (comments don't count)."""
+    def code_of(fn):
+        src = inspect.getsource(fn)
+        toks = tokenize.generate_tokens(io.StringIO(src).readline)
+        return " ".join(t.string for t in toks if t.type != tokenize.COMMENT)
+
+    assert "product_snapshots" not in code_of(server._insights_summary_compute)
+    for h in (server._drops_from_rollups, server._gaps_from_coverage,
+              server._spread_docs_from_coverage, server._conf_avg_from_rollups,
+              server._freshness_from_coverage):
+        assert "product_snapshots" not in code_of(h), h.__name__
 
 
 # ── pure-Python cross-checks: coverage semantics == OLD snapshot definitions ──
@@ -165,7 +234,7 @@ def _old_gaps(snaps, since):
 
 
 def _cov_gaps(snaps, since):
-    # coverage: last_seen per (sku,store); count stores with last_seen>=since
+    # coverage: last_seen (accepted) per (sku,store); count stores with last_seen>=since
     last_seen = {}
     for s in snaps:
         if s["confidence_score"] >= FLOOR:
@@ -175,8 +244,7 @@ def _cov_gaps(snaps, since):
     per_sku = {}
     for (sku, store), ts in last_seen.items():
         if ts >= since:
-            per_sku.setdefault(sku, 0)
-            per_sku[sku] += 1
+            per_sku[sku] = per_sku.get(sku, 0) + 1
     return sum(1 for n in per_sku.values() if n < 3)
 
 
@@ -210,6 +278,72 @@ def _cov_spread(snaps, since):
     return round(statistics.median(vals), 2) if vals else 0
 
 
+def _old_freshness(snaps, now):
+    # OLD freshness_pipeline: per-(sku,store) $max crawled_at over ALL snapshots
+    # (no confidence filter), bucketed today/week/month/stale.
+    latest = {}
+    for s in snaps:
+        k = (s["sku"], s["store_id"])
+        if k not in latest or s["crawled_at"] > latest[k]:
+            latest[k] = s["crawled_at"]
+    fr = {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
+    d24, d7, d30 = now - timedelta(hours=24), now - timedelta(days=7), now - timedelta(days=30)
+    for ts in latest.values():
+        fr["total"] += 1
+        if ts >= d24:
+            fr["today"] += 1
+        elif ts >= d7:
+            fr["this_week"] += 1
+        elif ts >= d30:
+            fr["this_month"] += 1
+        else:
+            fr["stale"] += 1
+    return fr
+
+
+def _cov_freshness(snaps, now):
+    # coverage: last_seen_any_at per pair (all confidences), same bucketing
+    last_any = {}
+    for s in snaps:
+        k = (s["sku"], s["store_id"])
+        if k not in last_any or s["crawled_at"] > last_any[k]:
+            last_any[k] = s["crawled_at"]
+    fr = {"total": 0, "today": 0, "this_week": 0, "this_month": 0, "stale": 0}
+    d24, d7, d30 = now - timedelta(hours=24), now - timedelta(days=7), now - timedelta(days=30)
+    for ts in last_any.values():
+        fr["total"] += 1
+        if ts >= d24:
+            fr["today"] += 1
+        elif ts >= d7:
+            fr["this_week"] += 1
+        elif ts >= d30:
+            fr["this_month"] += 1
+        else:
+            fr["stale"] += 1
+    return fr
+
+
+def _old_conf_avg(snaps, since):
+    # OLD pipeline_conf: $avg confidence over accepted snapshots in the window
+    vals = [s["confidence_score"] for s in snaps
+            if s["confidence_score"] >= FLOOR and s["crawled_at"] >= since]
+    return round(sum(vals) / len(vals), 1) if vals else 0
+
+
+def _rollup_conf_avg(snaps, since_day):
+    # rollup: per-day conf sums over accepted snapshots, windowed by calendar day
+    day_conf = {}
+    for s in snaps:
+        if s["confidence_score"] >= FLOOR:
+            day = s["crawled_at"].strftime("%Y-%m-%d")
+            dc = day_conf.setdefault(day, [0.0, 0])
+            dc[0] += s["confidence_score"]
+            dc[1] += 1
+    tot_s = sum(v[0] for d, v in day_conf.items() if d >= since_day)
+    tot_n = sum(v[1] for d, v in day_conf.items() if d >= since_day)
+    return round(tot_s / tot_n, 1) if tot_n else 0
+
+
 def _rand_snaps(rng):
     snaps = []
     now = datetime.now(timezone.utc)
@@ -234,7 +368,36 @@ def test_coverage_gaps_and_spread_match_old_definitions():
         assert _cov_spread(snaps, since) == _old_spread(snaps, since)
 
 
+def test_coverage_freshness_identical_to_old_pipeline():
+    rng = random.Random(20260731)
+    now = datetime.now(timezone.utc)
+    for _ in range(3000):
+        snaps = _rand_snaps(rng)
+        assert _cov_freshness(snaps, now) == _old_freshness(snaps, now)
+
+
+def test_rollup_conf_avg_matches_old_within_day_granularity():
+    """avg_confidence: the rollup mean equals the old windowed $avg whenever the
+    window boundary falls on a day edge; with an intra-day boundary, only the
+    boundary DAY's snapshots can differ (day-granular windowing, as with drops)."""
+    rng = random.Random(20260801)
+    now = datetime.now(timezone.utc)
+    for _ in range(3000):
+        snaps = _rand_snaps(rng)
+        days = rng.choice([7, 14, 30, 90])
+        since = now - timedelta(days=days)
+        # exact-day boundary: truncate `since` to midnight → both windows contain
+        # precisely the same snapshots → identical result
+        since_mid = since.replace(hour=0, minute=0, second=0, microsecond=0)
+        old = _old_conf_avg(snaps, since_mid)
+        new = _rollup_conf_avg(snaps, since_mid.strftime("%Y-%m-%d"))
+        assert old == new, (old, new)
+
+
 if __name__ == "__main__":
     test_coverage_gaps_and_spread_match_old_definitions()
+    test_coverage_freshness_identical_to_old_pipeline()
+    test_rollup_conf_avg_matches_old_within_day_granularity()
+    test_summary_compute_never_touches_product_snapshots()
     test_integration_rollups_ferretdb()
-    print("PASS: iter30 rollups integration + coverage≡old gaps/spread")
+    print("PASS: iter31 rollups integration + freshness/conf equivalence + no-snapshot contract")
