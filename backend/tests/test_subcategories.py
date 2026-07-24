@@ -151,6 +151,30 @@ def test_hybrid_name_verdict_beats_store_tags():
     assert classify_food_subcategory_hybrid("cat_food", "فيليكس بالدجاج 85g", "طعام رطب") == "cat_food_wet"
 
 
+def test_dog_signals_win_parent_decision():
+    # iter40 — the Zolux case: للكلاب must win even when another token confuses
+    # the cat check; عظم chew-bones are dog products.
+    assert guess_category("زولكس عظمة مضغ مضغوطة مكافآت للكلاب البالغة") == "dog_food"
+    assert C("dog_food", "زولكس عظمة مضغ مضغوطة مكافآت للكلاب البالغة") == "dog_treats"
+    assert guess_category("عظمة مضغ للكلاب") == "dog_food"
+    assert guess_category("مكافآت للقطط والكلاب") == "dog_food"     # dog beats cat
+    assert guess_category("عظم مضغوط طبيعي") == "dog_food"          # bone ⇒ dog
+    # cat-only names unaffected
+    assert guess_category("مكافآت تشورو للقطط بالتونة") == "cat_food"
+
+
+def test_new_treat_forms():
+    assert C("dog_food", "جيركي الدجاج للكلاب") == "dog_treats"
+    assert C("cat_food", "Chicken jerky strips for cats") == "cat_treats"
+    assert C("dog_food", "دنتال ستيكس للعناية بالأسنان") == "dog_treats"
+    assert C("cat_food", "ليكابل كريمي بالتونة") == "cat_treats"
+
+
+def test_treat_names_without_animal_go_to_pet_food():
+    assert guess_category("تريتس ليكابل كريمي") == "pet_food"
+    assert guess_category("سناك مجفف بالكبد") == "pet_food"
+
+
 def test_classifier_migration_v2():
     async def main():
         db = AsyncIOMotorClient(MONGO)["test_subcat_migration"]
@@ -174,6 +198,16 @@ def test_classifier_migration_v2():
              "name_en": "Hills Kitten Chicken 2kg", "category": "cat_food", "subcategory": None},
             {"id": "6", "sku": "H2", "name_ar": "قفص نقل معدني",
              "name_en": "", "category": "accessories"},
+            # iter40 v3 cases:
+            # wrong-parent: dog name stored under cat_food (the Zolux case)
+            {"id": "7", "sku": "Z1", "name_ar": "زولكس عظمة مضغ مضغوطة مكافآت للكلاب البالغة",
+             "name_en": "", "category": "cat_food", "subcategory": "cat_treats"},
+            # treat name, no animal → out of accessories into pet_food
+            {"id": "8", "sku": "T2", "name_ar": "تريتس ليكابل كريمي",
+             "name_en": "", "category": "accessories"},
+            # empty category → assigned from name
+            {"id": "9", "sku": "E1", "name_ar": "طعام قطط جاف بالدجاج",
+             "name_en": "", "category": ""},
         ])
         n = await server.backfill_food_subcategories(db)
         assert n >= 4, n
@@ -184,6 +218,9 @@ def test_classifier_migration_v2():
         assert docs["T1"]["category"] == "cat_food" and docs["T1"]["subcategory"] == "cat_treats"
         assert docs["H1"]["category"] == "cat_food" and docs["H1"]["subcategory"] is None
         assert docs["H2"]["category"] == "accessories"
+        assert docs["Z1"]["category"] == "dog_food" and docs["Z1"]["subcategory"] == "dog_treats"
+        assert docs["T2"]["category"] == "pet_food" and docs["T2"]["subcategory"] is None
+        assert docs["E1"]["category"] == "cat_food" and docs["E1"]["subcategory"] == "cat_food_dry"
         # version marker set → second run is a no-op
         marker = await db.metric_rollup_meta.find_one({"_id": "classifier"})
         assert marker["version"] == server.CLASSIFIER_VERSION

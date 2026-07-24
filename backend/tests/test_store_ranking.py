@@ -170,6 +170,18 @@ def test_store_ranking_end_to_end():
         # ── preview endpoint: super_admin only, bypasses cache ──
         prev = await server.store_ranking_preview(user={"id": "t", "email": "t", "role": "super_admin"})
         assert prev["total_stores"] == 5
+        # iter40 diagnostics
+        diag = prev["diagnostics"]
+        assert diag["own_orders"]["docs_in_window"] == 1
+        assert diag["own_orders"]["helper_result"] == {"revenue": 99.5, "orders": 1}
+        audit_by_id = {a["store_id"]: a for a in diag["platform_audit"]}
+        assert audit_by_id["salla1"]["platform_tag"] == "salla"
+        assert audit_by_id["salla1"]["flag"] is None                 # no computed revenue → no flag
+        hists = diag["percentile_histograms"]
+        # zbig cheapest on both shared skus → both land in the 0–25% bucket
+        assert hists["zbig"]["buckets_0_25_50_75"][0] == 2 and hists["zbig"]["shared"] == 2
+        assert hists["salla1"]["buckets_0_25_50_75"][3] == 2         # always dearest
+        assert hists["zbig"]["median_price_ratio_vs_market"] < 1 < hists["salla1"]["median_price_ratio_vs_market"]
         try:
             await server.store_ranking_preview(user={"id": "t", "email": "t", "role": "viewer"})
             raise AssertionError("viewer should be rejected")
