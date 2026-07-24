@@ -137,6 +137,70 @@ def guess_category(name):
     return "accessories"
 
 
+# ── Food subcategory classifier (iter36) ─────────────────────
+# Splits cat_food / dog_food into dry / wet / treats. Same hybrid inputs as the
+# rest of the extraction pipeline: the product NAME plus the store's own
+# category tags (Salla/Zid `categories[]` names) when the payload carries them.
+# QUALITY OVER COVERAGE: a product that doesn't match confidently — or matches
+# both wet AND dry (variety packs) — stays generic cat_food / dog_food.
+FOOD_SUBCATEGORY_PARENTS = ("cat_food", "dog_food")
+FOOD_SUBCATEGORIES = ("cat_food_dry", "cat_food_wet", "cat_treats",
+                      "dog_food_dry", "dog_food_wet", "dog_treats")
+
+# NOTE deliberate omissions: "can" (matches Royal CANin), bare "treat" is
+# checked specially so "treatment" (healthcare wording) never classifies food.
+_TREAT_KEYWORDS = ["مكافأة", "مكافآت", "مكافات", "تريتس", "تريت", "سناك",
+                   "snack", "biscuit", "بسكويت", "chew", "مضغ", "stick", "ستيك", "أعواد"]
+_WET_KEYWORDS = ["رطب", "معلب", "ويت فود", "wet", "canned", "pouch", "باوتش",
+                 "jelly", "جيلي", "بالجيلي", "gravy", "مرق", "شوربة", "soup",
+                 "mousse", "pate", "باتيه"]
+_DRY_KEYWORDS = ["جاف", "دراي", "dry", "kibble", "كيبل"]
+
+
+def classify_food_subcategory(parent_category, *texts):
+    """Return one of FOOD_SUBCATEGORIES, or None to keep the generic parent.
+
+    Precedence: treats first (a chicken-stick "in gravy" is still a treat),
+    then wet vs dry — and a product matching BOTH wet and dry keywords is a
+    variety pack we refuse to guess on."""
+    if parent_category not in FOOD_SUBCATEGORY_PARENTS:
+        return None
+    t = " ".join(str(x) for x in texts if x).lower()
+    if not t:
+        return None
+    prefix = "cat" if parent_category == "cat_food" else "dog"
+    is_treat = any(k in t for k in _TREAT_KEYWORDS) or ("treat" in t and "treatment" not in t)
+    if is_treat:
+        return f"{prefix}_treats"
+    wet = any(k in t for k in _WET_KEYWORDS)
+    dry = any(k in t for k in _DRY_KEYWORDS)
+    if wet and dry:
+        return None                       # mixed/variety pack — don't guess
+    if wet:
+        return f"{prefix}_food_wet"
+    if dry:
+        return f"{prefix}_food_dry"
+    return None
+
+
+def extract_store_category_names(raw):
+    """Join the store's own category tag names (Salla: [{name: str}], Zid:
+    [{name: {ar, en}}]) into one text blob for the subcategory classifier."""
+    names = []
+    cats = raw.get("categories")
+    if isinstance(cats, list):
+        for c in cats:
+            if isinstance(c, dict):
+                nm = c.get("name")
+                if isinstance(nm, dict):
+                    names.extend(str(v) for v in nm.values() if v)
+                elif nm:
+                    names.append(str(nm))
+            elif isinstance(c, str):
+                names.append(c)
+    return " ".join(names)
+
+
 def guess_animal(name):
     n = name.lower()
     if any(w in n for w in ["قط", "كات", "cat", "هر"]):
@@ -423,13 +487,19 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
         product_url = _absolutize_url(norm.get("product_url"), store_domain)
 
         existing = await db.products.find_one({"sku": norm["sku"]})
+        # iter36 — hybrid classifier input: product name + the store's own
+        # category tag names (when the raw payload carries them).
+        store_cats = extract_store_category_names(raw)
         if not existing:
             pid = str(uuid.uuid4())
+            category = guess_category(norm["name_ar"])
             await db.products.insert_one({
                 "id": pid, "sku": norm["sku"],
                 "name_ar": norm["name_ar"], "name_en": norm["name_ar"],
                 "brand": extract_brand(norm["name_ar"]),
-                "category": guess_category(norm["name_ar"]),
+                "category": category,
+                # additive: parent category stays; None = confidently generic
+                "subcategory": classify_food_subcategory(category, norm["name_ar"], store_cats),
                 "animal_type": guess_animal(norm["name_ar"]),
                 "weight_kg": extract_weight(norm["name_ar"]),
                 "image_url": norm["img_url"],
@@ -444,6 +514,11 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 patch["image_url"] = norm["img_url"]
             if product_url and not existing.get("product_url"):
                 patch["product_url"] = product_url
+            if "subcategory" not in existing:
+                # iter36 — one-shot enrichment of pre-existing products (the
+                # startup backfill covers products no crawl revisits).
+                patch["subcategory"] = classify_food_subcategory(
+                    existing.get("category"), existing.get("name_ar"), existing.get("name_en"), store_cats)
             if patch:
                 await db.products.update_one({"id": pid}, {"$set": patch})
 
