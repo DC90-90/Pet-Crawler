@@ -225,28 +225,26 @@ def _absolutize_url(raw_url, store_domain):
     return f"https://{store_domain}/products/{s}"
 
 
+def _price_amount(f):
+    """Dict-aware price coercion — Salla prices are {amount, currency} objects,
+    Zid prices are plain numbers, legacy feeds may send strings."""
+    if isinstance(f, dict):
+        f = f.get("amount")
+    try:
+        return float(f or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _normalize_raw_product(raw, store_name):
     """Normalize a single raw product dict from any source into a standard form."""
     name_ar = raw.get("name", raw.get("title", ""))
 
     sku_raw = raw.get("sku") or raw.get("mpn") or f"S-{store_name[:2].upper()}-{raw.get('id', uuid.uuid4().hex[:6])}"
 
-    price_field = raw.get("price", 0)
-    if isinstance(price_field, dict):
-        price = float(price_field.get("amount", 0))
-    else:
-        price = float(price_field or 0)
-
-    sale_field = raw.get("sale_price", raw.get("promotion", {}).get("price", 0))
-    if isinstance(sale_field, dict):
-        sale_price = float(sale_field.get("amount", 0))
-    else:
-        sale_price = float(sale_field or 0)
-
-    original_price = price
-    if 0 < sale_price < price:
-        original_price = price
-        price = sale_price
+    # Price extraction happens AFTER barcode/variant selection below (iter35):
+    # when the barcode we key on comes from a skus[] variant, that variant's
+    # price fields — not the product root's — describe the item we track.
 
     # Stock quantity parsing (Feb 2026 micro-fixes):
     # - Salla returns quantity as STRING ("50") and uses unlimited_quantity flag
@@ -329,6 +327,7 @@ def _normalize_raw_product(raw, store_name):
     _EAN_RE = re.compile(r"^\d{8,14}$")
     barcode = ""
     from_variant = False
+    matched_variant = None       # iter35 — the variant the barcode came from
     variants = raw.get("skus")
     if isinstance(variants, list):
         for v in variants:
@@ -339,6 +338,7 @@ def _normalize_raw_product(raw, store_name):
                 if _EAN_RE.match(cand):
                     barcode = cand
                     from_variant = True
+                    matched_variant = v
                     break
             if barcode:
                 break
@@ -351,6 +351,43 @@ def _normalize_raw_product(raw, store_name):
     logger.info(
         f"normalize_salla barcode_source={'variant' if from_variant else 'root' if barcode else 'none'} sku={sku_raw}"
     )
+
+    # ── Effective / original / sale price (iter35 rewrite) ──────────────────
+    # Root-only extraction systematically overstated Salla prices: Salla defines
+    # sales PER VARIANT (skus[].price is the variant's CURRENT price,
+    # skus[].regular_price the pre-sale price), and the root sale_price is often
+    # {amount: 0} while a variant is on sale. Confirmed case: Lana Pets Brit
+    # Care 7kg showed 279 (root/regular) instead of the live 237.02 (variant
+    # sale). Rules:
+    #   • price source = the variant the barcode was taken from (when it carries
+    #     a usable price), else the product root — barcode and price must
+    #     describe the SAME item.
+    #   • effective price = source price, or sale_price when 0 < sale < price
+    #     (Zid convention: price=regular, sale_price=effective).
+    #   • original_price = regular_price when it's higher (Salla convention:
+    #     price is ALREADY the discounted price, regular_price holds the
+    #     pre-sale price) else the pre-swap price — making discount_pct real.
+    #   • sale_price is returned (and now persisted) whenever a genuine
+    #     discount exists, so capture regressions are visible in our own data.
+    src = matched_variant if (matched_variant and _price_amount(matched_variant.get("price")) > 0) else raw
+    base_price = _price_amount(src.get("price"))
+    sale_price = _price_amount(src.get("sale_price"))
+    if sale_price <= 0 and src is raw:
+        # promotion.price (legacy Salla) and special_price (Mowkly) fallbacks —
+        # (raw.get("promotion") or {}) also fixes the AttributeError when the
+        # API returns promotion: null.
+        sale_price = _price_amount((raw.get("promotion") or {}).get("price"))
+        if sale_price <= 0:
+            sale_price = _price_amount(raw.get("special_price"))
+    regular_price = _price_amount(src.get("regular_price"))
+
+    price = base_price
+    if 0 < sale_price < price:
+        price = sale_price
+    original_price = price
+    for cand in (regular_price, base_price):
+        if cand > original_price:
+            original_price = cand
     # Feb 2026: stock signal observability — tells us when unlimited flags fired
     _plat = "salla" if "unlimited_quantity" in raw else ("zid" if "is_infinite" in raw else "unknown")
     logger.info(
@@ -362,7 +399,10 @@ def _normalize_raw_product(raw, store_name):
         "name_ar": name_ar,
         "sku": sku_raw,
         "barcode": barcode,
-        "sale_price": float(sale_price) if 0 < sale_price < (price + sale_price) else None,
+        # iter35 — a real discount exists iff the sale price sits below the
+        # original; equal-to-price sale fields (Salla mirrors price into
+        # sale_price on sale items) are not a discount signal by themselves.
+        "sale_price": float(sale_price) if 0 < sale_price < original_price else None,
         "price": price,
         "original_price": original_price,
         "qty": max(0, qty),
@@ -416,6 +456,10 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "sku": norm["sku"],
             "price": round(norm["price"], 2),
             "original_price": round(norm["original_price"], 2),
+            # iter35 — persist the captured sale price so a future capture
+            # regression is DETECTABLE from our own data (a store whose
+            # discounted share collapses to ~0% is a red flag).
+            "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
             "discount_pct": max(0, disc_pct),
             "in_stock": norm["in_stock"],
             "qty_available": norm["qty"],
