@@ -5388,18 +5388,57 @@ async def get_my_skus(user=Depends(get_user)):
 # IngestPayload, _coerce_num, _coerce_int moved to models/schemas.py and core/utils.py (Feb 2026 refactor)
 
 
+# iter39 — classifier version. Bump whenever guess_category /
+# classify_food_subcategory rules change so existing products get reclassified
+# once at startup (marker doc in metric_rollup_meta, same pattern as the rollup
+# schema version). v2 = bowl→accessories, treat-names→food parents, word-bounded
+# ستيك/تريت/stick/treat, bundle markers stay generic.
+CLASSIFIER_VERSION = 2
+
+
 async def backfill_food_subcategories(db):
-    """iter36 — assign `subcategory` to every food product that doesn't carry
-    the field yet (value may be None = confidently generic, which also marks
-    the doc as processed → idempotent). Returns the number of docs touched."""
-    parents = {"category": {"$in": list(FOOD_SUBCATEGORY_PARENTS)}, "subcategory": {"$exists": False}}
-    if not await db.products.find_one(parents, {"_id": 1}):
+    """Version-gated reclassification pass. For every product with a name:
+    recompute the category, but APPLY it only when the change crosses the food
+    boundary (into or out of cat_food/dog_food — the scope of the v2 rule
+    changes; hand-set non-food labels stay untouched); then recompute
+    `subcategory` for food products (None = confidently generic) and clear it
+    for products that left the food parents. Returns docs updated."""
+    marker = await db.metric_rollup_meta.find_one({"_id": "classifier"})
+    if marker and (marker.get("version") or 0) >= CLASSIFIER_VERSION:
         return 0
     n = 0
-    async for p in db.products.find(parents, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1}):
-        sub = classify_food_subcategory(p.get("category"), p.get("name_ar"), p.get("name_en"))
-        await db.products.update_one({"sku": p["sku"]}, {"$set": {"subcategory": sub}})
-        n += 1
+    parents = set(FOOD_SUBCATEGORY_PARENTS)
+    from crawlers import _has_treat_signal, _BOWL_KEYWORDS
+    async for p in db.products.find(
+            {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1, "subcategory": 1}):
+        name = " ".join(str(x) for x in (p.get("name_ar"), p.get("name_en")) if x)
+        lname = name.lower()
+        if not lname.strip():
+            continue
+        old_cat = p.get("category") or ""
+        # Category moves ONLY on the v2-affected signals — never a blind
+        # recompute, which would clobber hand-set labels on keyword-less names:
+        #   bowls/feeders out of the food parents; treat-named products into them.
+        cat = old_cat
+        if any(w in lname for w in _BOWL_KEYWORDS):
+            cat = "accessories"
+        elif old_cat not in parents and _has_treat_signal(lname):
+            cat = guess_category(p.get("name_ar") or p.get("name_en") or "")
+            if cat not in parents:
+                cat = old_cat            # treat signal but no clear animal → leave
+        sub = classify_food_subcategory(cat, name) if cat in parents else None
+        update = {}
+        if cat != old_cat:
+            update["category"] = cat
+        if sub != p.get("subcategory") or "subcategory" not in p:
+            update["subcategory"] = sub
+        if update:
+            await db.products.update_one({"sku": p["sku"]}, {"$set": update})
+            n += 1
+    await db.metric_rollup_meta.update_one(
+        {"_id": "classifier"},
+        {"$set": {"version": CLASSIFIER_VERSION, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True)
     return n
 
 
@@ -5410,29 +5449,56 @@ async def subcategory_preview(samples: int = Query(20, ge=1, le=100), user=Depen
     classifier can be sanity-checked against real data. super_admin only."""
     if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
         raise HTTPException(403, "super_admin only")
+    from crawlers import _has_treat_signal
+    # iter39 — demo-seed SKUs are the literal template values; separate them so
+    # real-catalog percentages aren't polluted by synthetic products.
+    demo_skus = {t[0] for t in PRODUCTS_SEED + EXTRA_PRODUCT_TEMPLATES}
     dist = {k: 0 for k in FOOD_SUBCATEGORIES}
     generic = {p: 0 for p in FOOD_SUBCATEGORY_PARENTS}
+    real_dist = {k: 0 for k in FOOD_SUBCATEGORIES}
+    real_generic = {p: 0 for p in FOOD_SUBCATEGORY_PARENTS}
     sample_map = {k: [] for k in [*FOOD_SUBCATEGORIES, *FOOD_SUBCATEGORY_PARENTS]}
-    total = 0
+    treat_name_parents = {}
+    total = demo_total = 0
     async for p in db.products.find(
-        {"category": {"$in": list(FOOD_SUBCATEGORY_PARENTS)}},
+        {},
         {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1, "subcategory": 1},
     ):
+        is_demo = p.get("sku") in demo_skus
+        name = " ".join(str(x) for x in (p.get("name_ar"), p.get("name_en")) if x)
+        # issue-4 diagnostic: where do treat-NAMED products live today?
+        if name and _has_treat_signal(name.lower()):
+            treat_name_parents[p.get("category") or ""] = treat_name_parents.get(p.get("category") or "", 0) + 1
+        if (p.get("category") or "") not in FOOD_SUBCATEGORY_PARENTS:
+            continue
         total += 1
+        if is_demo:
+            demo_total += 1
         # use the stored assignment when present (post-backfill), else classify live
         sub = p.get("subcategory") if "subcategory" in p else classify_food_subcategory(
-            p.get("category"), p.get("name_ar"), p.get("name_en"))
+            p.get("category"), name)
         key = sub or p["category"]
         if sub:
             dist[sub] += 1
+            if not is_demo:
+                real_dist[sub] += 1
         else:
             generic[p["category"]] += 1
+            if not is_demo:
+                real_generic[p["category"]] += 1
         if len(sample_map[key]) < samples:
             sample_map[key].append({"sku": p.get("sku"), "name": p.get("name_ar") or p.get("name_en"),
-                                    "assigned": key})
+                                    "assigned": key, "demo": is_demo})
     pct = {k: round(100 * v / total, 1) if total else 0 for k, v in {**dist, **generic}.items()}
-    return {"total_food_products": total, "subcategory_counts": dist,
-            "generic_counts": generic, "pct": pct, "samples": sample_map}
+    real_total = total - demo_total
+    pct_real = {k: round(100 * v / real_total, 1) if real_total else 0
+                for k, v in {**real_dist, **real_generic}.items()}
+    return {"total_food_products": total, "demo_food_products": demo_total,
+            "subcategory_counts": dist, "generic_counts": generic, "pct": pct,
+            "pct_real_catalog_only": pct_real,
+            "treat_name_parent_distribution": treat_name_parents,
+            "classifier_version": CLASSIFIER_VERSION,
+            "samples": sample_map}
 
 
 @router.get("/admin/recent-snapshots")
