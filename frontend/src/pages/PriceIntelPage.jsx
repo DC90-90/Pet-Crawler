@@ -21,7 +21,10 @@ export default function PriceIntelPage() {
   const [selectedSku, setSelectedSku] = useState(null);
   const [detail, setDetail] = useState(null);
   const [tab, setTab] = useState("action");
-  const [leaderboard, setLeaderboard] = useState(null);
+  // iter38 — live Market Strength ranking (replaces the static April
+  // MySkuWatch leaderboard in the widget)
+  const [ranking, setRanking] = useState(null);
+  const [rankingComputedAt, setRankingComputedAt] = useState(null);
   const [catalogGaps, setCatalogGaps] = useState([]);
   const [showGuide, setShowGuide] = useState(false);
   const [cacheComputedAt, setCacheComputedAt] = useState(null);
@@ -33,9 +36,9 @@ export default function PriceIntelPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [r, lb, gaps, mine, sum] = await Promise.all([
+      const [r, rk, gaps, mine, sum] = await Promise.all([
         api.get("/price-intel/dashboard"),
-        api.get("/baseline/leaderboard").catch(() => ({ data: null })),
+        api.get("/price-intel/store-ranking").catch(() => ({ data: null })),
         api.get("/baseline/catalog-gaps").catch(() => ({ data: [] })),
         // Both cached server-side (14 is a standard dashboard-cache window);
         // limit=1 keeps the my-products payload to KPIs + one row.
@@ -43,7 +46,8 @@ export default function PriceIntelPage() {
         api.get("/insights/summary", { params: { days: 14 } }).catch(() => ({ data: null })),
       ]);
       setData(r.data);
-      setLeaderboard(lb.data);
+      setRanking(rk.data);
+      setRankingComputedAt(rk.headers?.["x-cache-computed-at"] || null);
       setCatalogGaps(gaps.data || []);
       setMyKpis(mine.data?.kpis || null);
       setSummary14(sum.data || null);
@@ -125,7 +129,7 @@ export default function PriceIntelPage() {
 
       {showGuide && <ConfidenceGuidePanel isRTL={isRTL} />}
 
-      <MarketPositionWidget leaderboard={leaderboard} myKpis={myKpis} summary={summary14} isRTL={isRTL} />
+      <MarketPositionWidget ranking={ranking} rankingComputedAt={rankingComputedAt} myKpis={myKpis} summary={summary14} isRTL={isRTL} />
 
       <div className="flex gap-1 glass-card p-1.5">
         {tabs.map((t) => (

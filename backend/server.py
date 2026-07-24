@@ -8,7 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re, time, shutil, asyncio
+import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re, time, shutil, asyncio, math
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
@@ -3364,9 +3364,25 @@ async def _insights_summary_compute(db, days):
         "stale_pct": round(100 * fr.get("stale", 0) / fr_total, 1),
     }
 
-    # Market position summary (Feb 2026) — aggregate over my products that have
-    # a computed market_position. Uses last-7-day, confidence>=75 snapshots
-    # (filtering happens in compute_market_position).
+    # Market position summary (Feb 2026) — iter38: extracted verbatim into
+    # _compute_market_position_summary so the Price-Intel store ranking can use
+    # the SAME own-store percentile (one source of truth). Identical output.
+    market_position_summary = await _compute_market_position_summary(db)
+
+    return {
+        "total_skus": total_skus, "price_drops": price_drops,
+        "product_gaps": product_gaps, "median_spread": median_spread,
+        "avg_confidence": avg_confidence,
+        "freshness_breakdown": freshness_breakdown,
+        "market_position_summary": market_position_summary,
+    }
+
+
+async def _compute_market_position_summary(db):
+    """Aggregate market position over my products that have a computed
+    market_position. Uses last-7-day, confidence>=75 snapshots (filtering
+    happens in compute_market_position). Extracted verbatim from
+    _insights_summary_compute in iter38 — output unchanged."""
     own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
     own_store_id = own_store_doc.get("id") if own_store_doc else None
     market_position_summary = None
@@ -3457,14 +3473,8 @@ async def _insights_summary_compute(db, days):
                 "at_median_count": at_median,
                 "avg_percentile": avg_percentile,
             }
+    return market_position_summary
 
-    return {
-        "total_skus": total_skus, "price_drops": price_drops,
-        "product_gaps": product_gaps, "median_spread": median_spread,
-        "avg_confidence": avg_confidence,
-        "freshness_breakdown": freshness_breakdown,
-        "market_position_summary": market_position_summary,
-    }
 
 async def _insights_leaderboard_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -4843,6 +4853,204 @@ async def _run_sync_and_match(kind: str):
     return run
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# iter38 — live store ranking ("Market Strength Score"), replacing the static
+# April MySkuWatch leaderboard on Price Intel. Fixed 30d window. Score is
+# computed from signals available for EVERY store regardless of platform:
+#   0.25·breadth + 0.35·price + 0.25·stock + 0.15·freshness   (client-approved)
+# Revenue is a separate column — SAR where measurable (Zid ledger signals),
+# an explicit "not measurable (Salla)" status where not. Reads only the small
+# collections (coverage, matches, my_products, sales rollups, stores); cached
+# via _SINGLE_CACHE_SPECS, so it recomputes on the existing post-crawl hooks.
+# ─────────────────────────────────────────────────────────────────────────────
+_RANKING_WEIGHTS = {"breadth": 0.25, "price": 0.35, "stock": 0.25, "freshness": 0.15}
+_RANKING_WINDOW_DAYS = 30
+_RANKING_FRESH_HOURS = 48
+_RANKING_STALE_BELOW = 0.3     # freshness under this ⇒ "stale data" badge
+
+
+async def _store_ranking_compute(db):
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=_RANKING_WINDOW_DAYS)
+    fresh_floor = now - timedelta(hours=_RANKING_FRESH_HOURS)
+
+    stores_meta = {s["id"]: s async for s in db.stores.find(
+        {}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "is_own_store": 1, "domain": 1})}
+    own_store_id = next((sid for sid, s in stores_meta.items() if s.get("is_own_store")), None)
+
+    # ── one pass over in-window coverage: breadth / stock / freshness / prices ──
+    per_store = {}            # sid -> {products, in_stock, fresh, sold_sig, qty_sig}
+    prices_by_sku = {}        # sku -> [(price, sid)] for the percentile pass
+    cursor = db.sku_store_coverage.find(
+        {"last_priced_at": {"$gte": since}},
+        {"_id": 0, "sku": 1, "store_id": 1, "last_priced_price": 1, "last_in_stock": 1,
+         "last_seen_any_at": 1, "last_sold_pos_at": 1, "last_usable_qty_at": 1},
+    ).batch_size(2000)
+    def _aware(dt):
+        # PyMongo returns tz-naive UTC datetimes by default — normalize before
+        # comparing with our aware timestamps (server-side $gte is unaffected).
+        if dt is not None and dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    async for c in cursor:
+        sid = c["store_id"]
+        st = per_store.setdefault(sid, {"products": 0, "in_stock": 0, "fresh": 0,
+                                        "sold_sig": False, "qty_sig": False})
+        st["products"] += 1
+        if c.get("last_in_stock"):
+            st["in_stock"] += 1
+        lsa = _aware(c.get("last_seen_any_at"))
+        if lsa is not None and lsa >= fresh_floor:
+            st["fresh"] += 1
+        sold_at = _aware(c.get("last_sold_pos_at"))
+        if sold_at is not None and sold_at >= since:
+            st["sold_sig"] = True
+        qty_at = _aware(c.get("last_usable_qty_at"))
+        if qty_at is not None and qty_at >= since:
+            st["qty_sig"] = True
+        prices_by_sku.setdefault(c["sku"], []).append((c["last_priced_price"], sid))
+
+    # price percentile per competitor store — head-to-head on SHARED skus only:
+    # percentile = share of co-sellers strictly cheaper (ties share position)
+    pct_sum = {}
+    pct_n = {}
+    cheapest_hits = {}
+    shared_counts = {}
+    for sku, sellers in prices_by_sku.items():
+        if len(sellers) < 2:
+            continue
+        prices = sorted(p for p, _sid in sellers)
+        n = len(sellers)
+        min_p = prices[0]
+        for p, sid in sellers:
+            below = sum(1 for q in prices if q < p)
+            pct_sum[sid] = pct_sum.get(sid, 0.0) + below / (n - 1)
+            pct_n[sid] = pct_n.get(sid, 0) + 1
+            shared_counts[sid] = shared_counts.get(sid, 0) + 1
+            if p == min_p:
+                cheapest_hits[sid] = cheapest_hits.get(sid, 0) + 1
+
+    # ── own store components come from own sources (own prices are not crawled
+    # into snapshots/coverage): my_products + the SAME market-position percentile
+    # the Insights card shows + the real Zid orders ledger ──
+    my_prods = await db.my_products.find(
+        {}, {"_id": 0, "price": 1, "sale_price": 1, "in_stock": 1, "quantity": 1, "last_synced_at": 1}).to_list(length=None)
+    own_products = sum(1 for p in my_prods if (p.get("sale_price") or p.get("price") or 0) > 0)
+    own_in_stock = sum(1 for p in my_prods if p.get("in_stock") or (p.get("quantity") or 0) > 0)
+
+    def _synced_recent(p):
+        ts = p.get("last_synced_at")
+        if not ts:
+            return False
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                return False
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts >= fresh_floor
+    own_fresh = sum(1 for p in my_prods if _synced_recent(p))
+
+    mp_summary = await _compute_market_position_summary(db)
+    own_pct = (mp_summary or {}).get("avg_percentile")
+
+    # own revenue — the same real-ledger figure the My Products KPI shows
+    own_revenue = None
+    order_docs = await db.own_store_orders.find(
+        {"created_at": {"$gte": since}}, {"_id": 0, "excluded": 1, "total": 1, "units": 1, "items": 1},
+    ).to_list(100000)
+    if order_docs:
+        agg = aggregate_orders(order_docs)
+        if agg["orders_count"] > 0:
+            own_revenue = round(agg["revenue"], 2)
+
+    # competitor revenue from the sales rollups (leaderboard's source)
+    sales_pairs = await _sales_pairs_from_rollups(db, since)
+    revenue_by_store = {}
+    for p in sales_pairs:
+        revenue_by_store[p["store_id"]] = revenue_by_store.get(p["store_id"], 0.0) + p["revenue"]
+
+    # overlap with the user's catalog (distinct matched my_skus per store)
+    overlap = {}
+    async for m in db.product_matches.find({}, {"_id": 0, "my_sku": 1, "competitor_store_id": 1}):
+        overlap.setdefault(m["competitor_store_id"], set()).add(m["my_sku"])
+
+    # ── assemble rows ──
+    if own_store_id:
+        per_store.setdefault(own_store_id, {"products": 0, "in_stock": 0, "fresh": 0,
+                                            "sold_sig": True, "qty_sig": True})
+        per_store[own_store_id].update({"products": own_products, "in_stock": own_in_stock,
+                                        "fresh": own_fresh})
+    max_products = max((st["products"] for st in per_store.values()), default=0)
+    rows = []
+    for sid, st in per_store.items():
+        meta = stores_meta.get(sid, {})
+        n = st["products"]
+        if n <= 0:
+            continue
+        is_own = sid == own_store_id
+        breadth = math.log1p(n) / math.log1p(max_products) if max_products else 0.0
+        if is_own:
+            price_score = round(1 - own_pct / 100, 4) if own_pct is not None else 0.5
+            avg_pctile = own_pct if own_pct is not None else None
+            cheapest_rate = None
+            shared = (mp_summary or {}).get("ranked_products") or 0
+            if shared and mp_summary:
+                cheapest_rate = round(mp_summary["cheapest_count"] / shared, 4)
+        else:
+            if pct_n.get(sid):
+                avg_frac = pct_sum[sid] / pct_n[sid]
+                price_score = round(1 - avg_frac, 4)
+                avg_pctile = round(avg_frac * 100, 1)
+            else:
+                price_score, avg_pctile = 0.5, None    # no shared skus → neutral
+            shared = shared_counts.get(sid, 0)
+            cheapest_rate = round(cheapest_hits.get(sid, 0) / shared, 4) if shared else None
+        stock_score = round(st["in_stock"] / n, 4)
+        fresh_score = round(st["fresh"] / n, 4)
+        score = round(100 * (_RANKING_WEIGHTS["breadth"] * breadth
+                             + _RANKING_WEIGHTS["price"] * price_score
+                             + _RANKING_WEIGHTS["stock"] * stock_score
+                             + _RANKING_WEIGHTS["freshness"] * fresh_score), 1)
+        # revenue column — value where measurable, explicit status where not
+        if is_own:
+            revenue, rev_status = own_revenue, ("ledger" if own_revenue is not None else "accumulating")
+        else:
+            rev = round(revenue_by_store.get(sid, 0.0), 2)
+            if rev > 0:
+                revenue, rev_status = rev, "computed"
+            elif not st["sold_sig"] and not st["qty_sig"]:
+                revenue, rev_status = None, "not_measurable"
+            else:
+                revenue, rev_status = None, "accumulating"
+        rows.append({
+            "store_id": sid,
+            "name": meta.get("name") or sid,
+            "platform": (meta.get("platform") or "").lower(),
+            "is_own_store": is_own,
+            "score": score,
+            "components": {
+                "breadth": {"score": round(breadth, 4), "products": n},
+                "price": {"score": price_score, "avg_percentile": avg_pctile,
+                          "cheapest_rate": cheapest_rate, "shared_products": shared},
+                "stock": {"score": stock_score, "in_stock": st["in_stock"]},
+                "freshness": {"score": fresh_score, "fresh_products": st["fresh"]},
+            },
+            "revenue_30d": revenue,
+            "revenue_status": rev_status,
+            "overlap": len(overlap.get(sid, ())) if not is_own else None,
+            "stale": fresh_score < _RANKING_STALE_BELOW,
+        })
+    rows.sort(key=lambda r: (-r["score"], -r["components"]["breadth"]["products"], r["name"]))
+    for i, r in enumerate(rows, 1):
+        r["rank"] = i
+    own_rank = next((r["rank"] for r in rows if r["is_own_store"]), None)
+    return {"window_days": _RANKING_WINDOW_DAYS, "weights": _RANKING_WEIGHTS,
+            "total_stores": len(rows), "own_rank": own_rank, "stores": rows}
+
+
 async def _price_intel_dashboard_compute(db):
     """Price Intelligence Dashboard — all sections."""
     now = datetime.now(timezone.utc)
@@ -5952,6 +6160,26 @@ async def price_intel_dashboard(response: Response = None, user=Depends(get_user
     return body
 
 
+@router.get("/price-intel/store-ranking")
+async def price_intel_store_ranking(response: Response = None, user=Depends(get_user)):
+    """iter38 — live Market Strength ranking (fixed 30d). Served from the page
+    cache; recomputed on the same post-crawl/sync hooks as every other spec."""
+    body, meta = await _serve_page_cache(db, "price-intel/store-ranking", None,
+                                         lambda: _store_ranking_compute(db), True)
+    _apply_cache_headers(response, meta)
+    return body
+
+
+@router.get("/admin/store-ranking-preview")
+async def store_ranking_preview(user=Depends(get_user)):
+    """iter38 — read-only, cache-bypassing preview of the live ranking so the
+    methodology can be validated against real production data before the
+    client-facing widget ships. super_admin only."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+    return await _store_ranking_compute(db)
+
+
 # Register cache specs for background recompute. insights/sales gets a synthetic
 # super_admin user (my_products only uses it for the auth dependency, which is
 # bypassed for in-process calls).
@@ -5968,6 +6196,8 @@ _WINDOW_CACHE_SPECS.extend([
 ])
 _SINGLE_CACHE_SPECS.extend([
     ("price-intel/dashboard", lambda db: _price_intel_dashboard_compute(db)),
+    # iter38 — live store ranking, recomputed on the same post-crawl hooks
+    ("price-intel/store-ranking", lambda db: _store_ranking_compute(db)),
 ])
 
 
