@@ -1990,6 +1990,23 @@ async def maybe_recompute_page_caches(db, min_interval_secs=600, force=False):
 
 
 
+async def _own_orders_aggregate(db, o_start, o_end=None):
+    """iter40 — THE single source for own-store ledger revenue figures. Both the
+    My Products KPI path and the store ranking read this helper, so the same
+    metric can never show two different values again. Returns
+    aggregate_orders() output, or None when no non-excluded orders fall in the
+    window (callers fall back / show 'accumulating')."""
+    order_query = {"created_at": {"$gte": o_start, **({"$lt": o_end} if o_end else {})}}
+    order_docs = await db.own_store_orders.find(
+        order_query, {"_id": 0, "excluded": 1, "total": 1, "units": 1, "items": 1},
+    ).to_list(100000)
+    if order_docs:
+        _agg = aggregate_orders(order_docs)
+        if _agg["orders_count"] > 0:
+            return _agg
+    return None
+
+
 async def _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only):
     """Compute the FULL my-products dataset — every enriched row + KPIs +
     categories + total — for the given filters, WITHOUT sort or pagination.
@@ -2039,14 +2056,9 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
         else:
             o_start = datetime.now(timezone.utc) - timedelta(days=days)
             o_end = None
-        order_query = {"created_at": {"$gte": o_start, **({"$lt": o_end} if o_end else {})}}
-        order_docs = await db.own_store_orders.find(
-            order_query, {"_id": 0, "excluded": 1, "total": 1, "units": 1, "items": 1},
-        ).to_list(100000)
-        if order_docs:
-            _agg = aggregate_orders(order_docs)
-            if _agg["orders_count"] > 0:
-                orders_agg = _agg
+        # iter40 — shared ledger helper: the store ranking reads the SAME
+        # function, so "My Revenue" can never disagree between surfaces again.
+        orders_agg = await _own_orders_aggregate(db, o_start, o_end)
 
     # Get all products
     prod_query = {}
@@ -4956,15 +4968,10 @@ async def _store_ranking_compute(db):
     mp_summary = await _compute_market_position_summary(db)
     own_pct = (mp_summary or {}).get("avg_percentile")
 
-    # own revenue — the same real-ledger figure the My Products KPI shows
-    own_revenue = None
-    order_docs = await db.own_store_orders.find(
-        {"created_at": {"$gte": since}}, {"_id": 0, "excluded": 1, "total": 1, "units": 1, "items": 1},
-    ).to_list(100000)
-    if order_docs:
-        agg = aggregate_orders(order_docs)
-        if agg["orders_count"] > 0:
-            own_revenue = round(agg["revenue"], 2)
+    # own revenue — iter40: the SAME shared ledger helper the My Products KPI
+    # uses (single source; the two surfaces can no longer disagree).
+    own_agg = await _own_orders_aggregate(db, since)
+    own_revenue = round(own_agg["revenue"], 2) if own_agg else None
 
     # competitor revenue from the sales rollups (leaderboard's source)
     sales_pairs = await _sales_pairs_from_rollups(db, since)
@@ -5388,12 +5395,15 @@ async def get_my_skus(user=Depends(get_user)):
 # IngestPayload, _coerce_num, _coerce_int moved to models/schemas.py and core/utils.py (Feb 2026 refactor)
 
 
-# iter39 — classifier version. Bump whenever guess_category /
+# iter39/40 — classifier version. Bump whenever guess_category /
 # classify_food_subcategory rules change so existing products get reclassified
 # once at startup (marker doc in metric_rollup_meta, same pattern as the rollup
 # schema version). v2 = bowl→accessories, treat-names→food parents, word-bounded
-# ستيك/تريت/stick/treat, bundle markers stay generic.
-CLASSIFIER_VERSION = 2
+# ستيك/تريت/stick/treat, bundle markers stay generic. v3 = dog signals win the
+# parent decision (wrong-parent flips within the food parents), treat-named
+# products accepted into pet_food when no animal is named, empty categories
+# assigned, jerky/dental/lickable treat forms.
+CLASSIFIER_VERSION = 3
 
 
 async def backfill_food_subcategories(db):
@@ -5416,16 +5426,25 @@ async def backfill_food_subcategories(db):
         if not lname.strip():
             continue
         old_cat = p.get("category") or ""
-        # Category moves ONLY on the v2-affected signals — never a blind
-        # recompute, which would clobber hand-set labels on keyword-less names:
-        #   bowls/feeders out of the food parents; treat-named products into them.
+        # Category moves ONLY on signal-scoped rules — never a blind recompute,
+        # which would clobber hand-set labels on keyword-less names:
+        #   v2: bowls/feeders out of the food parents; treat-names into them.
+        #   v3: wrong-parent flips WITHIN the food parents when the name's own
+        #       animal signals disagree (Zolux "…للكلاب" stored as cat_food);
+        #       treat-names with no clear animal go to pet_food (out of
+        #       accessories); empty categories get assigned from the name.
         cat = old_cat
+        guessed = guess_category(p.get("name_ar") or p.get("name_en") or "")
         if any(w in lname for w in _BOWL_KEYWORDS):
             cat = "accessories"
-        elif old_cat not in parents and _has_treat_signal(lname):
-            cat = guess_category(p.get("name_ar") or p.get("name_en") or "")
-            if cat not in parents:
-                cat = old_cat            # treat signal but no clear animal → leave
+        elif not old_cat:
+            cat = guessed                              # v3: 34 empty-category docs
+        elif old_cat in parents:
+            if guessed in parents and guessed != old_cat:
+                cat = guessed                          # v3: cat↔dog parent flip
+        elif _has_treat_signal(lname):
+            if guessed in parents or guessed in ("pet_food", "bird_food", "fish_food"):
+                cat = guessed                          # v2+v3: treat-name into food
         sub = classify_food_subcategory(cat, name) if cat in parents else None
         update = {}
         if cat != old_cat:
@@ -5722,12 +5741,20 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                 existing = await db.products.find_one({"sku": sku}, {"_id": 0})
                 if not existing:
                     pid = str(uuid.uuid4())
+                    # iter40 — classify at insert (this path used to write empty
+                    # category/animal/brand: the source of the 34 ""-category docs)
+                    _cls_name = name_ar or name_en or ""
+                    _cat = guess_category(_cls_name) if _cls_name else ""
                     await db.products.insert_one({
                         "id": pid, "sku": sku,
                         "name_ar": name_ar, "name_en": name_en,
                         "barcode": barcode,
-                        "brand": "", "category": "", "animal_type": "",
-                        "weight_kg": 0, "image_url": "",
+                        "brand": extract_brand(_cls_name) if _cls_name else "",
+                        "category": _cat,
+                        "subcategory": classify_food_subcategory(_cat, name_ar, name_en),
+                        "animal_type": guess_animal(_cls_name) if _cls_name else "",
+                        "weight_kg": extract_weight(_cls_name) if _cls_name else 0,
+                        "image_url": "",
                         "product_url": product_url,
                         "first_seen_at": now.isoformat(),
                     })
@@ -6238,12 +6265,79 @@ async def price_intel_store_ranking(response: Response = None, user=Depends(get_
 
 @router.get("/admin/store-ranking-preview")
 async def store_ranking_preview(user=Depends(get_user)):
-    """iter38 — read-only, cache-bypassing preview of the live ranking so the
-    methodology can be validated against real production data before the
-    client-facing widget ships. super_admin only."""
+    """iter38/40 — read-only, cache-bypassing preview of the live ranking plus
+    validation diagnostics: per-store platform audit (tag vs the data signals it
+    actually produces), own-orders ledger debug, and per-store shared-product
+    percentile histograms (the Caty-#1 sanity check). super_admin only."""
     if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
         raise HTTPException(403, "super_admin only")
-    return await _store_ranking_compute(db)
+    out = await _store_ranking_compute(db)
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=_RANKING_WINDOW_DAYS)
+
+    # ── platform audit: tag vs crawler behaviour vs data signals ──
+    stores_docs = {s["id"]: s async for s in db.stores.find(
+        {}, {"_id": 0, "id": 1, "platform": 1, "last_crawl_endpoint": 1,
+             "last_crawl_tier": 1, "last_crawl_status": 1, "last_crawled_at": 1})}
+    audit = []
+    for r in out["stores"]:
+        sd = stores_docs.get(r["store_id"], {})
+        has_signals = r["revenue_status"] in ("computed", "ledger", "accumulating")
+        audit.append({
+            "store_id": r["store_id"], "name": r["name"],
+            "platform_tag": r["platform"],
+            "last_crawl_endpoint": sd.get("last_crawl_endpoint"),
+            "last_crawl_tier": sd.get("last_crawl_tier"),
+            "last_crawl_status": sd.get("last_crawl_status"),
+            "last_crawled_at": sd.get("last_crawled_at"),
+            "produces_sales_signals": has_signals,
+            # a "salla" tag with computed revenue means qty-depletion signals
+            # exist — possible (Salla exposes quantity) but worth eyeballing;
+            # flag so tag/data mismatches like Mowkly can't hide.
+            "flag": "salla_tag_with_computed_revenue"
+                    if (r["platform"] == "salla" and r["revenue_status"] == "computed") else None,
+        })
+
+    # ── own-orders ledger debug (issue: ranking said accumulating while
+    # my-products showed SAR — both now read _own_orders_aggregate; this shows
+    # exactly what that helper sees) ──
+    own_docs_n = await db.own_store_orders.count_documents({"created_at": {"$gte": since}})
+    newest = await db.own_store_orders.find_one({}, {"_id": 0, "created_at": 1}, sort=[("created_at", -1)])
+    own_agg = await _own_orders_aggregate(db, since)
+    orders_debug = {
+        "docs_in_window": own_docs_n,
+        "newest_order_at": (newest or {}).get("created_at"),
+        "helper_result": {"revenue": round(own_agg["revenue"], 2), "orders": own_agg["orders_count"]} if own_agg else None,
+    }
+
+    # ── per-store shared-product percentile histograms + price ratio ──
+    prices_by_sku = {}
+    async for c in db.sku_store_coverage.find(
+            {"last_priced_at": {"$gte": since}},
+            {"_id": 0, "sku": 1, "store_id": 1, "last_priced_price": 1}).batch_size(2000):
+        prices_by_sku.setdefault(c["sku"], []).append((c["last_priced_price"], c["store_id"]))
+    hist = {}
+    ratios = {}
+    for sku, sellers in prices_by_sku.items():
+        if len(sellers) < 2:
+            continue
+        prices = sorted(p for p, _s in sellers)
+        n = len(sellers)
+        med = statistics.median(prices)
+        for p, sid in sellers:
+            frac = sum(1 for q in prices if q < p) / (n - 1)
+            b = hist.setdefault(sid, [0, 0, 0, 0])
+            b[min(3, int(frac * 4))] += 1
+            if med > 0:
+                ratios.setdefault(sid, []).append(p / med)
+    percentile_histograms = {
+        sid: {"buckets_0_25_50_75": b, "shared": sum(b),
+              "median_price_ratio_vs_market": round(statistics.median(ratios[sid]), 3) if ratios.get(sid) else None}
+        for sid, b in hist.items()
+    }
+    out["diagnostics"] = {"platform_audit": audit, "own_orders": orders_debug,
+                         "percentile_histograms": percentile_histograms}
+    return out
 
 
 # Register cache specs for background recompute. insights/sales gets a synthetic

@@ -125,12 +125,20 @@ function RevenueCell({ row, isRTL }) {
     return <span className="metric-number text-[#6AC1B5]">{row.revenue_30d.toLocaleString()} SAR</span>;
   }
   if (row.revenue_status === "not_measurable") {
+    // iter40 — blame Salla only when the store actually IS Salla; other
+    // platforms without signals get a neutral label so the Salla claim
+    // stays credible.
+    const isSalla = row.platform === "salla";
     return (
       <span
         className="text-[9px] px-1.5 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B]"
-        title={isRTL ? "منصة سلة لا تكشف عدادات المبيعات" : "Salla does not expose sales counters"}
+        title={isSalla
+          ? (isRTL ? "هذا المتجر لا يكشف عدادات المبيعات أو كميات قابلة للاستخدام" : "This store exposes no sales counters or usable quantities")
+          : (isRTL ? "لا توجد إشارات مبيعات لهذا المتجر" : "No sales signals for this store")}
       >
-        ⓘ {isRTL ? "غير قابل للقياس (سلة)" : "Not measurable (Salla)"}
+        ⓘ {isSalla
+          ? (isRTL ? "غير قابل للقياس (سلة)" : "Not measurable (Salla)")
+          : (isRTL ? "غير قابل للقياس" : "Not measurable")}
       </span>
     );
   }
