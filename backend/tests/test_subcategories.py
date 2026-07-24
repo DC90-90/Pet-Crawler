@@ -18,7 +18,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 os.environ.setdefault("DB_NAME", "test_subcategories")
 from crawlers import (  # noqa: E402
-    classify_food_subcategory, extract_store_category_names,
+    classify_food_subcategory, classify_food_subcategory_hybrid,
+    extract_store_category_names, guess_category,
     process_crawled_products, FOOD_SUBCATEGORIES,
 )
 import server  # noqa: E402
@@ -98,6 +99,96 @@ def test_store_category_tags_help():
     assert C("dog_food", "لو للكلاب", extract_store_category_names(raw_zid)) == "dog_treats"
     assert extract_store_category_names({}) == ""
     assert extract_store_category_names({"categories": None}) == ""
+
+
+# ── iter39 fixes (validated against real-catalog samples) ────────────────────
+def test_bowls_are_accessories_not_food():
+    # the confirmed case: "صحن طعام" (food bowl) used to hit طعام → cat_food,
+    # and بلاستيكي (plastic) contains ستيك → treats. Bowls now force accessories.
+    assert guess_category("مودرنا صحن طعام بلاستيكي للقطط و الكلاب") == "accessories"
+    assert guess_category("وعاء طعام مزدوج للكلاب") == "accessories"
+    assert guess_category("Automatic pet feeder with food storage") == "accessories"
+    assert guess_category("Stainless steel dog food bowl") == "accessories"
+    assert guess_category("مغذية أوتوماتيكية للقطط") == "accessories"
+
+
+def test_holistic_and_plastic_no_longer_read_as_steak():
+    # ستيك is a substring of هوليستيك (holistic) and بلاستيكي (plastic) — the
+    # confirmed cause of Solid Gold dry food landing in dog_treats.
+    assert C("dog_food", "سوليد جولد هوليستيك بليندز طعام جاف للكلاب") == "dog_food_dry"
+    assert C("cat_food", "طعام هوليستيك جاف للقطط") == "cat_food_dry"
+    # standalone ستيك is still a treat word
+    assert C("dog_food", "ستيك دجاج مجفف للكلاب") == "dog_treats"
+    # sticker must not read as stick
+    assert C("cat_food", "sticker gift with cat food") is None
+
+
+def test_bundles_stay_generic():
+    # the confirmed case: kitten box (food + litter + treats + toy) → cat_treats
+    assert C("cat_food", "بكج للقطط الصغيرة مع طعام أكانا وحبيبات تدريب الحمّام ومكافآت تشورو ولعبة") is None
+    assert C("cat_food", "عرض 1+1 طعام قطط رطب") is None
+    assert C("dog_food", "Puppy starter package: kibble + treats") is None
+    assert C("cat_food", "مجموعة تغذية القطط الشاملة") is None
+
+
+def test_treat_names_reach_food_parents():
+    # issue 4: treat names carry no generic food keyword and fell through
+    # guess_category to accessories — never reaching the subcategorizer.
+    assert guess_category("مكافآت تشورو للقطط بالتونة") == "cat_food"
+    assert guess_category("سناك كلاب بالكبد المجفف") == "dog_food"
+    assert guess_category("تريتس القطط بالسلمون") == "cat_food"
+    # ...and then subcategorize as treats end-to-end
+    cat = guess_category("مكافآت تشورو للقطط بالتونة")
+    assert C(cat, "مكافآت تشورو للقطط بالتونة") == "cat_treats"
+
+
+def test_hybrid_name_verdict_beats_store_tags():
+    # an unambiguous form keyword in the NAME can never be overridden by a tag
+    assert classify_food_subcategory_hybrid("dog_food", "طعام جاف للكلاب", "مكافآت") == "dog_food_dry"
+    # bundle-marked names block tag input entirely
+    assert classify_food_subcategory_hybrid("cat_food", "بكج طعام القطط", "طعام رطب") is None
+    # tags still help when the name is inconclusive
+    assert classify_food_subcategory_hybrid("cat_food", "فيليكس بالدجاج 85g", "طعام رطب") == "cat_food_wet"
+
+
+def test_classifier_migration_v2():
+    async def main():
+        db = AsyncIOMotorClient(MONGO)["test_subcat_migration"]
+        for c in ("products", "metric_rollup_meta"):
+            await db[c].delete_many({})
+        await db.products.insert_many([
+            # issue 1: bowl mis-filed as food + treats (via بلاستيكي)
+            {"id": "1", "sku": "B1", "name_ar": "مودرنا صحن طعام بلاستيكي للقطط و الكلاب",
+             "name_en": "", "category": "cat_food", "subcategory": "cat_treats"},
+            # issue 2: dry food mis-filed as treats (via هوليستيك)
+            {"id": "2", "sku": "S1", "name_ar": "سوليد جولد هوليستيك بليندز طعام جاف للكلاب",
+             "name_en": "", "category": "dog_food", "subcategory": "dog_treats"},
+            # issue 3: bundle filed by smallest component
+            {"id": "3", "sku": "P1", "name_ar": "بكج للقطط الصغيرة مع طعام أكانا ومكافآت تشورو ولعبة",
+             "name_en": "", "category": "cat_food", "subcategory": "cat_treats"},
+            # issue 4: treat-named product stuck in accessories
+            {"id": "4", "sku": "T1", "name_ar": "مكافآت تشورو للقطط بالتونة",
+             "name_en": "", "category": "accessories"},
+            # hand-labeled product with keyword-less name must NOT move
+            {"id": "5", "sku": "H1", "name_ar": "هيلز كيتن دجاج 2 كجم",
+             "name_en": "Hills Kitten Chicken 2kg", "category": "cat_food", "subcategory": None},
+            {"id": "6", "sku": "H2", "name_ar": "قفص نقل معدني",
+             "name_en": "", "category": "accessories"},
+        ])
+        n = await server.backfill_food_subcategories(db)
+        assert n >= 4, n
+        docs = {p["sku"]: p async for p in db.products.find({}, {"_id": 0})}
+        assert docs["B1"]["category"] == "accessories" and docs["B1"]["subcategory"] is None
+        assert docs["S1"]["category"] == "dog_food" and docs["S1"]["subcategory"] == "dog_food_dry"
+        assert docs["P1"]["category"] == "cat_food" and docs["P1"]["subcategory"] is None
+        assert docs["T1"]["category"] == "cat_food" and docs["T1"]["subcategory"] == "cat_treats"
+        assert docs["H1"]["category"] == "cat_food" and docs["H1"]["subcategory"] is None
+        assert docs["H2"]["category"] == "accessories"
+        # version marker set → second run is a no-op
+        marker = await db.metric_rollup_meta.find_one({"_id": "classifier"})
+        assert marker["version"] == server.CLASSIFIER_VERSION
+        assert await server.backfill_food_subcategories(db) == 0
+    asyncio.run(main())
 
 
 # ── curated realistic corpus → the distribution/sample report ────────────────

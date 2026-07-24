@@ -113,10 +113,22 @@ def extract_brand(name):
     return ""
 
 
+# iter39 — feeding accessories: these force `accessories` even when طعام/food
+# appears in the name ("صحن طعام" = food bowl).
+_BOWL_KEYWORDS = ["صحن", "صحون", "وعاء", "أوعية", "bowl", "feeder", "مغذية"]
+
+
 def guess_category(name):
     n = name.lower()
+    # iter39 — feeding ACCESSORIES win before food keywords: "صحن طعام" (food
+    # bowl) contains طعام and used to classify bowls/feeders as food.
+    if any(w in n for w in _BOWL_KEYWORDS):
+        return "accessories"
     food_keywords = ["طعام", "غذاء", "food", "دراي", "ويت", "علف", "كيبل", "معلب"]
-    if any(w in n for w in food_keywords):
+    # iter39 — treat names ("مكافآت تشورو", "سناك كلاب") often carry NO generic
+    # food keyword and fell through to accessories, so they never reached the
+    # food subcategorizer. A treat signal IS a food signal.
+    if any(w in n for w in food_keywords) or _has_treat_signal(n):
         if any(w in n for w in ["قط", "كات", "cat"]):
             return "cat_food"
         if any(w in n for w in ["كلب", "كلاب", "dog"]):
@@ -147,30 +159,48 @@ FOOD_SUBCATEGORY_PARENTS = ("cat_food", "dog_food")
 FOOD_SUBCATEGORIES = ("cat_food_dry", "cat_food_wet", "cat_treats",
                       "dog_food_dry", "dog_food_wet", "dog_treats")
 
-# NOTE deliberate omissions: "can" (matches Royal CANin), bare "treat" is
-# checked specially so "treatment" (healthcare wording) never classifies food.
-_TREAT_KEYWORDS = ["مكافأة", "مكافآت", "مكافات", "تريتس", "تريت", "سناك",
-                   "snack", "biscuit", "بسكويت", "chew", "مضغ", "stick", "ستيك", "أعواد"]
+# NOTE deliberate omissions: "can" (matches Royal CANin). iter39 — the short/
+# collision-prone tokens (ستيك inside هوليستيك "holistic" and بلاستيكي
+# "plastic"; تريت inside تريتمنت; treat inside treatment; stick inside sticker)
+# are WORD-BOUNDED via regex instead of substring-matched. That trap was the
+# confirmed cause of "Solid Gold طعام جاف" landing in dog_treats.
+_TREAT_SUBSTRINGS = ["مكافأة", "مكافآت", "مكافات", "تريتس", "سناك",
+                     "snack", "biscuit", "بسكويت", "chew", "مضغ", "أعواد"]
+_TREAT_WORD_RE = re.compile(r"(?<!\w)(ستيك|تريت|sticks?|treats?)(?!\w)")
 _WET_KEYWORDS = ["رطب", "معلب", "ويت فود", "wet", "canned", "pouch", "باوتش",
                  "jelly", "جيلي", "بالجيلي", "gravy", "مرق", "شوربة", "soup",
                  "mousse", "pate", "باتيه"]
 _DRY_KEYWORDS = ["جاف", "دراي", "dry", "kibble", "كيبل"]
+# iter39 — bundle/box/offer markers: multi-item packs (food + litter + treats
+# + toy) were getting filed by their smallest component. Bundles stay generic.
+_BUNDLE_MARKERS = ["بكج", "باكج", "باكيج", "bundle", "package", "combo",
+                   "كومبو", "عرض", "عروض", "مجموعة", "+"]
+
+
+def _has_treat_signal(t):
+    return any(k in t for k in _TREAT_SUBSTRINGS) or bool(_TREAT_WORD_RE.search(t))
+
+
+def _is_bundle(t):
+    return any(m in t for m in _BUNDLE_MARKERS)
 
 
 def classify_food_subcategory(parent_category, *texts):
     """Return one of FOOD_SUBCATEGORIES, or None to keep the generic parent.
 
-    Precedence: treats first (a chicken-stick "in gravy" is still a treat),
-    then wet vs dry — and a product matching BOTH wet and dry keywords is a
-    variety pack we refuse to guess on."""
+    Precedence: bundle markers first (multi-item packs stay generic), then
+    treats (a chicken-stick "in gravy" is still a treat), then wet vs dry —
+    and a product matching BOTH wet and dry keywords is a variety pack we
+    refuse to guess on."""
     if parent_category not in FOOD_SUBCATEGORY_PARENTS:
         return None
     t = " ".join(str(x) for x in texts if x).lower()
     if not t:
         return None
+    if _is_bundle(t):
+        return None
     prefix = "cat" if parent_category == "cat_food" else "dog"
-    is_treat = any(k in t for k in _TREAT_KEYWORDS) or ("treat" in t and "treatment" not in t)
-    if is_treat:
+    if _has_treat_signal(t):
         return f"{prefix}_treats"
     wet = any(k in t for k in _WET_KEYWORDS)
     dry = any(k in t for k in _DRY_KEYWORDS)
@@ -181,6 +211,17 @@ def classify_food_subcategory(parent_category, *texts):
     if dry:
         return f"{prefix}_food_dry"
     return None
+
+
+def classify_food_subcategory_hybrid(parent_category, name, store_tags):
+    """iter39 — precedence-safe hybrid: the product NAME's verdict always wins
+    (an explicit form keyword in the name can never be overridden by a store
+    tag, and a bundle-marked name blocks tag input entirely); store category
+    tags are consulted only when the name alone is inconclusive."""
+    primary = classify_food_subcategory(parent_category, name)
+    if primary is not None or _is_bundle(str(name or "").lower()):
+        return primary
+    return classify_food_subcategory(parent_category, name, store_tags)
 
 
 def extract_store_category_names(raw):
@@ -499,7 +540,7 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 "brand": extract_brand(norm["name_ar"]),
                 "category": category,
                 # additive: parent category stays; None = confidently generic
-                "subcategory": classify_food_subcategory(category, norm["name_ar"], store_cats),
+                "subcategory": classify_food_subcategory_hybrid(category, norm["name_ar"], store_cats),
                 "animal_type": guess_animal(norm["name_ar"]),
                 "weight_kg": extract_weight(norm["name_ar"]),
                 "image_url": norm["img_url"],
@@ -517,8 +558,10 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             if "subcategory" not in existing:
                 # iter36 — one-shot enrichment of pre-existing products (the
                 # startup backfill covers products no crawl revisits).
-                patch["subcategory"] = classify_food_subcategory(
-                    existing.get("category"), existing.get("name_ar"), existing.get("name_en"), store_cats)
+                patch["subcategory"] = classify_food_subcategory_hybrid(
+                    existing.get("category"),
+                    " ".join(str(x) for x in (existing.get("name_ar"), existing.get("name_en")) if x),
+                    store_cats)
             if patch:
                 await db.products.update_one({"id": pid}, {"$set": patch})
 
