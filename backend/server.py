@@ -24,6 +24,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from crawlers import (
     crawl_store_waterfall, process_crawled_products,
     extract_brand, guess_category, guess_animal, extract_weight,
+    classify_food_subcategory, FOOD_SUBCATEGORIES, FOOD_SUBCATEGORY_PARENTS,
     sync_own_store_prices,
 )
 from store_registry import ensure_stores as registry_ensure_stores
@@ -345,6 +346,9 @@ CATEGORIES = {
     "litter": "Litter", "toys": "Toys", "grooming": "Grooming",
     "healthcare": "Healthcare", "small_food": "Small Animal Food",
     "reptile": "Reptile", "vet_supplies": "Vet Supplies", "pet_food": "Pet Food",
+    # iter36 — food subcategories (additive; parent cat_food/dog_food remain)
+    "cat_food_dry": "Dry Cat Food", "cat_treats": "Cat Treats",
+    "dog_food_dry": "Dry Dog Food", "dog_treats": "Dog Treats",
 }
 
 EXTRA_PRODUCT_TEMPLATES = [
@@ -2047,7 +2051,12 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
     # Get all products
     prod_query = {}
     if category and category != "all":
-        prod_query["category"] = category
+        # iter36 — subcategory keys filter on the additive `subcategory` field;
+        # parent keys (cat_food, …) keep matching every product as before.
+        if category in FOOD_SUBCATEGORIES:
+            prod_query["subcategory"] = category
+        else:
+            prod_query["category"] = category
     if animal_type and animal_type != "all":
         prod_query["animal_type"] = animal_type
     if search:
@@ -2518,7 +2527,9 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
             "avg_market_share": round(100 / total_count, 1) if total_count else 0,
         }
     # Distinct categories across the FULL filtered set (so the dropdown stays complete after pagination)
-    categories_all = sorted({(r.get("category") or "") for r in result if r.get("category")})
+    # iter36 — subcategories present in the set appear alongside their parents.
+    categories_all = sorted({(r.get("category") or "") for r in result if r.get("category")}
+                            | {r["subcategory"] for r in result if r.get("subcategory")})
     # Apply pagination AFTER sort + KPIs so totals remain accurate
     return {"kpis": kpis, "rows": result, "total": total_count, "categories": categories_all}
 
@@ -2611,7 +2622,11 @@ async def list_products(
 ):
     query = {}
     if category and category != "all":
-        query["category"] = category
+        # iter36 — subcategory-aware (same rule as the My Products filter)
+        if category in FOOD_SUBCATEGORIES:
+            query["subcategory"] = category
+        else:
+            query["category"] = category
     if animal_type and animal_type != "all":
         query["animal_type"] = animal_type
     if search:
@@ -3639,7 +3654,9 @@ async def _insights_trending_compute(db, days):
     products = await db.products.find({}, {"_id": 0}).to_list(500)
     cat_data = {}
     for p in products:
-        cat = p["category"]
+        # iter36 — trending tabs split on the food subcategory when one was
+        # confidently assigned; unclassified products stay under the parent.
+        cat = p.get("subcategory") or p["category"]
         sales = sku_sales.get(p["sku"], 0)
         cat_data.setdefault(cat, {"total_sales": 0, "products": []})
         cat_data[cat]["total_sales"] += sales
@@ -5229,6 +5246,53 @@ async def get_my_skus(user=Depends(get_user)):
 # IngestPayload, _coerce_num, _coerce_int moved to models/schemas.py and core/utils.py (Feb 2026 refactor)
 
 
+async def backfill_food_subcategories(db):
+    """iter36 — assign `subcategory` to every food product that doesn't carry
+    the field yet (value may be None = confidently generic, which also marks
+    the doc as processed → idempotent). Returns the number of docs touched."""
+    parents = {"category": {"$in": list(FOOD_SUBCATEGORY_PARENTS)}, "subcategory": {"$exists": False}}
+    if not await db.products.find_one(parents, {"_id": 1}):
+        return 0
+    n = 0
+    async for p in db.products.find(parents, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1}):
+        sub = classify_food_subcategory(p.get("category"), p.get("name_ar"), p.get("name_en"))
+        await db.products.update_one({"sku": p["sku"]}, {"$set": {"subcategory": sub}})
+        n += 1
+    return n
+
+
+@router.get("/admin/subcategory-preview")
+async def subcategory_preview(samples: int = Query(20, ge=1, le=100), user=Depends(get_user)):
+    """iter36 — read-only classifier audit over the LIVE catalog: distribution of
+    food products across subcategories plus N sample names per bucket, so the
+    classifier can be sanity-checked against real data. super_admin only."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+    dist = {k: 0 for k in FOOD_SUBCATEGORIES}
+    generic = {p: 0 for p in FOOD_SUBCATEGORY_PARENTS}
+    sample_map = {k: [] for k in [*FOOD_SUBCATEGORIES, *FOOD_SUBCATEGORY_PARENTS]}
+    total = 0
+    async for p in db.products.find(
+        {"category": {"$in": list(FOOD_SUBCATEGORY_PARENTS)}},
+        {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1, "subcategory": 1},
+    ):
+        total += 1
+        # use the stored assignment when present (post-backfill), else classify live
+        sub = p.get("subcategory") if "subcategory" in p else classify_food_subcategory(
+            p.get("category"), p.get("name_ar"), p.get("name_en"))
+        key = sub or p["category"]
+        if sub:
+            dist[sub] += 1
+        else:
+            generic[p["category"]] += 1
+        if len(sample_map[key]) < samples:
+            sample_map[key].append({"sku": p.get("sku"), "name": p.get("name_ar") or p.get("name_en"),
+                                    "assigned": key})
+    pct = {k: round(100 * v / total, 1) if total else 0 for k, v in {**dist, **generic}.items()}
+    return {"total_food_products": total, "subcategory_counts": dist,
+            "generic_counts": generic, "pct": pct, "samples": sample_map}
+
+
 @router.get("/admin/recent-snapshots")
 async def admin_recent_snapshots(limit: int = Query(200, ge=1, le=1000), user=Depends(get_user)):
     """Read-only admin helper: latest N snapshots joined with store platform.
@@ -6090,6 +6154,15 @@ async def startup():
     # request after a deploy/restart is fast instead of paying the live-compute
     # cost. Fire-and-forget: never blocks startup, failures fall back to live.
     async def _warm_dashboard_cache():
+        # iter36 — one-time food-subcategory backfill for pre-existing products
+        # (new/recrawled products are classified in process_crawled_products).
+        # Runs BEFORE the page-cache warm-up so trending caches see subcategories.
+        try:
+            n = await backfill_food_subcategories(db)
+            if n:
+                logger.info(f"[Subcat] backfilled {n} food products (field set even when generic → idempotent)")
+        except Exception:
+            logger.exception("[Subcat] backfill failed (new crawls will classify incrementally)")
         # iter30 — backfill the metric rollup/coverage collections FIRST so the
         # page-cache warm-up below reads populated metrics (drops/gaps/spread).
         await _maybe_backfill_store_metrics(db)

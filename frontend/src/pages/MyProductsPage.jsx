@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { useI18n } from "@/lib/i18n";
+import { useI18n, catLabel } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
 import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -226,7 +226,7 @@ export default function MyProductsPage() {
           </SelectTrigger>
           <SelectContent className="bg-[#104745] border-white/10 text-white">
             <SelectItem value="all">{t("all_categories")}</SelectItem>
-            {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+            {categories.map((c) => <SelectItem key={c} value={c}>{catLabel(c, isRTL)}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>

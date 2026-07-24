@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQueries } from "@tanstack/react-query";
-import { useI18n } from "@/lib/i18n";
+import { useI18n, catLabel } from "@/lib/i18n";
 import api from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -320,13 +320,13 @@ export default function InsightsPage() {
           <h3 className="text-sm font-semibold text-white mb-3">{t("chart_trending")}</h3>
           <Tabs defaultValue={trending[0]?.category || "cat_food"} className="w-full">
             <TabsList className="flex flex-wrap gap-1 bg-transparent h-auto p-0 mb-3">
-              {trending.slice(0, 6).map((c) => (
+              {trending.slice(0, 9).map((c) => (
                 <TabsTrigger key={c.category} value={c.category} className="text-[10px] px-2 py-1 rounded-md data-[state=active]:bg-[#1E988E] data-[state=active]:text-[#090E1C]">
-                  {c.category_label}
+                  {catLabel(c.category, isRTL) || c.category_label}
                 </TabsTrigger>
               ))}
             </TabsList>
-            {trending.slice(0, 6).map((c) => (
+            {trending.slice(0, 9).map((c) => (
               <TabsContent key={c.category} value={c.category} className="mt-0">
                 <p className="text-xs text-[#A1E4DB] mb-2">Total: {c.total_sales} units sold</p>
                 <div className="space-y-1.5">
