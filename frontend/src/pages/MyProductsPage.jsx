@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { useI18n, catLabel } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
-import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw } from "lucide-react";
+import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw, Info } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import ProductDetailPanel from "@/components/ProductDetailPanel";
 import { MineBadge } from "@/components/MineBadge";
 import { MarketPositionBadge } from "@/components/MarketPosition";
@@ -26,6 +27,52 @@ function ConfBadge({ tier, score }) {
     <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${cls[tier] || "tier-2"}`}>
       T{tier} {score}%
     </span>
+  );
+}
+
+/**
+ * Small accessible tooltip for KPI card explainers (Feb 2026).
+ *
+ * We use Radix Tooltip's UNCONTROLLED mode so the library coordinates
+ * open/close state across all six cards — hovering a second trigger
+ * automatically dismisses the first. Radix reacts to pointer (desktop
+ * hover) and focus (keyboard tab) natively. For mobile: a tap normally
+ * focuses the button, which triggers Radix's focus-open path — but iOS
+ * Safari doesn't reliably focus a plain button on tap, so we explicitly
+ * call `.focus()` in the click handler to guarantee tooltip visibility
+ * on touch. Tapping again (or outside) blurs the button, closing it.
+ *
+ * `tracking-normal` overrides the card header's 0.15em letter-spacing so
+ * Arabic body text (DIN Next LT Arabic via `font-arabic`) stays legible —
+ * Arabic script breaks visually under letter-spacing. Radix Tooltip
+ * auto-flips side/align based on the ancestor `dir="rtl"` attribute, so
+ * no explicit RTL positioning is needed here.
+ */
+function KpiInfoTooltip({ content, label }) {
+  return (
+    <Tooltip delayDuration={100}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); e.currentTarget.focus(); }}
+          className="inline-flex items-center justify-center w-4 h-4 rounded-full text-[#6AC1B5] hover:text-white focus:outline-none focus-visible:ring-1 focus-visible:ring-[#1E988E] transition-colors"
+          aria-label={label}
+          data-testid="kpi-info-trigger"
+        >
+          <Info className="w-3.5 h-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent
+        side="top"
+        align="center"
+        sideOffset={6}
+        collisionPadding={12}
+        className="max-w-[260px] bg-[#0A2728] text-[#EAF7F5] border border-[#13625F] shadow-lg text-[11px] leading-[1.55] tracking-normal px-3 py-2"
+        data-testid="kpi-info-content"
+      >
+        {content}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -161,28 +208,39 @@ export default function MyProductsPage() {
          see BOTH what the market earns and what they actually take home.
          Sixth card added: Market Coverage = matched products / total — surfaces
          the data-quality bar so a low avg_market_share isn't read as "we're losing"
-         when the truth is "we don't have competitor data on most of the catalogue") */}
+         when the truth is "we don't have competitor data on most of the catalogue".
+         Info tooltips (Feb 2026): each card exposes an ⓘ explainer — hover on
+         desktop, tap on mobile — sourced from the i18n dictionary so translation
+         drift is impossible.) */}
+      <TooltipProvider delayDuration={100}>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { key: "kpi_products", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
-          { key: "kpi_units_sold", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_mkt_revenue", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
+          { key: "kpi_products", tipKey: "kpi_products_tip", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
+          { key: "kpi_units_sold", tipKey: "kpi_units_sold_tip", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
+          { key: "kpi_mkt_revenue", tipKey: "kpi_mkt_revenue_tip", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
           // Real ledger data (Zid Orders API) drops the "(Est.)" suffix and
           // shows the order count; the estimation fallback keeps the old label.
-          { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : null, icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, sub: kpis.share_sample_size != null ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : null, icon: TrendingDown, accent: "#F59E0B" },
-          { key: "kpi_market_coverage", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
+          // Both variants share the same explainer copy (the source of the
+          // number differs, but the meaning "your store's revenue in this
+          // period" is identical to the reader).
+          { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", tipKey: "kpi_my_revenue_tip", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : null, icon: TrendingUp, accent: "#10B981" },
+          { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: `${kpis.avg_market_share ?? 0}%`, sub: kpis.share_sample_size != null ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : null, icon: TrendingDown, accent: "#F59E0B" },
+          { key: "kpi_market_coverage", tipKey: "kpi_market_coverage_tip", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
         ].map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">{t(k.key)}</p>
-              <k.icon className="w-4 h-4" style={{ color: k.accent }} />
+              <div className="flex items-center gap-1.5 min-w-0">
+                <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB] truncate">{t(k.key)}</p>
+                <KpiInfoTooltip content={t(k.tipKey)} label={t("kpi_info_label")} />
+              </div>
+              <k.icon className="w-4 h-4 shrink-0" style={{ color: k.accent }} />
             </div>
             <p className="text-2xl font-bold tracking-tighter text-white metric-number animate-countUp">{k.val}</p>
             {k.sub && <p className="text-[11px] text-[#A1E4DB] font-mono mt-0.5" data-testid={`kpi-${k.key}-sub`}>{k.sub}</p>}
           </div>
         ))}
       </div>
+      </TooltipProvider>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 glass-card p-3">
