@@ -5514,6 +5514,8 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                     "sku": sku,
                     "price": round(effective_price, 2),
                     "original_price": round(original_price, 2),
+                    # iter35 — persist the sale price for capture observability
+                    "sale_price": round(sale_price, 2) if 0 < sale_price < price else None,
                     "discount_pct": max(0, disc_pct),
                     "in_stock": in_stock,
                     "product_url": product_url,
