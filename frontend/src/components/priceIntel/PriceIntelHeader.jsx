@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Shield, Info, Trophy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { CONFIDENCE_LEVELS } from "./PriceIntelShared";
@@ -104,62 +105,129 @@ export function ConfidenceGuidePanel({ isRTL }) {
   );
 }
 
-// iter32 — the "Your Store Performance" card and the market-position headline now
-// read LIVE sources (my-products KPIs + insights/summary), never the frozen
-// market_intelligence_baseline literals from the April MySkuWatch import. The
-// static leaderboard list remains but is explicitly labeled as that snapshot.
-export function MarketPositionWidget({ leaderboard, myKpis, summary, isRTL }) {
-  if (!leaderboard?.my_store_baseline && !myKpis && !summary) return null;
-  const mp = summary?.market_position_summary;
-  const pct = mp && mp.ranked_products > 0 && mp.avg_percentile != null ? mp.avg_percentile : null;
-  // Same verdict semantics + tone as the Insights page Market Position card, so
-  // the two pages give ONE answer to "where do I rank".
-  const verdict = pct == null ? null
-    : pct < 33 ? (isRTL ? "أرخص من معظم السوق" : "cheaper than most of the market")
-    : pct < 50 ? (isRTL ? "غالباً تحت وسيط السوق" : "mostly below the market median")
-    : pct < 66 ? (isRTL ? "غالباً فوق وسيط السوق" : "mostly above the market median")
-    : (isRTL ? "أغلى من معظم السوق" : "expensive vs the market");
-  const tone = pct == null ? "#A1E4DB" : pct < 50 ? "#6AC1B5" : pct < 66 ? "#A1E4DB" : "#FBBF24";
-  const isLedger = myKpis?.my_revenue_source === "zid_orders";
-  const snapshotLabel = isRTL ? "لقطة MySkuWatch — 17 أبريل 2026" : "MySkuWatch snapshot — 17 Apr 2026";
+// iter38 — the left card is now the LIVE Market Strength ranking (fixed 30d,
+// recomputed after every crawl). The static April MySkuWatch list and its star
+// ratings are gone from this widget entirely. The right card stays the live
+// "Your Store Performance" (iter32).
+function ScoreBar({ value, color = "#1E988E" }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <span className="inline-flex items-center gap-1.5">
+      <span className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden inline-block">
+        <span className="h-full block rounded-full" style={{ width: `${Math.max(2, Math.min(100, value))}%`, background: color }} />
+      </span>
+      <span className="metric-number text-xs font-bold text-white">{value}</span>
+    </span>
+  );
+}
+
+function RevenueCell({ row, isRTL }) {
+  if (row.revenue_30d != null) {
+    return <span className="metric-number text-[#6AC1B5]">{row.revenue_30d.toLocaleString()} SAR</span>;
+  }
+  if (row.revenue_status === "not_measurable") {
+    return (
+      <span
+        className="text-[9px] px-1.5 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B]"
+        title={isRTL ? "منصة سلة لا تكشف عدادات المبيعات" : "Salla does not expose sales counters"}
+      >
+        ⓘ {isRTL ? "غير قابل للقياس (سلة)" : "Not measurable (Salla)"}
+      </span>
+    );
+  }
+  return <span className="text-[9px] text-[#A1E4DB]">{isRTL ? "قيد التجميع" : "Accumulating"}</span>;
+}
+
+export function StoreRankingCard({ ranking, computedAt, isRTL }) {
+  const [expanded, setExpanded] = useState(null);
+  if (!ranking?.stores?.length) {
+    return (
       <div className="glass-card p-5">
-        <div className="flex items-center gap-2 mb-3">
-          <Trophy className="w-5 h-5 text-[#F59E0B]" />
-          <h3 className="text-sm font-semibold text-white">{isRTL ? "ترتيبك في السوق" : "Market Position"}</h3>
+        <p className="text-[11px] text-[#A1E4DB]">{isRTL ? "لا توجد بيانات تصنيف حية بعد" : "No live ranking data yet"}</p>
+      </div>
+    );
+  }
+  const own = ranking.stores.find((r) => r.is_own_store);
+  const compMeta = [
+    { key: "breadth", label: isRTL ? "اتساع الكتالوج" : "Catalog breadth", w: 25, detail: (c) => `${c.breadth.products.toLocaleString()} ${isRTL ? "منتج" : "products"}` },
+    { key: "price", label: isRTL ? "تنافسية الأسعار" : "Price competitiveness", w: 35, detail: (c) => c.price.avg_percentile != null ? `P${c.price.avg_percentile} · ${c.price.shared_products.toLocaleString()} ${isRTL ? "منتج مشترك" : "shared"}` : (isRTL ? "لا منتجات مشتركة" : "no shared products") },
+    { key: "stock", label: isRTL ? "توفر المخزون" : "Stock health", w: 25, detail: (c) => `${Math.round(c.stock.score * 100)}% ${isRTL ? "متوفر" : "in stock"}` },
+    { key: "freshness", label: isRTL ? "حداثة البيانات" : "Data freshness", w: 15, detail: (c) => `${Math.round(c.freshness.score * 100)}% ${isRTL ? "خلال 48 ساعة" : "seen <48h"}` },
+  ];
+  return (
+    <div className="glass-card p-5" data-testid="store-ranking-card">
+      <div className="flex items-center gap-2 mb-1">
+        <Trophy className="w-5 h-5 text-[#F59E0B]" />
+        <h3 className="text-sm font-semibold text-white">{isRTL ? "ترتيب قوة السوق" : "Market Strength Ranking"}</h3>
+      </div>
+      {own && (
+        <div className="flex items-end gap-2 mb-1" data-testid="own-rank-headline">
+          <span className="text-4xl font-bold text-[#1E988E] metric-number">#{own.rank}</span>
+          <span className="text-[#A1E4DB] text-sm mb-1">
+            {isRTL ? `من ${ranking.total_stores} متجراً · قوة السوق ${own.score}` : `of ${ranking.total_stores} stores · Market Strength ${own.score}`}
+          </span>
         </div>
-        {pct != null ? (
-          <div className="mb-3" data-testid="pi-live-percentile">
-            <div className="flex items-end gap-2">
-              <span className="text-4xl font-bold metric-number" style={{ color: tone }}>P{pct}</span>
-              <span className="text-[#A1E4DB] text-sm mb-1">{isRTL ? "متوسط المئين السعري" : "avg. price percentile"}</span>
-            </div>
-            <p className="text-[11px] mt-1" style={{ color: tone }}>
-              {isRTL ? "أنت " : "You're "}{verdict} · {mp.ranked_products.toLocaleString()} {isRTL ? "منتج مصنف" : "products ranked"}
-            </p>
-          </div>
-        ) : (
-          <p className="text-[11px] text-[#A1E4DB] mb-3">{isRTL ? "لا توجد بيانات تصنيف حية بعد" : "No live ranking data yet"}</p>
-        )}
-        {leaderboard?.leaderboard?.length > 0 && (
-          <div className="space-y-1.5">
-            <Badge className="text-[8px] bg-[#F59E0B]/10 text-[#F59E0B] border-0">{snapshotLabel}</Badge>
-            {leaderboard.leaderboard.slice(0, 7).map((e) => (
-              <div key={e.rank} className={`flex items-center gap-2 text-xs py-1 px-2 rounded-lg ${e.is_my_store ? "bg-[#1E988E]/10 border border-[#1E988E]/20" : ""}`}>
-                <span className="text-[#A1E4DB] w-5 text-right">#{e.rank}</span>
-                <span className={`flex-1 ${e.is_my_store ? "text-[#1E988E] font-semibold" : "text-white"}`}>{e.store_domain}</span>
-                <span className="text-[#A1E4DB]">{e.relative_size}</span>
-              </div>
-            ))}
-            {leaderboard.leaderboard.length > 7 && leaderboard.my_store_baseline && (
-              <div className="text-[10px] text-[#A1E4DB] text-center pt-1">
-                ... + {leaderboard.leaderboard.length - 7} more stores ({isRTL ? "ترتيب اللقطة" : "snapshot rank"} #{leaderboard.my_store_baseline.market_rank})
+      )}
+      {computedAt && (
+        <p className="text-[10px] text-[#6AC1B5] mb-3 font-mono">
+          {isRTL ? "محدث حتى" : "as of"}{" "}
+          {new Date(computedAt).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
+          {" · "}{isRTL ? "آخر 30 يوماً" : "last 30 days"}
+        </p>
+      )}
+      <div className="space-y-1">
+        {ranking.stores.map((r) => (
+          <div key={r.store_id}>
+            <button
+              type="button"
+              onClick={() => setExpanded(expanded === r.store_id ? null : r.store_id)}
+              className={`w-full flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg text-start transition-colors hover:bg-white/5 ${r.is_own_store ? "bg-[#1E988E]/10 border border-[#1E988E]/20" : ""}`}
+              data-testid={`ranking-row-${r.store_id}`}
+            >
+              <span className="text-[#A1E4DB] w-6 text-center metric-number">#{r.rank}</span>
+              <span className={`flex-1 truncate ${r.is_own_store ? "text-[#1E988E] font-semibold" : "text-white"}`}>
+                {r.name}
+                <span className="text-[8px] ms-1.5 px-1 py-0.5 rounded bg-white/10 text-[#A1E4DB] uppercase">{r.platform}</span>
+                {r.stale && (
+                  <span className="text-[8px] ms-1 px-1 py-0.5 rounded bg-[#EF4444]/15 text-[#F87171]">
+                    {isRTL ? "بيانات قديمة" : "stale data"}
+                  </span>
+                )}
+              </span>
+              <ScoreBar value={r.score} color={r.is_own_store ? "#1E988E" : "#6AC1B5"} />
+              <span className="w-28 text-end hidden sm:inline-block"><RevenueCell row={r} isRTL={isRTL} /></span>
+            </button>
+            {expanded === r.store_id && (
+              <div className="mx-2 mb-1 px-3 py-2 rounded-lg bg-black/20 border border-white/5 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5" data-testid={`ranking-breakdown-${r.store_id}`}>
+                {compMeta.map((cm) => (
+                  <div key={cm.key} className="flex items-center gap-2 text-[10px]">
+                    <span className="text-[#A1E4DB] w-32 shrink-0">{cm.label} <span className="opacity-60">({cm.w}%)</span></span>
+                    <span className="flex-1 h-1 rounded-full bg-white/10 overflow-hidden">
+                      <span className="h-full block rounded-full bg-[#1E988E]" style={{ width: `${Math.round(r.components[cm.key].score * 100)}%` }} />
+                    </span>
+                    <span className="text-white metric-number w-8 text-end">{Math.round(r.components[cm.key].score * 100)}</span>
+                    <span className="text-[#A1E4DB] opacity-70 w-28 text-end truncate">{cm.detail(r.components)}</span>
+                  </div>
+                ))}
+                {r.overlap != null && (
+                  <div className="text-[10px] text-[#A1E4DB] sm:col-span-2">
+                    {isRTL ? `${r.overlap.toLocaleString()} منتجاً مشتركاً مع كتالوجك` : `${r.overlap.toLocaleString()} products overlap with your catalog`}
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
+        ))}
       </div>
+    </div>
+  );
+}
+
+export function MarketPositionWidget({ ranking, rankingComputedAt, myKpis, summary, isRTL }) {
+  if (!ranking && !myKpis && !summary) return null;
+  const isLedger = myKpis?.my_revenue_source === "zid_orders";
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <StoreRankingCard ranking={ranking} computedAt={rankingComputedAt} isRTL={isRTL} />
       <div className="glass-card p-5">
         <h3 className="text-sm font-semibold text-white mb-3">{isRTL ? "أداء متجرك (14 يوم)" : "Your Store Performance (14d)"}</h3>
         <div className="grid grid-cols-2 gap-4" data-testid="pi-store-performance-live">
