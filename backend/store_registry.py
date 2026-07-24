@@ -40,7 +40,12 @@ REQUIRED_STORES = [
      "discovery": "Jul 2026: indexed URLs now show WooCommerce paths (/en/product-category/...) — may have migrated off Salla; verify on next crawl"},
     {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True},
     {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "use_storefront_categories": True},
-    {"name": "Mowkly", "domain": "mowkly.com", "platform": "salla", "priority": 1, "working_endpoint": "/api/v1/products"},
+    # iter40 — platform corrected salla→zid: mowkly.com serves a Zid-style
+    # /api/v1/products API (page pagination, quantity exposed) and produces
+    # measurable sales signals; the old "salla" tag made the ranking's
+    # "Not measurable (Salla)" label incoherent. ensure_stores syncs this
+    # correction into db.stores on next boot.
+    {"name": "Mowkly", "domain": "mowkly.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
     {"name": "Aleef", "domain": "aleef.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
     {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
     {"name": "Petsy", "domain": "petsysa.com", "platform": "zid", "priority": 2, "working_endpoint": "/api/v1/products"},

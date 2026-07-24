@@ -129,10 +129,13 @@ def guess_category(name):
     # food keyword and fell through to accessories, so they never reached the
     # food subcategorizer. A treat signal IS a food signal.
     if any(w in n for w in food_keywords) or _has_treat_signal(n):
+        # iter40 — DOG signals win the parent decision (client rule: an explicit
+        # للكلاب / كلاب / dog beats any stray cat token, and عظم chew-bones are
+        # dog products). Zolux "عظمة مضغ ... للكلاب" was landing in cat_treats.
+        if any(w in n for w in ["كلب", "كلاب", "dog", "عظمة", "عظم", "bone"]):
+            return "dog_food"
         if any(w in n for w in ["قط", "كات", "cat"]):
             return "cat_food"
-        if any(w in n for w in ["كلب", "كلاب", "dog"]):
-            return "dog_food"
         if any(w in n for w in ["طير", "طيور", "ببغاء", "bird"]):
             return "bird_food"
         if any(w in n for w in ["سمك", "أسماك", "fish"]):
@@ -165,7 +168,9 @@ FOOD_SUBCATEGORIES = ("cat_food_dry", "cat_food_wet", "cat_treats",
 # are WORD-BOUNDED via regex instead of substring-matched. That trap was the
 # confirmed cause of "Solid Gold طعام جاف" landing in dog_treats.
 _TREAT_SUBSTRINGS = ["مكافأة", "مكافآت", "مكافات", "تريتس", "سناك",
-                     "snack", "biscuit", "بسكويت", "chew", "مضغ", "أعواد"]
+                     "snack", "biscuit", "بسكويت", "chew", "مضغ", "أعواد",
+                     # iter40 — treat forms found missing during validation
+                     "جيركي", "jerky", "دنتال", "ليكابل", "lickable"]
 _TREAT_WORD_RE = re.compile(r"(?<!\w)(ستيك|تريت|sticks?|treats?)(?!\w)")
 _WET_KEYWORDS = ["رطب", "معلب", "ويت فود", "wet", "canned", "pouch", "باوتش",
                  "jelly", "جيلي", "بالجيلي", "gravy", "مرق", "شوربة", "soup",

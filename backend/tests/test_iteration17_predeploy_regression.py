@@ -12,7 +12,7 @@ import pytest
 import requests
 
 BASE_URL = os.environ.get(
-    "REACT_APP_BACKEND_URL", "https://price-intel-dev.preview.emergentagent.com"
+    "REACT_APP_BACKEND_URL", "https://daleel-price-intel.preview.emergentagent.com"
 ).rstrip("/")
 SUPER_ADMIN_EMAIL = "a.disi@taqueen.sa"
 SUPER_ADMIN_PASSWORD = "Ahmaddc90@"
