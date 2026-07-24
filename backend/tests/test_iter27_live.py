@@ -7,7 +7,7 @@ import time
 import pytest
 import requests
 
-BASE_URL = "https://daleel-price-intel.preview.emergentagent.com"
+BASE_URL = "https://price-intel-dev.preview.emergentagent.com"
 EMAIL = "a.disi@taqueen.sa"
 PASSWORD = "Ahmaddc90@"
 TIMEOUT_S = 30.0

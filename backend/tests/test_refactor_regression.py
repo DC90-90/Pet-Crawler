@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 if not BASE_URL:
-    BASE_URL = "https://daleel-price-intel.preview.emergentagent.com"
+    BASE_URL = "https://price-intel-dev.preview.emergentagent.com"
 
 # Test credentials
 ADMIN_EMAIL = "a.disi@taqueen.sa"

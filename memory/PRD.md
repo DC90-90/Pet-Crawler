@@ -103,5 +103,5 @@ Post-proper-fix, production 90D KPIs should surface as (per preview): matched â‰
 - Crawler token (hardcoded): `zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO`
 
 ## URLs
-- Preview: https://daleel-price-intel.preview.emergentagent.com
+- Preview: https://price-intel-dev.preview.emergentagent.com
 - Production: https://saudi-pets-monitor.emergent.host

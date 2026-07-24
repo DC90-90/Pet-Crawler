@@ -1,442 +1,300 @@
-<analysis>**original_problem_statement**: 
-SaaS web application called Daleel (formerly Daleel Pets) for Saudi store owners to track and monitor competitor stores in the Saudi market. 
+<analysis>Here is the handoff summary for the next agent:
+
+**original_problem_statement**: 
+SaaS web application called Daleel for Saudi store owners to track and monitor competitor stores in the Saudi market. 
 PRODUCT REQUIREMENTS: 
 - Monitor product prices, stock/quantity, best sellers, categories, and discounts.
 - Complex data crawler architecture handling multiple Saudi store platforms (Salla, Zid).
-- Sophisticated product matching engine prioritizing Barcode -> SKU matching with strict confidence scoring (Name-based matching has been completely removed).
-- UI/UX: HRM-SA Visual Identity (Dark/Light mode, Recharts, Space Grotesk/JetBrains Mono fonts). Dashboard with tables, insights, filtering.
-- Backend: FastAPI + MongoDB + JWT Auth + APScheduler.
+- Sophisticated product matching engine prioritizing Barcode -> SKU matching.
+- Backend: FastAPI + MongoDB + JWT Auth + APScheduler. Frontend: React 18 + Tailwind.
 
 **User's preferred language**: English (INSTRUCT next agent to respond in English only)
 
-**what currently exists?**: 
-A highly functional, production-deployed React + FastAPI + MongoDB platform. The backend features a robust 4-tier waterfall crawler bypassing blocks using Saudi Residential Proxies (Webshare). The frontend is optimized with React Query, lazy loading, and TTL caching, making Insights dashboards load fast. It features robust RBAC, automatic Playwright self-healing, daily cron-based scheduling, and deeply analytical dashboards with market position tracking, data freshness indicators, and handling of Salla platform data limitations.
+**what currently exists?** 
+A highly functional, production-deployed React + FastAPI + MongoDB platform. The app has a robust multi-tier crawler, Zid own-store sync, and a strict matching engine. Recently, the app underwent massive scaling migrations to fix 10s Production timeouts by moving to write-time rollup collections (, , ). A food subcategory classifier and store ranking feature were added. The UI features bilingual KPI tooltips, live KPI metrics, and freshness indicators.
 
 **Last working item**: 
-    - Last item agent was working: The new session just started. The agent gathered context by reading  and checking the supervisor status. It discovered that the  service is currently  and has sent an  message to propose a working plan to the user.
-    - Status: BLOCKED (Waiting for user response and blocked by stopped backend)
+    - Last item agent was working: The agent reviewed the workspace and asset list to locate the  file. It then used the  tool to confirm the plan for downloading, extracting, and surgically merging the zip file contents into the workspace without overwriting critical workspace-only changes.
+    - Status: NOT STARTED (Waiting on User Confirmation)
     - Agent Testing Done: N
-    - Which testing method agent to use? NA
+    - Which testing method agent to use? backend testing agent / manual python test scripts (============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.0.3, pluggy-1.6.0
+rootdir: /app
+plugins: anyio-4.13.0
+collected 341 items / 3 errors
+
+==================================== ERRORS ====================================
+________ ERROR collecting backend/tests/test_competitor_count_union.py _________
+backend/tests/test_competitor_count_union.py:40: in <module>
+    BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen os>:679: in __getitem__
+    ???
+E   KeyError: 'REACT_APP_BACKEND_URL'
+______ ERROR collecting backend/tests/test_iteration18_sync_hardening.py _______
+backend/tests/test_iteration18_sync_hardening.py:14: in <module>
+    BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'NoneType' object has no attribute 'rstrip'
+______ ERROR collecting backend/tests/test_iteration19_coverage_split.py _______
+backend/tests/test_iteration19_coverage_split.py:27: in <module>
+    BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen os>:679: in __getitem__
+    ???
+E   KeyError: 'REACT_APP_BACKEND_URL'
+=============================== warnings summary ===============================
+../root/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12
+  /root/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+backend/server.py:6321
+  /app/backend/server.py:6321: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../root/.venv/lib/python3.11/site-packages/fastapi/applications.py:4495
+../root/.venv/lib/python3.11/site-packages/fastapi/applications.py:4495
+  /root/.venv/lib/python3.11/site-packages/fastapi/applications.py:4495: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+backend/server.py:6565
+  /app/backend/server.py:6565: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+ERROR backend/tests/test_competitor_count_union.py - KeyError: 'REACT_APP_BAC...
+ERROR backend/tests/test_iteration18_sync_hardening.py - AttributeError: 'Non...
+ERROR backend/tests/test_iteration19_coverage_split.py - KeyError: 'REACT_APP...
+!!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!!
+======================== 5 warnings, 3 errors in 2.52s ========================= on )
     - User Testing Done: N
 
 **All Pending/In progress Issue list**: 
-  Issue 1: Backend service is STOPPED (P0 - CRITICAL)
-     - Attempted fixes: None. The agent just discovered it via backend                          RUNNING   pid 47, uptime 0:00:03
-code-server                      STOPPED   Not started
-frontend                         RUNNING   pid 49, uptime 0:00:03
-mongodb                          RUNNING   pid 52, uptime 0:00:03
-nginx-code-proxy                 RUNNING   pid 45, uptime 0:00:03 (Exit code: 3).
-     - Next debug checklist: Check backend logs (==> /var/log/supervisor/backend.err.log <==
-INFO:server:[Scheduler] Registered Test Store (test.example.com) — daily at 02:00 UTC / 05:00 KSA
-INFO:server:[Scheduler] Daily crawl schedule loaded — 14 stores, 04:00–04:55 KSA window.
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Scheduler started
-INFO:apscheduler.scheduler:Added job "generate_market_digest" to job store "default"
-INFO:apscheduler.scheduler:Added job "startup.<locals>._scheduled_own_sync" to job store "default"
-INFO:server:Scheduler started with 14 crawl jobs + weekly digest + 6h own-store sync
-INFO:     Application startup complete.
-INFO:server:[Playwright] PLAYWRIGHT_BROWSERS_PATH='/pw-browsers' is WRITABLE
-INFO:server:[Playwright] Aggressive install starting (browsers_path='/pw-browsers'); cmd=/root/.venv/bin/python -m playwright install chromium chromium-headless-shell
-INFO:server:[Playwright] Install completed successfully (rc=0)
-INFO:server:[Playwright] Smoke test: launching headless Chromium against about:blank...
-INFO:server:[Playwright] chromium.executable_path resolves to: '/pw-browsers/chromium-1208/chrome-linux/chrome'
-INFO:server:[Playwright] Smoke test PASSED — headless Chromium launched, navigated to about:blank, title=''. Tier-3 crawls should now work.
-ERROR:server:[Proxy] Smoke test FAILED: ProxyError: 502 Bad Gateway
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:apscheduler.scheduler:Scheduler has been shut down
-INFO:     Application shutdown complete.
-INFO:     Finished server process [5353]
-INFO:     Stopping reloader process [5079]
-INFO:     Will watch for changes in these directories: ['/app/backend']
-INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
-INFO:     Started reloader process [5450] using WatchFiles
-INFO:     Started server process [5452]
-INFO:     Waiting for application startup.
-INFO:server:[RBAC] Refreshed super admin a.disi@taqueen.sa
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Zarafa (zarafaksa.com) — daily at 01:00 UTC / 04:00 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Panda Store (matjarpanda.com) — daily at 01:15 UTC / 04:15 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Lana Pets (lanapets.com) — daily at 01:10 UTC / 04:10 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Hamtaro (hamtaro.sa) — daily at 01:40 UTC / 04:40 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Caty Store (caty-store.com) — daily at 01:20 UTC / 04:20 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Petsy (petsysa.com) — daily at 01:05 UTC / 04:05 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Pets houses (pets-houses.com) — daily at 01:55 UTC / 04:55 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered aleef (aleef.com) — daily at 01:25 UTC / 04:25 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered CuteCat (cutecat.com.sa) — daily at 01:30 UTC / 04:30 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered CutePets (cutepets.com.sa) — daily at 01:35 UTC / 04:35 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Mowkly (mowkly.com) — daily at 01:50 UTC / 04:50 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Hobba (hobbapet.com) — daily at 01:45 UTC / 04:45 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered TEST_Regression_Store (test-regression.example.com) — daily at 02:00 UTC / 05:00 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Test Store (test.example.com) — daily at 02:00 UTC / 05:00 KSA
-INFO:server:[Scheduler] Daily crawl schedule loaded — 14 stores, 04:00–04:55 KSA window.
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Scheduler started
-INFO:apscheduler.scheduler:Added job "generate_market_digest" to job store "default"
-INFO:apscheduler.scheduler:Added job "startup.<locals>._scheduled_own_sync" to job store "default"
-INFO:server:Scheduler started with 14 crawl jobs + weekly digest + 6h own-store sync
-INFO:     Application startup complete.
-INFO:server:[Playwright] PLAYWRIGHT_BROWSERS_PATH='/pw-browsers' is WRITABLE
-INFO:server:[Playwright] Aggressive install starting (browsers_path='/pw-browsers'); cmd=/root/.venv/bin/python -m playwright install chromium chromium-headless-shell
-INFO:server:[Playwright] Install completed successfully (rc=0)
-INFO:server:[Playwright] Smoke test: launching headless Chromium against about:blank...
-INFO:server:[Playwright] chromium.executable_path resolves to: '/pw-browsers/chromium-1208/chrome-linux/chrome'
-INFO:server:[Playwright] Smoke test PASSED — headless Chromium launched, navigated to about:blank, title=''. Tier-3 crawls should now work.
-ERROR:server:[Proxy] Smoke test FAILED: ProxyError: 502 Bad Gateway
-INFO:     Will watch for changes in these directories: ['/app/backend']
-INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
-INFO:     Started reloader process [47] using WatchFiles
-INFO:     Started server process [91]
-INFO:     Waiting for application startup.
-
-==> /var/log/supervisor/backend.out.log <==
-INFO:     10.208.130.77:35358 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.78:42478 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.77:35358 - "GET /api/my-products?sort_by=revenue_est&sort_order=desc&limit=100&offset=0&days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.77:35358 - "GET /api/my-products?sort_by=revenue_est&sort_order=desc&limit=100&offset=0&days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:42478 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.77:35370 - "GET /api/auth/me HTTP/1.1" 200 OK
-INFO:     10.208.130.77:35358 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.78:42478 - "GET /api/auth/me HTTP/1.1" 200 OK
-INFO:     10.208.130.77:35358 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.78:42478 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.77:35358 - "GET /api/baseline/catalog-gaps HTTP/1.1" 200 OK
-INFO:     10.208.130.78:42478 - "GET /api/baseline/leaderboard HTTP/1.1" 200 OK
-INFO:     10.208.130.78:42490 - "GET /api/price-intel/dashboard HTTP/1.1" 200 OK
-INFO:     10.208.130.78:42478 - "GET /api/baseline/catalog-gaps HTTP/1.1" 200 OK
-INFO:     10.208.130.78:42494 - "GET /api/baseline/leaderboard HTTP/1.1" 200 OK
-INFO:     10.208.130.77:35358 - "GET /api/price-intel/dashboard HTTP/1.1" 200 OK
-INFO:     10.208.130.78:34546 - "GET /api/price-intel/product/052742038599 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:48342 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34584 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34584 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.78:48342 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34584 - "GET /api/my-products?sort_by=revenue_est&sort_order=desc&limit=100&offset=0&days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:48342 - "GET /api/my-products?sort_by=revenue_est&sort_order=desc&limit=100&offset=0&days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34584 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34598 - "GET /api/auth/me HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34584 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34598 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.78:48342 - "GET /api/auth/me HTTP/1.1" 200 OK
-INFO:     10.208.130.78:48342 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34598 - "GET /api/baseline/leaderboard HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34618 - "GET /api/baseline/catalog-gaps HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34612 - "GET /api/price-intel/dashboard HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34618 - "GET /api/baseline/catalog-gaps HTTP/1.1" 200 OK
-INFO:     10.208.130.78:48342 - "GET /api/baseline/leaderboard HTTP/1.1" 200 OK
-INFO:     10.208.130.78:48342 - "GET /api/price-intel/dashboard HTTP/1.1" 200 OK
-INFO:     10.208.130.77:46930 - "GET /api/price-intel/product/3336025821533 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:39768 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:52980 - "GET /api/insights/summary?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.77:52980 - "GET /api/my-products?limit=10 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:38104 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34002 - "GET /api/insights/summary?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:38104 - "GET /api/my-products?limit=50 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:50934 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.78:50934 - "GET /api/my-products?limit=2 HTTP/1.1" 200 OK
-INFO:     10.208.130.77:50022 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.78:57130 - "GET /api/my-products?limit=20&mine_only=true HTTP/1.1" 200 OK
-INFO:     10.208.130.77:57056 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:57056 - "GET /api/my-products?limit=50&mine_only=true HTTP/1.1" 200 OK
-INFO:     10.208.130.77:57056 - "GET /api/my-products?limit=50&mine_only=true HTTP/1.1" 200 OK
-INFO:     10.208.130.77:57056 - "GET /api/products/full HTTP/1.1" 404 Not Found
-INFO:     10.208.130.77:48336 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.78:34254 - "GET /api/products/3336025821533/full HTTP/1.1" 200 OK
-INFO:     10.208.130.78:34254 - "GET /api/my-products?limit=5&q=3336025821533 HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34560 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:34560 - "GET /api/price-intel/dashboard?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:48064 - "GET /api/insights/summary?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:47188 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.78:47188 - "GET /api/price-intel/dashboard?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:39874 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.78:39874 - "GET /api/price-intel/dashboard?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.77:38036 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:38036 - "GET /api/price-intel/dashboard?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.77:39956 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:39956 - "GET /api/price-intel/dashboard?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:60708 - "GET /api/insights/summary?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46590 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:54146 - "GET /api/price-intel/dashboard?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.77:41278 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.78:36414 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.77:41278 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.78:36414 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.78:36414 - "GET /api/my-products?sort_by=revenue_est&sort_order=desc&limit=100&offset=0&days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:36414 - "GET /api/my-products?sort_by=revenue_est&sort_order=desc&limit=100&offset=0&days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46674 - "GET /api/auth/me HTTP/1.1" 200 OK
-INFO:     10.208.130.78:36414 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46688 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.77:41278 - "GET /api/auth/me HTTP/1.1" 200 OK
-INFO:     10.208.130.78:36414 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46674 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58944 - "GET /api/insights/leaderboard?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46706 - "GET /api/insights/gaps HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46674 - "GET /api/insights/price-wars HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58952 - "GET /api/insights/trending?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:36414 - "GET /api/insights/summary?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46698 - "GET /api/insights/restock-opportunities HTTP/1.1" 200 OK
-INFO:     10.208.130.77:41278 - "GET /api/insights/top-sellers?days=30 HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46674 - "GET /api/auth/me HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46706 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58952 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58952 - "GET /api/auth/me HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58944 - "GET /api/my-skus HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58944 - "GET /api/notifications HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58944 - "GET /api/baseline/catalog-gaps HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46706 - "GET /api/baseline/leaderboard HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58952 - "GET /api/price-intel/dashboard HTTP/1.1" 200 OK
-INFO:     10.208.130.77:58944 - "GET /api/baseline/catalog-gaps HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46706 - "GET /api/baseline/leaderboard HTTP/1.1" 200 OK
-INFO:     10.208.130.78:46706 - "GET /api/price-intel/dashboard HTTP/1.1" 200 OK
-INFO:     10.208.130.78:38366 - "POST /api/auth/login HTTP/1.1" 200 OK
-INFO:     10.208.130.77:37986 - "GET /api/price-intel/dashboard?days=30 HTTP/1.1" 200 OK) to find the startup crash reason (likely an import error or syntax issue from previous edits), fix it, and run backend: stopped
-backend: started.
-     - Why fix this issue and what will be achieved with the fix? The application is completely unusable if the FastAPI backend is down.
-     - Status: NOT STARTED
+  Issue 1: Zid  401 Unauthorized (P1)
+     - Attempted fixes: Merged  into main, but the API call  fails.
+     - Next debug checklist: User needs to provide the OAuth  token in addition to the .
+     - Why fix this issue and what will be achieved with the fix? Unblocks My Revenue calculations based on real Zid order ledgers.
+     - Status: BLOCKED (Waiting on user for token)
      - Is recurring issue? N
      - Should Test frontend/backend/both after fix? backend
-     - Blocked on other issue: None
+     - Blocked on other issue: User needs to fetch and provide Zid OAuth Authorization token.
 
 **In progress Task List**: 
-  None. The agent has just initialized context gathering.
+  Task 1: Merge  updates (P0)
+     - Where to resume: Check the response from . Then, download  via URL found in , extract outside the workspace (e.g. ), diff against the workspace, and surgically merge the changes into , , , etc. 
+     - What will be achieved with this? Brings in classifier v3 changes, Mowkly platform correction, classification-at-insert change, and  helper.
+     - Status: NOT STARTED
+     - Should Test frontend/backend/both after fix? backend (run all tests in )
+     - Blocked on something: Waiting for user to confirm the plan.
+     - **CRITICAL PRESERVATION REQUIREMENTS:** 
+       1. Motor Atlas timeouts ( ~lines 79–97)
+       2. Hardened  ( ~lines 207–263)
+       3. Duplicate  import dedup
+       4. iter26 KPI tooltips in  + 
+       5. DO NOT overwrite .
 
 **Upcoming and Future Tasks**
   Upcoming Tasks:
-  - 🔴 **P0** Refactoring:  is critically large (>4400 lines). API routes MUST be extracted into a  directory (e.g., , , ).
-  - 🟡 **P1** Resend email integration (Needs User API Key)
-  - 🟡 **P1** Implement recommended Data Accuracy constraints: Enforce confidence floor (>=85) on dashboard aggregations, and sanity-check  deltas.
-  - 🟡 **P2** Sprint 2:  backend integration (to bypass Cloudflare for protected stores via TLS mimicry).
+  - 🔴 **P0** Refactoring:  is critically large (>6000 lines). API routes MUST be extracted into a  directory. **User requested doing this LAST.**
+  - 🟡 **P1** Brand data missing at ingestion: Investigate why 93% of crawled products land with empty .
+  - 🟡 **P1** New-store rollout ( in ).
+  - 🟡 **P1** Resend email integration (Hold - awaiting User API Key).
+  - 🟡 **P2** Sprint 2:  backend integration (to bypass Cloudflare for protected stores).
   - 🟡 **P2** Sprint 2: Sitemap discovery (for 60x faster crawling).
-  - 🟢 **P2** Webhook notifications (Slack/Telegram)
+  - 🟢 **P2** Webhook notifications (Slack/Telegram).
   
-  Future Tasks (Sprint 3):
-  - 🟢 **P3** Mahally barcode enrichment (Admin endpoint + Apify client to fetch barcodes for unmatched products).
+  Future Tasks:
+  - 🟢 **P3** Mahally barcode enrichment & Salla Sales Data (Needs custom Tier-3 crawler).
   - 🟢 **P3** Auto platform detection ( HEAD-probe for new stores).
-  - 🟢 **P3** Implement Test suite under .
 
 **Completed work in this session**
-- Agent has only performed context gathering and environment checks. No code has been modified yet in this specific session fork.
+- Sent the initial planning question to the user via .
 
 **Earlier issues found/mentioned but not fixed**
-   Issue 1: Crawler soft-blocks  
+   Issue 1: Crawler soft-blocks
    - Debug checklist: Detect Salla soft-blocks (HTTP 200 with ) and abort writing empty snapshots.
-   - Why to solve this issue and what will be achieved with this? Prevents database pollution with blank data due to proxy soft-blocks.
+   - Why to solve this issue and what will be achieved with this? Prevents database pollution with blank data.
    - Should Test frontend/backend/both after fix: backend
    - Is recurring issue? N
 
 **Known issue recurrence from previous fork**
-  - Issue recurrence in previous fork: None
-  - Recurrence count: 0
-  - Status: RESOLVED
+  - Issue recurrence in previous fork: Data scale divergence between environments. Bugs that pass on preview (~120 seeded snapshots) fail catastrophically on production (>1.6M snapshots). 
+  - Recurrence count: 5 (Most recently: production 500s on  and  operations). 
+  - Status: RESOLVED (via rollup collections), but keep in mind for future queries.
+  - Previous Agent Mistake: Accidentally deleted iter26 KPI tooltips from frontend files in a prior fork. Be extremely careful to preserve them when merging updates.
 
 **Code Architecture**
-
+/app/
+├── backend/
+│   ├── core/                  
+│   ├── server.py              # Main FastAPI app, APIs (>6000 lines - NEEDS REFACTOR)
+│   ├── crawlers.py            # Crawler and classifier logic
+│   ├── matcher.py             # Matching engine
+│   ├── store_registry.py      # Store definitions
+│   ├── zid_orders.py          # Zid orders integration
+│   ├── tests/                 # Comprehensive python test scripts
+│   └── .env                   
+├── frontend/
+│   ├── src/pages/             # MyProductsPage, InsightsPage, PriceIntelPage
+│   ├── src/components/        
+│   ├── src/lib/i18n.js        # Localization and KPI tooltip definitions
+│   └── .env
 
 **Key Technical Concepts**
-Frontend: React 18, React Query (TanStack), Tailwind CSS, Recharts, Shadcn, Lazy Loading.
-Backend: FastAPI, MongoDB (Motor) with Compound Indexes, APScheduler (CronTriggers), Playwright (headless-shell), httpx (Webshare proxies), In-memory TTL Caching.
+React 18, React Query, Tailwind CSS. FastAPI, MongoDB (Motor), MongoDB Aggregation Pipelines (Rollups, ), APScheduler, Playwright.
 
 **key DB schema**
-  - users: {email, password_hash, role, allowed_pages}
-  - stores: {..., use_proxy, is_active}
-  - product_snapshots: {..., crawled_at}
-  - proxy_usage: {store_id, bytes_estimate, crawled_at}
+  - : {sku, store_id, price, qty_available, in_stock, crawled_at, confidence_score, sale_price}
+  - : {sku, barcode, name_ar, price, quantity, last_synced_at, present_on_store}
+  - : {store_id, date, drops, conf_sum, conf_count}
+  - : {sku, store_id, last_seen_at, last_seen_any_at, last_price, last_confidence, last_store_name, last_in_stock, last_qty, last_priced_at, last_priced_price, last_priced_store_name, last_sold_pos_at, last_usable_qty_at}
+  - : {store_id, sku, date, units_sold, rev_sold, units_qty, rev_qty, qty_drop}
 
 **changes in tech stack**
-  - Added  to frontend.
-  - Added  decorator pattern in backend.
-  - Added aggressive Downloading Chrome for Testing 145.0.7632.6 (playwright chromium v1208) from https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1208/chromium-linux-arm64.zip
-|                                                                                |   0% of 179.6 MiB
-|■■■■■■■■                                                                        |  10% of 179.6 MiB
-|■■■■■■■■■■■■■■■■                                                                |  20% of 179.6 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 179.6 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 179.6 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 179.6 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 179.6 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 179.6 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 179.6 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 179.6 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 179.6 MiB
-Chrome for Testing 145.0.7632.6 (playwright chromium v1208) downloaded to /pw-browsers/chromium-1208
-Downloading Firefox 146.0.1 (playwright firefox v1509) from https://cdn.playwright.dev/dbazure/download/playwright/builds/firefox/1509/firefox-debian-12-arm64.zip
-|                                                                                |   0% of 91 MiB
-|■■■■■■■■                                                                        |  10% of 91 MiB
-|■■■■■■■■■■■■■■■■                                                                |  20% of 91 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 91 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 91 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 91 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 91 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 91 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 91 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 91 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 91 MiB
-Firefox 146.0.1 (playwright firefox v1509) downloaded to /pw-browsers/firefox-1509
-Downloading WebKit 26.0 (playwright webkit v2248) from https://cdn.playwright.dev/dbazure/download/playwright/builds/webkit/2248/webkit-debian-12-arm64.zip
-|                                                                                |   0% of 92.5 MiB
-|■■■■■■■■                                                                        |  10% of 92.5 MiB
-|■■■■■■■■■■■■■■■■                                                                |  20% of 92.5 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■                                                        |  30% of 92.5 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                                |  40% of 92.5 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                        |  50% of 92.5 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                                |  60% of 92.5 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                        |  70% of 92.5 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■                |  80% of 92.5 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■        |  90% of 92.5 MiB
-|■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■| 100% of 92.5 MiB
-WebKit 26.0 (playwright webkit v2248) downloaded to /pw-browsers/webkit-2248 startup command handling.
+  - None
 
 **All files of reference**
   - 
   - 
+  - 
+  - 
+  - 
 
 **Areas that need refactoring**: 
-  -  is critically large (>4400 lines) and MUST be modularized into a  directory.
+  -  is critically large. MUST be broken down into a standard routing architecture (). Deferred until data caching/quality issues are resolved (User specified to do this last).
 
 **key api endpoints**
-  -  (Wrapped in TTL cache)
+  - 
   - 
   - 
   - 
 
 **Critical Info for New Agent** 
-  - **Environment Bug**: The backend is currently STOPPED. Fix this immediately via logs before proceeding to any feature tasks.
-  - **Production vs Preview Environment**: Preview environment uses  but  falls back to  to prevent CORS issues on production.
-  - **Salla Data Limitations**: Salla stores do not expose sales count. The Insights UI explicitly handles this by marking them  instead of showing 0 revenue.
-  - **Webshare Proxies**: Zid stores are NEVER proxied. Salla stores prone to soft-blocks have .
-  - **Crawl Schedule**: All stores crawl daily between 04:00-04:55 KSA (01:00 UTC). Do not use intervals.
+  - **PREVIEW VS PRODUCTION:** The preview environment only has a tiny seeded dataset. Production has millions of rows. DO NOT write unbounded  or  aggregations on large collections.
+  - **PRESERVATION MANDATE:** You will often be asked to merge ZIP files from GitHub main. When doing so, you **MUST** surgically preserve workspace-only changes:
+    1. **Motor Atlas timeouts** ( ~lines 79-97).
+    2. **Hardened ** probe ( ~lines 207-263 with ).
+    3. **iter26 KPI tooltips** ( and ). The agent previously accidentally deleted these; they have been cleanly restored. Do not lose them again.
+  - DO NOT overwrite .
 
 **documents and test reports created in this job**
-  - None created by this agent yet.
+  - None newly created yet.
+  - Existing: 
 
 **Last 10 User Messages and any pending HUMAN messages** 
- - **Pending Message**: The agent has called the  tool to share a plan based on its initial context reading and is currently waiting for the user's approval or guidance. 
+ - *User (Initial Prompt)*: Instructed to merge  updates while preserving specific workspace-only changes.
+ - *User (via Agent Tool)*: System provided file listings and assets.
+ - *User (PENDING)*: Agent sent an  request proposing the merge plan. Waiting for user's approval.
 
 **Project Health Check:**
-- Broken:  supervisor process is STOPPED. (External: Hobba store returning HTTP 500 upstream).
-- Mocked: Emails.
+- Broken: Zid orders sync (Auth scope 401).
+- Mocked: Resend emails.
 
 **3rd Party Integrations** 
   - Playwright (Headless Browser)
-  - Webshare Proxies — Requires User Credentials from .
-  - Resend (Email Delivery) — Future task, requires User API Key.
-  - Apify (Mahally crawler) — Future task, requires User API Key.
+  - Webshare Proxies (User credentials in .env)
+  - Zid Merchant API (User API Key present in , but missing OAuth token for Orders route)
 
 **Testing status**
-  - Testing agent used after significant changes: NO
+  - Testing agent used after significant changes: NO (in this specific session)
   - Troubleshoot agent used after agent stuck in loop: NO
-  - Test files created: None
-  - Known regressions: Backend is currently down and needs to be restarted.
+  - Test files created: Extensive python test suites (, , , , , ) already present.
+  - Known regressions: None currently.
 
 **Credentials to test flow:**
-  - Super Admin:  / 
-  - Standard User:  / 
-  - Crawler Ingest Token: 
+  - Super Admin:  (check ).
 
 **What agent forgot to execute**
-The agent has not forgotten anything, but its context gathering was interrupted because it is waiting on . The next agent *must* resolve the STOPPED backend immediately upon receiving the user's response.
+N/A - Agent is currently waiting for human input to proceed with the primary task.
 
 **Debugging checklist for current issue**
-    Issue: Backend service is STOPPED
-    Backend files to check: 
-    - Terminal: INFO:     Stopping reloader process [47]
-INFO:     Will watch for changes in these directories: ['/app/backend']
-INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
-INFO:     Started reloader process [187] using WatchFiles
-INFO:     Started server process [189]
-INFO:     Waiting for application startup.
-INFO:server:[RBAC] Refreshed super admin a.disi@taqueen.sa
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Zarafa (zarafaksa.com) — daily at 01:00 UTC / 04:00 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Panda Store (matjarpanda.com) — daily at 01:15 UTC / 04:15 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Lana Pets (lanapets.com) — daily at 01:10 UTC / 04:10 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Hamtaro (hamtaro.sa) — daily at 01:40 UTC / 04:40 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Caty Store (caty-store.com) — daily at 01:20 UTC / 04:20 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Petsy (petsysa.com) — daily at 01:05 UTC / 04:05 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Pets houses (pets-houses.com) — daily at 01:55 UTC / 04:55 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered aleef (aleef.com) — daily at 01:25 UTC / 04:25 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered CuteCat (cutecat.com.sa) — daily at 01:30 UTC / 04:30 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered CutePets (cutepets.com.sa) — daily at 01:35 UTC / 04:35 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Mowkly (mowkly.com) — daily at 01:50 UTC / 04:50 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Hobba (hobbapet.com) — daily at 01:45 UTC / 04:45 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered TEST_Regression_Store (test-regression.example.com) — daily at 02:00 UTC / 05:00 KSA
-INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
-INFO:server:[Scheduler] Registered Test Store (test.example.com) — daily at 02:00 UTC / 05:00 KSA
-INFO:server:[Scheduler] Daily crawl schedule loaded — 14 stores, 04:00–04:55 KSA window.
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Added job "scheduled_crawl_job" to job store "default"
-INFO:apscheduler.scheduler:Scheduler started
-INFO:apscheduler.scheduler:Added job "generate_market_digest" to job store "default"
-INFO:apscheduler.scheduler:Added job "startup.<locals>._scheduled_own_sync" to job store "default"
-INFO:server:Scheduler started with 14 crawl jobs + weekly digest + 6h own-store sync
-INFO:     Application startup complete.
-INFO:server:[Playwright] PLAYWRIGHT_BROWSERS_PATH='/pw-browsers' is WRITABLE
-INFO:server:[Playwright] Aggressive install starting (browsers_path='/pw-browsers'); cmd=/root/.venv/bin/python -m playwright install chromium chromium-headless-shell
-INFO:httpx:HTTP Request: GET https://api.ipify.org?format=json "HTTP/1.1 200 OK"
-INFO:server:[Proxy] Smoke test: connected via SA proxy, exit IP = 149.109.240.143
-    - Terminal: 
-    - Check  for any trailing syntax errors.
-    - Run backend: stopped
-backend: started and verify it stays RUNNING.</analysis>
+    Issue: Merge  updates.
+    Backend files to check: , , 
+    Action: 
+    1. Once user approves, download  via URL found in  to a temporary directory (e.g., ).
+    2. Unzip and diff the files against the workspace.
+    3. Surgically merge the changes (classifier v3, classification at insert, Mowkly correction, , subcategory/store-ranking diagnostics).
+    4. ENSURE  and  in  are preserved.
+    5. ENSURE  in frontend files are preserved.
+    6. Run all ============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.0.3, pluggy-1.6.0
+rootdir: /app
+plugins: anyio-4.13.0
+collected 341 items / 3 errors
+
+==================================== ERRORS ====================================
+________ ERROR collecting backend/tests/test_competitor_count_union.py _________
+backend/tests/test_competitor_count_union.py:40: in <module>
+    BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen os>:679: in __getitem__
+    ???
+E   KeyError: 'REACT_APP_BACKEND_URL'
+______ ERROR collecting backend/tests/test_iteration18_sync_hardening.py _______
+backend/tests/test_iteration18_sync_hardening.py:14: in <module>
+    BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: 'NoneType' object has no attribute 'rstrip'
+______ ERROR collecting backend/tests/test_iteration19_coverage_split.py _______
+backend/tests/test_iteration19_coverage_split.py:27: in <module>
+    BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen os>:679: in __getitem__
+    ???
+E   KeyError: 'REACT_APP_BACKEND_URL'
+=============================== warnings summary ===============================
+../root/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12
+  /root/.venv/lib/python3.11/site-packages/starlette/formparsers.py:12: PendingDeprecationWarning: Please use `import python_multipart` instead.
+    import multipart
+
+backend/server.py:6321
+  /app/backend/server.py:6321: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../root/.venv/lib/python3.11/site-packages/fastapi/applications.py:4495
+../root/.venv/lib/python3.11/site-packages/fastapi/applications.py:4495
+  /root/.venv/lib/python3.11/site-packages/fastapi/applications.py:4495: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+backend/server.py:6565
+  /app/backend/server.py:6565: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+ERROR backend/tests/test_competitor_count_union.py - KeyError: 'REACT_APP_BAC...
+ERROR backend/tests/test_iteration18_sync_hardening.py - AttributeError: 'Non...
+ERROR backend/tests/test_iteration19_coverage_split.py - KeyError: 'REACT_APP...
+!!!!!!!!!!!!!!!!!!! Interrupted: 3 errors during collection !!!!!!!!!!!!!!!!!!!!
+======================== 5 warnings, 3 errors in 0.93s ========================= files in  to verify backend functionality.</analysis>

@@ -5,7 +5,7 @@
   "passed_tests": [
     "test_iter27_insights_cache.py: 6/6 in-process tests PASS (byte-identical cache, list-endpoint cache, price-intel cache, non-default bypass, stale fallback, recompute registry).",
     "test_dashboard_cache.py: 4/4 PASS (iter25 regression preserved).",
-    "test_iter27_live.py: 36/36 PASS against https://daleel-price-intel.preview.emergentagent.com in 2.52s total.",
+    "test_iter27_live.py: 36/36 PASS against https://price-intel-dev.preview.emergentagent.com in 2.52s total.",
     "/api/insights/summary days∈{7,14,30,90}: 200, cache.source='cache', <2s.",
     "/api/insights/summary?days=45: 200, cache.source='live_uncacheable'.",
     "/api/insights/{leaderboard,top-sellers,trending,gaps,price-wars,restock-opportunities,sales}?days=7|14|30|90: 200 in <2s (28 combinations).",
