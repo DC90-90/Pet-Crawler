@@ -24,6 +24,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from crawlers import (
     crawl_store_waterfall, process_crawled_products,
     extract_brand, guess_category, guess_animal, extract_weight,
+    classify_food_subcategory, FOOD_SUBCATEGORIES, FOOD_SUBCATEGORY_PARENTS,
     sync_own_store_prices,
 )
 from store_registry import ensure_stores as registry_ensure_stores
@@ -345,6 +346,9 @@ CATEGORIES = {
     "litter": "Litter", "toys": "Toys", "grooming": "Grooming",
     "healthcare": "Healthcare", "small_food": "Small Animal Food",
     "reptile": "Reptile", "vet_supplies": "Vet Supplies", "pet_food": "Pet Food",
+    # iter36 — food subcategories (additive; parent cat_food/dog_food remain)
+    "cat_food_dry": "Dry Cat Food", "cat_treats": "Cat Treats",
+    "dog_food_dry": "Dry Dog Food", "dog_treats": "Dog Treats",
 }
 
 EXTRA_PRODUCT_TEMPLATES = [
@@ -2047,7 +2051,12 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
     # Get all products
     prod_query = {}
     if category and category != "all":
-        prod_query["category"] = category
+        # iter36 — subcategory keys filter on the additive `subcategory` field;
+        # parent keys (cat_food, …) keep matching every product as before.
+        if category in FOOD_SUBCATEGORIES:
+            prod_query["subcategory"] = category
+        else:
+            prod_query["category"] = category
     if animal_type and animal_type != "all":
         prod_query["animal_type"] = animal_type
     if search:
@@ -2518,7 +2527,9 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
             "avg_market_share": round(100 / total_count, 1) if total_count else 0,
         }
     # Distinct categories across the FULL filtered set (so the dropdown stays complete after pagination)
-    categories_all = sorted({(r.get("category") or "") for r in result if r.get("category")})
+    # iter36 — subcategories present in the set appear alongside their parents.
+    categories_all = sorted({(r.get("category") or "") for r in result if r.get("category")}
+                            | {r["subcategory"] for r in result if r.get("subcategory")})
     # Apply pagination AFTER sort + KPIs so totals remain accurate
     return {"kpis": kpis, "rows": result, "total": total_count, "categories": categories_all}
 
@@ -2611,7 +2622,11 @@ async def list_products(
 ):
     query = {}
     if category and category != "all":
-        query["category"] = category
+        # iter36 — subcategory-aware (same rule as the My Products filter)
+        if category in FOOD_SUBCATEGORIES:
+            query["subcategory"] = category
+        else:
+            query["category"] = category
     if animal_type and animal_type != "all":
         query["animal_type"] = animal_type
     if search:
@@ -2856,39 +2871,9 @@ async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_use
     return {"velocity": velocity_data, "avg_daily": avg_velocity, "total_units": total_units}
 
 # ── Insights Routes ─────────────────────────────────────────
-# ─────────────────────────────────────────────────────────────────────────────
-# DIAGNOSTIC (iter27, kept through iter30) — /api/insights/summary 500 hunter.
-# Production returns 500 and we cannot read runtime logs. This instrumentation
-# tracks which stage of _insights_summary_compute is executing (per-request via
-# a ContextVar, so concurrent requests don't clobber each other) and lets the
-# thin endpoint return the real error to a super_admin as a 200 JSON payload.
-# LEAVE ON until production is confirmed healthy, then set
-# INSIGHTS_SUMMARY_DIAGNOSTIC = False (endpoint reverts to a normal 500 for
-# everyone), or delete this block + the `_diag_stage` calls in the compute +
-# the try/except in the insights_summary endpoint. It does NOT change the
-# success path — the .set() calls are inert on success and the response stays
-# byte-identical.
-import contextvars as _contextvars
-import traceback as _traceback
-
-INSIGHTS_SUMMARY_DIAGNOSTIC = True
-_INSIGHTS_SUMMARY_STAGE = _contextvars.ContextVar("_insights_summary_stage", default="init")
-
-
-def _diag_stage(name):
-    if INSIGHTS_SUMMARY_DIAGNOSTIC:
-        _INSIGHTS_SUMMARY_STAGE.set(name)
-
-
-def _insights_summary_diag_payload(exc, tb):
-    return {
-        "error": True,
-        "exception_type": type(exc).__name__,
-        "exception_message": str(exc),
-        "traceback": (tb or "")[-2000:],
-        "failed_stage": _INSIGHTS_SUMMARY_STAGE.get(),
-    }
-# ─────────────────────────────────────────────────────────────────────────────
+# (The iter27 diagnostic instrumentation — stage ContextVar + super_admin
+# traceback payload — was removed in iter37 after production ran stable across
+# all four windows. See git history if a 500 hunter is ever needed again.)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3330,7 +3315,6 @@ async def _sales_pairs_from_rollups(db, since, store_id=None):
 
 
 async def _insights_summary_compute(db, days):
-    _diag_stage("init")
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # iter31 — this function NO LONGER touches product_snapshots. Every metric is
@@ -3339,37 +3323,14 @@ async def _insights_summary_compute(db, days):
     # my_products, product_matches). The confidence floor
     # (MIN_AGGREGATION_CONFIDENCE) is applied at rollup-build time, so the KPIs
     # keep the P1 accuracy guard.
-    _diag_stage("aggregations_parallel")
-    try:
-        total_skus, drops_count, product_gaps, spread_docs, conf_avg = await asyncio.gather(
-            db.products.count_documents({}),
-            _drops_from_rollups(db, since),
-            _gaps_from_coverage(db, since),
-            _spread_docs_from_coverage(db, since),
-            _conf_avg_from_rollups(db, since),
-        )
-    except Exception:
-        # DIAGNOSTIC (error path only — no success-path impact): the gather masks
-        # WHICH of the parallel tasks failed, so re-run them one at a time to
-        # pinpoint. Labels kept as pipeline_drops/gaps/spread/conf for continuity
-        # with the earlier diagnostic output, though they all hit the
-        # rollup/coverage sets now.
-        if INSIGHTS_SUMMARY_DIAGNOSTIC:
-            for _nm, _co in [
-                ("count_documents", lambda: db.products.count_documents({})),
-                ("pipeline_drops", lambda: _drops_from_rollups(db, since)),
-                ("pipeline_gaps", lambda: _gaps_from_coverage(db, since)),
-                ("pipeline_spread", lambda: _spread_docs_from_coverage(db, since)),
-                ("pipeline_conf", lambda: _conf_avg_from_rollups(db, since)),
-            ]:
-                try:
-                    await _co()
-                except Exception:
-                    _diag_stage(f"aggregations_parallel:{_nm}")
-                    break
-        raise
+    total_skus, drops_count, product_gaps, spread_docs, conf_avg = await asyncio.gather(
+        db.products.count_documents({}),
+        _drops_from_rollups(db, since),
+        _gaps_from_coverage(db, since),
+        _spread_docs_from_coverage(db, since),
+        _conf_avg_from_rollups(db, since),
+    )
 
-    _diag_stage("post_aggregation_python")
     # Preserve the legacy empty-result behaviour exactly: the old drops $count stage
     # emitted no document when zero groups qualified and the code fell back to a
     # random demo value. The rollup sum returns a real 0 in that case, so map 0 →
@@ -3389,9 +3350,7 @@ async def _insights_summary_compute(db, days):
     # $max, precomputed at write time) instead of a $group over every snapshot in
     # history, which NetworkTimeout'd at production scale.
     now = datetime.now(timezone.utc)
-    _diag_stage("freshness_pipeline")
     fr = await _freshness_from_coverage(db, now)
-    _diag_stage("freshness_python")
     fr_total = max(fr.get("total", 0), 1)
     freshness_breakdown = {
         "total_tracked": fr.get("total", 0),
@@ -3408,19 +3367,16 @@ async def _insights_summary_compute(db, days):
     # Market position summary (Feb 2026) — aggregate over my products that have
     # a computed market_position. Uses last-7-day, confidence>=75 snapshots
     # (filtering happens in compute_market_position).
-    _diag_stage("market_position:fetch_own_store")
     own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
     own_store_id = own_store_doc.get("id") if own_store_doc else None
     market_position_summary = None
     if own_store_id:
         # Read my_products directly (own prices don't live in product_snapshots)
-        _diag_stage("market_position:fetch_my_products")
         my_prods = await db.my_products.find({}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1, "last_synced_at": 1}).to_list(length=None)
         my_skus = [p["sku"] for p in my_prods]
         my_price_lookup = {p["sku"]: p for p in my_prods}
         if my_skus:
             # Build (my_sku -> [(comp_sku, comp_store_id), ...]) map
-            _diag_stage("market_position:fetch_matches")
             matches_by_my_sku = {}
             async for m in db.product_matches.find({"my_sku": {"$in": my_skus}}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}):
                 matches_by_my_sku.setdefault(m["my_sku"], []).append((m["competitor_sku"], m["competitor_store_id"]))
@@ -3430,9 +3386,7 @@ async def _insights_summary_compute(db, days):
             for entries in matches_by_my_sku.values():
                 for cs, _sid in entries:
                     relevant_skus.add(cs)
-            _diag_stage("market_position:fetch_store_names")
             store_name_by_id = {s["id"]: s.get("name", "") for s in await db.stores.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(200)}
-            _diag_stage("market_position:fetch_snapshots")
             # iter31 — read the latest accepted price per (sku,store) from coverage
             # instead of scanning + sorting 7d of snapshots. last_seen_at>=mp_since
             # ⟺ the pair's latest accepted crawl is in the 7d window, and
@@ -3450,7 +3404,6 @@ async def _insights_summary_compute(db, days):
                     "crawled_at": cov.get("last_seen_at"),
                 }
 
-            _diag_stage("market_position:loop")
             cheapest = most_expensive = below = above = at_median = 0
             ranked_count = 0
             percentile_sum = 0.0
@@ -3478,9 +3431,7 @@ async def _insights_summary_compute(db, days):
                         "confidence_score": sn.get("confidence_score", 0),
                         "crawled_at": sn.get("crawled_at"),
                     })
-                _diag_stage("compute_market_position")
                 mp = compute_market_position(seller_prices, own_store_id)
-                _diag_stage("market_position:loop")  # back to loop scope after the call returns
                 if not mp:
                     continue
                 ranked_count += 1
@@ -3495,7 +3446,6 @@ async def _insights_summary_compute(db, days):
                     above += 1
                 else:
                     at_median += 1
-            _diag_stage("market_position:build_summary")
             avg_percentile = round(percentile_sum / ranked_count, 1) if ranked_count else None
             market_position_summary = {
                 "ranked_products": ranked_count,
@@ -3508,7 +3458,6 @@ async def _insights_summary_compute(db, days):
                 "avg_percentile": avg_percentile,
             }
 
-    _diag_stage("build_response")
     return {
         "total_skus": total_skus, "price_drops": price_drops,
         "product_gaps": product_gaps, "median_spread": median_spread,
@@ -3639,7 +3588,9 @@ async def _insights_trending_compute(db, days):
     products = await db.products.find({}, {"_id": 0}).to_list(500)
     cat_data = {}
     for p in products:
-        cat = p["category"]
+        # iter36 — trending tabs split on the food subcategory when one was
+        # confidently assigned; unclassified products stay under the parent.
+        cat = p.get("subcategory") or p["category"]
         sales = sku_sales.get(p["sku"], 0)
         cat_data.setdefault(cat, {"total_sales": 0, "products": []})
         cat_data[cat]["total_sales"] += sales
@@ -5229,6 +5180,53 @@ async def get_my_skus(user=Depends(get_user)):
 # IngestPayload, _coerce_num, _coerce_int moved to models/schemas.py and core/utils.py (Feb 2026 refactor)
 
 
+async def backfill_food_subcategories(db):
+    """iter36 — assign `subcategory` to every food product that doesn't carry
+    the field yet (value may be None = confidently generic, which also marks
+    the doc as processed → idempotent). Returns the number of docs touched."""
+    parents = {"category": {"$in": list(FOOD_SUBCATEGORY_PARENTS)}, "subcategory": {"$exists": False}}
+    if not await db.products.find_one(parents, {"_id": 1}):
+        return 0
+    n = 0
+    async for p in db.products.find(parents, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1}):
+        sub = classify_food_subcategory(p.get("category"), p.get("name_ar"), p.get("name_en"))
+        await db.products.update_one({"sku": p["sku"]}, {"$set": {"subcategory": sub}})
+        n += 1
+    return n
+
+
+@router.get("/admin/subcategory-preview")
+async def subcategory_preview(samples: int = Query(20, ge=1, le=100), user=Depends(get_user)):
+    """iter36 — read-only classifier audit over the LIVE catalog: distribution of
+    food products across subcategories plus N sample names per bucket, so the
+    classifier can be sanity-checked against real data. super_admin only."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+    dist = {k: 0 for k in FOOD_SUBCATEGORIES}
+    generic = {p: 0 for p in FOOD_SUBCATEGORY_PARENTS}
+    sample_map = {k: [] for k in [*FOOD_SUBCATEGORIES, *FOOD_SUBCATEGORY_PARENTS]}
+    total = 0
+    async for p in db.products.find(
+        {"category": {"$in": list(FOOD_SUBCATEGORY_PARENTS)}},
+        {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1, "subcategory": 1},
+    ):
+        total += 1
+        # use the stored assignment when present (post-backfill), else classify live
+        sub = p.get("subcategory") if "subcategory" in p else classify_food_subcategory(
+            p.get("category"), p.get("name_ar"), p.get("name_en"))
+        key = sub or p["category"]
+        if sub:
+            dist[sub] += 1
+        else:
+            generic[p["category"]] += 1
+        if len(sample_map[key]) < samples:
+            sample_map[key].append({"sku": p.get("sku"), "name": p.get("name_ar") or p.get("name_en"),
+                                    "assigned": key})
+    pct = {k: round(100 * v / total, 1) if total else 0 for k, v in {**dist, **generic}.items()}
+    return {"total_food_products": total, "subcategory_counts": dist,
+            "generic_counts": generic, "pct": pct, "samples": sample_map}
+
+
 @router.get("/admin/recent-snapshots")
 async def admin_recent_snapshots(limit: int = Query(200, ge=1, le=1000), user=Depends(get_user)):
     """Read-only admin helper: latest N snapshots joined with store platform.
@@ -5867,18 +5865,8 @@ _INSIGHTS_STD = DASHBOARD_CACHE_STD_WINDOWS
 
 @router.get("/insights/summary")
 async def insights_summary(days: int = Query(30), response: Response = None, user=Depends(get_user)):
-    # DIAGNOSTIC (iter27, kept through iter30): on any failure of the serve/compute
-    # path, return the real error to a super_admin as a 200 JSON payload (production
-    # logs are unreadable). Everyone else — and when INSIGHTS_SUMMARY_DIAGNOSTIC is
-    # False — gets the normal 500 (re-raise). Success path is untouched.
-    try:
-        body, meta = await _serve_page_cache(db, "insights/summary", days,
-                                             lambda: _insights_summary_compute(db, days), days in _INSIGHTS_STD)
-    except Exception as _e:
-        _is_super = (user or {}).get("role") == "super_admin" or is_super_admin_email((user or {}).get("email", ""))
-        if INSIGHTS_SUMMARY_DIAGNOSTIC and _is_super:
-            return _insights_summary_diag_payload(_e, _traceback.format_exc())
-        raise
+    body, meta = await _serve_page_cache(db, "insights/summary", days,
+                                         lambda: _insights_summary_compute(db, days), days in _INSIGHTS_STD)
     _apply_cache_headers(response, meta)
     return body
 
@@ -6090,6 +6078,15 @@ async def startup():
     # request after a deploy/restart is fast instead of paying the live-compute
     # cost. Fire-and-forget: never blocks startup, failures fall back to live.
     async def _warm_dashboard_cache():
+        # iter36 — one-time food-subcategory backfill for pre-existing products
+        # (new/recrawled products are classified in process_crawled_products).
+        # Runs BEFORE the page-cache warm-up so trending caches see subcategories.
+        try:
+            n = await backfill_food_subcategories(db)
+            if n:
+                logger.info(f"[Subcat] backfilled {n} food products (field set even when generic → idempotent)")
+        except Exception:
+            logger.exception("[Subcat] backfill failed (new crawls will classify incrementally)")
         # iter30 — backfill the metric rollup/coverage collections FIRST so the
         # page-cache warm-up below reads populated metrics (drops/gaps/spread).
         await _maybe_backfill_store_metrics(db)

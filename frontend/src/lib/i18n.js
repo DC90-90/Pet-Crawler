@@ -1,5 +1,39 @@
 import { createContext, useContext, useState, useCallback } from "react";
 
+// iter36 — bilingual category labels (incl. the new food subcategories).
+// Keys are the backend category/subcategory values; parents stay valid
+// alongside subcategories (additive split). Rendered in the app's standard
+// Arabic font (DIN Next LT Arabic via the global font stack) and RTL-aware
+// through the normal isRTL flow.
+export const CATEGORY_LABELS = {
+  cat_food: { en: "Cat Food", ar: "طعام قطط" },
+  cat_food_dry: { en: "Dry Cat Food", ar: "طعام قطط جاف" },
+  cat_food_wet: { en: "Wet Cat Food", ar: "طعام قطط رطب" },
+  cat_treats: { en: "Cat Treats", ar: "مكافآت قطط" },
+  dog_food: { en: "Dog Food", ar: "طعام كلاب" },
+  dog_food_dry: { en: "Dry Dog Food", ar: "طعام كلاب جاف" },
+  dog_food_wet: { en: "Wet Dog Food", ar: "طعام كلاب رطب" },
+  dog_treats: { en: "Dog Treats", ar: "مكافآت كلاب" },
+  bird_food: { en: "Bird Food", ar: "طعام طيور" },
+  fish_food: { en: "Fish Food", ar: "طعام أسماك" },
+  pet_food: { en: "Pet Food", ar: "طعام حيوانات" },
+  small_food: { en: "Small Animal Food", ar: "طعام حيوانات صغيرة" },
+  litter: { en: "Litter", ar: "رمل ومستلزمات النظافة" },
+  toys: { en: "Toys", ar: "ألعاب" },
+  grooming: { en: "Grooming", ar: "العناية والتنظيف" },
+  healthcare: { en: "Healthcare", ar: "صحة وعلاج" },
+  accessories: { en: "Accessories", ar: "إكسسوارات" },
+  equipment: { en: "Equipment", ar: "معدات" },
+  reptile: { en: "Reptile", ar: "زواحف" },
+  vet_supplies: { en: "Vet Supplies", ar: "مستلزمات بيطرية" },
+};
+
+export function catLabel(key, isRTL) {
+  const entry = CATEGORY_LABELS[key];
+  if (!entry) return key;                    // unknown key → raw value (safe)
+  return isRTL ? entry.ar : entry.en;
+}
+
 // Local translation dictionary — no external translation API is used.
 // To integrate a translation service (e.g., i18next-http-backend), add REACT_APP_I18N_KEY to .env
 // and configure the backend plugin here.
