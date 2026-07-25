@@ -5492,6 +5492,156 @@ async def backfill_food_subcategories(db):
     return n
 
 
+def _demo_seed_skus():
+    """iter39/41 — THE single source of truth for demo-seed detection: the
+    literal SKU values of the synthetic seed templates. Used by the
+    subcategory preview's demo flags and the demo-cleanup endpoint."""
+    return {t[0] for t in PRODUCTS_SEED + EXTRA_PRODUCT_TEMPLATES}
+
+
+# iter41 — every collection that stores a product reference, with the exact
+# match predicate for a given (skus, product_ids) pair. Audited across
+# server.py/crawlers.py/matcher.py: snapshots carry sku+product_id; matches and
+# the blacklist carry my_sku/competitor_sku; alerts carry product_sku;
+# alert_events carry both product_sku and sku; baseline stats/opportunities are
+# barcode-keyed from the real MySkuWatch import (included for completeness —
+# expected 0). dashboard_cache holds derived pages only (rebuilt by recompute).
+def _demo_cascade_queries(skus, ids):
+    sk = {"$in": sorted(skus)}
+    return [
+        ("product_snapshots", {"$or": [{"sku": sk}, {"product_id": {"$in": sorted(ids)}}]}),
+        ("product_matches", {"$or": [{"my_sku": sk}, {"competitor_sku": sk}]}),
+        ("match_blacklist", {"$or": [{"my_sku": sk}, {"competitor_sku": sk}]}),
+        ("sku_store_coverage", {"sku": sk}),
+        ("sku_sales_daily", {"sku": sk}),
+        ("my_products", {"sku": sk}),
+        ("alerts", {"product_sku": sk}),
+        ("alert_events", {"$or": [{"sku": sk}, {"product_sku": sk}]}),
+        ("product_baseline_stats", {"sku": sk}),
+        ("market_opportunities", {"sku": sk}),
+        ("products", {"sku": sk}),
+    ]
+
+
+_REAL_SKU_RE = re.compile(r"^\d{8,14}$")   # numeric GTIN — never a seed SKU
+
+
+async def _demo_subcategory_counts(db):
+    counts = {}
+    async for p in db.products.find({}, {"_id": 0, "category": 1, "subcategory": 1}):
+        key = p.get("subcategory") or p.get("category") or ""
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+@router.get("/admin/demo-cleanup")
+async def demo_cleanup_get(dry_run: bool = Query(True), user=Depends(get_user)):
+    """iter42 — browser-friendly DRY RUN ONLY. GET can never delete: the
+    destructive path stays POST-only, so a prefetched/crawled/retried URL is
+    harmless by construction."""
+    if not dry_run:
+        raise HTTPException(405, "GET is dry-run only — use POST /api/admin/demo-cleanup?dry_run=false for the real run")
+    return await demo_cleanup(dry_run=True, user=user)
+
+
+@router.post("/admin/demo-cleanup")
+async def demo_cleanup(dry_run: bool = Query(True), user=Depends(get_user)):
+    """iter41 — remove the synthetic seed catalog from production.
+
+    dry_run=true (default): full report, zero writes. Real run: backs up every
+    affected document into demo_cleanup_backup_<ts>_<collection> BEFORE any
+    delete, cascades across every referencing collection, then triggers the
+    rollup/cache recomputes so totals update immediately. super_admin only."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+
+    demo_skus = _demo_seed_skus()
+    matched = await db.products.find(
+        {"sku": {"$in": sorted(demo_skus)}},
+        {"_id": 0, "sku": 1, "id": 1, "category": 1, "subcategory": 1},
+    ).to_list(length=None)
+    skus = {p["sku"] for p in matched}
+    ids = {p.get("id") for p in matched if p.get("id")}
+
+    # ── safety guard ──
+    guard_reasons = []
+    real_looking = sorted(s for s in skus if s.startswith("Z.") or s.startswith("S-PE-") or _REAL_SKU_RE.match(s))
+    if real_looking:
+        guard_reasons.append(f"detector matched real-crawl-shaped SKUs: {real_looking[:10]}")
+    if len(skus) > 200:
+        guard_reasons.append(f"demo count {len(skus)} exceeds the 200 safety ceiling")
+    if guard_reasons and not dry_run:
+        raise HTTPException(409, f"demo-cleanup refused: {'; '.join(guard_reasons)}")
+
+    # ── report material: breakdowns + cascade counts ──
+    by_category = {}
+    for p in matched:
+        key = p.get("subcategory") or p.get("category") or ""
+        by_category[key] = by_category.get(key, 0) + 1
+    by_store_rows = await db.product_snapshots.aggregate([
+        {"$match": {"sku": {"$in": sorted(skus)}}},
+        {"$group": {"_id": "$store_id", "n": {"$sum": 1}}},
+    ], allowDiskUse=True).to_list(length=None) if skus else []
+    by_store = {r["_id"]: r["n"] for r in by_store_rows}
+
+    cascade = _demo_cascade_queries(skus, ids) if skus else []
+    cascade_counts = {}
+    for coll, q in cascade:
+        cascade_counts[coll] = await db[coll].count_documents(q)
+
+    before = {
+        "my_products_total": await db.my_products.count_documents({}),
+        "total_matches": await db.product_matches.count_documents({}),
+        "subcategory_counts": await _demo_subcategory_counts(db),
+    }
+    report = {
+        "dry_run": dry_run,
+        "guard": {"ok": not guard_reasons, "reasons": guard_reasons},
+        "demo_products": len(skus),
+        "by_category": by_category,
+        "by_store_snapshots": by_store,
+        "cascade_counts": cascade_counts,
+        "before": before,
+    }
+    if dry_run or not skus:
+        return report
+
+    # ── real run: backup FIRST, then delete, per collection ──
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    backups = {}
+    for coll, q in cascade:
+        docs = await db[coll].find(q).to_list(length=None)
+        bname = f"demo_cleanup_backup_{ts}_{coll}"
+        if docs:
+            await db[bname].insert_many(docs)     # backup written before any delete
+        backups[coll] = {"backup_collection": bname, "docs": len(docs)}
+    await db[f"demo_cleanup_backup_{ts}_manifest"].insert_one({
+        "_id": "manifest", "created_at": datetime.now(timezone.utc),
+        "skus": sorted(skus), "collections": {k: v["docs"] for k, v in backups.items()},
+    })
+    for coll, q in cascade:
+        await db[coll].delete_many(q)
+
+    # ── recompute so dashboards reflect the new totals immediately ──
+    recompute = {}
+    try:
+        recompute["store_metrics"] = await recompute_all_store_metrics(db)
+    except Exception as e:
+        recompute["store_metrics"] = f"ERROR: {str(e)[:80]}"
+    recompute["dashboard_cache"] = "recomputed" if await maybe_recompute_dashboard_cache(db, force=True) else "skipped"
+    recompute["page_caches"] = "recomputed" if await maybe_recompute_page_caches(db, force=True) else "skipped"
+
+    report["after"] = {
+        "my_products_total": await db.my_products.count_documents({}),
+        "total_matches": await db.product_matches.count_documents({}),
+        "subcategory_counts": await _demo_subcategory_counts(db),
+    }
+    report["backups"] = backups
+    report["backup_timestamp"] = ts
+    report["recompute"] = recompute
+    return report
+
+
 @router.get("/admin/subcategory-preview")
 async def subcategory_preview(samples: int = Query(20, ge=1, le=100), user=Depends(get_user)):
     """iter36 — read-only classifier audit over the LIVE catalog: distribution of
@@ -5500,9 +5650,7 @@ async def subcategory_preview(samples: int = Query(20, ge=1, le=100), user=Depen
     if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
         raise HTTPException(403, "super_admin only")
     from crawlers import _has_treat_signal
-    # iter39 — demo-seed SKUs are the literal template values; separate them so
-    # real-catalog percentages aren't polluted by synthetic products.
-    demo_skus = {t[0] for t in PRODUCTS_SEED + EXTRA_PRODUCT_TEMPLATES}
+    demo_skus = _demo_seed_skus()
     dist = {k: 0 for k in FOOD_SUBCATEGORIES}
     generic = {p: 0 for p in FOOD_SUBCATEGORY_PARENTS}
     real_dist = {k: 0 for k in FOOD_SUBCATEGORIES}
