@@ -4,9 +4,12 @@ import api from "@/lib/api";
 import { toast } from "sonner";
 import { Shield, KeyRound, CheckCircle2, XCircle, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/App";
+import DemoCleanupPanel from "@/components/DemoCleanupPanel";
 
 export default function SettingsPage() {
   const { isRTL } = useI18n();
+  const { user } = useAuth();
   const [encryptionOk, setEncryptionOk] = useState(null);
   const [importStatus, setImportStatus] = useState(null);
 
@@ -93,6 +96,9 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      {/* Demo Data Cleanup (iter43) — super_admin only */}
+      {user?.role === "super_admin" && <DemoCleanupPanel isRTL={isRTL} />}
 
       {/* Auto-Generate Alerts */}
       <div className="glass-card p-5">

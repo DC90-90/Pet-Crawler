@@ -1,0 +1,21 @@
+{
+  "summary": "iter43 verified end-to-end. Backend contract on /api/admin/demo-cleanup fully compliant (dry-run guard now exposes real_sku_match+confirm_count_required; POST ?dry_run=false without confirm_count -> 409; wrong confirm_count -> 409 with 'count' in detail; GET ?dry_run=false -> 405). All 6 regression endpoints (health, my-products, price-intel/store-ranking, insights/summary, stores, scheduler/status) return 200 with a single reused super_admin token. Hardened /api/health returns status=healthy, mongodb=connected, scheduler_active_jobs present. Frontend DemoCleanupPanel renders on Settings page for super_admin, calls GET /admin/demo-cleanup on mount, shows report (Demo Products=0 as expected on preview DB, My Products=40, Matches=40), guard-ok badge shown, destructive button disabled (n=0), no console errors, Settings page not broken. iter26 KPI info triggers present (6/6) on My Products page.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": { "ui_bugs": [], "integration_issues": [], "design_issues": [] },
+  "test_report_links": [
+    "/app/backend/tests/test_iter43_demo_cleanup_live.py",
+    "/app/test_reports/pytest/iter43_live.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "DemoCleanupPanel.jsx: window.confirm() is used for the destructive confirmation. Works but not ideal design consistency vs the rest of the shadcn/toast-driven UI — consider a custom Dialog for parity. Not a blocker.",
+    "DemoCleanupPanel.jsx: 'blocked' condition = !!guard.real_sku_match || !guard.ok, which is correct, but the button also disables when n===0 (currently the preview-DB case). Users may want a subtle explanation ('no demo products to delete') rather than an opaque disabled state — currently only the shield reason string is shown."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter43_demo_cleanup_live.py"],
+  "success_rate": { "backend": "100% (12/12)", "frontend": "100%" },
+  "test_credentials": "super_admin: a.disi@taqueen.sa / Ahmaddc90@ (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. Preview DB has 0 demo products (as flagged by main agent) — contract-level checks executed against the live server; the actual real-run deletion path is covered by the isolated-DB pytest test_demo_cleanup.py (green per main agent).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Login response uses key 'token' (not 'access_token'). Always reuse a single token to avoid the 5/min login rate limit. iter43 backend contract fully validated. Frontend uses window.localStorage under key 'token' via AuthProvider; direct localStorage.setItem seed does not survive because AuthProvider initializes from stored value on mount but PrivateRoute may redirect if user is not restored — safer to log in through the UI."
+}

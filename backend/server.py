@@ -5545,13 +5545,18 @@ async def demo_cleanup_get(dry_run: bool = Query(True), user=Depends(get_user)):
 
 
 @router.post("/admin/demo-cleanup")
-async def demo_cleanup(dry_run: bool = Query(True), user=Depends(get_user)):
-    """iter41 — remove the synthetic seed catalog from production.
+async def demo_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int] = Query(None), user=Depends(get_user)):
+    """iter41/43 — remove the synthetic seed catalog from production.
 
-    dry_run=true (default): full report, zero writes. Real run: backs up every
-    affected document into demo_cleanup_backup_<ts>_<collection> BEFORE any
-    delete, cascades across every referencing collection, then triggers the
-    rollup/cache recomputes so totals update immediately. super_admin only."""
+    dry_run=true (default): full report, zero writes. Real run
+    (dry_run=false): REQUIRES confirm_count to exactly equal the live demo
+    count computed at run time — you delete exactly the set you reviewed, or
+    nothing. The real-SKU guard is ALWAYS ON and never overridable; a
+    catastrophe cap (1000) protects against detector drift regardless of
+    confirm_count. Backs up every affected document into
+    demo_cleanup_backup_<ts>_<collection> BEFORE any delete, cascades across
+    every referencing collection, then triggers the rollup/cache recomputes so
+    totals update immediately. super_admin only."""
     if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
         raise HTTPException(403, "super_admin only")
 
@@ -5563,15 +5568,23 @@ async def demo_cleanup(dry_run: bool = Query(True), user=Depends(get_user)):
     skus = {p["sku"] for p in matched}
     ids = {p.get("id") for p in matched if p.get("id")}
 
-    # ── safety guard ──
+    # ── safety guard (iter43 contract) ──
     guard_reasons = []
     real_looking = sorted(s for s in skus if s.startswith("Z.") or s.startswith("S-PE-") or _REAL_SKU_RE.match(s))
     if real_looking:
         guard_reasons.append(f"detector matched real-crawl-shaped SKUs: {real_looking[:10]}")
-    if len(skus) > 200:
-        guard_reasons.append(f"demo count {len(skus)} exceeds the 200 safety ceiling")
-    if guard_reasons and not dry_run:
-        raise HTTPException(409, f"demo-cleanup refused: {'; '.join(guard_reasons)}")
+    if len(skus) > 1000:
+        guard_reasons.append(f"demo count {len(skus)} exceeds the 1000 catastrophe cap (detector drift?)")
+    if not dry_run:
+        # never overridable: real-SKU match and the catastrophe cap block the run
+        if guard_reasons:
+            raise HTTPException(409, f"demo-cleanup refused: {'; '.join(guard_reasons)}")
+        # confirm-count contract: the caller must confirm the EXACT live count
+        if confirm_count != len(skus):
+            raise HTTPException(
+                409,
+                f"demo-cleanup refused: confirm_count={confirm_count} does not match the "
+                f"live demo count {len(skus)} — re-run the dry run, review, and confirm the exact number")
 
     # ── report material: breakdowns + cascade counts ──
     by_category = {}
@@ -5596,7 +5609,11 @@ async def demo_cleanup(dry_run: bool = Query(True), user=Depends(get_user)):
     }
     report = {
         "dry_run": dry_run,
-        "guard": {"ok": not guard_reasons, "reasons": guard_reasons},
+        "guard": {"ok": not guard_reasons, "reasons": guard_reasons,
+                  # iter43 — frontend contract: the button must disable on a
+                  # real-SKU match, and the POST must confirm this exact count.
+                  "real_sku_match": bool(real_looking),
+                  "confirm_count_required": len(skus)},
         "demo_products": len(skus),
         "by_category": by_category,
         "by_store_snapshots": by_store,
