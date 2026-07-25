@@ -91,8 +91,8 @@ Post-proper-fix, production 90D KPIs should surface as (per preview): matched â‰
 - **P3** Mahally Apify enrichment, auto platform detection, Salla soft-block detector
 
 ## Credentials
-- **Super Admin (god mode, immutable)**: `a.disi@taqueen.sa` / `Ahmaddc90@`
-- Crawler token (hardcoded): `zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO`
+- **Super Admin (god mode, immutable)**: a.disi@taqueen.sa / <in Emergent Secrets>
+- Crawler token (hardcoded): <in Emergent Secrets>
 
 ## URLs
 - Preview: https://daleel-price-intel.preview.emergentagent.com
