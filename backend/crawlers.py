@@ -1531,24 +1531,193 @@ def storefront_shelf_price(raw):
     return shelf, list_price
 
 
+# iter45 — the own catalogue carries barcode variants like
+# "9003579308936carton" (a case/carton pack sharing the unit EAN). Match on the
+# leading 8-14 digit run as well as the literal value, in BOTH directions, so a
+# suffix on either side still matches.
+_BARCODE_LEAD_RE = re.compile(r"^(\d{8,14})(?=[^\d]|$)")
+
+
+def barcode_keys(value):
+    """Candidate lookup keys for a barcode-ish value (lowercased)."""
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return []
+    keys = [raw]
+    m = _BARCODE_LEAD_RE.match(raw)
+    if m and m.group(1) != raw:
+        keys.append(m.group(1))
+    return keys
+
+
 def _storefront_price_index(rows):
-    """Index raw storefront rows by SKU and by barcode → (shelf, list)."""
-    by_sku, by_barcode = {}, {}
+    """Index raw storefront rows for price lookup → {by_sku, by_barcode, by_id}.
+
+    iter45 — indexes three ways because my_products keys are heterogeneous:
+    merchant SKUs, Zid internal ids ("Z.123456"), and barcodes that may carry a
+    variant suffix. Every value maps to (shelf_price, list_price).
+    """
+    idx = {"by_sku": {}, "by_barcode": {}, "by_id": {}}
     for r in rows:
         shelf, list_price = storefront_shelf_price(r)
         if shelf <= 0:
             continue
         entry = (shelf, list_price)
-        sku = str(r.get("sku") or "").strip()
-        barcode = str(r.get("barcode") or "").strip()
+        sku = str(r.get("sku") or "").strip().lower()
         if sku:
-            by_sku[sku] = entry
-        if barcode:
-            by_barcode[barcode] = entry
-    return by_sku, by_barcode
+            idx["by_sku"][sku] = entry
+        for k in barcode_keys(r.get("barcode")):
+            idx["by_barcode"][k] = entry
+        rid = str(r.get("id") or "").strip().lower()
+        if rid:
+            idx["by_id"][rid] = entry
+    return idx
 
 
-async def fetch_own_storefront_catalog_raw(store):
+def storefront_price_lookup(idx, sku=None, barcode=None):
+    """Resolve a my_products row against the storefront index.
+
+    Returns ((shelf, list), method) or (None, None). Order: exact SKU, then
+    barcode (literal, then suffix-stripped), then — for Zid internal ids like
+    "Z.123456" — the numeric remainder against the storefront row id.
+    """
+    s = str(sku or "").strip().lower()
+    if s and s in idx["by_sku"]:
+        return idx["by_sku"][s], "sku"
+    for k in barcode_keys(barcode):
+        if k in idx["by_barcode"]:
+            return idx["by_barcode"][k], ("barcode" if k == str(barcode or "").strip().lower()
+                                          else "barcode_normalized")
+    # a numeric-looking SKU may itself be a barcode
+    if s:
+        for k in barcode_keys(s):
+            if k in idx["by_barcode"]:
+                return idx["by_barcode"][k], "sku_as_barcode"
+        if s.startswith("z."):
+            zid = s[2:]
+            if zid in idx["by_id"]:
+                return idx["by_id"][zid], "zid_internal_id"
+            if zid in idx["by_sku"]:
+                return idx["by_sku"][zid], "zid_internal_id"
+    return None, None
+
+
+# iter45 — own-store storefront pagination. The SHARED _paginate_endpoint stops
+# on `len(page) < 20`, a "short page means last page" heuristic that truncated
+# our own catalogue at 1,184 of 2,590 products. That helper is also used by the
+# COMPETITOR crawl, so it is left untouched; the own-store fetch gets this
+# dedicated paginator driven by the response's explicit pagination metadata.
+OWN_SF_MAX_PAGES = 200
+OWN_SF_PAGE_TIMEOUT = 20.0
+_OWN_SF_PAGE_DELAY = 0.08
+
+
+def _sf_items(body):
+    """Extract the product list from any storefront envelope shape."""
+    if not isinstance(body, dict):
+        return []
+    items = body.get("data", body.get("products", body.get("results", [])))
+    if isinstance(items, dict):                      # legacy nested envelope
+        inner = items.get("products")
+        if isinstance(inner, dict) and isinstance(inner.get("data"), list):
+            return inner["data"]
+        if isinstance(items.get("data"), list):
+            return items["data"]
+        return []
+    return items if isinstance(items, list) else []
+
+
+def _sf_page_meta(body):
+    """(total_pages, total_results, has_next) from whichever metadata the
+    storefront exposes — pages_count / last_page / results / next."""
+    if not isinstance(body, dict):
+        return None, None, None
+    pg = body.get("pagination") if isinstance(body.get("pagination"), dict) else {}
+
+    def _int(*vals):
+        for v in vals:
+            if isinstance(v, bool):
+                continue
+            try:
+                if v is not None:
+                    return int(v)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    total_pages = _int(body.get("pages_count"), pg.get("pages_count"),
+                       body.get("last_page"), pg.get("last_page"),
+                       body.get("total_pages"), pg.get("total_pages"))
+    total_results = _int(body.get("total"), pg.get("total"),
+                         body.get("results"), pg.get("results"),
+                         body.get("count") if not isinstance(body.get("data"), list) else None)
+    nxt = pg.get("next", body.get("next"))
+    has_next = None if nxt is None and "next" not in pg and "next" not in body else bool(nxt)
+    return total_pages, total_results, has_next
+
+
+async def _paginate_own_storefront(http, ep, initial_items, max_pages=OWN_SF_MAX_PAGES):
+    """Walk the FULL own-store catalogue. Never stops on a short page — only on
+    explicit end-of-pagination, an empty page, a page cap, or an error.
+    Returns (rows, pages_fetched, stop_reason)."""
+    rows = list(initial_items)
+    seen = set()
+
+    def _key(r):
+        return (str(r.get("id") or "").strip()
+                or str(r.get("sku") or "").strip()
+                or str(r.get("barcode") or "").strip())
+
+    for r in rows:
+        seen.add(_key(r))
+
+    page, stop_reason = 1, "exhausted"
+    total_pages = total_results = None
+    while page < max_pages:
+        page += 1
+        params = dict(ep.get("params", {}))
+        params["page"] = page
+        try:
+            resp = await http.get(ep["url"], params=params, timeout=OWN_SF_PAGE_TIMEOUT)
+            if resp.status_code != 200:
+                stop_reason = f"http_{resp.status_code}"
+                break
+            body = resp.json()
+        except Exception as exc:
+            logger.warning(f"[OwnSF] page {page} failed: {exc}")
+            stop_reason = "page_error"
+            break
+        more = _sf_items(body)
+        if not more:
+            stop_reason = "empty_page"
+            break
+        fresh = [r for r in more if _key(r) not in seen]
+        for r in fresh:
+            seen.add(_key(r))
+        rows.extend(fresh)
+        if not fresh:                     # same page echoed back — pagination is looping
+            stop_reason = "duplicate_page"
+            break
+        tp, tr, has_next = _sf_page_meta(body)
+        total_pages = tp if tp is not None else total_pages
+        total_results = tr if tr is not None else total_results
+        if has_next is False:
+            stop_reason = "no_next"
+            break
+        if total_pages is not None and page >= total_pages:
+            stop_reason = "pages_count_reached"
+            break
+        if total_results is not None and len(rows) >= total_results:
+            stop_reason = "results_total_reached"
+            break
+        await asyncio.sleep(_OWN_SF_PAGE_DELAY)
+    else:
+        stop_reason = "max_pages"
+    logger.info(f"[OwnSF] {len(rows)} products across {page} page(s) — stop={stop_reason}")
+    return rows, page, stop_reason
+
+
+async def fetch_own_storefront_catalog_raw(store, max_pages=OWN_SF_MAX_PAGES):
     """iter44 (Step-1 validation) — fetch the own store's PUBLIC storefront
     catalogue and return the RAW rows, unnormalised.
 
@@ -1564,23 +1733,27 @@ async def fetch_own_storefront_catalog_raw(store):
     platform = (store.get("platform") or "zid").lower()
     endpoints = _build_salla_endpoints(base, store.get("working_endpoint"), platform=platform)
     crawl_log = _make_crawl_log(store, tier_attempted=1)
-    rows, matched = [], None
+    rows, matched, pages, stop_reason = [], None, 0, None
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers={
+        async with httpx.AsyncClient(timeout=OWN_SF_PAGE_TIMEOUT, follow_redirects=True, headers={
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json, text/html, */*",
         }) as http:
             for ep in endpoints:
                 items, matched_ep = await _try_single_endpoint(http, ep, crawl_log)
                 if matched_ep:
-                    rows = await _paginate_endpoint(http, matched_ep, items)
                     matched = matched_ep
+                    rows, pages, stop_reason = await _paginate_own_storefront(
+                        http, matched_ep, items, max_pages=max_pages)
                     break
     except Exception as e:
         return rows, {"ok": False, "error": str(e)[:300], "endpoint": (matched or {}).get("tag"),
-                      "rows": len(rows), "attempts": crawl_log.get("attempts")}
+                      "rows": len(rows), "pages": pages, "stop_reason": "exception",
+                      "attempts": crawl_log.get("attempts")}
     return rows, {"ok": bool(matched), "endpoint": (matched or {}).get("tag"),
-                  "rows": len(rows), "attempts": crawl_log.get("attempts")}
+                  "rows": len(rows), "pages": pages, "stop_reason": stop_reason,
+                  "truncated": stop_reason == "max_pages",
+                  "attempts": crawl_log.get("attempts")}
 
 
 async def sync_own_store_prices(db, store=None):
@@ -1668,14 +1841,15 @@ async def sync_own_store_prices(db, store=None):
     # the PRICE from the storefront, matched by SKU then barcode. A SKU the
     # storefront doesn't carry keeps the merchant price and is tagged
     # price_basis="merchant_ex_vat" so the fallback rate stays visible.
-    sf_by_sku, sf_by_barcode = {}, {}
+    sf_index = {"by_sku": {}, "by_barcode": {}, "by_id": {}}
     storefront_overlay_meta = None
     if sync_source_label == "zid_api":
         try:
             sf_rows, storefront_overlay_meta = await fetch_own_storefront_catalog_raw(store)
-            sf_by_sku, sf_by_barcode = _storefront_price_index(sf_rows)
-            logger.info(f"[OwnSync] storefront overlay: {len(sf_by_sku)} SKUs / "
-                        f"{len(sf_by_barcode)} barcodes priced inc-VAT")
+            sf_index = _storefront_price_index(sf_rows)
+            logger.info(f"[OwnSync] storefront overlay: {len(sf_index['by_sku'])} SKUs / "
+                        f"{len(sf_index['by_barcode'])} barcode keys priced inc-VAT "
+                        f"({(storefront_overlay_meta or {}).get('pages')} pages)")
         except Exception as e:
             # Never fail the sync on the overlay — fall back to merchant prices,
             # tagged, so the basis is auditable rather than silently wrong.
@@ -1710,8 +1884,8 @@ async def sync_own_store_prices(db, store=None):
         if raw.get("_zid_id"):
             # Stock/sales fields ALWAYS come from the merchant API; only the
             # price is overlaid from the storefront (iter44 Step 2).
-            sf_hit = (sf_by_sku.get(str(raw.get("sku") or "").strip())
-                      or sf_by_barcode.get(str(raw.get("barcode") or "").strip()))
+            sf_hit, _sf_method = storefront_price_lookup(
+                sf_index, sku=raw.get("sku"), barcode=raw.get("barcode"))
             if sf_hit:
                 shelf, list_price = sf_hit
                 price_basis = "storefront_inc_vat"
