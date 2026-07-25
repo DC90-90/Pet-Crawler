@@ -110,6 +110,18 @@ def test_dry_run_reports_without_writing():
             raise AssertionError("viewer should be rejected")
         except HTTPException as e:
             assert e.status_code == 403
+
+        # iter42 — GET route: dry run allowed, destructive run REJECTED (GET
+        # must never delete; the real run is POST-only)
+        rep_get = await server.demo_cleanup_get(dry_run=True, user=SUPER)
+        assert rep_get["dry_run"] is True and rep_get["demo_products"] == 3
+        try:
+            await server.demo_cleanup_get(dry_run=False, user=SUPER)
+            raise AssertionError("GET with dry_run=false must be rejected")
+        except HTTPException as e:
+            assert e.status_code == 405 and "POST" in e.detail
+        # ...and nothing was deleted by any of the above
+        assert await db.products.count_documents({}) == 4
     asyncio.run(main())
 
 

@@ -5503,6 +5503,16 @@ async def _demo_subcategory_counts(db):
     return counts
 
 
+@router.get("/admin/demo-cleanup")
+async def demo_cleanup_get(dry_run: bool = Query(True), user=Depends(get_user)):
+    """iter42 — browser-friendly DRY RUN ONLY. GET can never delete: the
+    destructive path stays POST-only, so a prefetched/crawled/retried URL is
+    harmless by construction."""
+    if not dry_run:
+        raise HTTPException(405, "GET is dry-run only — use POST /api/admin/demo-cleanup?dry_run=false for the real run")
+    return await demo_cleanup(dry_run=True, user=user)
+
+
 @router.post("/admin/demo-cleanup")
 async def demo_cleanup(dry_run: bool = Query(True), user=Depends(get_user)):
     """iter41 — remove the synthetic seed catalog from production.
