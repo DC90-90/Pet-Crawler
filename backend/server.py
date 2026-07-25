@@ -29,6 +29,7 @@ from crawlers import (
     # iter44 Step-1 validation (read-only VAT-basis audit)
     fetch_own_storefront_catalog_raw, _fetch_zid_api_catalog, _price_amount,
     _storefront_price_index, storefront_price_lookup,
+    merchant_index, resolve_own_price, KSA_VAT_RATE,
 )
 from store_registry import ensure_stores as registry_ensure_stores
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
@@ -5485,30 +5486,78 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
         raise HTTPException(502, f"storefront fetch failed — refusing to backfill: {sf_meta}")
     idx = _storefront_price_index(sf_rows)
 
-    changed, unchanged, no_match = [], 0, []
-    match_methods = {}
+    # iter46 — the storefront genuinely lists only part of the catalogue, so the
+    # Merchant pull is needed both to PRICE the remainder and to tell a live
+    # merchant-only product from a stale row no source touches any more.
+    merchant_rows, merchant_status = await _fetch_zid_api_catalog(db, store)
+    m_idx = merchant_index(merchant_rows)
+
+    now = datetime.now(timezone.utc)
+
+    def _age_days(ts):
+        if not ts:
+            return None
+        try:
+            d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return (now - d).days
+
+    def _bucket(days):
+        if days is None:
+            return "never_synced"
+        for lim, label in ((7, "<7d"), (30, "7-30d"), (90, "30-90d")):
+            if days < lim:
+                return label
+        return ">90d"
+
+    changed, unchanged, no_source = [], 0, []
+    match_methods, basis_counts = {}, {}
+    stale = {"by_sync_source": {}, "by_age": {}, "samples": []}
     async for p in db.my_products.find(
-            {}, {"_id": 0, "sku": 1, "barcode": 1, "price": 1, "sale_price": 1, "price_basis": 1}):
+            {}, {"_id": 0, "sku": 1, "barcode": 1, "price": 1, "sale_price": 1,
+                 "price_basis": 1, "sync_source": 1, "last_synced_at": 1}):
         sku = str(p.get("sku") or "").strip()
         hit, method = storefront_price_lookup(idx, sku=sku, barcode=p.get("barcode"))
+        m_row, m_method = (None, None)
         if not hit:
-            no_match.append(sku)
+            m_row, m_method = storefront_price_lookup(m_idx, sku=sku, barcode=p.get("barcode"))
+        if not hit and not m_row:
+            # in NEITHER live source — stale. Never VAT-inflated; reported so a
+            # prune can be considered instead.
+            no_source.append(sku)
+            src = p.get("sync_source") or "(none)"
+            stale["by_sync_source"][src] = stale["by_sync_source"].get(src, 0) + 1
+            b = _bucket(_age_days(p.get("last_synced_at")))
+            stale["by_age"][b] = stale["by_age"].get(b, 0) + 1
+            if len(stale["samples"]) < 20:
+                stale["samples"].append({"sku": sku, "sync_source": src,
+                                         "last_synced_at": p.get("last_synced_at"),
+                                         "price": p.get("price")})
             continue
-        match_methods[method] = match_methods.get(method, 0) + 1
-        shelf, list_price = hit
-        new_sale = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
+        match_methods[method or m_method] = match_methods.get(method or m_method, 0) + 1
+        new_price, new_sale, basis = resolve_own_price(
+            hit,
+            merchant_price=(m_row or {}).get("price"),
+            merchant_sale_price=(m_row or {}).get("sale_price"),
+            is_taxable=(m_row or {}).get("is_taxable"),
+        )
+        basis_counts[basis] = basis_counts.get(basis, 0) + 1
         old_price = p.get("price")
         old_eff = p.get("sale_price") or old_price          # what the UI shows today
-        if old_price is not None and abs(float(old_price) - shelf) <= 0.009 and p.get("price_basis") == "storefront_inc_vat":
+        if (old_price is not None and abs(float(old_price) - new_price) <= 0.009
+                and p.get("price_basis") == basis):
             unchanged += 1
             continue
         changed.append({
             "sku": sku,
             "before_price": old_price, "before_sale_price": p.get("sale_price"),
             "before_effective": round(float(old_eff), 2) if old_eff else None,
-            "after_price": shelf, "after_sale_price": new_sale,
-            "ratio": round(shelf / float(old_eff), 4) if old_eff else None,
-            "before_basis": p.get("price_basis"),
+            "after_price": new_price, "after_sale_price": new_sale,
+            "ratio": round(new_price / float(old_eff), 4) if old_eff else None,
+            "before_basis": p.get("price_basis"), "after_basis": basis,
         })
 
     report = {
@@ -5519,11 +5568,16 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
                        "priced_skus": len(idx["by_sku"]),
                        "priced_barcode_keys": len(idx["by_barcode"])},
         "match_methods": match_methods,
+        "merchant": {"status": merchant_status, "rows": len(merchant_rows),
+                     "vat_rate": KSA_VAT_RATE},
         "my_products_total": await db.my_products.count_documents({}),
         "would_update" if dry_run else "updated": len(changed),
-        "already_inc_vat": unchanged,
-        "no_storefront_match": len(no_match),
-        "no_storefront_match_sample": no_match[:20],
+        "already_on_target_basis": unchanged,
+        "price_basis_counts": basis_counts,
+        # rows in NEITHER live source — candidates for pruning, never inflated
+        "no_live_source": len(no_source),
+        "no_live_source_sample": no_source[:20],
+        "stale_breakdown": stale,
         "sample": changed[:sample],
     }
     if dry_run:
@@ -5533,15 +5587,15 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
         await db.my_products.update_one({"sku": c["sku"]}, {"$set": {
             "price": c["after_price"],
             "sale_price": c["after_sale_price"],
-            "price_basis": "storefront_inc_vat",
+            "price_basis": c["after_basis"],
             "vat_backfilled_at": datetime.now(timezone.utc).isoformat(),
         }})
-    # rows the storefront doesn't carry keep the merchant price — tag them so
-    # the basis is explicit rather than unknown
-    if no_match:
+    # rows no live source carries are left EXACTLY as they are — untouched and
+    # unpriced-over, so a prune decision stays open
+    if no_source:
         await db.my_products.update_many(
-            {"sku": {"$in": no_match}, "price_basis": {"$exists": False}},
-            {"$set": {"price_basis": "merchant_ex_vat"}})
+            {"sku": {"$in": no_source}, "price_basis": {"$exists": False}},
+            {"$set": {"price_basis": "no_live_source"}})
     report["after_verification"] = [
         {"sku": c["sku"], **{k: v for k, v in (await db.my_products.find_one(
             {"sku": c["sku"]}, {"_id": 0, "price": 1, "sale_price": 1, "price_basis": 1})).items()}}
