@@ -1517,6 +1517,41 @@ async def _fetch_zid_api_catalog(db, store):
     return out, "ok"
 
 
+async def fetch_own_storefront_catalog_raw(store):
+    """iter44 (Step-1 validation) — fetch the own store's PUBLIC storefront
+    catalogue and return the RAW rows, unnormalised.
+
+    _normalize_raw_product() drops `effective_price` and `is_taxable`, which are
+    exactly the fields the VAT-basis audit needs, so this returns the untouched
+    JSON. Read-only: performs no DB writes and does not mutate the store doc
+    (unlike the sync path, which caches working_endpoint).
+
+    Returns (rows, meta) where meta records the endpoint used and whether the
+    fetch looked complete.
+    """
+    base = f"https://{store['domain']}"
+    platform = (store.get("platform") or "zid").lower()
+    endpoints = _build_salla_endpoints(base, store.get("working_endpoint"), platform=platform)
+    crawl_log = _make_crawl_log(store, tier_attempted=1)
+    rows, matched = [], None
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/html, */*",
+        }) as http:
+            for ep in endpoints:
+                items, matched_ep = await _try_single_endpoint(http, ep, crawl_log)
+                if matched_ep:
+                    rows = await _paginate_endpoint(http, matched_ep, items)
+                    matched = matched_ep
+                    break
+    except Exception as e:
+        return rows, {"ok": False, "error": str(e)[:300], "endpoint": (matched or {}).get("tag"),
+                      "rows": len(rows), "attempts": crawl_log.get("attempts")}
+    return rows, {"ok": bool(matched), "endpoint": (matched or {}).get("tag"),
+                  "rows": len(rows), "attempts": crawl_log.get("attempts")}
+
+
 async def sync_own_store_prices(db, store=None):
     """Sync prices/quantities from the user's own Zid store back into db.my_products.
 
