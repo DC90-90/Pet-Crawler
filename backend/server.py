@@ -26,6 +26,8 @@ from crawlers import (
     extract_brand, guess_category, guess_animal, extract_weight,
     classify_food_subcategory, FOOD_SUBCATEGORIES, FOOD_SUBCATEGORY_PARENTS,
     sync_own_store_prices,
+    # iter44 Step-1 validation (read-only VAT-basis audit)
+    fetch_own_storefront_catalog_raw, _fetch_zid_api_catalog, _price_amount,
 )
 from store_registry import ensure_stores as registry_ensure_stores
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
@@ -5463,6 +5465,131 @@ async def backfill_food_subcategories(db):
         {"$set": {"version": CLASSIFIER_VERSION, "updated_at": datetime.now(timezone.utc)}},
         upsert=True)
     return n
+
+
+@router.get("/admin/own-store-price-audit")
+async def own_store_price_audit(sample: int = Query(20, ge=1, le=200), user=Depends(get_user)):
+    """iter44 STEP 1 — read-only validation of the own-store VAT-basis fix.
+
+    Answers, against LIVE data, the four questions that must pass before the
+    price source is switched from the Zid Merchant API (ex-VAT) to the public
+    storefront (inc-VAT):
+      1. SKU coverage in both directions (merchant-only / storefront-only)
+      2. per-SKU price ratio distribution (expect ~1.15 taxable / ~1.00 not)
+      3. storefront `price` vs `effective_price` divergence (sale items)
+      4. storefront catalogue completeness (full catalogue, not a partial page)
+
+    Writes NOTHING and changes NO behaviour — the sync still uses the Merchant
+    price until Step 2 is explicitly approved. super_admin only.
+    """
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+    store = await db.stores.find_one({"is_own_store": True}, {"_id": 0})
+    if not store:
+        raise HTTPException(400, "no store flagged is_own_store=True")
+
+    merchant_rows, zid_status = await _fetch_zid_api_catalog(db, store)
+    sf_rows, sf_meta = await fetch_own_storefront_catalog_raw(store)
+
+    def _k(v):
+        return str(v or "").strip()
+
+    merchant, sf, sf_by_bc = {}, {}, {}
+    for r in merchant_rows:
+        if _k(r.get("sku")):
+            merchant[_k(r["sku"])] = r
+    for r in sf_rows:
+        if _k(r.get("sku")):
+            sf[_k(r["sku"])] = r
+        if _k(r.get("barcode")):
+            sf_by_bc[_k(r["barcode"])] = r
+
+    # ── Q1: coverage both directions ──
+    m_only = sorted(set(merchant) - set(sf))
+    s_only = sorted(set(sf) - set(merchant))
+    both = sorted(set(merchant) & set(sf))
+    # the sync matches barcode-FIRST, so a merchant-only SKU may still be
+    # recoverable from the storefront via barcode — that changes the true
+    # fallback rate, so measure it rather than assuming.
+    m_only_by_barcode = [s for s in m_only if _k(merchant[s].get("barcode")) in sf_by_bc]
+
+    # ── Q2/Q3: ratios + price/effective_price divergence over the FULL overlap ──
+    stored = {p["sku"]: p async for p in db.my_products.find(
+        {"sku": {"$in": both}}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1, "sync_source": 1})}
+    buckets = {"vat_15": 0, "parity": 0, "other": 0, "unusable": 0}
+    detail, others, diverged = [], [], []
+    for s in both:
+        mp = _price_amount(merchant[s].get("price"))
+        sp = _price_amount(sf[s].get("price"))
+        se = _price_amount(sf[s].get("effective_price"))
+        shelf = se if se > 0 else sp          # effective_price is the shelf price when present
+        taxable = sf[s].get("is_taxable")
+        ratio = round(shelf / mp, 4) if (mp > 0 and shelf > 0) else None
+        if ratio is None:
+            buckets["unusable"] += 1
+        elif abs(ratio - 1.15) <= 0.005:
+            buckets["vat_15"] += 1
+        elif abs(ratio - 1.0) <= 0.005:
+            buckets["parity"] += 1
+        else:
+            buckets["other"] += 1
+        row = {"sku": s, "merchant_price": mp, "storefront_price": sp,
+               "storefront_effective_price": se, "shelf_price": shelf,
+               "ratio": ratio, "is_taxable": taxable,
+               "stored_now": (stored.get(s) or {}).get("price"),
+               "stored_sync_source": (stored.get(s) or {}).get("sync_source")}
+        if ratio is not None and abs(ratio - 1.15) > 0.005 and abs(ratio - 1.0) > 0.005 and len(others) < 10:
+            others.append(row)
+        if sp > 0 and se > 0 and abs(sp - se) > 0.009 and len(diverged) < 10:
+            diverged.append({**row, "lower_field": "effective_price" if se < sp else "price"})
+        if len(detail) < sample:
+            detail.append(row)
+
+    # ── Q4: storefront catalogue completeness ──
+    sf_priced = sum(1 for r in sf_rows
+                    if _price_amount(r.get("effective_price")) > 0 or _price_amount(r.get("price")) > 0)
+    completeness = {
+        "storefront_fetch": sf_meta,
+        "storefront_rows": len(sf_rows),
+        "storefront_distinct_skus": len(sf),
+        "storefront_rows_with_usable_price": sf_priced,
+        "storefront_priced_pct": round(100 * sf_priced / len(sf_rows), 1) if sf_rows else 0,
+        "merchant_rows": len(merchant_rows),
+        "merchant_distinct_skus": len(merchant),
+        "merchant_status": zid_status,
+        "my_products_total": await db.my_products.count_documents({}),
+    }
+
+    n_both = len(both) or 1
+    return {
+        "store": {"name": store.get("name"), "domain": store.get("domain"), "platform": store.get("platform")},
+        "q1_coverage": {
+            "in_both": len(both),
+            "merchant_only": len(m_only),
+            "merchant_only_recoverable_by_barcode": len(m_only_by_barcode),
+            "merchant_only_truly_absent": len(m_only) - len(m_only_by_barcode),
+            "storefront_only": len(s_only),
+            "merchant_only_sample": m_only[:20],
+            "storefront_only_sample": s_only[:20],
+        },
+        "q2_ratio_distribution": {
+            **buckets,
+            "vat_15_pct": round(100 * buckets["vat_15"] / n_both, 1),
+            "verdict": ("consistent_vat_15" if buckets["other"] == 0 and buckets["vat_15"] > 0
+                        else "mixed_or_random — INSPECT q2_other_samples"),
+        },
+        "q2_sample": detail,
+        "q2_other_samples": others,
+        "q3_price_vs_effective": {
+            "diverging_count": sum(1 for s in both
+                                   if _price_amount(sf[s].get("price")) > 0
+                                   and _price_amount(sf[s].get("effective_price")) > 0
+                                   and abs(_price_amount(sf[s].get("price")) - _price_amount(sf[s].get("effective_price"))) > 0.009),
+            "samples": diverged,
+            "note": "effective_price is treated as the shelf price when > 0; price is the fallback",
+        },
+        "q4_completeness": completeness,
+    }
 
 
 def _demo_seed_skus():
