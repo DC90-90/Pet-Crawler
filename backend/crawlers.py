@@ -1442,6 +1442,24 @@ def _own_sync_fallback_warning(zid_status: str):
     )
 
 
+# iter46 — KSA standard VAT rate. Used ONLY to gross up Merchant-API prices for
+# products the storefront does not list; storefront prices are already inclusive.
+KSA_VAT_RATE = 0.15
+
+
+def _zid_is_taxable(p):
+    """Tristate tax flag from a Zid Merchant API product: True / False / None.
+
+    None means 'the API did not tell us' — the caller must NOT assume taxable,
+    because guessing wrong inflates a real price by 15%.
+    """
+    for key in ("is_taxable", "taxable"):
+        v = p.get(key)
+        if isinstance(v, bool):
+            return v
+    return None
+
+
 async def _fetch_zid_api_catalog(db, store):
     """Fetch the full product catalogue from Zid's authenticated Merchant API.
 
@@ -1497,6 +1515,12 @@ async def _fetch_zid_api_catalog(db, store):
                         # sold_count_diff method (works even for is_infinite
                         # products whose qty can never show depletion).
                         "sold_count": _extract_zid_sold_count(p),
+                        # iter46 — needed to decide whether a non-storefront
+                        # product may be grossed up by VAT. Preserved as a
+                        # TRISTATE: True / False / None(unknown) — never
+                        # coerced, so "unknown" can be tagged instead of
+                        # silently inflating a price.
+                        "is_taxable": _zid_is_taxable(p),
                         "img_url": ((p.get("images") or [{}])[0] or {}).get("origin") or ((p.get("images") or [{}])[0] or {}).get("image") or "",
                         "product_url": p.get("html_url") or "",
                         "_zid_id": p.get("id"),
@@ -1550,28 +1574,42 @@ def barcode_keys(value):
     return keys
 
 
-def _storefront_price_index(rows):
-    """Index raw storefront rows for price lookup → {by_sku, by_barcode, by_id}.
+def build_key_index(rows, payload_fn):
+    """Index catalogue rows three ways — by SKU, by barcode (literal AND
+    suffix-stripped), and by row id — mapping each key to payload_fn(row).
 
-    iter45 — indexes three ways because my_products keys are heterogeneous:
-    merchant SKUs, Zid internal ids ("Z.123456"), and barcodes that may carry a
-    variant suffix. Every value maps to (shelf_price, list_price).
+    iter45/46 — my_products keys are heterogeneous (merchant SKUs, Zid internal
+    ids like "Z.123456", barcodes with variant suffixes), so the SAME rules are
+    used for the storefront and the Merchant catalogues.
     """
     idx = {"by_sku": {}, "by_barcode": {}, "by_id": {}}
     for r in rows:
-        shelf, list_price = storefront_shelf_price(r)
-        if shelf <= 0:
+        payload = payload_fn(r)
+        if payload is None:
             continue
-        entry = (shelf, list_price)
         sku = str(r.get("sku") or "").strip().lower()
         if sku:
-            idx["by_sku"][sku] = entry
+            idx["by_sku"][sku] = payload
         for k in barcode_keys(r.get("barcode")):
-            idx["by_barcode"][k] = entry
-        rid = str(r.get("id") or "").strip().lower()
+            idx["by_barcode"][k] = payload
+        rid = str(r.get("id") or r.get("_zid_id") or "").strip().lower()
         if rid:
-            idx["by_id"][rid] = entry
+            idx["by_id"][rid] = payload
     return idx
+
+
+def _storefront_price_index(rows):
+    """Storefront rows → (shelf_price, list_price) per key. Unpriced rows drop."""
+    def _payload(r):
+        shelf, list_price = storefront_shelf_price(r)
+        return (shelf, list_price) if shelf > 0 else None
+    return build_key_index(rows, _payload)
+
+
+def merchant_index(rows):
+    """iter46 — Merchant-API rows → the raw row per key, so the fallback can
+    read both the ex-VAT price and the is_taxable tristate."""
+    return build_key_index(rows, lambda r: r)
 
 
 def storefront_price_lookup(idx, sku=None, barcode=None):
@@ -1717,6 +1755,37 @@ async def _paginate_own_storefront(http, ep, initial_items, max_pages=OWN_SF_MAX
     return rows, page, stop_reason
 
 
+# iter46 — the single place the own-store price basis is decided. Sync and
+# backfill both call this, so the two can never drift apart.
+#
+#   on the storefront            -> its inc-VAT shelf price   storefront_inc_vat
+#   not on it, is_taxable True   -> merchant price x (1+VAT)  merchant_computed_inc_vat
+#   not on it, is_taxable False  -> merchant price unchanged  merchant_non_taxable
+#   not on it, is_taxable None   -> merchant price unchanged  merchant_unknown_tax
+#
+# The last case is deliberately NOT grossed up: inflating a price on a guess is
+# worse than leaving a known-basis value, and the tag makes the gap countable.
+def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None, is_taxable=None):
+    """Return (price, sale_price, price_basis). All outputs are 2dp."""
+    if sf_hit:
+        shelf, list_price = sf_hit
+        on_sale = list_price > 0 and shelf < list_price - 0.009
+        return round(shelf, 2), (round(shelf, 2) if on_sale else None), "storefront_inc_vat"
+
+    price = _price_amount(merchant_price)
+    sale = _price_amount(merchant_sale_price)
+    if is_taxable is True:
+        mult = 1 + KSA_VAT_RATE
+        # sale_price must be grossed up TOO: every consumer reads
+        # `sale_price or price`, so leaving an ex-VAT sale behind would defeat
+        # the conversion on exactly the discounted products.
+        return (round(price * mult, 2),
+                round(sale * mult, 2) if sale > 0 else None,
+                "merchant_computed_inc_vat")
+    basis = "merchant_non_taxable" if is_taxable is False else "merchant_unknown_tax"
+    return round(price, 2), (round(sale, 2) if sale > 0 else None), basis
+
+
 async def fetch_own_storefront_catalog_raw(store, max_pages=OWN_SF_MAX_PAGES):
     """iter44 (Step-1 validation) — fetch the own store's PUBLIC storefront
     catalogue and return the RAW rows, unnormalised.
@@ -1855,7 +1924,8 @@ async def sync_own_store_prices(db, store=None):
             # tagged, so the basis is auditable rather than silently wrong.
             storefront_overlay_meta = {"ok": False, "error": str(e)[:200]}
             logger.error(f"[OwnSync] storefront overlay failed ({e}) — merchant prices retained")
-    basis_counts = {"storefront_inc_vat": 0, "merchant_ex_vat": 0}
+    basis_counts = {"storefront_inc_vat": 0, "merchant_computed_inc_vat": 0,
+                    "merchant_non_taxable": 0, "merchant_unknown_tax": 0}
 
     # ── Pre-build lookup tables of my_products by barcode + SKU ──
     my_by_sku, my_by_barcode = {}, {}
@@ -1886,19 +1956,15 @@ async def sync_own_store_prices(db, store=None):
             # price is overlaid from the storefront (iter44 Step 2).
             sf_hit, _sf_method = storefront_price_lookup(
                 sf_index, sku=raw.get("sku"), barcode=raw.get("barcode"))
-            if sf_hit:
-                shelf, list_price = sf_hit
-                price_basis = "storefront_inc_vat"
-                price_v = shelf
-                # BOTH price fields must move to the inc-VAT basis together:
-                # every consumer reads `sale_price or price`, so leaving the
-                # merchant's ex-VAT sale_price behind would defeat the fix on
-                # exactly the products that are on sale.
-                sale_v = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
-            else:
-                price_basis = "merchant_ex_vat"
-                price_v = raw.get("price") or 0
-                sale_v = raw.get("sale_price")
+            # iter46 — two-tier basis: storefront shelf price when the product
+            # is listed, else the Merchant price grossed up ONLY when Zid says
+            # the product is taxable.
+            price_v, sale_v, price_basis = resolve_own_price(
+                sf_hit,
+                merchant_price=raw.get("price"),
+                merchant_sale_price=raw.get("sale_price"),
+                is_taxable=raw.get("is_taxable"),
+            )
             norm = {
                 "sku": raw.get("sku") or "",
                 "barcode": raw.get("barcode") or "",

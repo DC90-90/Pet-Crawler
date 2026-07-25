@@ -204,16 +204,20 @@ def test_backfill_dry_run_with_full_catalogue_and_mixed_keys():
         async def _fake_fetch(store, max_pages=200):
             return sf, {"ok": True, "endpoint": "/api/v1/products", "rows": len(sf),
                         "pages": 42, "stop_reason": "pages_count_reached", "truncated": False}
-        orig = server.fetch_own_storefront_catalog_raw
+        async def _no_merchant(db, store):
+            return [], "missing_token"
+        orig = (server.fetch_own_storefront_catalog_raw, server._fetch_zid_api_catalog)
         server.fetch_own_storefront_catalog_raw = _fake_fetch
+        server._fetch_zid_api_catalog = _no_merchant
         try:
             rep = await server.own_store_vat_backfill(dry_run=True, sample=10, user=SUPER)
         finally:
-            server.fetch_own_storefront_catalog_raw = orig
+            server.fetch_own_storefront_catalog_raw, server._fetch_zid_api_catalog = orig
 
         assert rep["my_products_total"] == 1050
         assert rep["would_update"] == 1000, rep["would_update"]
-        assert rep["no_storefront_match"] == 50, rep["no_storefront_match"]
+        # no storefront row AND no merchant row -> no live source
+        assert rep["no_live_source"] == 50, rep["no_live_source"]
         # every key shape resolved, and we can see WHICH
         assert rep["match_methods"]["sku"] == 400
         assert rep["match_methods"]["zid_internal_id"] == 300
