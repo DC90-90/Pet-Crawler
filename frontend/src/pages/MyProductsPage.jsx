@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useI18n, catLabel } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
-import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw } from "lucide-react";
+import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw, Info } from "lucide-react";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -32,6 +33,22 @@ function ConfBadge({ tier, score }) {
 function SortIcon({ field, sortBy, sortOrder }) {
   if (sortBy !== field) return <ArrowUpDown className="w-3 h-3 ms-1 opacity-30" />;
   return sortOrder === "asc" ? <ArrowUp className="w-3 h-3 ms-1 text-[#1E988E]" /> : <ArrowDown className="w-3 h-3 ms-1 text-[#1E988E]" />;
+}
+
+// iter26 (workspace sync) — small ⓘ tooltip explaining what each KPI means.
+function KpiInfoTooltip({ content, label }) {
+  return (
+    <Tooltip delayDuration={150}>
+      <TooltipTrigger asChild>
+        <button type="button" aria-label={label} className="text-[#A1E4DB]/60 hover:text-white transition-colors">
+          <Info className="w-3 h-3" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-[220px] text-[11px] leading-snug bg-[#104745] border border-white/10 text-[#E6FFFA]">
+        {content}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 export default function MyProductsPage() {
@@ -162,20 +179,24 @@ export default function MyProductsPage() {
          Sixth card added: Market Coverage = matched products / total — surfaces
          the data-quality bar so a low avg_market_share isn't read as "we're losing"
          when the truth is "we don't have competitor data on most of the catalogue") */}
+      <TooltipProvider>
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { key: "kpi_products", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
-          { key: "kpi_units_sold", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_mkt_revenue", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
+          { key: "kpi_products", tipKey: "kpi_products_tip", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
+          { key: "kpi_units_sold", tipKey: "kpi_units_sold_tip", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
+          { key: "kpi_mkt_revenue", tipKey: "kpi_mkt_revenue_tip", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
           // Real ledger data (Zid Orders API) drops the "(Est.)" suffix and
           // shows the order count; the estimation fallback keeps the old label.
-          { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : null, icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_market_share", val: `${kpis.avg_market_share ?? 0}%`, sub: kpis.share_sample_size != null ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : null, icon: TrendingDown, accent: "#F59E0B" },
-          { key: "kpi_market_coverage", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
+          { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", tipKey: "kpi_my_revenue_tip", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : null, icon: TrendingUp, accent: "#10B981" },
+          { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: `${kpis.avg_market_share ?? 0}%`, sub: kpis.share_sample_size != null ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : null, icon: TrendingDown, accent: "#F59E0B" },
+          { key: "kpi_market_coverage", tipKey: "kpi_market_coverage_tip", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
         ].map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">{t(k.key)}</p>
+              <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB] inline-flex items-center gap-1">
+                {t(k.key)}
+                {k.tipKey && <KpiInfoTooltip content={t(k.tipKey)} label={t("kpi_info_label")} />}
+              </p>
               <k.icon className="w-4 h-4" style={{ color: k.accent }} />
             </div>
             <p className="text-2xl font-bold tracking-tighter text-white metric-number animate-countUp">{k.val}</p>
@@ -183,6 +204,7 @@ export default function MyProductsPage() {
           </div>
         ))}
       </div>
+      </TooltipProvider>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 glass-card p-3">

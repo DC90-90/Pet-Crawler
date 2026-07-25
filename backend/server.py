@@ -30,7 +30,6 @@ from crawlers import (
 from store_registry import ensure_stores as registry_ensure_stores
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 from cryptography.fernet import Fernet, InvalidToken
-from store_registry import ensure_stores as registry_ensure_stores
 
 # ── Refactored modules (Feb 2026) ───────────────────────────
 from models import (
@@ -78,7 +77,9 @@ def decrypt_value(ciphertext: str) -> str:
     return fernet.decrypt(ciphertext.encode()).decode()
 
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+# Atlas-friendly timeouts (workspace sync): fail server selection fast instead
+# of blocking requests, bound connect, and cap any single socket op at 45s.
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=10000, socketTimeoutMS=45000)
 db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
@@ -189,18 +190,22 @@ def is_super_admin_email(email: str) -> bool:
 # ── Health Endpoint ──────────────────────────────────────────
 @router.get("/health")
 async def health_check():
-    # MongoDB connection state
-    mongo_ok = False
-    try:
-        await client.admin.command("ping")
-        mongo_ok = True
-    except Exception:
-        pass
+    """Hardened health check (workspace sync): every DB call is bounded by
+    asyncio.wait_for, so a stalled Mongo can never block the endpoint — the
+    handler answers fast with status healthy/degraded either way."""
+    async def _timed(coro, timeout=3.0):
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except Exception:
+            return None
 
-    # APScheduler active jobs count
+    # MongoDB connection state (bounded ping)
+    mongo_ok = await _timed(client.admin.command("ping")) is not None
+
+    # APScheduler active jobs count (in-process, no DB)
     jobs_count = len(scheduler.get_jobs()) if scheduler.running else 0
 
-    # Playwright availability
+    # Playwright availability (filesystem only)
     pw_available = False
     pw_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
     try:
@@ -211,26 +216,25 @@ async def health_check():
     except Exception:
         pass
 
-    # Last successful crawl timestamp
+    # Last successful crawl timestamp (both lookups bounded; skipped when Mongo
+    # is already known-down so the endpoint stays fast in the degraded case)
     last_crawl = None
-    try:
-        log = await db.crawl_logs.find_one(
+    if mongo_ok:
+        log = await _timed(db.crawl_logs.find_one(
             {"tier_used": {"$exists": True}},
             {"_id": 0, "completed_at": 1},
             sort=[("completed_at", -1)],
-        )
+        ))
         if log and log.get("completed_at"):
             last_crawl = log["completed_at"] if isinstance(log["completed_at"], str) else log["completed_at"].isoformat()
         else:
-            store = await db.stores.find_one(
+            store = await _timed(db.stores.find_one(
                 {"last_crawled_at": {"$ne": "", "$exists": True}},
                 {"_id": 0, "last_crawled_at": 1},
                 sort=[("last_crawled_at", -1)],
-            )
+            ))
             if store and store.get("last_crawled_at"):
                 last_crawl = store["last_crawled_at"]
-    except Exception:
-        pass
 
     # Server uptime
     uptime_secs = round(time.time() - SERVER_START_TIME, 1)
