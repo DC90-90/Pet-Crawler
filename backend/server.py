@@ -28,7 +28,7 @@ from crawlers import (
     sync_own_store_prices,
     # iter44 Step-1 validation (read-only VAT-basis audit)
     fetch_own_storefront_catalog_raw, _fetch_zid_api_catalog, _price_amount,
-    _storefront_price_index,
+    _storefront_price_index, storefront_price_lookup,
 )
 from store_registry import ensure_stores as registry_ensure_stores
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
@@ -5483,16 +5483,18 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
     sf_rows, sf_meta = await fetch_own_storefront_catalog_raw(store)
     if not sf_meta.get("ok") or not sf_rows:
         raise HTTPException(502, f"storefront fetch failed — refusing to backfill: {sf_meta}")
-    by_sku, by_barcode = _storefront_price_index(sf_rows)
+    idx = _storefront_price_index(sf_rows)
 
     changed, unchanged, no_match = [], 0, []
+    match_methods = {}
     async for p in db.my_products.find(
             {}, {"_id": 0, "sku": 1, "barcode": 1, "price": 1, "sale_price": 1, "price_basis": 1}):
         sku = str(p.get("sku") or "").strip()
-        hit = by_sku.get(sku) or by_barcode.get(str(p.get("barcode") or "").strip())
+        hit, method = storefront_price_lookup(idx, sku=sku, barcode=p.get("barcode"))
         if not hit:
             no_match.append(sku)
             continue
+        match_methods[method] = match_methods.get(method, 0) + 1
         shelf, list_price = hit
         new_sale = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
         old_price = p.get("price")
@@ -5512,7 +5514,11 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
     report = {
         "dry_run": dry_run,
         "storefront": {"endpoint": sf_meta.get("endpoint"), "rows": sf_meta.get("rows"),
-                       "priced_skus": len(by_sku)},
+                       "pages": sf_meta.get("pages"), "stop_reason": sf_meta.get("stop_reason"),
+                       "truncated": sf_meta.get("truncated"),
+                       "priced_skus": len(idx["by_sku"]),
+                       "priced_barcode_keys": len(idx["by_barcode"])},
+        "match_methods": match_methods,
         "my_products_total": await db.my_products.count_documents({}),
         "would_update" if dry_run else "updated": len(changed),
         "already_inc_vat": unchanged,
@@ -5627,6 +5633,9 @@ async def own_store_price_audit(sample: int = Query(20, ge=1, le=200), user=Depe
                     if _price_amount(r.get("effective_price")) > 0 or _price_amount(r.get("price")) > 0)
     completeness = {
         "storefront_fetch": sf_meta,
+        "storefront_pages": sf_meta.get("pages"),
+        "storefront_stop_reason": sf_meta.get("stop_reason"),
+        "storefront_truncated": sf_meta.get("truncated"),
         "storefront_rows": len(sf_rows),
         "storefront_distinct_skus": len(sf),
         "storefront_rows_with_usable_price": sf_priced,
