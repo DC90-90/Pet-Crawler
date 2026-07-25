@@ -131,14 +131,17 @@ def test_guard_blocks_real_sku_and_ceiling():
         await _seed(db)
         server.db = db
         # (a) detector drift onto a real-crawl-shaped SKU → real run refused
+        # EVEN with the correct confirm_count supplied (never overridable)
         extra = ("8595602540877", "x", "x", "x", "cat_food", "cat", 1, 1)
         server.EXTRA_PRODUCT_TEMPLATES.append(extra)
         try:
             rep = await server.demo_cleanup(dry_run=True, user=SUPER)
             assert rep["guard"]["ok"] is False          # dry run REPORTS the violation
+            assert rep["guard"]["real_sku_match"] is True
+            live_n = rep["guard"]["confirm_count_required"]
             try:
-                await server.demo_cleanup(dry_run=False, user=SUPER)
-                raise AssertionError("real run must refuse on guard violation")
+                await server.demo_cleanup(dry_run=False, confirm_count=live_n, user=SUPER)
+                raise AssertionError("real run must refuse on real-SKU match even with correct confirm_count")
             except HTTPException as e:
                 assert e.status_code == 409 and "real-crawl-shaped" in e.detail
         finally:
@@ -146,22 +149,31 @@ def test_guard_blocks_real_sku_and_ceiling():
         # real product untouched by the refused run
         assert await db.products.count_documents({"sku": REAL_SKU}) == 1
 
-        # (b) >200 ceiling
-        fakes = [(f"FAKE-DEMO-{i}", "x", "x", "x", "cat_food", "cat", 1, 1) for i in range(205)]
+        # (b) confirm-count contract: missing or mismatched → 409, nothing deleted
+        for wrong in (None, 2, 4, 0):
+            try:
+                await server.demo_cleanup(dry_run=False, confirm_count=wrong, user=SUPER)
+                raise AssertionError(f"real run must refuse on confirm_count={wrong}")
+            except HTTPException as e:
+                assert e.status_code == 409 and "confirm_count" in e.detail
+        assert await db.products.count_documents({}) == 4
+
+        # (c) catastrophe cap: >1000 refuses regardless of confirm_count
+        fakes = [(f"FAKE-DEMO-{i}", "x", "x", "x", "cat_food", "cat", 1, 1) for i in range(1005)]
         server.EXTRA_PRODUCT_TEMPLATES.extend(fakes)
         try:
             await db.products.insert_many(
                 [{"id": f"f{i}", "sku": f"FAKE-DEMO-{i}", "name_ar": "x", "category": "toys"}
-                 for i in range(205)])
+                 for i in range(1005)])
             try:
-                await server.demo_cleanup(dry_run=False, user=SUPER)
-                raise AssertionError("real run must refuse above the ceiling")
+                await server.demo_cleanup(dry_run=False, confirm_count=1008, user=SUPER)
+                raise AssertionError("real run must refuse above the catastrophe cap")
             except HTTPException as e:
-                assert e.status_code == 409 and "ceiling" in e.detail
+                assert e.status_code == 409 and "catastrophe cap" in e.detail
         finally:
             for f in fakes:
                 server.EXTRA_PRODUCT_TEMPLATES.remove(f)
-            await db.products.delete_many({"sku": {"$in": [f"FAKE-DEMO-{i}" for i in range(205)]}})
+            await db.products.delete_many({"sku": {"$in": [f"FAKE-DEMO-{i}" for i in range(1005)]}})
     asyncio.run(main())
 
 
@@ -173,7 +185,7 @@ def test_real_run_backs_up_cascades_and_recomputes():
         calls = []
         orig = _stub_recomputes(calls)
         try:
-            rep = await server.demo_cleanup(dry_run=False, user=SUPER)
+            rep = await server.demo_cleanup(dry_run=False, confirm_count=3, user=SUPER)
         finally:
             (server.recompute_all_store_metrics, server.maybe_recompute_dashboard_cache,
              server.maybe_recompute_page_caches) = orig
