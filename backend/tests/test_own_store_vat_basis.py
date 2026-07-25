@@ -1,14 +1,20 @@
-"""iter44 Step 2 + Step 3 — own-store price moves to the VAT-inclusive basis.
+"""iter44/46 — own-store price basis: two-tier storefront + Merchant fallback.
 
-Step 2: the sync keeps sold_count / quantity / stock from the Zid Merchant API
-but takes the PRICE from the public storefront (effective_price, else price) —
-the same basis as every competitor row and as the orders ledger. A SKU the
-storefront doesn't carry keeps the merchant price, tagged merchant_ex_vat.
+The storefront genuinely lists only part of the catalogue (confirmed in
+production: 1,184 of 2,590, stop_reason "no_next"), so it cannot price what it
+does not carry. The basis is therefore decided per product:
 
-Step 3: a one-off backfill moves existing my_products rows onto that basis.
+  on the storefront            -> its inc-VAT shelf price   storefront_inc_vat
+  not on it, is_taxable True   -> merchant price x 1.15     merchant_computed_inc_vat
+  not on it, is_taxable False  -> merchant price unchanged  merchant_non_taxable
+  not on it, is_taxable None   -> merchant price unchanged  merchant_unknown_tax
 
-Ground truth from production: SKU 052742059518 — storefront 170 inc-VAT,
-merchant 147.83 ex-VAT, 147.83 x 1.15 = 170.
+Unknown tax is deliberately NOT grossed up — inflating a real price on a guess
+is worse than leaving a known value — but it IS tagged so the gap is countable.
+Stock/sales always come from the Merchant API.
+
+Ground truth: SKU 052742059518 — storefront 170 inc-VAT, merchant 147.83
+ex-VAT, 147.83 x 1.15 = 170.
 """
 import asyncio
 import os
@@ -28,74 +34,101 @@ SUPER = {"id": "t", "email": "t@t", "role": "super_admin"}
 STORE = {"id": "own", "name": "Pets Houses", "domain": "pets-houses.com",
          "platform": "zid", "is_own_store": True}
 
-# Merchant API rows (ex-VAT prices, authoritative stock/sales)
+
+def _m(sku, barcode, price, zid_id, sale_price=None, is_taxable="omit", qty=5, sold=1):
+    row = {"sku": sku, "barcode": barcode, "name_ar": sku, "name_en": sku,
+           "price": price, "sale_price": sale_price, "qty_available": qty,
+           "in_stock": True, "sold_count": sold, "img_url": "", "product_url": "",
+           "_zid_id": zid_id}
+    if is_taxable != "omit":
+        row["is_taxable"] = is_taxable
+    return row
+
+
+# Merchant API rows — ex-VAT prices, authoritative stock/sales
 MERCHANT = [
-    # the confirmed production case
-    {"sku": "052742059518", "barcode": "052742059518", "name_ar": "هيلز", "name_en": "Hills GI",
-     "price": 147.83, "sale_price": None, "qty_available": 7, "in_stock": True,
-     "sold_count": 42, "img_url": "", "product_url": "", "_zid_id": 1},
-    # on sale: merchant list ex-VAT 173.91, storefront shelf 170 (list 200)
-    {"sku": "SALE1", "barcode": "B-SALE", "name_ar": "س", "name_en": "Sale",
-     "price": 173.91, "sale_price": 173.91, "qty_available": 3, "in_stock": True,
-     "sold_count": 5, "img_url": "", "product_url": "", "_zid_id": 2},
-    # matched to the storefront by BARCODE only (SKU differs)
-    {"sku": "MERCH-SKU", "barcode": "9999999999999", "name_ar": "ب", "name_en": "ByBarcode",
-     "price": 86.96, "sale_price": None, "qty_available": 1, "in_stock": True,
-     "sold_count": 9, "img_url": "", "product_url": "", "_zid_id": 3},
-    # NOT on the storefront at all → must keep the merchant price, tagged
-    {"sku": "ONLY-MERCH", "barcode": "B-ONLY", "name_ar": "ف", "name_en": "MerchOnly",
-     "price": 50.00, "sale_price": None, "qty_available": 4, "in_stock": True,
-     "sold_count": 2, "img_url": "", "product_url": "", "_zid_id": 4},
+    _m("052742059518", "052742059518", 147.83, 1, is_taxable=True, qty=7, sold=42),  # on storefront
+    _m("SALE1", "B-SALE", 173.91, 2, sale_price=173.91, is_taxable=True, qty=3),      # on storefront, on sale
+    _m("MERCH-SKU", "9999999999999", 86.96, 3, is_taxable=True, qty=1),               # storefront by barcode
+    _m("ONLY-MERCH", "B-ONLY", 50.00, 4, is_taxable=True, qty=4),                     # NOT on storefront, taxable
+    _m("NT-1", "B-NT", 40.00, 5, is_taxable=False, qty=2),                            # NOT on storefront, exempt
+    _m("UNK-1", "B-UNK", 30.00, 6, qty=6),                                            # NOT on storefront, unknown
 ]
-# Storefront rows (inc-VAT; no reliable stock/sales fields)
+# Storefront rows — inc-VAT; no reliable stock/sales fields
 STOREFRONT = [
-    {"sku": "052742059518", "barcode": "052742059518", "price": 170, "effective_price": 170, "is_taxable": True},
-    {"sku": "SALE1", "barcode": "B-SALE", "price": 200, "effective_price": 170, "is_taxable": True},
-    {"sku": "SF-DIFFERENT", "barcode": "9999999999999", "price": 100, "effective_price": 100, "is_taxable": True},
+    {"id": 1, "sku": "052742059518", "barcode": "052742059518", "price": 170, "effective_price": 170, "is_taxable": True},
+    {"id": 2, "sku": "SALE1", "barcode": "B-SALE", "price": 200, "effective_price": 170, "is_taxable": True},
+    {"id": 3, "sku": "SF-DIFFERENT", "barcode": "9999999999999", "price": 100, "effective_price": 100, "is_taxable": True},
 ]
 
 
 def _stub(merchant=MERCHANT, sf=STOREFRONT, sf_ok=True):
     orig = (crawlers._fetch_zid_api_catalog, crawlers.fetch_own_storefront_catalog_raw,
-            server.fetch_own_storefront_catalog_raw)
+            server.fetch_own_storefront_catalog_raw, server._fetch_zid_api_catalog)
 
-    async def _m(db, store):
+    async def _mf(db, store):
         return [dict(r) for r in merchant], "ok"
 
-    async def _s(store):
-        return [dict(r) for r in sf], {"ok": sf_ok, "endpoint": "/api/v1/products", "rows": len(sf)}
-
-    crawlers._fetch_zid_api_catalog = _m
-    crawlers.fetch_own_storefront_catalog_raw = _s
-    server.fetch_own_storefront_catalog_raw = _s
+    async def _sf(store, max_pages=200):
+        return [dict(r) for r in sf], {"ok": sf_ok, "endpoint": "/api/v1/products",
+                                       "rows": len(sf), "pages": 1,
+                                       "stop_reason": "no_next", "truncated": False}
+    crawlers._fetch_zid_api_catalog = _mf
+    crawlers.fetch_own_storefront_catalog_raw = _sf
+    server.fetch_own_storefront_catalog_raw = _sf
+    server._fetch_zid_api_catalog = _mf
     return orig
 
 
 def _unstub(orig):
     (crawlers._fetch_zid_api_catalog, crawlers.fetch_own_storefront_catalog_raw,
-     server.fetch_own_storefront_catalog_raw) = orig
+     server.fetch_own_storefront_catalog_raw, server._fetch_zid_api_catalog) = orig
 
 
-async def _prep(db, seed_my_products=True):
+async def _prep(db):
     for c in ("stores", "my_products", "product_snapshots", "crawl_logs", "matching_jobs"):
         await db[c].delete_many({})
     await db.stores.insert_one(dict(STORE))
-    if seed_my_products:
-        # what production holds TODAY: ex-VAT from the merchant path
-        await db.my_products.insert_many([
-            {"sku": "052742059518", "barcode": "052742059518", "price": 147.83,
-             "sale_price": None, "sync_source": "zid_api"},
-            {"sku": "SALE1", "barcode": "B-SALE", "price": 173.91,
-             "sale_price": 173.91, "sync_source": "zid_api"},
-            {"sku": "MERCH-SKU", "barcode": "9999999999999", "price": 86.96,
-             "sale_price": None, "sync_source": "zid_api"},
-            {"sku": "ONLY-MERCH", "barcode": "B-ONLY", "price": 50.00,
-             "sale_price": None, "sync_source": "zid_api"},
-        ])
+    # what production holds TODAY: ex-VAT from the merchant path
+    await db.my_products.insert_many([
+        {"sku": r["sku"], "barcode": r["barcode"], "price": r["price"],
+         "sale_price": r.get("sale_price"), "sync_source": "zid_api",
+         "last_synced_at": "2026-07-25T00:00:00+00:00"}
+        for r in MERCHANT
+    ])
 
 
-# ── Step 2 ───────────────────────────────────────────────────────────────────
-def test_sync_stores_inc_vat_price_and_keeps_merchant_stock():
+# ── the resolver, in isolation ───────────────────────────────────────────────
+def test_resolve_own_price_covers_all_four_bases():
+    R = crawlers.resolve_own_price
+    assert crawlers.KSA_VAT_RATE == 0.15
+    # 1. on the storefront -> shelf price (list==shelf, so not "on sale")
+    assert R((170.0, 170.0)) == (170.0, None, "storefront_inc_vat")
+    # ...on sale -> both fields carry the shelf price
+    assert R((170.0, 200.0)) == (170.0, 170.0, "storefront_inc_vat")
+    # 2. not on storefront + taxable -> x1.15
+    assert R(None, merchant_price=147.83, is_taxable=True) == (170.0, None, "merchant_computed_inc_vat")
+    # a discounted merchant row grosses up BOTH fields
+    assert R(None, merchant_price=100, merchant_sale_price=80, is_taxable=True) == (
+        115.0, 92.0, "merchant_computed_inc_vat")
+    # 3. explicitly non-taxable -> unchanged
+    assert R(None, merchant_price=40, is_taxable=False) == (40.0, None, "merchant_non_taxable")
+    # 4. unknown -> unchanged AND tagged (never silently inflated)
+    assert R(None, merchant_price=30, is_taxable=None) == (30.0, None, "merchant_unknown_tax")
+
+
+def test_is_taxable_is_a_tristate():
+    T = crawlers._zid_is_taxable
+    assert T({"is_taxable": True}) is True
+    assert T({"is_taxable": False}) is False
+    assert T({}) is None                       # absent
+    assert T({"is_taxable": None}) is None      # null
+    assert T({"is_taxable": "yes"}) is None     # non-bool is NOT truthy-coerced
+    assert T({"taxable": True}) is True         # alternate key
+
+
+# ── Step 2: the sync ─────────────────────────────────────────────────────────
+def test_sync_applies_two_tier_basis():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _prep(db)
@@ -105,42 +138,44 @@ def test_sync_stores_inc_vat_price_and_keeps_merchant_stock():
             res = await crawlers.sync_own_store_prices(db, store=dict(STORE))
         finally:
             _unstub(orig)
-
         rows = {p["sku"]: p async for p in db.my_products.find({}, {"_id": 0})}
 
-        # (a) taxable SKU stored at the INC-VAT storefront price, not 147.83
+        # 1. on the storefront -> inc-VAT shelf price, merchant stock retained
         hills = rows["052742059518"]
-        assert hills["price"] == 170, hills
-        assert hills["price_basis"] == "storefront_inc_vat"
-        # stock + sales still come from the MERCHANT API
+        assert hills["price"] == 170 and hills["price_basis"] == "storefront_inc_vat"
         assert hills["quantity"] == 7 and hills["in_stock"] is True
-        assert hills.get("sold_count") == 42 or res["updated"] >= 1
 
-        # (b) on-sale row: BOTH price fields on the inc-VAT basis, so the
-        # universal `sale_price or price` read yields the shelf price
+        # on sale: both fields inc-VAT so `sale_price or price` == shelf
         sale = rows["SALE1"]
-        assert sale["price"] == 170 and sale["sale_price"] == 170, sale
+        assert sale["price"] == 170 and sale["sale_price"] == 170
         assert (sale.get("sale_price") or sale["price"]) == 170
-        assert sale["price_basis"] == "storefront_inc_vat"
 
-        # (c) merchant SKU matched to the storefront by BARCODE
-        bybc = rows["MERCH-SKU"]
-        assert bybc["price"] == 100 and bybc["price_basis"] == "storefront_inc_vat"
+        # matched to the storefront by barcode
+        assert rows["MERCH-SKU"]["price"] == 100
 
-        # (d) merchant-only SKU: NOT dropped, keeps merchant price, tagged
+        # 2. NOT on the storefront + taxable -> grossed up, tagged
         only = rows["ONLY-MERCH"]
-        assert only["price"] == 50.00, only
-        assert only["price_basis"] == "merchant_ex_vat"
-        assert only["quantity"] == 4
+        assert only["price"] == round(50.00 * 1.15, 2) == 57.5
+        assert only["price_basis"] == "merchant_computed_inc_vat"
+        assert only["quantity"] == 4                     # stock still from merchant
 
-        # (e) basis counts surfaced for observability
-        assert res["price_basis_counts"] == {"storefront_inc_vat": 3, "merchant_ex_vat": 1}
+        # 3. non-taxable -> flat
+        assert rows["NT-1"]["price"] == 40.00
+        assert rows["NT-1"]["price_basis"] == "merchant_non_taxable"
+
+        # 4. unknown tax -> flat AND tagged (not inflated)
+        assert rows["UNK-1"]["price"] == 30.00
+        assert rows["UNK-1"]["price_basis"] == "merchant_unknown_tax"
+
+        assert res["price_basis_counts"] == {
+            "storefront_inc_vat": 3, "merchant_computed_inc_vat": 1,
+            "merchant_non_taxable": 1, "merchant_unknown_tax": 1}
     asyncio.run(main())
 
 
-def test_sync_falls_back_to_merchant_when_storefront_unavailable():
-    """The overlay must never fail the sync — prices stay merchant-based and
-    are tagged, rather than the catalogue silently going unpriced."""
+def test_sync_survives_storefront_outage_via_taxable_fallback():
+    """A storefront outage no longer means storing ex-VAT: taxable products are
+    computed inc-VAT, and the untaxable/unknown ones stay flat and tagged."""
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _prep(db)
@@ -151,16 +186,19 @@ def test_sync_falls_back_to_merchant_when_storefront_unavailable():
         finally:
             _unstub(orig)
         rows = {p["sku"]: p async for p in db.my_products.find({}, {"_id": 0})}
-        assert rows["052742059518"]["price"] == 147.83          # merchant retained
-        assert rows["052742059518"]["price_basis"] == "merchant_ex_vat"
-        assert rows["052742059518"]["quantity"] == 7            # stock still synced
-        assert res["price_basis_counts"]["merchant_ex_vat"] == 4
-        assert res["updated"] >= 1                              # nothing dropped
+        assert rows["052742059518"]["price"] == 170.0        # 147.83 x 1.15
+        assert rows["052742059518"]["price_basis"] == "merchant_computed_inc_vat"
+        assert rows["052742059518"]["quantity"] == 7          # stock still synced
+        assert rows["NT-1"]["price"] == 40.00                 # exempt stays flat
+        assert rows["UNK-1"]["price"] == 30.00                # unknown stays flat
+        assert res["price_basis_counts"]["merchant_computed_inc_vat"] == 4
+        assert res["price_basis_counts"]["merchant_non_taxable"] == 1
+        assert res["price_basis_counts"]["merchant_unknown_tax"] == 1
     asyncio.run(main())
 
 
-# ── Step 3 ───────────────────────────────────────────────────────────────────
-def test_backfill_dry_run_then_apply():
+# ── Step 3: the backfill ─────────────────────────────────────────────────────
+def test_backfill_reports_bases_and_applies_them():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _prep(db)
@@ -168,38 +206,64 @@ def test_backfill_dry_run_then_apply():
         orig = _stub()
         try:
             dry = await server.own_store_vat_backfill(dry_run=True, sample=10, user=SUPER)
-            # dry run writes nothing
-            assert dry["dry_run"] is True and dry["would_update"] == 3
-            assert dry["no_storefront_match"] == 1
-            assert dry["no_storefront_match_sample"] == ["ONLY-MERCH"]
-            before = {r["sku"]: r for r in dry["sample"]}
-            assert before["052742059518"]["before_price"] == 147.83
-            assert before["052742059518"]["after_price"] == 170
-            assert abs(before["052742059518"]["ratio"] - 1.15) <= 0.005
+            assert dry["dry_run"] is True
+            assert dry["would_update"] == 6, dry["would_update"]
+            assert dry["no_live_source"] == 0
+            assert dry["price_basis_counts"] == {
+                "storefront_inc_vat": 3, "merchant_computed_inc_vat": 1,
+                "merchant_non_taxable": 1, "merchant_unknown_tax": 1}
+            assert dry["merchant"]["vat_rate"] == 0.15
+            by = {r["sku"]: r for r in dry["sample"]}
+            assert by["052742059518"]["after_price"] == 170
+            assert abs(by["052742059518"]["ratio"] - 1.15) <= 0.005
+            assert by["ONLY-MERCH"]["after_price"] == 57.5
+            assert by["ONLY-MERCH"]["after_basis"] == "merchant_computed_inc_vat"
+            assert by["NT-1"]["after_price"] == 40.00
+            # dry run wrote nothing
             assert (await db.my_products.find_one({"sku": "052742059518"}))["price"] == 147.83
 
             real = await server.own_store_vat_backfill(dry_run=False, sample=10, user=SUPER)
-            assert real["updated"] == 3
+            assert real["updated"] == 6
+            again = await server.own_store_vat_backfill(dry_run=True, sample=10, user=SUPER)
+            assert again["would_update"] == 0 and again["already_on_target_basis"] == 6
         finally:
             _unstub(orig)
 
         rows = {p["sku"]: p async for p in db.my_products.find({}, {"_id": 0})}
         assert rows["052742059518"]["price"] == 170
-        assert rows["052742059518"]["price_basis"] == "storefront_inc_vat"
-        assert rows["052742059518"]["vat_backfilled_at"]
-        assert rows["SALE1"]["price"] == 170 and rows["SALE1"]["sale_price"] == 170
-        assert rows["MERCH-SKU"]["price"] == 100
-        # untouched by the storefront, but the basis is now explicit
-        assert rows["ONLY-MERCH"]["price"] == 50.00
-        assert rows["ONLY-MERCH"]["price_basis"] == "merchant_ex_vat"
+        assert rows["ONLY-MERCH"]["price"] == 57.5
+        assert rows["NT-1"]["price"] == 40.00 and rows["NT-1"]["price_basis"] == "merchant_non_taxable"
+        assert rows["UNK-1"]["price"] == 30.00 and rows["UNK-1"]["price_basis"] == "merchant_unknown_tax"
+    asyncio.run(main())
 
-        # idempotent: a second run finds nothing left to change
+
+def test_backfill_flags_stale_rows_and_never_prices_them():
+    """Rows in NEITHER live source are left untouched and reported by age and
+    sync_source, so pruning can be considered instead of VAT-inflating them."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _prep(db)
+        await db.my_products.insert_many([
+            {"sku": "GHOST-1", "barcode": "B-G1", "price": 11.0, "sync_source": "crawler_ingest",
+             "last_synced_at": "2025-01-01T00:00:00+00:00"},
+            {"sku": "GHOST-2", "barcode": "B-G2", "price": 12.0, "sync_source": "zid_api",
+             "last_synced_at": "2026-07-20T00:00:00+00:00"},
+            {"sku": "GHOST-3", "barcode": "B-G3", "price": 13.0},      # never synced
+        ])
+        server.db = db
         orig = _stub()
         try:
-            again = await server.own_store_vat_backfill(dry_run=True, sample=10, user=SUPER)
+            dry = await server.own_store_vat_backfill(dry_run=True, sample=10, user=SUPER)
         finally:
             _unstub(orig)
-        assert again["would_update"] == 0 and again["already_inc_vat"] == 3
+        assert dry["no_live_source"] == 3
+        assert set(dry["no_live_source_sample"]) == {"GHOST-1", "GHOST-2", "GHOST-3"}
+        sb = dry["stale_breakdown"]
+        assert sb["by_sync_source"] == {"crawler_ingest": 1, "zid_api": 1, "(none)": 1}
+        assert sb["by_age"][">90d"] == 1 and sb["by_age"]["never_synced"] == 1
+        assert len(sb["samples"]) == 3
+        # untouched — no price written for a product no source carries
+        assert (await db.my_products.find_one({"sku": "GHOST-1"}))["price"] == 11.0
     asyncio.run(main())
 
 
@@ -215,7 +279,6 @@ def test_backfill_refuses_on_storefront_failure_and_requires_super_admin():
                 raise AssertionError("must refuse when the storefront fetch fails")
             except HTTPException as e:
                 assert e.status_code == 502
-            # nothing rewritten
             assert (await db.my_products.find_one({"sku": "052742059518"}))["price"] == 147.83
         finally:
             _unstub(orig)
@@ -232,8 +295,11 @@ def test_backfill_refuses_on_storefront_failure_and_requires_super_admin():
 
 
 if __name__ == "__main__":
-    test_sync_stores_inc_vat_price_and_keeps_merchant_stock()
-    test_sync_falls_back_to_merchant_when_storefront_unavailable()
-    test_backfill_dry_run_then_apply()
+    test_resolve_own_price_covers_all_four_bases()
+    test_is_taxable_is_a_tristate()
+    test_sync_applies_two_tier_basis()
+    test_sync_survives_storefront_outage_via_taxable_fallback()
+    test_backfill_reports_bases_and_applies_them()
+    test_backfill_flags_stale_rows_and_never_prices_them()
     test_backfill_refuses_on_storefront_failure_and_requires_super_admin()
-    print("PASS: iter44 Step 2 + Step 3")
+    print("PASS: iter46 two-tier VAT basis")
