@@ -1517,6 +1517,37 @@ async def _fetch_zid_api_catalog(db, store):
     return out, "ok"
 
 
+def storefront_shelf_price(raw):
+    """iter44 Step 2 — (shelf, list) price from a RAW storefront row.
+
+    `effective_price` is the price actually on the shelf (it reflects any live
+    discount); `price` is the list price and the fallback when effective_price
+    is absent/zero. Both are VAT-INCLUSIVE — this is what a shopper pays and
+    what every competitor row already holds.
+    """
+    list_price = _price_amount(raw.get("price"))
+    effective = _price_amount(raw.get("effective_price"))
+    shelf = effective if effective > 0 else list_price
+    return shelf, list_price
+
+
+def _storefront_price_index(rows):
+    """Index raw storefront rows by SKU and by barcode → (shelf, list)."""
+    by_sku, by_barcode = {}, {}
+    for r in rows:
+        shelf, list_price = storefront_shelf_price(r)
+        if shelf <= 0:
+            continue
+        entry = (shelf, list_price)
+        sku = str(r.get("sku") or "").strip()
+        barcode = str(r.get("barcode") or "").strip()
+        if sku:
+            by_sku[sku] = entry
+        if barcode:
+            by_barcode[barcode] = entry
+    return by_sku, by_barcode
+
+
 async def fetch_own_storefront_catalog_raw(store):
     """iter44 (Step-1 validation) — fetch the own store's PUBLIC storefront
     catalogue and return the RAW rows, unnormalised.
@@ -1627,6 +1658,31 @@ async def sync_own_store_prices(db, store=None):
     crawled = len(all_raw)
     crawl_log["products_found"] = crawled
 
+    # ── iter44 Step 2: inc-VAT price overlay ────────────────────────────────
+    # The Zid MERCHANT API returns the ex-VAT base price, while the public
+    # storefront returns the VAT-inclusive shelf price — the same basis as every
+    # competitor row and as our own orders ledger. Storing the merchant price
+    # made our store look ~15% cheaper than it is on every taxable product.
+    # So when the merchant path wins we still take sold_count / quantity /
+    # stock from it (the storefront does not expose those reliably) but overlay
+    # the PRICE from the storefront, matched by SKU then barcode. A SKU the
+    # storefront doesn't carry keeps the merchant price and is tagged
+    # price_basis="merchant_ex_vat" so the fallback rate stays visible.
+    sf_by_sku, sf_by_barcode = {}, {}
+    storefront_overlay_meta = None
+    if sync_source_label == "zid_api":
+        try:
+            sf_rows, storefront_overlay_meta = await fetch_own_storefront_catalog_raw(store)
+            sf_by_sku, sf_by_barcode = _storefront_price_index(sf_rows)
+            logger.info(f"[OwnSync] storefront overlay: {len(sf_by_sku)} SKUs / "
+                        f"{len(sf_by_barcode)} barcodes priced inc-VAT")
+        except Exception as e:
+            # Never fail the sync on the overlay — fall back to merchant prices,
+            # tagged, so the basis is auditable rather than silently wrong.
+            storefront_overlay_meta = {"ok": False, "error": str(e)[:200]}
+            logger.error(f"[OwnSync] storefront overlay failed ({e}) — merchant prices retained")
+    basis_counts = {"storefront_inc_vat": 0, "merchant_ex_vat": 0}
+
     # ── Pre-build lookup tables of my_products by barcode + SKU ──
     my_by_sku, my_by_barcode = {}, {}
     async for mp in db.my_products.find({}, {"_id": 0, "sku": 1, "barcode": 1}):
@@ -1652,20 +1708,47 @@ async def sync_own_store_prices(db, store=None):
         # public-crawl path needs _normalize_raw_product to reshape Salla/Zid
         # storefront JSON. Distinguish by the synthetic `_zid_id` marker.
         if raw.get("_zid_id"):
+            # Stock/sales fields ALWAYS come from the merchant API; only the
+            # price is overlaid from the storefront (iter44 Step 2).
+            sf_hit = (sf_by_sku.get(str(raw.get("sku") or "").strip())
+                      or sf_by_barcode.get(str(raw.get("barcode") or "").strip()))
+            if sf_hit:
+                shelf, list_price = sf_hit
+                price_basis = "storefront_inc_vat"
+                price_v = shelf
+                # BOTH price fields must move to the inc-VAT basis together:
+                # every consumer reads `sale_price or price`, so leaving the
+                # merchant's ex-VAT sale_price behind would defeat the fix on
+                # exactly the products that are on sale.
+                sale_v = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
+            else:
+                price_basis = "merchant_ex_vat"
+                price_v = raw.get("price") or 0
+                sale_v = raw.get("sale_price")
             norm = {
                 "sku": raw.get("sku") or "",
                 "barcode": raw.get("barcode") or "",
                 "name_ar": raw.get("name_ar") or "",
                 "name_en": raw.get("name_en") or "",
-                "price": raw.get("price") or 0,
-                "sale_price": raw.get("sale_price"),
+                "price": price_v,
+                "sale_price": sale_v,
                 "qty": raw.get("qty_available") or 0,
                 "in_stock": raw.get("in_stock", False),
                 "img_url": raw.get("img_url", ""),
                 "product_url": raw.get("product_url", ""),
             }
         else:
+            # Public-crawl fallback: `all_raw` IS the storefront payload, so it
+            # is already inc-VAT. _normalize_raw_product is shared with the
+            # COMPETITOR crawl and must not change, so apply the same
+            # effective_price-first shelf rule here on the raw row.
             norm = _normalize_raw_product(raw, store["name"])
+            price_basis = "storefront_inc_vat"
+            shelf, list_price = storefront_shelf_price(raw)
+            if shelf > 0:
+                norm["price"] = shelf
+                norm["sale_price"] = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
+        basis_counts[price_basis] = basis_counts.get(price_basis, 0) + 1
         crawled_sku = str(norm["sku"]).strip()
         crawled_barcode = str(norm.get("barcode") or "").strip()
 
@@ -1706,6 +1789,7 @@ async def sync_own_store_prices(db, store=None):
                 "present_on_store": True,
                 "last_synced_at": sync_ts,
                 "sync_source": f"{sync_source_label}_auto_discovery",
+                "price_basis": price_basis,
                 "discovered_via": sync_source_label,
             }
             await db.my_products.update_one(
@@ -1729,6 +1813,7 @@ async def sync_own_store_prices(db, store=None):
             "in_stock": bool(norm["in_stock"]),
             "last_synced_at": sync_ts,
             "sync_source": sync_source_label,
+            "price_basis": price_basis,
             "present_on_store": True,
             "last_seen_on_store": sync_ts,
         }
@@ -1870,6 +1955,8 @@ async def sync_own_store_prices(db, store=None):
             "own_store_sync_archived": archived,
             "own_store_sync_source": sync_source_label,
             "own_store_sync_warning": sync_warning or "",
+            # iter44 — how many rows landed on each VAT basis this run
+            "own_store_price_basis": basis_counts,
         }},
     )
 
@@ -1902,6 +1989,9 @@ async def sync_own_store_prices(db, store=None):
         "completed_at": sync_ts,
         "duration_secs": round(duration, 1),
         "is_own_store_sync": True,
+        # iter44 Step 2 — VAT-basis visibility
+        "price_basis_counts": basis_counts,
+        "storefront_overlay": storefront_overlay_meta,
     }
 
 
