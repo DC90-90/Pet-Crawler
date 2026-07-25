@@ -27,6 +27,7 @@ from crawlers import (
     classify_food_subcategory, FOOD_SUBCATEGORIES, FOOD_SUBCATEGORY_PARENTS,
     # iter44 Step-1 validation (read-only VAT-basis audit)
     fetch_own_storefront_catalog_raw, _fetch_zid_api_catalog, _price_amount,
+    _storefront_price_index,
     sync_own_store_prices,
 )
 from store_registry import ensure_stores as registry_ensure_stores
@@ -5492,6 +5493,86 @@ async def backfill_food_subcategories(db):
         {"$set": {"version": CLASSIFIER_VERSION, "updated_at": datetime.now(timezone.utc)}},
         upsert=True)
     return n
+
+
+@router.post("/admin/own-store-vat-backfill")
+async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+                                 user=Depends(get_user)):
+    """iter44 STEP 3 — one-off backfill of existing my_products rows onto the
+    VAT-inclusive basis, using the SAME storefront source Step 2 now syncs from.
+
+    dry_run=true (default) reports before/after with zero writes. Rows the
+    storefront doesn't carry are left untouched and counted (they keep the
+    merchant ex-VAT basis, tagged, exactly like the sync's fallback).
+    super_admin only."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+    store = await db.stores.find_one({"is_own_store": True}, {"_id": 0})
+    if not store:
+        raise HTTPException(400, "no store flagged is_own_store=True")
+
+    sf_rows, sf_meta = await fetch_own_storefront_catalog_raw(store)
+    if not sf_meta.get("ok") or not sf_rows:
+        raise HTTPException(502, f"storefront fetch failed — refusing to backfill: {sf_meta}")
+    by_sku, by_barcode = _storefront_price_index(sf_rows)
+
+    changed, unchanged, no_match = [], 0, []
+    async for p in db.my_products.find(
+            {}, {"_id": 0, "sku": 1, "barcode": 1, "price": 1, "sale_price": 1, "price_basis": 1}):
+        sku = str(p.get("sku") or "").strip()
+        hit = by_sku.get(sku) or by_barcode.get(str(p.get("barcode") or "").strip())
+        if not hit:
+            no_match.append(sku)
+            continue
+        shelf, list_price = hit
+        new_sale = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
+        old_price = p.get("price")
+        old_eff = p.get("sale_price") or old_price          # what the UI shows today
+        if old_price is not None and abs(float(old_price) - shelf) <= 0.009 and p.get("price_basis") == "storefront_inc_vat":
+            unchanged += 1
+            continue
+        changed.append({
+            "sku": sku,
+            "before_price": old_price, "before_sale_price": p.get("sale_price"),
+            "before_effective": round(float(old_eff), 2) if old_eff else None,
+            "after_price": shelf, "after_sale_price": new_sale,
+            "ratio": round(shelf / float(old_eff), 4) if old_eff else None,
+            "before_basis": p.get("price_basis"),
+        })
+
+    report = {
+        "dry_run": dry_run,
+        "storefront": {"endpoint": sf_meta.get("endpoint"), "rows": sf_meta.get("rows"),
+                       "priced_skus": len(by_sku)},
+        "my_products_total": await db.my_products.count_documents({}),
+        "would_update" if dry_run else "updated": len(changed),
+        "already_inc_vat": unchanged,
+        "no_storefront_match": len(no_match),
+        "no_storefront_match_sample": no_match[:20],
+        "sample": changed[:sample],
+    }
+    if dry_run:
+        return report
+
+    for c in changed:
+        await db.my_products.update_one({"sku": c["sku"]}, {"$set": {
+            "price": c["after_price"],
+            "sale_price": c["after_sale_price"],
+            "price_basis": "storefront_inc_vat",
+            "vat_backfilled_at": datetime.now(timezone.utc).isoformat(),
+        }})
+    # rows the storefront doesn't carry keep the merchant price — tag them so
+    # the basis is explicit rather than unknown
+    if no_match:
+        await db.my_products.update_many(
+            {"sku": {"$in": no_match}, "price_basis": {"$exists": False}},
+            {"$set": {"price_basis": "merchant_ex_vat"}})
+    report["after_verification"] = [
+        {"sku": c["sku"], **{k: v for k, v in (await db.my_products.find_one(
+            {"sku": c["sku"]}, {"_id": 0, "price": 1, "sale_price": 1, "price_basis": 1})).items()}}
+        for c in changed[:sample]
+    ]
+    return report
 
 
 @router.get("/admin/own-store-price-audit")
