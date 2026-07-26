@@ -5547,14 +5547,39 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
     changed, unchanged, no_source = [], 0, []
     match_methods, basis_counts = {}, {}
     stale = {"by_sync_source": {}, "by_age": {}, "samples": []}
+    # iter47 D — the same rows resolved with the PREVIOUS key set, so the gain
+    # from the new keys is measured rather than asserted.
+    no_source_before = 0
+    recovered = {"count": 0, "by_method": {}, "samples": []}
     async for p in db.my_products.find(
             {}, {"_id": 0, "sku": 1, "barcode": 1, "price": 1, "sale_price": 1,
-                 "price_basis": 1, "sync_source": 1, "last_synced_at": 1}):
+                 "price_basis": 1, "sync_source": 1, "last_synced_at": 1,
+                 "product_page_url": 1}):
         sku = str(p.get("sku") or "").strip()
-        hit, method = storefront_price_lookup(idx, sku=sku, barcode=p.get("barcode"))
+        url = p.get("product_page_url")
+        hit, method = storefront_price_lookup(idx, sku=sku, barcode=p.get("barcode"),
+                                              product_url=url)
         m_row, m_method = (None, None)
         if not hit:
-            m_row, m_method = storefront_price_lookup(m_idx, sku=sku, barcode=p.get("barcode"))
+            m_row, m_method = storefront_price_lookup(m_idx, sku=sku, barcode=p.get("barcode"),
+                                                      product_url=url)
+
+        # what the pre-iter47 key set would have found for this same row
+        legacy = storefront_price_lookup(idx, sku=sku, barcode=p.get("barcode"),
+                                         canonical=False)[0]
+        if not legacy:
+            legacy = storefront_price_lookup(m_idx, sku=sku, barcode=p.get("barcode"),
+                                             canonical=False)[0]
+        if not legacy:
+            no_source_before += 1
+            if hit or m_row:
+                won = method or m_method
+                recovered["count"] += 1
+                recovered["by_method"][won] = recovered["by_method"].get(won, 0) + 1
+                if len(recovered["samples"]) < 20:
+                    recovered["samples"].append({"sku": sku, "barcode": p.get("barcode"),
+                                                 "method": won})
+
         if not hit and not m_row:
             # in NEITHER live source — stale. Never VAT-inflated; reported so a
             # prune can be considered instead.
@@ -5606,6 +5631,8 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
         "already_on_target_basis": unchanged,
         "price_basis_counts": basis_counts,
         # rows in NEITHER live source — candidates for pruning, never inflated
+        "no_live_source_before_iter47_keys": no_source_before,
+        "recovered_by_iter47_keys": recovered,
         "no_live_source": len(no_source),
         "no_live_source_sample": no_source[:20],
         "stale_breakdown": stale,
