@@ -4021,11 +4021,20 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     for sku, store_snaps in by_sku.items():
         if len(store_snaps) < 2:
             continue
-        prices = [s["price"] for s in store_snaps if s.get("price", 0) > 0]
-        if not prices:
-            continue
-        min_price = min(prices)
-        avg_price = statistics.mean(prices)
+        # iter50 — "the market" is COMPETITORS. Our own store used to be folded
+        # into the min/avg, so whenever our price was the lowest raw number the
+        # Scanner reported it back to us as the market low and computed a 0%
+        # gap against ourselves. That silently under-stated the market by 15%
+        # on every product, because own-store snapshots are written ex-VAT
+        # while competitor snapshots are the inc-VAT shelf price (Defect 1,
+        # crawlers.py:2163 — logged separately, NOT fixed here). own_id was
+        # already resolved above and had never been used.
+        comp_prices = [s["price"] for s in store_snaps
+                       if s.get("price", 0) > 0 and s["store_id"] != own_id]
+        if not comp_prices:
+            continue          # no competitor carries it — there is no market low
+        min_price = min(comp_prices)
+        avg_price = statistics.mean(comp_prices)
         for s in store_snaps:
             if s.get("price", 0) <= 0:
                 continue
@@ -4036,7 +4045,10 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                 if gap_avg <= 5:
                     p = prod_map.get(sku, {})
                     well_positioned.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_price, 2), "store_name": s["store_name"]})
-                if s["price"] == min_price and s["price"] < avg_price * 0.95:
+                # `<=` not `==`: min_price is now the COMPETITOR low, so our own
+                # store undercutting the market sits strictly below it and would
+                # otherwise drop out of this list entirely.
+                if s["price"] <= min_price and s["price"] < avg_price * 0.95:
                     p = prod_map.get(sku, {})
                     undercut.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_price, 2), "store_name": s["store_name"]})
                 continue
