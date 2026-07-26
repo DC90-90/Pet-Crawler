@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
 from bson import ObjectId
+from pymongo.errors import BulkWriteError
 from starlette.responses import StreamingResponse, JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -6023,6 +6024,130 @@ _STORE_CASCADE_SKIPPED = {
 }
 
 
+# iter49 — the destructive path used to read a whole collection with
+# `find(q).to_list(length=None)` and hand the entire result to one insert_many.
+# On production that meant ~63k CuteCat snapshots in a single round trip, which
+# blows the client's socketTimeoutMS=45000 cap and surfaced as a bare 500 with
+# nothing deleted. Everything below moves in bounded batches instead, and every
+# step reports which collection failed and why.
+_STORE_CLEANUP_BATCH = 1000
+
+
+class StoreCleanupError(Exception):
+    """Carries the structured detail returned to the caller on a 500."""
+
+    def __init__(self, detail):
+        super().__init__(detail.get("error", "store-cleanup failed"))
+        self.detail = detail
+
+
+async def _copy_in_batches(db, src, dst, q, batch=_STORE_CLEANUP_BATCH,
+                           tolerate_duplicates=False):
+    """Copy every doc matching `q` from `src` into `dst`, `batch` docs at a time.
+
+    Ids are fetched first and the documents are then pulled by id chunk, so no
+    cursor is held open across a write and no single operation is unbounded.
+    `tolerate_duplicates` is for the restore path, where some documents may have
+    survived a partially-applied delete_many. Returns the number copied."""
+    ids = [d["_id"] async for d in db[src].find(q, {"_id": 1}).batch_size(5000)]
+    copied = 0
+    for i in range(0, len(ids), batch):
+        chunk = ids[i:i + batch]
+        docs = await db[src].find({"_id": {"$in": chunk}}).to_list(length=len(chunk))
+        if not docs:
+            continue
+        try:
+            res = await db[dst].insert_many(docs, ordered=False)
+            copied += len(res.inserted_ids)
+        except BulkWriteError as e:
+            if not tolerate_duplicates:
+                raise
+            # every non-duplicate error is still fatal
+            errs = e.details.get("writeErrors") or []
+            if any(w.get("code") != 11000 for w in errs):
+                raise
+            copied += len(docs) - len(errs)
+    return copied
+
+
+async def _store_cleanup_backup(db, cascade, ts):
+    """Back every cascaded collection up BEFORE anything is deleted.
+
+    Any failure here aborts with nothing deleted — the safe outcome — and names
+    the collection and the underlying error."""
+    backups = {}
+    for coll, q in cascade:
+        bname = f"store_cleanup_backup_{ts}_{coll}"
+        try:
+            expected = await db[coll].count_documents(q)
+            # a same-second re-run would merge two backups into one collection
+            if await db[bname].estimated_document_count():
+                raise RuntimeError(f"backup collection {bname} already exists and is non-empty")
+            copied = await _copy_in_batches(db, coll, bname, q)
+            verified = await db[bname].count_documents({})
+            if verified != expected:
+                raise RuntimeError(
+                    f"backup verification failed: {coll} has {expected} matching docs "
+                    f"but {bname} holds {verified}")
+        except Exception as e:
+            logger.exception("[StoreCleanup] backup failed for %s", coll)
+            raise StoreCleanupError({
+                "error": "store-cleanup aborted during BACKUP — nothing was deleted",
+                "phase": "backup",
+                "collection": coll,
+                "backup_collection": bname,
+                "exception": type(e).__name__,
+                "message": str(e)[:400],
+                "completed_backups": {k: v["docs"] for k, v in backups.items()},
+                "hint": ("large collections are copied in batches of "
+                         f"{_STORE_CLEANUP_BATCH}; a timeout here points at the database, "
+                         "not at the batch size"),
+            })
+        backups[coll] = {"backup_collection": bname, "docs": copied, "verified": True}
+    return backups
+
+
+async def _store_cleanup_delete(db, cascade, backups, ts):
+    """Delete each cascaded collection, restoring from the backups already taken
+    if any single delete fails, so a half-cascade never leaves orphans."""
+    deleted, done = {}, []
+    for coll, q in cascade:
+        try:
+            res = await db[coll].delete_many(q)
+            deleted[coll] = res.deleted_count
+            done.append(coll)
+        except Exception as e:
+            logger.exception("[StoreCleanup] delete failed for %s — restoring", coll)
+            restored, restore_errors = {}, {}
+            # `coll` itself is included: delete_many is not atomic across
+            # documents, so the failing collection may be partially deleted too.
+            for prev in done + [coll]:
+                bname = backups[prev]["backup_collection"]
+                try:
+                    # the backup is the pre-delete truth; re-insert what is
+                    # missing and skip anything that survived as a duplicate.
+                    restored[prev] = await _copy_in_batches(
+                        db, bname, prev, {}, tolerate_duplicates=True)
+                except Exception as re_err:
+                    restore_errors[prev] = f"{type(re_err).__name__}: {str(re_err)[:200]}"
+                    logger.exception("[StoreCleanup] restore failed for %s", prev)
+            raise StoreCleanupError({
+                "error": "store-cleanup failed mid-cascade — earlier deletes were rolled back",
+                "phase": "delete",
+                "collection": coll,
+                "exception": type(e).__name__,
+                "message": str(e)[:400],
+                "deleted_before_failure": deleted,
+                "restored": restored,
+                "restore_errors": restore_errors,
+                "backup_timestamp": ts,
+                "hint": ("every affected document is still in "
+                         f"store_cleanup_backup_{ts}_* — restore from there if the "
+                         "automatic rollback above reports errors"),
+            })
+    return deleted
+
+
 async def _resolve_store_cleanup(db):
     """Resolve the keep-list against live stores and compute the delete set.
 
@@ -6197,23 +6322,31 @@ async def store_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int
     if dry_run or not delete_ids:
         return report
 
-    # ── real run: backup FIRST, then delete, per collection ──
+    # ── real run: backup FIRST (all of it), then delete ──
+    # Both phases raise StoreCleanupError carrying structured detail, so a
+    # failure names the collection and the reason instead of surfacing a bare
+    # 500 with no way to tell how far the cascade got.
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    backups = {}
-    for coll, q in cascade:
-        docs = await db[coll].find(q).to_list(length=None)
-        bname = f"store_cleanup_backup_{ts}_{coll}"
-        if docs:
-            await db[bname].insert_many(docs)     # backup written before any delete
-        backups[coll] = {"backup_collection": bname, "docs": len(docs)}
-    await db[f"store_cleanup_backup_{ts}_manifest"].insert_one({
-        "_id": "manifest", "created_at": datetime.now(timezone.utc),
-        "store_ids": sorted(delete_ids), "domains": sorted(delete_domains),
-        "stores": delete_detail,
-        "collections": {k: v["docs"] for k, v in backups.items()},
-    })
-    for coll, q in cascade:
-        await db[coll].delete_many(q)
+    try:
+        backups = await _store_cleanup_backup(db, cascade, ts)
+        await db[f"store_cleanup_backup_{ts}_manifest"].insert_one({
+            "_id": "manifest", "created_at": datetime.now(timezone.utc),
+            "store_ids": sorted(delete_ids), "domains": sorted(delete_domains),
+            "stores": delete_detail,
+            "collections": {k: v["docs"] for k, v in backups.items()},
+        })
+        deleted = await _store_cleanup_delete(db, cascade, backups, ts)
+    except StoreCleanupError as e:
+        raise HTTPException(500, {**e.detail, "backup_timestamp": ts,
+                                  "delete_count": len(delete_ids)})
+    except Exception as e:
+        logger.exception("[StoreCleanup] unexpected failure in the destructive path")
+        raise HTTPException(500, {
+            "error": "store-cleanup failed", "phase": "manifest_or_unknown",
+            "exception": type(e).__name__, "message": str(e)[:400],
+            "backup_timestamp": ts,
+            "hint": f"check for store_cleanup_backup_{ts}_* collections before retrying",
+        })
 
     # stop the per-store crawl jobs so the scheduler doesn't keep firing at
     # stores that no longer exist
@@ -6226,27 +6359,37 @@ async def store_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int
             logger.exception("[StoreCleanup] failed to unregister crawl job %s", sid)
 
     # ── recompute so dashboards, rollups and the ranking drop the dead stores ──
-    recompute = {}
-    try:
-        recompute["store_metrics"] = await recompute_all_store_metrics(db)
-    except Exception as e:
-        recompute["store_metrics"] = f"ERROR: {str(e)[:80]}"
-    recompute["dashboard_cache"] = "recomputed" if await maybe_recompute_dashboard_cache(db, force=True) else "skipped"
-    # page caches include price-intel/store-ranking (iter38)
-    recompute["page_caches"] = "recomputed" if await maybe_recompute_page_caches(db, force=True) else "skipped"
-    recompute["crawl_jobs_unregistered"] = unregistered
+    # The data is already gone and backed up at this point, so a recompute
+    # failure must NOT 500 the whole call — it would hide a successful delete
+    # and make the operator re-run a cleanup that already happened.
+    recompute = {"crawl_jobs_unregistered": unregistered}
+    for label, fn in (("store_metrics", lambda: recompute_all_store_metrics(db)),
+                      ("dashboard_cache", lambda: maybe_recompute_dashboard_cache(db, force=True)),
+                      # page caches include price-intel/store-ranking (iter38)
+                      ("page_caches", lambda: maybe_recompute_page_caches(db, force=True))):
+        try:
+            res = await fn()
+            recompute[label] = res if label == "store_metrics" else ("recomputed" if res else "skipped")
+        except Exception as e:
+            logger.exception("[StoreCleanup] recompute step %s failed", label)
+            recompute[label] = f"ERROR: {type(e).__name__}: {str(e)[:160]}"
 
     # ── orphan audit: nothing may still point at a deleted store ──
-    orphans = {}
-    for coll, q in cascade:
-        orphans[coll] = await db[coll].count_documents(q)
-    # products is SKU-keyed and intentionally not cascaded; report what is now
-    # unreferenced so a follow-up prune can be decided separately
-    remaining_skus = set(await db.product_snapshots.distinct("sku"))
-    orphan_products = 0
-    async for p in db.products.find({}, {"_id": 0, "sku": 1}):
-        if p.get("sku") not in remaining_skus:
-            orphan_products += 1
+    orphans, orphan_products = {}, None
+    try:
+        for coll, q in cascade:
+            orphans[coll] = await db[coll].count_documents(q)
+        # products is SKU-keyed and intentionally not cascaded; report what is
+        # now unreferenced so a follow-up prune can be decided separately
+        remaining_skus = set(await db.product_snapshots.distinct("sku"))
+        orphan_products = 0
+        async for p in db.products.find({}, {"_id": 0, "sku": 1}):
+            if p.get("sku") not in remaining_skus:
+                orphan_products += 1
+    except Exception as e:
+        logger.exception("[StoreCleanup] orphan audit failed")
+        orphans["_error"] = f"{type(e).__name__}: {str(e)[:160]}"
+    report["deleted_counts"] = deleted
 
     report["after"] = {
         "stores": await db.stores.count_documents({}),
