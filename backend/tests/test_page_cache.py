@@ -51,6 +51,12 @@ async def _fresh_db():
     db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
     server.db = db
     await seed(db, 40, 30)
+    # Isolation: the shared sandbox DB name is fixed by whichever test module
+    # imports first, so other suites' fixtures can leave sales/rollup/coverage
+    # docs behind. seed() only resets snapshots, so clear the collections this
+    # page's compute reads (they are empty in isolation → behaviour-neutral).
+    for coll in ("sku_sales_daily", "metric_daily_rollups", "sku_store_coverage"):
+        await db[coll].delete_many({})
     await db.dashboard_cache.drop()
     await db.dashboard_cache.create_index("key", unique=True)
     return db

@@ -5957,193 +5957,277 @@ async def demo_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int]
     return report
 
 
-# ── store-cleanup (single-purpose competitor-store removal) ──────────────────
-# Keep EXACTLY these 11 stores; delete every store NOT in this list. Matched on
-# normalized domain (primary), name is advisory only. Mirrors the demo-cleanup
-# safety contract: dry-run report, backup-before-delete, cascade, recompute.
+# ── iter48: store cleanup ────────────────────────────────────────────────────
+# Trim the registry down to the 11 stores we actually track. Same safety
+# contract as demo-cleanup: dry-run GET, destructive POST behind confirm_count,
+# backup-before-delete, full cascade, recompute.
+#
+# (display name, bare domain). Domains are the PRIMARY key; the name is only a
+# secondary signal, because a store can be renamed in the UI but its domain is
+# what every crawl and snapshot is keyed to.
 STORE_CLEANUP_KEEP_LIST = [
-    ("aleef",       "aleef.com"),
-    ("Petsy",       "petsysa.com"),
-    ("Zarafa",      "zarafaksa.com"),
-    ("Caty Store",  "caty-store.com"),
-    ("CutePets",    "cutepets.com.sa"),
-    ("Hamtaro",     "hamtaro.sa"),
-    ("Hobba",       "hobbapet.com"),
-    ("Lana Pets",   "lanapets.com"),
-    ("Mowkly",      "mowkly.com"),
+    ("aleef", "aleef.com"),
+    ("Petsy", "petsysa.com"),
+    ("Zarafa", "zarafaksa.com"),
+    ("Caty Store", "caty-store.com"),
+    ("CutePets", "cutepets.com.sa"),
+    ("Hamtaro", "hamtaro.sa"),
+    ("Hobba", "hobbapet.com"),
+    ("Lana Pets", "lanapets.com"),
+    ("Mowkly", "mowkly.com"),
     ("Panda Store", "matjarpanda.com"),
     ("Pets houses", "pets-houses.com"),
 ]
-STORE_CLEANUP_KEEP_COUNT = len(STORE_CLEANUP_KEEP_LIST)   # 11
-STORE_CLEANUP_DELETE_CAP = 50                              # catastrophe cap
+STORE_CLEANUP_EXPECTED_KEEP = 11
+STORE_CLEANUP_MAX_DELETE = 50          # catastrophe cap
 
 
-def _normalize_store_domain(d):
-    """Normalize a store domain for matching: lowercase, strip scheme, strip a
-    leading www., strip trailing slashes/space. Nothing else (TLDs are kept)."""
-    if not d:
-        return ""
-    d = str(d).strip().lower()
+def normalize_store_domain(value):
+    """Bare comparable domain: no scheme, no www., no trailing slash or path."""
+    d = str(value or "").strip().lower()
     d = re.sub(r"^https?://", "", d)
-    if d.startswith("www."):
-        d = d[4:]
-    return d.rstrip("/")
+    d = re.sub(r"^www\.", "", d)
+    return d.split("/")[0].strip()
 
 
-async def _resolve_store_cleanup_sets(db):
-    """Resolve the keep-list against every store, build the delete set as
-    'every store NOT matched by the keep-list'. Pure read — no writes."""
-    stores = await db.stores.find(
-        {}, {"_id": 0, "id": 1, "name": 1, "domain": 1, "is_own_store": 1, "is_active": 1},
-    ).to_list(length=None)
-    by_norm = {}
-    for s in stores:
-        by_norm.setdefault(_normalize_store_domain(s.get("domain")), []).append(s)
-
-    keep_resolution = []
-    keep_ids = set()
-    unmatched = []
-    for name, domain in STORE_CLEANUP_KEEP_LIST:
-        nd = _normalize_store_domain(domain)
-        matches = by_norm.get(nd, [])
-        keep_resolution.append({
-            "keep_name": name, "keep_domain": domain, "normalized": nd,
-            "matched_store_ids": [m["id"] for m in matches],
-            "matched_store_names": [m.get("name") for m in matches],
-        })
-        if not matches:
-            unmatched.append({"name": name, "domain": domain})
-        for m in matches:
-            keep_ids.add(m["id"])
-
-    delete_stores = [s for s in stores if s["id"] not in keep_ids]
-    return stores, keep_resolution, keep_ids, unmatched, delete_stores
+def _normalize_store_name(value):
+    return " ".join(str(value or "").strip().lower().split())
 
 
-def _store_cleanup_cascade_queries(delete_ids):
-    """store_id-keyed collections that hold a reference to a competitor store.
-    Audited across server.py/crawlers.py/matcher.py. my_products is own-store
-    only (store_id never in the delete set) — included defensively, expected 0."""
-    ids = {"$in": sorted(delete_ids)}
+# Every collection that carries a reference to a store, with the exact match
+# predicate for a given delete set. Audited across server.py / crawlers.py /
+# matcher.py / zid_orders.py / store_registry.py:
+#   store_id      snapshots, coverage, sales, rollups, crawl_logs, otp_requests,
+#                 alerts, proxy_usage
+#   competitor_store_id  product_matches, match_blacklist
+#   store_name    alert_events (no id is persisted on the event)
+#   store_domain  proxy_usage, market_leaderboard, market_intelligence_baseline
+# `stores` itself is last so the store row outlives its own cascade if a delete
+# fails part-way through.
+#
+# Deliberately NOT cascaded, with reasons reported to the caller:
+#   products / my_products  keyed by SKU, no store reference at all
+#   market_digests          one doc per WEEK; a store name appears only inside
+#                           content.market_summary.most_active_store, so
+#                           deleting by it would destroy unrelated history
+#   dashboard_cache         derived only — rebuilt by the recompute below
+#   sync_runs, users, saved_filters, matching_jobs, metric_rollup_meta,
+#   own_store_orders, product_baseline_stats, market_opportunities
+#                           no store reference (barcode-, user- or global-keyed)
+def _store_cascade_queries(store_ids, domains, names):
+    sid = {"$in": sorted(store_ids)}
+    dom = {"$in": sorted(domains)}
     return [
-        ("product_snapshots",   {"store_id": ids}),
-        ("sku_store_coverage",  {"store_id": ids}),
-        ("sku_sales_daily",     {"store_id": ids}),
-        ("metric_daily_rollups", {"store_id": ids}),
-        ("crawl_logs",          {"store_id": ids}),
-        ("alerts",              {"store_id": ids}),
-        ("my_products",         {"store_id": ids}),
-        ("product_matches",     {"competitor_store_id": ids}),
-        ("stores",              {"id": ids}),
+        ("product_snapshots", {"store_id": sid}),
+        ("product_matches", {"competitor_store_id": sid}),
+        ("match_blacklist", {"competitor_store_id": sid}),
+        ("sku_store_coverage", {"store_id": sid}),
+        ("sku_sales_daily", {"store_id": sid}),
+        ("metric_daily_rollups", {"store_id": sid}),
+        ("crawl_logs", {"store_id": sid}),
+        ("otp_requests", {"store_id": sid}),
+        ("alerts", {"store_id": sid}),
+        ("alert_events", {"store_name": {"$in": sorted(names)}}),
+        ("proxy_usage", {"$or": [{"store_id": sid}, {"store_domain": dom}]}),
+        ("market_leaderboard", {"store_domain": dom}),
+        ("market_intelligence_baseline", {"store_domain": dom}),
+        ("stores", {"id": sid}),
     ]
 
+_STORE_CASCADE_SKIPPED = {
+    "products": "SKU-keyed global catalog — no store reference",
+    "my_products": "own-store catalog, SKU-keyed — own store is never deletable",
+    "market_digests": "one doc per week; store appears only inside content.market_summary — deleting by it would destroy unrelated history",
+    "dashboard_cache": "derived only — rebuilt by the recompute step",
+    "sync_runs": "no store reference",
+    "matching_jobs": "no store reference (singleton job doc)",
+    "metric_rollup_meta": "no store reference (schema marker)",
+    "own_store_orders": "own-store orders — own store is never deletable",
+    "product_baseline_stats": "barcode-keyed",
+    "market_opportunities": "barcode-keyed",
+    "users": "no store reference",
+    "saved_filters": "user-keyed",
+}
 
-async def _store_cleanup_domain_cascade(db, delete_domains):
-    """Domain-keyed collections (imported market baselines). Match only rows
-    whose normalized store_domain equals a DELETED store's domain, so we never
-    touch external baseline rows for stores we are keeping / never crawled."""
-    out = []
-    for coll, field in (("market_leaderboard", "store_domain"),
-                        ("market_intelligence_baseline", "store_domain")):
-        raw = await db[coll].distinct(field)
-        hits = sorted(r for r in raw if _normalize_store_domain(r) in delete_domains)
-        if hits:
-            out.append((coll, {field: {"$in": hits}}))
-    return out
+
+async def _resolve_store_cleanup(db):
+    """Resolve the keep-list against live stores and compute the delete set.
+
+    Returns (keep_rows, delete_rows, unresolved, live_total). Pure read."""
+    live = await db.stores.find({}, {"_id": 0}).to_list(length=None)
+    by_domain = {}
+    for s in live:
+        by_domain.setdefault(normalize_store_domain(s.get("domain")), []).append(s)
+    by_name = {}
+    for s in live:
+        by_name.setdefault(_normalize_store_name(s.get("name")), []).append(s)
+
+    keep_rows, unresolved, kept_ids = [], [], set()
+    for name, domain in STORE_CLEANUP_KEEP_LIST:
+        nd = normalize_store_domain(domain)
+        hits = by_domain.get(nd) or []
+        matched_on = "domain"
+        if not hits:
+            # secondary signal only — a renamed store keeps its domain, but a
+            # re-pointed domain keeps its name
+            hits = by_name.get(_normalize_store_name(name)) or []
+            matched_on = "name" if hits else None
+        if not hits:
+            unresolved.append({"keep_name": name, "keep_domain": domain,
+                               "normalized_domain": nd, "matched": 0})
+            continue
+        for s in hits:
+            kept_ids.add(s["id"])
+        keep_rows.append({
+            "keep_name": name, "keep_domain": domain, "normalized_domain": nd,
+            "matched_on": matched_on, "matched": len(hits),
+            "store_ids": [s["id"] for s in hits],
+            "store_names": [s.get("name") for s in hits],
+            "is_own_store": any(bool(s.get("is_own_store")) for s in hits),
+        })
+
+    delete_rows = [s for s in live if s["id"] not in kept_ids]
+    return keep_rows, delete_rows, unresolved, len(live)
 
 
 @router.get("/admin/store-cleanup")
 async def store_cleanup_get(dry_run: bool = Query(True), user=Depends(get_user)):
-    """Browser-friendly DRY RUN ONLY. GET can never delete: the destructive path
-    stays POST-only, so a prefetched/crawled/retried URL is harmless."""
+    """iter48 — browser-friendly DRY RUN ONLY. GET can never delete: the
+    destructive path stays POST-only, so a prefetched / crawled / retried URL is
+    harmless by construction."""
     if not dry_run:
-        raise HTTPException(405, "GET is dry-run only — use POST /api/admin/store-cleanup?dry_run=false for the real run")
+        raise HTTPException(405, "GET is dry-run only — use POST /api/admin/store-cleanup?dry_run=false&confirm_count=N for the real run")
     return await store_cleanup(dry_run=True, user=user)
 
 
 @router.post("/admin/store-cleanup")
-async def store_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int] = Query(None), user=Depends(get_user)):
-    """Delete every competitor store NOT in STORE_CLEANUP_KEEP_LIST, with all of
-    its data. Hard guards (never overridable): never delete an own-store; refuse
-    unless the keep-list resolves to EXACTLY 11 live stores (a keep-domain that
-    matches zero stores aborts with the offending entries named); refuse if the
-    delete set exceeds the 50-store catastrophe cap. Real run (dry_run=false)
-    also requires confirm_count == delete-set size, backs up every affected doc
-    into store_cleanup_backup_<ts>_<collection> BEFORE deleting, cascades, then
-    recomputes store metrics + rankings + dashboard/page caches. super_admin only."""
+async def store_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int] = Query(None),
+                        user=Depends(get_user)):
+    """iter48 — delete every competitor store that is NOT in the 11-store
+    keep-list, cascading across every collection that references a store.
+
+    dry_run=true (default): full report, zero writes. Real run
+    (dry_run=false): REQUIRES confirm_count to exactly equal the delete-set size
+    computed at run time — you delete exactly the set you reviewed, or nothing.
+
+    Three guards abort with 409 and are NEVER overridable by confirm_count:
+      1. an own-store (is_own_store=true) landed in the delete set
+      2. the keep-list did not resolve to exactly 11 live stores — each
+         zero-match keep-domain is named, so a domain-format mismatch can never
+         silently delete a store we meant to keep
+      3. the delete set exceeds 50 stores
+
+    Backs every affected document up into store_cleanup_backup_<ts>_<collection>
+    BEFORE any delete, then recomputes rollups, ranking and dashboard caches.
+    super_admin only."""
     if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
         raise HTTPException(403, "super_admin only")
 
-    stores, keep_resolution, keep_ids, unmatched, delete_stores = await _resolve_store_cleanup_sets(db)
-    delete_ids = {s["id"] for s in delete_stores}
-    delete_domains = {_normalize_store_domain(s.get("domain")) for s in delete_stores if s.get("domain")}
-    own_in_delete = [{"id": s["id"], "name": s.get("name"), "domain": s.get("domain")}
-                     for s in delete_stores if s.get("is_own_store")]
+    keep_rows, delete_rows, unresolved, live_total = await _resolve_store_cleanup(db)
+    resolved_keep_stores = sum(r["matched"] for r in keep_rows)
+    delete_ids = {s["id"] for s in delete_rows}
+    delete_domains = {normalize_store_domain(s.get("domain")) for s in delete_rows if s.get("domain")}
+    delete_names = {s.get("name") for s in delete_rows if s.get("name")}
 
-    # ── hard guards (never overridable) ──
+    # ── hard guards — never overridable ──
     guard_reasons = []
-    if unmatched:
-        guard_reasons.append(
-            "keep-list did not resolve — these entries matched ZERO stores: "
-            + ", ".join(f"{u['name']} ({u['domain']})" for u in unmatched))
-    if len(keep_ids) != STORE_CLEANUP_KEEP_COUNT:
-        guard_reasons.append(
-            f"keep-list resolved to {len(keep_ids)} stores, expected exactly {STORE_CLEANUP_KEEP_COUNT}")
+    own_in_delete = [{"id": s["id"], "name": s.get("name"), "domain": s.get("domain")}
+                     for s in delete_rows if s.get("is_own_store")]
     if own_in_delete:
-        guard_reasons.append(f"delete set includes own-store(s): {own_in_delete} — aborting")
-    if len(delete_ids) > STORE_CLEANUP_DELETE_CAP:
         guard_reasons.append(
-            f"delete set size {len(delete_ids)} exceeds the {STORE_CLEANUP_DELETE_CAP}-store catastrophe cap")
-
-    # ── cascade queries + counts ──
-    store_id_cascade = _store_cleanup_cascade_queries(delete_ids) if delete_ids else []
-    domain_cascade = await _store_cleanup_domain_cascade(db, delete_domains) if delete_domains else []
-    all_cascade = store_id_cascade + domain_cascade
-    cascade_counts = {}
-    for coll, q in all_cascade:
-        cascade_counts[coll] = await db[coll].count_documents(q)
-
-    delete_set_report = []
-    for s in delete_stores:
-        sid = s["id"]
-        delete_set_report.append({
-            "store_id": sid, "name": s.get("name"), "domain": s.get("domain"),
-            "is_active": s.get("is_active"),
-            "snapshots": await db.product_snapshots.count_documents({"store_id": sid}),
-            "matches": await db.product_matches.count_documents({"competitor_store_id": sid}),
-        })
-
-    report = {
-        "dry_run": dry_run,
-        "guard": {"ok": not guard_reasons, "reasons": guard_reasons,
-                  "own_store_in_delete_set": bool(own_in_delete),
-                  "keep_resolved_count": len(keep_ids),
-                  "keep_expected": STORE_CLEANUP_KEEP_COUNT,
-                  "delete_cap": STORE_CLEANUP_DELETE_CAP,
-                  "confirm_count_required": len(delete_ids)},
-        "keep_list_resolution": keep_resolution,
-        "delete_set_size": len(delete_ids),
-        "delete_set": delete_set_report,
-        "cascade_counts": cascade_counts,
-        "before": {"stores_total": len(stores), "stores_kept": len(keep_ids)},
-    }
+            "delete set contains is_own_store=true store(s): "
+            + ", ".join(f"{s['name']} ({s['domain']})" for s in own_in_delete))
+    if unresolved:
+        guard_reasons.append(
+            "keep-list domain(s) matched ZERO live stores — refusing so a domain-format "
+            "mismatch cannot delete a store we meant to keep: "
+            + ", ".join(f"{u['keep_name']} <{u['keep_domain']}>" for u in unresolved))
+    if resolved_keep_stores != STORE_CLEANUP_EXPECTED_KEEP:
+        guard_reasons.append(
+            f"keep-list resolved to {resolved_keep_stores} live stores, expected "
+            f"{STORE_CLEANUP_EXPECTED_KEEP}")
+    if len(delete_ids) > STORE_CLEANUP_MAX_DELETE:
+        guard_reasons.append(
+            f"delete set {len(delete_ids)} exceeds the {STORE_CLEANUP_MAX_DELETE} "
+            "catastrophe cap")
 
     if not dry_run:
         if guard_reasons:
-            raise HTTPException(409, "store-cleanup refused: " + "; ".join(guard_reasons))
+            raise HTTPException(409, f"store-cleanup refused: {'; '.join(guard_reasons)}")
         if confirm_count != len(delete_ids):
             raise HTTPException(
                 409,
                 f"store-cleanup refused: confirm_count={confirm_count} does not match the "
-                f"delete-set size {len(delete_ids)} — re-run the dry run, review, and confirm the exact number")
+                f"live delete-set size {len(delete_ids)} — re-run the dry run, review, and "
+                "confirm the exact number")
 
+    # ── report material ──
+    cascade = _store_cascade_queries(delete_ids, delete_domains, delete_names) if delete_ids else []
+    cascade_counts = {}
+    for coll, q in cascade:
+        cascade_counts[coll] = await db[coll].count_documents(q)
+
+    snap_rows = await db.product_snapshots.aggregate([
+        {"$match": {"store_id": {"$in": sorted(delete_ids)}}},
+        {"$group": {"_id": "$store_id", "n": {"$sum": 1}}},
+    ], allowDiskUse=True).to_list(length=None) if delete_ids else []
+    snaps_by_store = {r["_id"]: r["n"] for r in snap_rows}
+    prod_rows = await db.sku_store_coverage.aggregate([
+        {"$match": {"store_id": {"$in": sorted(delete_ids)}}},
+        {"$group": {"_id": "$store_id", "n": {"$sum": 1}}},
+    ], allowDiskUse=True).to_list(length=None) if delete_ids else []
+    products_by_store = {r["_id"]: r["n"] for r in prod_rows}
+
+    delete_detail = sorted(
+        ({"store_id": s["id"], "name": s.get("name"), "domain": s.get("domain"),
+          "platform": s.get("platform"), "is_active": s.get("is_active"),
+          "last_crawled_at": s.get("last_crawled_at") or "",
+          "products": products_by_store.get(s["id"], 0),
+          "snapshots": snaps_by_store.get(s["id"], 0)}
+         for s in delete_rows),
+        key=lambda r: (-r["snapshots"], r["name"] or ""))
+
+    # store_registry.REQUIRED_STORES is re-applied by ensure_stores() on every
+    # boot, so any deleted domain still listed there comes BACK (empty, without
+    # its history) at the next restart. We must not edit that module here, so
+    # the caller is told exactly which ones will reappear.
+    from store_registry import REQUIRED_STORES as _REQUIRED_STORES
+    required_domains = {normalize_store_domain(s["domain"]) for s in _REQUIRED_STORES}
+    will_reappear = sorted(d for d in delete_domains if d in required_domains)
+
+    report = {
+        "dry_run": dry_run,
+        "guard": {"ok": not guard_reasons, "reasons": guard_reasons,
+                  "own_store_in_delete_set": own_in_delete,
+                  "keep_list_unresolved": unresolved,
+                  "keep_list_resolved_stores": resolved_keep_stores,
+                  "keep_list_expected": STORE_CLEANUP_EXPECTED_KEEP,
+                  "max_delete": STORE_CLEANUP_MAX_DELETE,
+                  "confirm_count_required": len(delete_ids)},
+        "live_stores_total": live_total,
+        "keep_list": keep_rows,
+        "delete_count": len(delete_ids),
+        "delete_set": delete_detail,
+        "cascade_counts": cascade_counts,
+        "cascade_skipped": _STORE_CASCADE_SKIPPED,
+        "warnings": ([] if not will_reappear else [
+            "these deleted domains are still in store_registry.REQUIRED_STORES and "
+            "ensure_stores() will re-create them (empty) on the next backend restart: "
+            + ", ".join(will_reappear)]),
+        "before": {
+            "stores": live_total,
+            "product_snapshots": await db.product_snapshots.count_documents({}),
+            "product_matches": await db.product_matches.count_documents({}),
+            "products": await db.products.count_documents({}),
+        },
+    }
     if dry_run or not delete_ids:
         return report
 
     # ── real run: backup FIRST, then delete, per collection ──
     ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     backups = {}
-    for coll, q in all_cascade:
+    for coll, q in cascade:
         docs = await db[coll].find(q).to_list(length=None)
         bname = f"store_cleanup_backup_{ts}_{coll}"
         if docs:
@@ -6151,23 +6235,54 @@ async def store_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int
         backups[coll] = {"backup_collection": bname, "docs": len(docs)}
     await db[f"store_cleanup_backup_{ts}_manifest"].insert_one({
         "_id": "manifest", "created_at": datetime.now(timezone.utc),
-        "delete_store_ids": sorted(delete_ids),
-        "delete_domains": sorted(delete_domains),
+        "store_ids": sorted(delete_ids), "domains": sorted(delete_domains),
+        "stores": delete_detail,
         "collections": {k: v["docs"] for k, v in backups.items()},
     })
-    for coll, q in all_cascade:
+    for coll, q in cascade:
         await db[coll].delete_many(q)
 
-    # ── recompute so dashboards/rankings reflect the new totals immediately ──
+    # stop the per-store crawl jobs so the scheduler doesn't keep firing at
+    # stores that no longer exist
+    unregistered = 0
+    for sid in delete_ids:
+        try:
+            unregister_crawl_job(sid)
+            unregistered += 1
+        except Exception:
+            logger.exception("[StoreCleanup] failed to unregister crawl job %s", sid)
+
+    # ── recompute so dashboards, rollups and the ranking drop the dead stores ──
     recompute = {}
     try:
         recompute["store_metrics"] = await recompute_all_store_metrics(db)
     except Exception as e:
         recompute["store_metrics"] = f"ERROR: {str(e)[:80]}"
     recompute["dashboard_cache"] = "recomputed" if await maybe_recompute_dashboard_cache(db, force=True) else "skipped"
+    # page caches include price-intel/store-ranking (iter38)
     recompute["page_caches"] = "recomputed" if await maybe_recompute_page_caches(db, force=True) else "skipped"
+    recompute["crawl_jobs_unregistered"] = unregistered
 
-    report["after"] = {"stores_total": await db.stores.count_documents({})}
+    # ── orphan audit: nothing may still point at a deleted store ──
+    orphans = {}
+    for coll, q in cascade:
+        orphans[coll] = await db[coll].count_documents(q)
+    # products is SKU-keyed and intentionally not cascaded; report what is now
+    # unreferenced so a follow-up prune can be decided separately
+    remaining_skus = set(await db.product_snapshots.distinct("sku"))
+    orphan_products = 0
+    async for p in db.products.find({}, {"_id": 0, "sku": 1}):
+        if p.get("sku") not in remaining_skus:
+            orphan_products += 1
+
+    report["after"] = {
+        "stores": await db.stores.count_documents({}),
+        "product_snapshots": await db.product_snapshots.count_documents({}),
+        "product_matches": await db.product_matches.count_documents({}),
+        "products": await db.products.count_documents({}),
+    }
+    report["orphan_store_references"] = orphans
+    report["orphan_products_not_deleted"] = orphan_products
     report["backups"] = backups
     report["backup_timestamp"] = ts
     report["recompute"] = recompute

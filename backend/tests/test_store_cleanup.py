@@ -1,17 +1,19 @@
-"""store-cleanup endpoint — delete every competitor store NOT in the 11-store
-keep-list, plus all of its data.
+"""iter48 — /api/admin/store-cleanup: trim the registry to the 11 keep-list stores.
 
-Covers: keep-list resolves against normalized domains (scheme/www/case/trailing
-slash), delete set = everything not kept; dry run reports without writing; the
-hard guards (own-store never deleted, keep-list must resolve to exactly 11, a
-keep-domain matching zero stores aborts with a clear message, 50-store
-catastrophe cap, confirm_count contract); backups written BEFORE delete; the
-cascade leaves ZERO orphan store references; kept stores + own-store data
-survive; recomputes triggered."""
+Same safety contract as demo-cleanup: dry-run GET, destructive POST behind an
+exact confirm_count, backup-before-delete, full cascade, recompute.
+
+The three hard guards are the point of this suite — each one must abort with 409
+and must NOT be overridable by passing a matching confirm_count:
+
+  1. an is_own_store store landing in the delete set  (Pets houses)
+  2. the keep-list not resolving to exactly 11 live stores, naming every
+     zero-match domain so a format mismatch can't delete a store we meant to keep
+  3. the 50-store catastrophe cap
+"""
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -23,305 +25,461 @@ from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
 MONGO = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
 SUPER = {"id": "t", "email": "t@t", "role": "super_admin"}
-NOW = datetime.now(timezone.utc)
 
-# 11 keep stores — domains formatted with scheme/www/case/slash to exercise the
-# normalizer. The own store (pets-houses.com) is one of the 11.
+# the 11 that stay, spelled EXACTLY as the live registry does — deliberately
+# with scheme/www/trailing-slash noise, which normalization must absorb
 KEEP = [
-    ("k_aleef",    "aleef",       "https://aleef.com/",  False),
-    ("k_petsy",    "Petsy",       "www.petsysa.com",     False),
-    ("k_zarafa",   "Zarafa",      "zarafaksa.com",       False),
-    ("k_caty",     "Caty",        "caty-store.com",      False),
-    ("k_cutepets", "CutePets",    "CUTEPETS.COM.SA",     False),
-    ("k_hamtaro",  "Hamtaro",     "hamtaro.sa",          False),
-    ("k_hobba",    "Hobba",       "hobbapet.com",        False),
-    ("k_lana",     "Lana Pets",   "lanapets.com",        False),
-    ("k_mowkly",   "Mowkly",      "mowkly.com",          False),
-    ("k_panda",    "Panda Store", "matjarpanda.com",     False),
-    ("own",        "Pets Houses", "pets-houses.com",     True),
+    ("Aleef", "https://aleef.com/"),
+    ("Petsy", "www.petsysa.com"),
+    ("Zarafa", "zarafaksa.com"),
+    ("Caty", "http://caty-store.com"),
+    ("CutePets", "cutepets.com.sa"),
+    ("Hamtaro", "hamtaro.sa"),
+    ("Hobba", "hobbapet.com"),
+    ("Lana Pets", "lanapets.com"),
+    ("Mowkly", "mowkly.com"),
+    ("Panda Store", "matjarpanda.com"),
+    ("Pets Houses", "pets-houses.com"),          # is_own_store
 ]
-DELETE = [
-    ("d_cutecat", "CuteCat",               "cutecat.com.sa"),
-    ("d_petzone", "Petzone",               "petzone.com"),
-    ("d_testreg", "TEST_Regression_Store", "test-regression.example.com"),
-]
-DELETE_IDS = {d[0] for d in DELETE}
+DROP = [("Waggy", "waggy.sa"), ("Cat Fans", "catfansksa.com"),
+        ("Cat City", "catcity11.com"), ("CuteCat", "cutecat.com.sa")]
 
-STORE_ID_COLLS = ["product_snapshots", "sku_store_coverage", "sku_sales_daily",
-                  "metric_daily_rollups", "crawl_logs", "alerts", "my_products",
-                  "product_matches"]
-DOMAIN_COLLS = ["market_leaderboard", "market_intelligence_baseline"]
+CASCADE_COLLECTIONS = [c for c, _ in server._store_cascade_queries({"x"}, {"x"}, {"x"})]
 
 
-async def _seed(db):
-    for c in STORE_ID_COLLS + DOMAIN_COLLS + ["stores", "metric_rollup_meta"]:
+def _store(i, name, domain, own=False):
+    return {"id": f"st-{i}", "name": name, "domain": domain, "platform": "zid",
+            "is_active": True, "is_own_store": own, "last_crawled_at": "2026-07-20T00:00:00Z"}
+
+
+async def _seed(db, keep=KEEP, drop=DROP):
+    for c in ("stores", "product_snapshots", "product_matches", "match_blacklist",
+              "sku_store_coverage", "sku_sales_daily", "metric_daily_rollups",
+              "crawl_logs", "otp_requests", "alerts", "alert_events", "proxy_usage",
+              "market_leaderboard", "market_intelligence_baseline", "products"):
         await db[c].delete_many({})
     for name in await db.list_collection_names():
         if name.startswith("store_cleanup_backup_"):
-            await db.drop_collection(name)
+            await db[name].drop()
 
-    for sid, name, domain, is_own in KEEP:
-        doc = {"id": sid, "name": name, "domain": domain, "is_active": True}
-        if is_own:
-            doc["is_own_store"] = True
-        await db.stores.insert_one(doc)
-    for sid, name, domain in DELETE:
-        await db.stores.insert_one({"id": sid, "name": name, "domain": domain, "is_active": True})
+    stores = []
+    for i, (name, domain) in enumerate(keep):
+        stores.append(_store(i, name, domain, own=(name == "Pets Houses")))
+    for j, (name, domain) in enumerate(drop):
+        stores.append(_store(100 + j, name, domain))
+    await db.stores.insert_many(stores)
 
-    # per DELETE store: one referencing doc in every store_id-keyed collection
-    for i, (sid, _n, _d) in enumerate(DELETE):
-        sku = f"DEL{i}"
-        await db.product_snapshots.insert_one({"id": f"ps_{sid}", "sku": sku, "store_id": sid,
-                                               "price": 10.0, "confidence_score": 99, "crawled_at": NOW})
-        await db.sku_store_coverage.insert_one({"_id": f"{sku}|{sid}", "sku": sku, "store_id": sid,
-                                                "last_priced_at": NOW, "last_seen_any_at": NOW})
-        await db.sku_sales_daily.insert_one({"_id": f"{sid}|{sku}|d", "store_id": sid, "sku": sku,
-                                             "date": "2099-01-01", "units_sold": 1})
-        await db.metric_daily_rollups.insert_one({"store_id": sid, "date": "2099-01-01", "conf_count": 1})
-        await db.crawl_logs.insert_one({"id": f"cl_{sid}", "store_id": sid, "store_name": _n})
-        await db.alerts.insert_one({"id": f"al_{sid}", "store_id": sid, "product_sku": sku})
-        await db.product_matches.insert_one({"my_sku": "MINE", "competitor_sku": sku,
-                                             "competitor_store_id": sid, "confidence": 99})
-
-    # KEPT-store data that MUST survive (a keep store's snapshot + a match onto it)
-    await db.product_snapshots.insert_one({"id": "ps_keep", "sku": "KEEP1", "store_id": "k_aleef",
-                                           "price": 5.0, "confidence_score": 99, "crawled_at": NOW})
-    await db.sku_store_coverage.insert_one({"_id": "KEEP1|k_aleef", "sku": "KEEP1", "store_id": "k_aleef",
-                                            "last_priced_at": NOW, "last_seen_any_at": NOW})
-    await db.product_matches.insert_one({"my_sku": "MINE", "competitor_sku": "KEEP1",
-                                         "competitor_store_id": "k_aleef", "confidence": 99})
-    # own-store data (my_products) — never touched
-    await db.my_products.insert_one({"sku": "OWN1", "store_id": "own", "is_own_store": True, "price": 7.0})
-
-    # domain-keyed baselines: one for a DELETE store, one for a KEEP store, one external
-    await db.market_leaderboard.insert_one({"store_domain": "cutecat.com.sa", "rank": 1})    # delete
-    await db.market_leaderboard.insert_one({"store_domain": "aleef.com", "rank": 2})          # keep
-    await db.market_leaderboard.insert_one({"store_domain": "external-store.com", "rank": 3}) # external
-    await db.market_intelligence_baseline.insert_one({"store_domain": "petzone.com"})         # delete
-    await db.market_intelligence_baseline.insert_one({"store_domain": "pets-houses.com"})      # keep/own
+    # one referencing document per cascaded collection, for a KEPT store and a
+    # DROPPED store, so the cascade must remove exactly half of them
+    keeper, dropper = stores[0], stores[len(keep)]
+    for s, tag in ((keeper, "keep"), (dropper, "drop")):
+        sid, dom, nm = s["id"], server.normalize_store_domain(s["domain"]), s["name"]
+        await db.product_snapshots.insert_one({"id": f"sn-{tag}", "sku": f"SKU-{tag}",
+                                               "store_id": sid, "store_name": nm, "price": 10})
+        await db.product_matches.insert_one({"my_sku": "M1", "competitor_sku": f"C-{tag}",
+                                             "competitor_store_id": sid})
+        await db.match_blacklist.insert_one({"my_sku": "M1", "competitor_sku": f"B-{tag}",
+                                             "competitor_store_id": sid})
+        await db.sku_store_coverage.insert_one({"_id": f"{tag}|{sid}", "sku": f"SKU-{tag}",
+                                                "store_id": sid})
+        await db.sku_sales_daily.insert_one({"store_id": sid, "sku": f"SKU-{tag}", "date": "2026-07-01"})
+        await db.metric_daily_rollups.insert_one({"_id": f"{sid}|2026-07-01", "store_id": sid,
+                                                  "date": "2026-07-01"})
+        await db.crawl_logs.insert_one({"id": f"cl-{tag}", "store_id": sid, "store_name": nm})
+        await db.otp_requests.insert_one({"id": f"otp-{tag}", "store_id": sid, "status": "pending"})
+        await db.alerts.insert_one({"id": f"al-{tag}", "store_id": sid, "product_sku": "M1"})
+        await db.alert_events.insert_one({"id": f"ev-{tag}", "store_name": nm, "sku": "M1"})
+        await db.proxy_usage.insert_one({"store_id": sid, "store_domain": dom, "bytes_estimate": 1})
+        await db.market_leaderboard.insert_one({"rank": 1, "store_domain": dom})
+        await db.market_intelligence_baseline.insert_one({"store_domain": dom})
+        await db.products.insert_one({"id": f"p-{tag}", "sku": f"SKU-{tag}"})
+    server.db = db
+    return stores
 
 
-def _stub_recomputes(calls):
+def _patch_recompute():
     orig = (server.recompute_all_store_metrics, server.maybe_recompute_dashboard_cache,
-            server.maybe_recompute_page_caches)
+            server.maybe_recompute_page_caches, server.unregister_crawl_job)
+    calls = {"metrics": 0, "dashboard": 0, "pages": 0, "unregistered": []}
 
-    async def _metrics(db):
-        calls.append("metrics"); return {"stores": 0}
+    async def _m(db):
+        calls["metrics"] += 1
+        return {"stores": 0}
 
-    async def _dash(db, force=False, **kw):
-        calls.append("dash"); return {"ok": 1}
+    async def _d(db, min_interval_secs=600, force=False):
+        calls["dashboard"] += 1
+        return True
 
-    async def _pages(db, force=False, **kw):
-        calls.append("pages"); return {"ok": 1}
-    server.recompute_all_store_metrics = _metrics
-    server.maybe_recompute_dashboard_cache = _dash
-    server.maybe_recompute_page_caches = _pages
-    return orig
+    async def _p(db, min_interval_secs=600, force=False):
+        calls["pages"] += 1
+        return True
+
+    def _u(sid):
+        calls["unregistered"].append(sid)
+
+    server.recompute_all_store_metrics = _m
+    server.maybe_recompute_dashboard_cache = _d
+    server.maybe_recompute_page_caches = _p
+    server.unregister_crawl_job = _u
+    return orig, calls
 
 
-def _restore_recomputes(orig):
+def _unpatch(orig):
     (server.recompute_all_store_metrics, server.maybe_recompute_dashboard_cache,
-     server.maybe_recompute_page_caches) = orig
+     server.maybe_recompute_page_caches, server.unregister_crawl_job) = orig
 
 
-def test_normalize_domain():
-    n = server._normalize_store_domain
-    assert n("https://Aleef.com/") == "aleef.com"
-    assert n("www.petsysa.com") == "petsysa.com"
-    assert n("http://www.hamtaro.sa//") == "hamtaro.sa"
-    assert n("  CUTEPETS.COM.SA ") == "cutepets.com.sa"
-    assert n(None) == "" and n("") == ""
-    print("PASS: domain normalization")
+# ── normalization ────────────────────────────────────────────────────────────
+def test_domain_normalization():
+    n = server.normalize_store_domain
+    for raw in ("aleef.com", "https://aleef.com", "http://aleef.com/", "www.aleef.com",
+                "https://www.aleef.com/", "  HTTPS://WWW.Aleef.com/  ",
+                "https://aleef.com/products/15"):
+        assert n(raw) == "aleef.com", raw
+    assert n("") == "" and n(None) == ""
+    # distinct domains stay distinct
+    assert n("cutepets.com.sa") != n("cutecat.com.sa")
 
 
-def test_dry_run_resolves_and_reports_without_writing():
+# ── dry run ──────────────────────────────────────────────────────────────────
+def test_dry_run_resolves_keep_list_and_writes_nothing():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed(db)
-        server.db = db
-        before_stores = await db.stores.count_documents({})
+        rep = await server.store_cleanup_get(dry_run=True, user=SUPER)
 
-        rep = await server.store_cleanup(dry_run=True, user=SUPER)
         assert rep["dry_run"] is True
-        assert rep["guard"]["ok"] is True, rep["guard"]
-        assert rep["guard"]["keep_resolved_count"] == 11
-        assert rep["guard"]["own_store_in_delete_set"] is False
-        assert rep["guard"]["confirm_count_required"] == 3
-        assert rep["delete_set_size"] == 3
-        assert {r["store_id"] for r in rep["delete_set"]} == DELETE_IDS
-        # every keep-list entry resolved to exactly one store
-        for kr in rep["keep_list_resolution"]:
-            assert len(kr["matched_store_ids"]) == 1, kr
-        # cascade counts (one referencing doc per delete store)
-        cc = rep["cascade_counts"]
-        assert cc["product_snapshots"] == 3
-        assert cc["sku_store_coverage"] == 3
-        assert cc["sku_sales_daily"] == 3
-        assert cc["metric_daily_rollups"] == 3
-        assert cc["crawl_logs"] == 3
-        assert cc["alerts"] == 3
-        assert cc["product_matches"] == 3
-        assert cc["my_products"] == 0                      # own-store only
-        assert cc["stores"] == 3
-        assert cc["market_leaderboard"] == 1               # only cutecat.com.sa
-        assert cc["market_intelligence_baseline"] == 1     # only petzone.com
-        assert "after" not in rep and "backups" not in rep
+        assert rep["live_stores_total"] == 15
+        assert rep["guard"]["ok"] is True, rep["guard"]["reasons"]
+        assert rep["guard"]["keep_list_resolved_stores"] == 11
+        assert len(rep["keep_list"]) == 11
+        assert all(k["matched"] == 1 and k["matched_on"] == "domain" for k in rep["keep_list"])
+        # every keep-list row carries the resolved store_id
+        assert all(len(k["store_ids"]) == 1 for k in rep["keep_list"])
 
-        # nothing written
-        assert await db.stores.count_documents({}) == before_stores
-        assert await db.product_snapshots.count_documents({}) == 4
-        assert await db.market_leaderboard.count_documents({}) == 3
+        assert rep["delete_count"] == 4 == rep["guard"]["confirm_count_required"]
+        assert {d["domain"] for d in rep["delete_set"]} == {d for _, d in DROP}
+        # per-store product + snapshot counts are surfaced
+        dropped = [d for d in rep["delete_set"] if d["domain"] == "waggy.sa"][0]
+        assert dropped["snapshots"] == 1 and dropped["products"] == 1
 
-        # non-admin rejected
-        try:
-            await server.store_cleanup(dry_run=True, user={"role": "viewer", "email": "v@v"})
-            raise AssertionError("viewer should be 403")
-        except HTTPException as e:
-            assert e.status_code == 403
+        # cascade covers every collection with a store reference, one doc each
+        for coll in CASCADE_COLLECTIONS:
+            assert coll in rep["cascade_counts"], coll
+        assert rep["cascade_counts"]["stores"] == 4
+        for coll in ("product_snapshots", "product_matches", "match_blacklist",
+                     "sku_store_coverage", "sku_sales_daily", "metric_daily_rollups",
+                     "crawl_logs", "otp_requests", "alerts", "alert_events",
+                     "proxy_usage", "market_leaderboard", "market_intelligence_baseline"):
+            assert rep["cascade_counts"][coll] == 1, (coll, rep["cascade_counts"][coll])
+        # collections deliberately left alone are declared with a reason
+        assert "products" in rep["cascade_skipped"] and rep["cascade_skipped"]["products"]
 
-        # GET is dry-run only
-        rep_get = await server.store_cleanup_get(dry_run=True, user=SUPER)
-        assert rep_get["dry_run"] is True and rep_get["delete_set_size"] == 3
-        try:
-            await server.store_cleanup_get(dry_run=False, user=SUPER)
-            raise AssertionError("GET dry_run=false must be 405")
-        except HTTPException as e:
-            assert e.status_code == 405 and "POST" in e.detail
-        assert await db.stores.count_documents({}) == before_stores
+        # ZERO writes
+        assert await db.stores.count_documents({}) == 15
+        assert await db.product_snapshots.count_documents({}) == 2
+        assert not [c for c in await db.list_collection_names()
+                    if c.startswith("store_cleanup_backup_")]
     asyncio.run(main())
 
 
+def test_get_is_dry_run_only_and_requires_super_admin():
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        try:
+            await server.store_cleanup_get(dry_run=False, user=SUPER)
+            raise AssertionError("GET with dry_run=false must be rejected")
+        except HTTPException as e:
+            assert e.status_code == 405, e.status_code
+        try:
+            await server.store_cleanup(dry_run=True, user={"role": "viewer", "email": "v@v"})
+            raise AssertionError("viewer must be rejected")
+        except HTTPException as e:
+            assert e.status_code == 403
+        assert await db.stores.count_documents({}) == 15
+    asyncio.run(main())
+
+
+# ── guard 1: the own store is never deletable ────────────────────────────────
 def test_own_store_never_in_delete_set():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        # the own store's domain is re-pointed, so the keep-list can no longer
+        # resolve it by domain — it must NOT silently fall into the delete set
         await _seed(db)
-        server.db = db
-        # an own-store whose domain is NOT in the keep-list would land in the
-        # delete set → hard guard must abort (keep-list still resolves to 11)
-        await db.stores.insert_one({"id": "own_stray", "name": "Stray Own",
-                                    "domain": "not-in-keeplist.com", "is_own_store": True, "is_active": True})
+        await db.stores.update_one({"is_own_store": True},
+                                   {"$set": {"domain": "pets-houses.example"}})
+
         rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        # matched by NAME, so it stays out of the delete set entirely
+        own = [k for k in rep["keep_list"] if k["is_own_store"]]
+        assert own and own[0]["matched_on"] == "name", rep["keep_list"]
+        assert not any(d["name"] == "Pets Houses" for d in rep["delete_set"])
+
+        # ...and if it somehow does land there (name changed too), the guard fires
+        await db.stores.update_one({"is_own_store": True},
+                                   {"$set": {"name": "Renamed Own Store"}})
+        rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        assert any(d["name"] == "Renamed Own Store" for d in rep["delete_set"])
         assert rep["guard"]["ok"] is False
-        assert rep["guard"]["own_store_in_delete_set"] is True
-        assert rep["guard"]["keep_resolved_count"] == 11
-        n = rep["guard"]["confirm_count_required"]
+        assert rep["guard"]["own_store_in_delete_set"], rep["guard"]
+        assert any("is_own_store" in r for r in rep["guard"]["reasons"]), rep["guard"]["reasons"]
+
+        # the guard is NOT overridable — even with a perfectly matching confirm_count
+        n = rep["delete_count"]
         try:
             await server.store_cleanup(dry_run=False, confirm_count=n, user=SUPER)
-            raise AssertionError("real run must refuse when an own-store is in the delete set")
+            raise AssertionError("own-store guard must abort the real run")
         except HTTPException as e:
-            assert e.status_code == 409 and "own-store" in e.detail
-        # nothing deleted
-        assert await db.stores.count_documents({}) == len(KEEP) + len(DELETE) + 1
+            assert e.status_code == 409 and "is_own_store" in e.detail, e.detail
+        assert await db.stores.count_documents({}) == 15      # nothing deleted
     asyncio.run(main())
 
 
-def test_keeplist_zero_match_aborts_with_named_entry():
+# ── guard 2: keep-list must resolve to exactly 11 ────────────────────────────
+def test_keep_list_not_eleven_aborts():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        # a duplicate row for one keep domain -> 12 resolved live stores
         await _seed(db)
-        server.db = db
-        # a keep store missing (its domain resolves to zero stores) — we must
-        # STOP so we never delete a store we meant to keep
-        await db.stores.delete_one({"id": "k_zarafa"})
+        await db.stores.insert_one(_store(900, "Aleef Duplicate", "aleef.com"))
         rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        assert rep["guard"]["keep_list_resolved_stores"] == 12
         assert rep["guard"]["ok"] is False
-        assert rep["guard"]["keep_resolved_count"] == 10
-        assert any("did not resolve" in r and "Zarafa" in r for r in rep["guard"]["reasons"]), rep["guard"]["reasons"]
-        zarafa = next(k for k in rep["keep_list_resolution"] if k["keep_name"] == "Zarafa")
-        assert zarafa["matched_store_ids"] == []
-        n = rep["guard"]["confirm_count_required"]
+        assert any("resolved to 12" in r for r in rep["guard"]["reasons"]), rep["guard"]["reasons"]
         try:
-            await server.store_cleanup(dry_run=False, confirm_count=n, user=SUPER)
-            raise AssertionError("real run must refuse when a keep-domain matches zero stores")
+            await server.store_cleanup(dry_run=False, confirm_count=rep["delete_count"], user=SUPER)
+            raise AssertionError("keep-list count guard must abort")
         except HTTPException as e:
-            assert e.status_code == 409 and "did not resolve" in e.detail and "Zarafa" in e.detail
-        assert await db.stores.count_documents({}) == len(KEEP) + len(DELETE) - 1
+            assert e.status_code == 409 and "expected 11" in e.detail, e.detail
+        assert await db.stores.count_documents({}) == 16
     asyncio.run(main())
 
 
-def test_catastrophe_cap_and_confirm_count():
+def test_zero_match_keep_domain_aborts_and_names_it():
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        # hobbapet.com is gone from the registry entirely — a domain-format
+        # mismatch looks exactly like this, and must never delete silently
+        await _seed(db, keep=[k for k in KEEP if k[1] != "hobbapet.com"])
+        rep = await server.store_cleanup(dry_run=True, user=SUPER)
+
+        assert rep["guard"]["ok"] is False
+        un = rep["guard"]["keep_list_unresolved"]
+        assert [u["keep_domain"] for u in un] == ["hobbapet.com"], un
+        assert un[0]["keep_name"] == "Hobba" and un[0]["matched"] == 0
+        # the reason text names the offending domain
+        assert any("hobbapet.com" in r for r in rep["guard"]["reasons"]), rep["guard"]["reasons"]
+
+        try:
+            await server.store_cleanup(dry_run=False, confirm_count=rep["delete_count"], user=SUPER)
+            raise AssertionError("zero-match keep-domain must abort")
+        except HTTPException as e:
+            assert e.status_code == 409 and "hobbapet.com" in e.detail, e.detail
+        assert await db.stores.count_documents({}) == 14
+    asyncio.run(main())
+
+
+# ── guard 3: catastrophe cap ─────────────────────────────────────────────────
+def test_catastrophe_cap_aborts_above_fifty():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed(db)
-        server.db = db
-        # confirm_count contract: mismatch/missing → 409, nothing deleted
-        for wrong in (None, 2, 4, 0):
-            try:
-                await server.store_cleanup(dry_run=False, confirm_count=wrong, user=SUPER)
-                raise AssertionError(f"must refuse confirm_count={wrong}")
-            except HTTPException as e:
-                assert e.status_code == 409 and "confirm_count" in e.detail
-        assert await db.stores.count_documents({}) == len(KEEP) + len(DELETE)
-
-        # catastrophe cap: push the delete set above 50 store docs
-        await db.stores.insert_many(
-            [{"id": f"junk{i}", "name": f"Junk{i}", "domain": f"junk{i}.example", "is_active": True}
-             for i in range(51)])
+        await db.stores.insert_many([_store(200 + i, f"Junk {i}", f"junk{i}.example")
+                                     for i in range(50)])
         rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        assert rep["delete_count"] == 54
         assert rep["guard"]["ok"] is False
-        assert rep["delete_set_size"] == 3 + 51
-        assert any("catastrophe cap" in r for r in rep["guard"]["reasons"])
+        assert any("catastrophe cap" in r for r in rep["guard"]["reasons"]), rep["guard"]["reasons"]
         try:
             await server.store_cleanup(dry_run=False, confirm_count=54, user=SUPER)
-            raise AssertionError("real run must refuse above the catastrophe cap")
+            raise AssertionError("catastrophe cap must abort")
         except HTTPException as e:
             assert e.status_code == 409 and "catastrophe cap" in e.detail
+        assert await db.stores.count_documents({}) == 65
     asyncio.run(main())
 
 
-def test_real_run_backs_up_cascades_and_leaves_no_orphans():
+# ── confirm_count contract ───────────────────────────────────────────────────
+def test_confirm_count_must_match_exactly():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed(db)
-        server.db = db
-        calls = []
-        orig = _stub_recomputes(calls)
+        for bad in (None, 0, 3, 5):
+            try:
+                await server.store_cleanup(dry_run=False, confirm_count=bad, user=SUPER)
+                raise AssertionError(f"confirm_count={bad} must be rejected")
+            except HTTPException as e:
+                assert e.status_code == 409 and "confirm_count" in e.detail
+        assert await db.stores.count_documents({}) == 15
+    asyncio.run(main())
+
+
+# ── real run ─────────────────────────────────────────────────────────────────
+def test_real_run_backs_up_before_delete_and_leaves_no_orphans():
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        orig, calls = _patch_recompute()
         try:
-            rep = await server.store_cleanup(dry_run=False, confirm_count=3, user=SUPER)
+            rep = await server.store_cleanup(dry_run=False, confirm_count=4, user=SUPER)
         finally:
-            _restore_recomputes(orig)
+            _unpatch(orig)
 
+        assert rep["dry_run"] is False and rep["delete_count"] == 4
         ts = rep["backup_timestamp"]
-        # backups written before delete, one per referencing collection
-        assert rep["backups"]["stores"]["docs"] == 3
-        assert rep["backups"]["product_snapshots"]["docs"] == 3
-        assert rep["backups"]["product_matches"]["docs"] == 3
-        assert rep["backups"]["market_leaderboard"]["docs"] == 1
-        assert await db[f"store_cleanup_backup_{ts}_stores"].count_documents({}) == 3
+
+        # ── backups written BEFORE the delete: every cascaded collection has a
+        # backup collection holding exactly what was removed ──
+        for coll in CASCADE_COLLECTIONS:
+            b = rep["backups"][coll]
+            assert b["backup_collection"] == f"store_cleanup_backup_{ts}_{coll}"
+            assert await db[b["backup_collection"]].count_documents({}) == b["docs"], coll
+            assert b["docs"] == 1 if coll != "stores" else b["docs"] == 4
         manifest = await db[f"store_cleanup_backup_{ts}_manifest"].find_one({"_id": "manifest"})
-        assert manifest and set(manifest["delete_store_ids"]) == DELETE_IDS
+        assert manifest and len(manifest["store_ids"]) == 4
+        assert set(manifest["domains"]) == {d for _, d in DROP}
+        # the backup is a faithful copy — the dropped snapshot is recoverable
+        bs = await db[f"store_cleanup_backup_{ts}_product_snapshots"].find_one({"id": "sn-drop"})
+        assert bs and bs["sku"] == "SKU-drop"
 
-        # ZERO orphan store references anywhere
-        for coll in ["product_snapshots", "sku_store_coverage", "sku_sales_daily",
-                     "metric_daily_rollups", "crawl_logs", "alerts", "my_products"]:
-            assert await db[coll].count_documents({"store_id": {"$in": sorted(DELETE_IDS)}}) == 0, coll
-        assert await db.product_matches.count_documents({"competitor_store_id": {"$in": sorted(DELETE_IDS)}}) == 0
-        assert await db.stores.count_documents({"id": {"$in": sorted(DELETE_IDS)}}) == 0
-
-        # kept stores + their data survive
+        # ── the delete itself ──
         assert await db.stores.count_documents({}) == 11
-        assert await db.product_snapshots.count_documents({"store_id": "k_aleef"}) == 1
-        assert await db.product_matches.count_documents({"competitor_store_id": "k_aleef"}) == 1
-        # own-store survives + its my_products untouched
-        assert await db.stores.count_documents({"is_own_store": True}) == 1
-        assert await db.my_products.count_documents({"store_id": "own"}) == 1
+        assert {s["domain"] for s in await db.stores.find({}, {"_id": 0}).to_list(None)} \
+            == {d for _, d in KEEP}
+        assert rep["after"]["stores"] == 11
 
-        # domain cascade: only the delete-store baselines removed
-        lb = {d["store_domain"] async for d in db.market_leaderboard.find({}, {"_id": 0, "store_domain": 1})}
-        assert lb == {"aleef.com", "external-store.com"}       # cutecat.com.sa removed
-        mib = {d["store_domain"] async for d in db.market_intelligence_baseline.find({}, {"_id": 0, "store_domain": 1})}
-        assert mib == {"pets-houses.com"}                       # petzone.com removed
+        # ── no orphan store references anywhere ──
+        assert rep["orphan_store_references"] == {c: 0 for c in CASCADE_COLLECTIONS}, \
+            rep["orphan_store_references"]
+        live_ids = {s["id"] for s in await db.stores.find({}, {"_id": 0, "id": 1}).to_list(None)}
+        for coll, field in (("product_snapshots", "store_id"), ("sku_store_coverage", "store_id"),
+                            ("sku_sales_daily", "store_id"), ("metric_daily_rollups", "store_id"),
+                            ("crawl_logs", "store_id"), ("otp_requests", "store_id"),
+                            ("alerts", "store_id"), ("proxy_usage", "store_id"),
+                            ("product_matches", "competitor_store_id"),
+                            ("match_blacklist", "competitor_store_id")):
+            async for d in db[coll].find({}, {"_id": 0, field: 1}):
+                assert d.get(field) in live_ids, (coll, d)
 
-        assert calls == ["metrics", "dash", "pages"]
-        assert rep["after"]["stores_total"] == 11
+        # kept-store data is untouched
+        assert await db.product_snapshots.count_documents({"id": "sn-keep"}) == 1
+        assert await db.product_matches.count_documents({}) == 1
+
+        # ── recompute ran, and the dead stores' crawl jobs were unregistered ──
+        assert calls["metrics"] == 1 and calls["dashboard"] == 1 and calls["pages"] == 1
+        assert len(calls["unregistered"]) == 4
+        assert rep["recompute"]["crawl_jobs_unregistered"] == 4
+
+        # products is SKU-keyed and NOT cascaded — reported, not silently dropped
+        assert rep["orphan_products_not_deleted"] == 1
+        assert await db.products.count_documents({}) == 2
+    asyncio.run(main())
+
+
+# ── the registry itself ──────────────────────────────────────────────────────
+def test_required_stores_is_exactly_the_eleven_keep_domains():
+    """iter48 follow-up — ensure_stores() re-creates every REQUIRED_STORES entry
+    on each boot, so a store deleted by the cleanup comes straight back unless
+    the registry is pruned too. The registry and the keep-list must agree
+    exactly, or the cleanup is not durable."""
+    import store_registry
+
+    keep_domains = {server.normalize_store_domain(d) for _, d in server.STORE_CLEANUP_KEEP_LIST}
+    assert len(keep_domains) == server.STORE_CLEANUP_EXPECTED_KEEP == 11
+
+    registry_domains = [server.normalize_store_domain(s["domain"])
+                        for s in store_registry.REQUIRED_STORES]
+    assert len(registry_domains) == 11, registry_domains
+    assert len(set(registry_domains)) == 11, "duplicate domain in REQUIRED_STORES"
+    assert set(registry_domains) == keep_domains, {
+        "only_in_registry": sorted(set(registry_domains) - keep_domains),
+        "only_in_keep_list": sorted(keep_domains - set(registry_domains)),
+    }
+
+    # none of the stores the cleanup deletes may linger in the registry
+    for gone in ("cutecat.com.sa", "waggy.sa", "catfansksa.com", "catcity11.com",
+                 "baboonstore.com", "anyabstore.com", "mycat.com.sa", "mycat.sa",
+                 "petzone.com", "petarabia.sa", "petshouse-sa.com",
+                 "snwr.zid.store", "salla.sa/catoutlet"):
+        assert server.normalize_store_domain(gone) not in set(registry_domains), gone
+
+    # the prune must not have disturbed the own-store flag or the rollout gate
+    own = [s for s in store_registry.REQUIRED_STORES if s.get("is_own_store")]
+    assert [s["domain"] for s in own] == ["pets-houses.com"], own
+    assert store_registry.ACTIVATE_NEW_STORES is False
+    # every surviving store still carries the fields ensure_stores() reads
+    for s in store_registry.REQUIRED_STORES:
+        assert s["name"] and s["domain"] and s["platform"] and s["priority"] in (1, 2), s
+
+
+def test_registry_recreation_warning_is_now_clean_but_still_works():
+    """With the registry pruned, a cleanup of today's junk stores must produce
+    NO re-creation warning — and the mechanism must still fire if a deleted
+    domain is ever re-added to REQUIRED_STORES."""
+    async def main():
+        import store_registry
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+
+        rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        assert rep["delete_count"] == 4
+        # none of the four dropped domains is in REQUIRED_STORES any more
+        assert rep["warnings"] == [], rep["warnings"]
+
+        # ...but the guard rail is live: put one back and the warning returns
+        orig = store_registry.REQUIRED_STORES
+        store_registry.REQUIRED_STORES = orig + [
+            {"name": "Waggy", "domain": "waggy.sa", "platform": "salla", "priority": 1}]
+        try:
+            rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        finally:
+            store_registry.REQUIRED_STORES = orig
+        assert rep["warnings"], "expected a re-creation warning"
+        joined = " ".join(rep["warnings"])
+        assert "ensure_stores" in joined and "waggy.sa" in joined
+    asyncio.run(main())
+
+
+def test_ensure_stores_seeds_only_the_eleven():
+    """End-to-end: booting against an EMPTY database must produce exactly the 11
+    keep-list stores — nothing the cleanup would immediately delete again."""
+    async def main():
+        from store_registry import ensure_stores
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await db.stores.delete_many({})
+        added = await ensure_stores(db)
+        assert added == 11, added
+        live = await db.stores.find({}, {"_id": 0}).to_list(None)
+        assert len(live) == 11
+        assert {server.normalize_store_domain(s["domain"]) for s in live} == \
+            {server.normalize_store_domain(d) for _, d in server.STORE_CLEANUP_KEEP_LIST}
+        assert [s["domain"] for s in live if s.get("is_own_store")] == ["pets-houses.com"]
+        # a second boot is still idempotent
+        assert await ensure_stores(db) == 0
+        assert await db.stores.count_documents({}) == 11
+
+        # and the cleanup now has nothing to do against a freshly booted DB
+        server.db = db
+        rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        assert rep["guard"]["ok"] is True, rep["guard"]["reasons"]
+        assert rep["delete_count"] == 0 and rep["delete_set"] == []
+        assert rep["guard"]["keep_list_resolved_stores"] == 11
     asyncio.run(main())
 
 
 if __name__ == "__main__":
-    test_normalize_domain()
-    test_dry_run_resolves_and_reports_without_writing()
+    test_domain_normalization()
+    test_dry_run_resolves_keep_list_and_writes_nothing()
+    test_get_is_dry_run_only_and_requires_super_admin()
     test_own_store_never_in_delete_set()
-    test_keeplist_zero_match_aborts_with_named_entry()
-    test_catastrophe_cap_and_confirm_count()
-    test_real_run_backs_up_cascades_and_leaves_no_orphans()
-    print("PASS: store cleanup")
+    test_keep_list_not_eleven_aborts()
+    test_zero_match_keep_domain_aborts_and_names_it()
+    test_catastrophe_cap_aborts_above_fifty()
+    test_confirm_count_must_match_exactly()
+    test_real_run_backs_up_before_delete_and_leaves_no_orphans()
+    test_required_stores_is_exactly_the_eleven_keep_domains()
+    test_registry_recreation_warning_is_now_clean_but_still_works()
+    test_ensure_stores_seeds_only_the_eleven()
+    print("PASS: iter48 store cleanup")
