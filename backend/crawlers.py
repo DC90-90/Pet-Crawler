@@ -1562,16 +1562,42 @@ def storefront_shelf_price(raw):
 _BARCODE_LEAD_RE = re.compile(r"^(\d{8,14})(?=[^\d]|$)")
 
 
-def barcode_keys(value):
-    """Candidate lookup keys for a barcode-ish value (lowercased)."""
+# iter47 — the same physical product can be keyed as UPC-A (12 digits, leading
+# zero) on one side and EAN (11 digits, zero dropped) on the other:
+#   my_products 052742059518  vs  storefront 52742059518
+# Neither literal nor suffix-stripping bridges those, so both sides also get the
+# canonical GTIN-14 form (zero-padded to 14), which is identical for both.
+def barcode_keys(value, canonical=True):
+    """Candidate lookup keys for a barcode-ish value (lowercased).
+
+    canonical=False reproduces the pre-iter47 key set, used only to measure how
+    many rows the new keys recover.
+    """
     raw = str(value or "").strip().lower()
     if not raw:
         return []
     keys = [raw]
     m = _BARCODE_LEAD_RE.match(raw)
-    if m and m.group(1) != raw:
-        keys.append(m.group(1))
+    if m:
+        lead = m.group(1)
+        if lead != raw:
+            keys.append(lead)
+        if canonical:
+            canon = lead.zfill(14)          # GTIN-14 canonical form
+            if canon not in keys:
+                keys.append(canon)
     return keys
+
+
+# Zid storefront product links look like /products/15 (Salla: /p15) — the
+# trailing id is the storefront row id, which the index already carries.
+_PRODUCT_URL_ID_RE = re.compile(r"/(?:products?/|p)(\d+)")
+
+
+def product_url_id(url):
+    """Storefront row id embedded in a product URL, or None."""
+    m = _PRODUCT_URL_ID_RE.search(str(url or ""))
+    return m.group(1) if m else None
 
 
 def build_key_index(rows, payload_fn):
@@ -1612,25 +1638,54 @@ def merchant_index(rows):
     return build_key_index(rows, lambda r: r)
 
 
-def storefront_price_lookup(idx, sku=None, barcode=None):
-    """Resolve a my_products row against the storefront index.
+def storefront_price_lookup(idx, sku=None, barcode=None, product_url=None, canonical=True):
+    """Resolve a my_products row against a catalogue index.
 
-    Returns ((shelf, list), method) or (None, None). Order: exact SKU, then
-    barcode (literal, then suffix-stripped), then — for Zid internal ids like
-    "Z.123456" — the numeric remainder against the storefront row id.
+    Returns ((shelf, list), method) or (None, None). Order, strongest first:
+    exact SKU, barcode (literal -> suffix-stripped -> GTIN-14 canonical), the
+    storefront id embedded in the product URL, the SKU treated as a barcode,
+    and finally a Zid internal id ("Z.123456").
+
+    canonical=False disables the iter47 keys (GTIN-14 + product URL) so the
+    caller can measure what the previous key set would have matched.
     """
     s = str(sku or "").strip().lower()
     if s and s in idx["by_sku"]:
         return idx["by_sku"][s], "sku"
-    for k in barcode_keys(barcode):
+
+    bc_raw = str(barcode or "").strip().lower()
+    bc_lead = None
+    m = _BARCODE_LEAD_RE.match(bc_raw) if bc_raw else None
+    if m:
+        bc_lead = m.group(1)
+    for k in barcode_keys(barcode, canonical=canonical):
         if k in idx["by_barcode"]:
-            return idx["by_barcode"][k], ("barcode" if k == str(barcode or "").strip().lower()
-                                          else "barcode_normalized")
-    # a numeric-looking SKU may itself be a barcode
+            if k == bc_raw:
+                method = "barcode"
+            elif k == bc_lead:
+                method = "barcode_normalized"
+            else:
+                method = "barcode_gtin14"
+            return idx["by_barcode"][k], method
+
+    # B (reverse direction) — our barcode may be their SKU. The forward
+    # direction (our SKU is their barcode) is handled below.
+    if canonical:
+        for k in barcode_keys(barcode, canonical=False):
+            if k in idx["by_sku"]:
+                return idx["by_sku"][k], "barcode_as_sku"
+
+    # C — the product URL carries the storefront row id verbatim
+    if canonical:
+        pid = product_url_id(product_url)
+        if pid and pid in idx["by_id"]:
+            return idx["by_id"][pid], "product_url_id"
+
+    # a numeric-looking SKU may itself be a barcode (B — now GTIN-aware via A)
     if s:
-        for k in barcode_keys(s):
+        for k in barcode_keys(s, canonical=canonical):
             if k in idx["by_barcode"]:
-                return idx["by_barcode"][k], "sku_as_barcode"
+                return idx["by_barcode"][k], ("sku_as_barcode" if k == s else "sku_as_barcode_gtin14")
         if s.startswith("z."):
             zid = s[2:]
             if zid in idx["by_id"]:
@@ -1638,6 +1693,11 @@ def storefront_price_lookup(idx, sku=None, barcode=None):
             if zid in idx["by_sku"]:
                 return idx["by_sku"][zid], "zid_internal_id"
     return None, None
+
+
+# methods that only exist because of the iter47 keys — used for before/after
+ITER47_METHODS = {"barcode_gtin14", "barcode_as_sku", "product_url_id",
+                  "sku_as_barcode_gtin14"}
 
 
 # iter45 — own-store storefront pagination. The SHARED _paginate_endpoint stops
@@ -1955,7 +2015,8 @@ async def sync_own_store_prices(db, store=None):
             # Stock/sales fields ALWAYS come from the merchant API; only the
             # price is overlaid from the storefront (iter44 Step 2).
             sf_hit, _sf_method = storefront_price_lookup(
-                sf_index, sku=raw.get("sku"), barcode=raw.get("barcode"))
+                sf_index, sku=raw.get("sku"), barcode=raw.get("barcode"),
+                product_url=raw.get("product_url"))
             # iter46 — two-tier basis: storefront shelf price when the product
             # is listed, else the Merchant price grossed up ONLY when Zid says
             # the product is taxable.
