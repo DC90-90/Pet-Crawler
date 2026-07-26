@@ -378,6 +378,272 @@ def test_real_run_backs_up_before_delete_and_leaves_no_orphans():
     asyncio.run(main())
 
 
+# ── iter49: destructive-path robustness ──────────────────────────────────────
+# Production symptom: POST ?dry_run=false&confirm_count=37 returned a bare 500
+# with NOTHING deleted, while the dry run was fine. The destructive path read
+# each collection with find(q).to_list(length=None) and handed the whole result
+# to one insert_many — ~63k CuteCat snapshots in a single round trip, against a
+# client capped at socketTimeoutMS=45000.
+class _SpyColl:
+    """Wraps one Motor collection so a single method can be observed or made to
+    fail. Motor builds a NEW collection object on every db[name] access, so
+    patching an attribute on db.foo would be silently discarded — the wrapper
+    has to sit on the database object instead."""
+
+    def __init__(self, coll, batches, fail_on=None):
+        self._c, self._b, self._fail = coll, batches, fail_on
+
+    def __getattr__(self, name):
+        return getattr(self._c, name)
+
+    async def insert_many(self, docs, ordered=True):
+        self._b.append(len(docs))
+        return await self._c.insert_many(docs, ordered=ordered)
+
+    async def delete_many(self, q):
+        if self._fail == "delete_many":
+            raise OSError("connection closed (socket timeout after 45000ms)")
+        return await self._c.delete_many(q)
+
+
+class _SpyDB:
+    def __init__(self, real, target, fail_on=None):
+        self._real, self._target, self._fail = real, target, fail_on
+        self.batches = []
+
+    def __getitem__(self, name):
+        coll = self._real[name]
+        return _SpyColl(coll, self.batches, self._fail) if name == self._target else coll
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_backup_is_batched_not_one_giant_insert():
+    """The backup must move in bounded batches, so a large collection can never
+    be one unbounded round trip again."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        # a "CuteCat-sized" collection, scaled down but well over one batch
+        await db.product_snapshots.insert_many(
+            [{"id": f"sn-big-{i}", "sku": f"S{i}", "store_id": "st-100", "price": 1}
+             for i in range(2500)])
+
+        orig, _ = _patch_recompute()
+        try:
+            rep = await server.store_cleanup(dry_run=False, confirm_count=4, user=SUPER)
+        finally:
+            _unpatch(orig)
+
+        ts = rep["backup_timestamp"]
+        bcoll = f"store_cleanup_backup_{ts}_product_snapshots"
+        # 2500 seeded + 1 from _seed's dropped store = 2501 backed up and deleted
+        assert rep["backups"]["product_snapshots"]["docs"] == 2501
+        assert rep["backups"]["product_snapshots"]["verified"] is True
+        assert await db[bcoll].count_documents({}) == 2501
+        assert rep["deleted_counts"]["product_snapshots"] == 2501
+        # only the kept store's snapshot survives
+        assert await db.product_snapshots.count_documents({}) == 1
+        assert rep["orphan_store_references"]["product_snapshots"] == 0
+        assert server._STORE_CLEANUP_BATCH == 1000
+    asyncio.run(main())
+
+
+def test_copy_in_batches_respects_the_batch_size():
+    """The actual regression guard: 2500 documents must never leave as one
+    insert_many, which is what blew the 45s socket cap in production."""
+    async def main():
+        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await real.copy_src.delete_many({})
+        await real.copy_dst.delete_many({})
+        await real.copy_src.insert_many([{"n": i} for i in range(2500)])
+
+        spy = _SpyDB(real, "copy_dst")
+        copied = await server._copy_in_batches(spy, "copy_src", "copy_dst", {}, batch=500)
+        assert copied == 2500
+        assert spy.batches == [500] * 5, spy.batches         # never one giant insert
+        assert await real.copy_dst.count_documents({}) == 2500
+
+        # and the default bound is enforced too
+        await real.copy_dst.delete_many({})
+        spy2 = _SpyDB(real, "copy_dst")
+        await server._copy_in_batches(spy2, "copy_src", "copy_dst", {})
+        assert max(spy2.batches) <= server._STORE_CLEANUP_BATCH, spy2.batches
+    asyncio.run(main())
+
+
+def test_backup_failure_aborts_with_the_collection_named_and_deletes_nothing():
+    """A backup failure is the safe failure: it must abort before any delete and
+    say WHICH collection failed and WHY, not 500 blindly."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        before_stores = await db.stores.count_documents({})
+        before_snaps = await db.product_snapshots.count_documents({})
+
+        real_copy = server._copy_in_batches
+
+        async def _boom(db_, src, dst, q, batch=1000, tolerate_duplicates=False):
+            if src == "crawl_logs":
+                raise OSError("connection closed (socket timeout after 45000ms)")
+            return await real_copy(db_, src, dst, q, batch=batch,
+                                   tolerate_duplicates=tolerate_duplicates)
+
+        server._copy_in_batches = _boom
+        orig, _ = _patch_recompute()
+        try:
+            await server.store_cleanup(dry_run=False, confirm_count=4, user=SUPER)
+            raise AssertionError("expected the backup failure to surface")
+        except HTTPException as e:
+            assert e.status_code == 500
+            d = e.detail
+            assert isinstance(d, dict), d
+            assert d["phase"] == "backup"
+            assert d["collection"] == "crawl_logs"
+            assert d["exception"] == "OSError"
+            assert "socket timeout" in d["message"]
+            assert "nothing was deleted" in d["error"]
+            # the collections already backed up are reported, so the operator
+            # knows exactly what state the DB is in
+            assert "product_snapshots" in d["completed_backups"]
+            assert "crawl_logs" not in d["completed_backups"]
+            assert d["backup_timestamp"] and d["delete_count"] == 4
+        finally:
+            server._copy_in_batches = real_copy
+            _unpatch(orig)
+
+        # NOTHING deleted — matches the production symptom, now explained
+        assert await db.stores.count_documents({}) == before_stores
+        assert await db.product_snapshots.count_documents({}) == before_snaps
+    asyncio.run(main())
+
+
+def test_backup_verification_catches_a_short_copy():
+    """A backup that silently copies fewer docs than the source holds must abort
+    rather than let the delete proceed against an incomplete safety net."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        real_copy = server._copy_in_batches
+
+        async def _short(db_, src, dst, q, batch=1000, tolerate_duplicates=False):
+            if src == "product_snapshots":
+                return 0        # claims success, copies nothing
+            return await real_copy(db_, src, dst, q, batch=batch,
+                                   tolerate_duplicates=tolerate_duplicates)
+
+        server._copy_in_batches = _short
+        orig, _ = _patch_recompute()
+        try:
+            await server.store_cleanup(dry_run=False, confirm_count=4, user=SUPER)
+            raise AssertionError("expected verification to abort")
+        except HTTPException as e:
+            assert e.status_code == 500
+            assert e.detail["phase"] == "backup"
+            assert e.detail["collection"] == "product_snapshots"
+            assert "verification failed" in e.detail["message"]
+        finally:
+            server._copy_in_batches = real_copy
+            _unpatch(orig)
+        assert await db.stores.count_documents({}) == 15
+    asyncio.run(main())
+
+
+def test_mid_cascade_delete_failure_rolls_back_and_leaves_no_orphans():
+    """The dangerous failure: some collections already deleted. Everything must
+    be restored from the backups so no orphan store reference survives."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        before = {c: await db[c].count_documents({}) for c in CASCADE_COLLECTIONS}
+
+        # crawl_logs sits mid-cascade: product_snapshots et al. are already gone
+        # by the time its delete blows up
+        server.db = _SpyDB(db, "crawl_logs", fail_on="delete_many")
+        orig, _ = _patch_recompute()
+        try:
+            await server.store_cleanup(dry_run=False, confirm_count=4, user=SUPER)
+            raise AssertionError("expected the delete failure to surface")
+        except HTTPException as e:
+            assert e.status_code == 500
+            d = e.detail
+            assert d["phase"] == "delete" and d["collection"] == "crawl_logs"
+            assert d["exception"] == "OSError"
+            assert "rolled back" in d["error"]
+            # the collections deleted before the failure are named...
+            assert d["deleted_before_failure"]["product_snapshots"] == 1
+            assert "crawl_logs" not in d["deleted_before_failure"]
+            # ...and every one of them, plus the failing collection, restored
+            assert d["restore_errors"] == {}, d["restore_errors"]
+            assert "product_snapshots" in d["restored"]
+            assert "crawl_logs" in d["restored"]
+            assert d["backup_timestamp"] and f"store_cleanup_backup_{d['backup_timestamp']}" in d["hint"]
+        finally:
+            server.db = db
+            _unpatch(orig)
+
+        # ── the whole point: the DB is back where it started ──
+        after = {c: await db[c].count_documents({}) for c in CASCADE_COLLECTIONS}
+        assert after == before, {k: (before[k], after[k]) for k in before if before[k] != after[k]}
+        # stores is last in the cascade, so it was never touched
+        assert await db.stores.count_documents({}) == 15
+        # and no orphan references were left behind by the partial cascade
+        live_ids = {s["id"] for s in await db.stores.find({}, {"_id": 0, "id": 1}).to_list(None)}
+        async for s in db.product_snapshots.find({}, {"_id": 0, "store_id": 1}):
+            assert s["store_id"] in live_ids
+    asyncio.run(main())
+
+
+def test_recompute_failure_does_not_mask_a_successful_delete():
+    """Once the data is gone and backed up, a recompute failure must be reported
+    in the body — not turned into a 500 that makes the operator re-run a cleanup
+    that already happened."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        orig, _ = _patch_recompute()
+
+        async def _boom(db_, min_interval_secs=600, force=False):
+            raise RuntimeError("dashboard cache rebuild exploded")
+
+        server.maybe_recompute_dashboard_cache = _boom
+        try:
+            rep = await server.store_cleanup(dry_run=False, confirm_count=4, user=SUPER)
+        finally:
+            _unpatch(orig)
+
+        assert rep["after"]["stores"] == 11              # the delete stands
+        assert rep["deleted_counts"]["stores"] == 4
+        assert rep["recompute"]["dashboard_cache"].startswith("ERROR: RuntimeError")
+        assert "exploded" in rep["recompute"]["dashboard_cache"]
+        # the other steps still ran
+        assert rep["recompute"]["page_caches"] == "recomputed"
+        assert rep["recompute"]["crawl_jobs_unregistered"] == 4
+    asyncio.run(main())
+
+
+def test_same_second_rerun_refuses_to_merge_two_backups():
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        # pre-create a backup collection for the timestamp this run will use
+        ts = server.datetime.now(server.timezone.utc).strftime("%Y%m%d%H%M%S")
+        await db[f"store_cleanup_backup_{ts}_product_snapshots"].insert_one({"stale": True})
+        orig, _ = _patch_recompute()
+        try:
+            await server.store_cleanup(dry_run=False, confirm_count=4, user=SUPER)
+            raise AssertionError("expected the pre-existing backup to abort the run")
+        except HTTPException as e:
+            assert e.status_code == 500 and e.detail["phase"] == "backup"
+            assert "already exists" in e.detail["message"]
+        finally:
+            _unpatch(orig)
+            await db[f"store_cleanup_backup_{ts}_product_snapshots"].drop()
+        assert await db.stores.count_documents({}) == 15
+    asyncio.run(main())
+
+
 # ── the registry itself ──────────────────────────────────────────────────────
 def test_required_stores_is_exactly_the_eleven_keep_domains():
     """iter48 follow-up — ensure_stores() re-creates every REQUIRED_STORES entry
@@ -479,6 +745,13 @@ if __name__ == "__main__":
     test_catastrophe_cap_aborts_above_fifty()
     test_confirm_count_must_match_exactly()
     test_real_run_backs_up_before_delete_and_leaves_no_orphans()
+    test_backup_is_batched_not_one_giant_insert()
+    test_copy_in_batches_respects_the_batch_size()
+    test_backup_failure_aborts_with_the_collection_named_and_deletes_nothing()
+    test_backup_verification_catches_a_short_copy()
+    test_mid_cascade_delete_failure_rolls_back_and_leaves_no_orphans()
+    test_recompute_failure_does_not_mask_a_successful_delete()
+    test_same_second_rerun_refuses_to_merge_two_backups()
     test_required_stores_is_exactly_the_eleven_keep_domains()
     test_registry_recreation_warning_is_now_clean_but_still_works()
     test_ensure_stores_seeds_only_the_eleven()
