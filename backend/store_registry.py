@@ -30,14 +30,16 @@ logger = logging.getLogger("store_registry")
 # domain rather than proxy everything.
 PROXY_STORES = {"cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa", "lanapets.com", "zarafaksa.com", "caty-store.com"}
 
+# iter48 — pruned to the 11 tracked stores. `ensure_stores()` re-creates every
+# entry here on each boot, so anything listed would come back after
+# /api/admin/store-cleanup deletes it. Re-add a store here (not just via the UI)
+# when it is genuinely onboarded.
 REQUIRED_STORES = [
     # ── Own store (benchmark for all SKU comparisons) ──
     {"name": "Pets Houses", "domain": "pets-houses.com", "platform": "zid", "priority": 1,
      "working_endpoint": "/api/v1/products", "is_own_store": True},
 
     # ── Competitors (original registry) ──
-    {"name": "CuteCat", "domain": "cutecat.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True,
-     "discovery": "Jul 2026: indexed URLs now show WooCommerce paths (/en/product-category/...) — may have migrated off Salla; verify on next crawl"},
     {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True},
     {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "use_storefront_categories": True},
     # iter40 — platform corrected salla→zid: mowkly.com serves a Zid-style
@@ -54,91 +56,6 @@ REQUIRED_STORES = [
     {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "use_storefront_categories": True},
     {"name": "Lana Pets", "domain": "lanapets.com", "platform": "salla", "priority": 1,
      "discovery": "re-verified Jul 2026: live, carries Royal Canin/Schesir/Applaws/Kit Cat"},
-
-    # ── Competitors discovered Jul 2026 (WebSearch sweep; platform attributed
-    #    from URL fingerprints — Salla /pNNN //cNNN /category/XXXX short-codes,
-    #    Zid /categories/NNNN //products/slug /pages/, or *.zid.store / salla.sa
-    #    hosting which is definitive). First crawl will confirm via Tier 1. ──
-    {"name": "Waggy", "domain": "waggy.sa", "platform": "salla", "priority": 1,
-     "discovery": "salla URL patterns /category/RQEAqo /p474879256; cats/dogs/birds/fish, Tabby installments"},
-    {"name": "Cat Fans", "domain": "catfansksa.com", "platform": "salla", "priority": 1,
-     "discovery": "salla URL patterns /brand-230787589 /c374241596; cat food/litter, Royal Canin"},
-    {"name": "Baboon Store", "domain": "baboonstore.com", "platform": "salla", "priority": 2,
-     "discovery": "salla short-code /ar/category/AzGgmq; Royal Canin cat food focus"},
-    {"name": "Cat City", "domain": "catcity11.com", "platform": "salla", "priority": 2,
-     "discovery": "salla product URLs /p1778290724 /p187286265; Jeddah, Royal Canin/Fancy Feast"},
-    {"name": "Anyab", "domain": "anyabstore.com", "platform": "salla", "priority": 1,
-     "discovery": "salla URL patterns /p1395756163; Riyadh, cats/rabbits/birds, free delivery 299+ SAR"},
-    {"name": "Pet Heaven", "domain": "petheaven.sa.com", "platform": "salla", "priority": 2,
-     "discovery": "salla URL patterns /p833196070 /c183764292; Farmina/Applaws cat food"},
-    {"name": "Cat Park", "domain": "catpark.sa", "platform": "salla", "priority": 2,
-     "discovery": "salla.sa/catpark-sa.com mirror exists; cats/birds/fish"},
-    {"name": "Safari Pet Store", "domain": "safariptstore.com", "platform": "salla", "priority": 2,
-     "discovery": "salla.sa-hosted mirror salla.sa/safariptstore.com; general pet supplies"},
-    {"name": "Pet Req", "domain": "pet-req.com", "platform": "salla", "priority": 2,
-     "discovery": "salla.sa/pet-req.com mirror + live custom domain"},
-    {"name": "My Cat (Zid)", "domain": "mycat.com.sa", "platform": "zid", "priority": 1,
-     "discovery": "zid URL patterns /products/ /categories/ /pages/; same-day Riyadh, free shipping 280+ SAR"},
-    {"name": "My Cat (Salla)", "domain": "mycat.sa", "platform": "salla", "priority": 2,
-     "discovery": "salla short-code /category/XqoeBz; sister storefront of mycat.com.sa"},
-    {"name": "My Cat SA", "domain": "mycatsa.com", "platform": "zid", "priority": 2,
-     "discovery": "zid-style /products /categories; third قطتي domain — dedupe with mycat.com.sa if same merchant"},
-    {"name": "Refq", "domain": "refqstore.sa", "platform": "zid", "priority": 1,
-     "discovery": "zid URL patterns /categories/1322935; cat food/litter, free delivery 250+ SAR"},
-    {"name": "Cat Shop", "domain": "catshoop1.com", "platform": "zid", "priority": 2,
-     "discovery": "zid URL pattern /en/categories/138647/رويال-كانين; cat supplies + vet products"},
-    {"name": "Whiskers", "domain": "whiskers-store.com", "platform": "zid", "priority": 1,
-     "discovery": "zid URL pattern /categories/320652/قطط; international-brand pet food"},
-    {"name": "Snwr", "domain": "snwr.zid.store", "platform": "zid", "priority": 2,
-     "discovery": "definitive: *.zid.store subdomain; cat food/litter/treats"},
-    {"name": "Cat Stuff", "domain": "catstuff.zid.store", "platform": "zid", "priority": 2,
-     "discovery": "definitive: *.zid.store subdomain; cat supplies + health section"},
-    {"name": "FamiliPet", "domain": "familipet.zid.store", "platform": "zid", "priority": 2,
-     "discovery": "definitive: *.zid.store subdomain; dogs/cats/birds"},
-    {"name": "Petigo", "domain": "j3b3hi.zid.store", "platform": "zid", "priority": 2,
-     "discovery": "definitive: *.zid.store subdomain; Josera/Wellness dog & cat food"},
-    {"name": "Priceless Pets", "domain": "priceless-pets.store", "platform": "zid", "priority": 2,
-     "discovery": "definitive: priceless-pets.zid.store mirror with same products"},
-    {"name": "Tena Cattery", "domain": "tenacattery.com", "platform": "zid", "priority": 2,
-     "discovery": "medium confidence: /products/<slug> + /en/products, Zid-standard titles; cat houses, Schesir/Kit Cat"},
-
-    # ── salla.sa-hosted stores (no custom domain; base_url is a path on salla.sa).
-    #    Tier 1 API paths differ on hosted stores; the waterfall will fall through
-    #    to browser tiers if the JSON endpoint 404s. ──
-    {"name": "Amazon Pet Shop", "domain": "salla.sa/amazon-pet-shop", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted store path"},
-    {"name": "Tagareed Alrass", "domain": "salla.sa/tagareedalrass", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; birds-first, full pet range, est. 2004 Al-Rass"},
-    {"name": "Natural Dry Food", "domain": "salla.sa/natural.dried.food", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; licensed Saudi cat-food factory"},
-    {"name": "Cat Outlet", "domain": "salla.sa/catoutlet", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; cat dry/wet food, litter"},
-    {"name": "Water Life Center", "domain": "salla.sa/waterlifecenter", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; aquatics + cat food"},
-    {"name": "Grey Bird", "domain": "salla.sa/grey_bird", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; bird feed and supplies"},
-    {"name": "Seven Bird", "domain": "salla.sa/seven_bird", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; birds/rodents + cat supplies"},
-    {"name": "Shop Zoo", "domain": "salla.sa/shopzoo", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; full cat range"},
-    {"name": "Pretty Cats", "domain": "salla.sa/pretty_catts22", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; cat supplies, cages"},
-    {"name": "Catstore", "domain": "salla.sa/catstore_0", "platform": "salla", "priority": 2,
-     "discovery": "definitive: salla.sa hosted; small cat store"},
-
-    # ── Market-share context players NOT on Salla/Zid (tracked for completeness,
-    #    inactive: the Salla/Zid crawl tiers don't apply; enable only after a
-    #    platform-specific crawler exists) ──
-    {"name": "Petzone KSA", "domain": "petzone.com", "platform": "other", "priority": 2, "is_active": False,
-     "discovery": "Magento-style .html URLs; major GCC chain with Riyadh/Jeddah physical stores"},
-    {"name": "Pet Arabia", "domain": "petarabia.sa", "platform": "other", "priority": 2, "is_active": False,
-     "discovery": "custom platform; Bahrain-origin chain, 2-4h delivery in KSA"},
-    {"name": "Beauty Pets", "domain": "beautypets.com.sa", "platform": "other", "priority": 2, "is_active": False,
-     "discovery": "likely WooCommerce; cats/dogs/birds/fish + vet clinic"},
-    {"name": "Sharqiya Pets", "domain": "sharqiya-pets.com", "platform": "other", "priority": 2, "is_active": False,
-     "discovery": "platform undetermined; Eastern Province — probe when network allows"},
-    {"name": "Pets House SA", "domain": "petshouse-sa.com", "platform": "other", "priority": 2, "is_active": False,
-     "discovery": "platform undetermined; similar name to pets-houses.com — brand-confusion competitor"},
 ]
 
 

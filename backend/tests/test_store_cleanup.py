@@ -378,20 +378,94 @@ def test_real_run_backs_up_before_delete_and_leaves_no_orphans():
     asyncio.run(main())
 
 
-def test_real_run_warns_about_registry_recreation():
-    """store_registry.REQUIRED_STORES is re-applied on every boot, so a deleted
-    domain still listed there comes back empty. We must not edit that module, so
-    the report has to say so out loud."""
+# ── the registry itself ──────────────────────────────────────────────────────
+def test_required_stores_is_exactly_the_eleven_keep_domains():
+    """iter48 follow-up — ensure_stores() re-creates every REQUIRED_STORES entry
+    on each boot, so a store deleted by the cleanup comes straight back unless
+    the registry is pruned too. The registry and the keep-list must agree
+    exactly, or the cleanup is not durable."""
+    import store_registry
+
+    keep_domains = {server.normalize_store_domain(d) for _, d in server.STORE_CLEANUP_KEEP_LIST}
+    assert len(keep_domains) == server.STORE_CLEANUP_EXPECTED_KEEP == 11
+
+    registry_domains = [server.normalize_store_domain(s["domain"])
+                        for s in store_registry.REQUIRED_STORES]
+    assert len(registry_domains) == 11, registry_domains
+    assert len(set(registry_domains)) == 11, "duplicate domain in REQUIRED_STORES"
+    assert set(registry_domains) == keep_domains, {
+        "only_in_registry": sorted(set(registry_domains) - keep_domains),
+        "only_in_keep_list": sorted(keep_domains - set(registry_domains)),
+    }
+
+    # none of the stores the cleanup deletes may linger in the registry
+    for gone in ("cutecat.com.sa", "waggy.sa", "catfansksa.com", "catcity11.com",
+                 "baboonstore.com", "anyabstore.com", "mycat.com.sa", "mycat.sa",
+                 "petzone.com", "petarabia.sa", "petshouse-sa.com",
+                 "snwr.zid.store", "salla.sa/catoutlet"):
+        assert server.normalize_store_domain(gone) not in set(registry_domains), gone
+
+    # the prune must not have disturbed the own-store flag or the rollout gate
+    own = [s for s in store_registry.REQUIRED_STORES if s.get("is_own_store")]
+    assert [s["domain"] for s in own] == ["pets-houses.com"], own
+    assert store_registry.ACTIVATE_NEW_STORES is False
+    # every surviving store still carries the fields ensure_stores() reads
+    for s in store_registry.REQUIRED_STORES:
+        assert s["name"] and s["domain"] and s["platform"] and s["priority"] in (1, 2), s
+
+
+def test_registry_recreation_warning_is_now_clean_but_still_works():
+    """With the registry pruned, a cleanup of today's junk stores must produce
+    NO re-creation warning — and the mechanism must still fire if a deleted
+    domain is ever re-added to REQUIRED_STORES."""
     async def main():
+        import store_registry
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed(db)
+
         rep = await server.store_cleanup(dry_run=True, user=SUPER)
-        # every DROP domain above is in REQUIRED_STORES today
+        assert rep["delete_count"] == 4
+        # none of the four dropped domains is in REQUIRED_STORES any more
+        assert rep["warnings"] == [], rep["warnings"]
+
+        # ...but the guard rail is live: put one back and the warning returns
+        orig = store_registry.REQUIRED_STORES
+        store_registry.REQUIRED_STORES = orig + [
+            {"name": "Waggy", "domain": "waggy.sa", "platform": "salla", "priority": 1}]
+        try:
+            rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        finally:
+            store_registry.REQUIRED_STORES = orig
         assert rep["warnings"], "expected a re-creation warning"
         joined = " ".join(rep["warnings"])
-        assert "ensure_stores" in joined
-        for _, dom in DROP:
-            assert dom in joined, dom
+        assert "ensure_stores" in joined and "waggy.sa" in joined
+    asyncio.run(main())
+
+
+def test_ensure_stores_seeds_only_the_eleven():
+    """End-to-end: booting against an EMPTY database must produce exactly the 11
+    keep-list stores — nothing the cleanup would immediately delete again."""
+    async def main():
+        from store_registry import ensure_stores
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await db.stores.delete_many({})
+        added = await ensure_stores(db)
+        assert added == 11, added
+        live = await db.stores.find({}, {"_id": 0}).to_list(None)
+        assert len(live) == 11
+        assert {server.normalize_store_domain(s["domain"]) for s in live} == \
+            {server.normalize_store_domain(d) for _, d in server.STORE_CLEANUP_KEEP_LIST}
+        assert [s["domain"] for s in live if s.get("is_own_store")] == ["pets-houses.com"]
+        # a second boot is still idempotent
+        assert await ensure_stores(db) == 0
+        assert await db.stores.count_documents({}) == 11
+
+        # and the cleanup now has nothing to do against a freshly booted DB
+        server.db = db
+        rep = await server.store_cleanup(dry_run=True, user=SUPER)
+        assert rep["guard"]["ok"] is True, rep["guard"]["reasons"]
+        assert rep["delete_count"] == 0 and rep["delete_set"] == []
+        assert rep["guard"]["keep_list_resolved_stores"] == 11
     asyncio.run(main())
 
 
@@ -405,5 +479,7 @@ if __name__ == "__main__":
     test_catastrophe_cap_aborts_above_fifty()
     test_confirm_count_must_match_exactly()
     test_real_run_backs_up_before_delete_and_leaves_no_orphans()
-    test_real_run_warns_about_registry_recreation()
+    test_required_stores_is_exactly_the_eleven_keep_domains()
+    test_registry_recreation_warning_is_now_clean_but_still_works()
+    test_ensure_stores_seeds_only_the_eleven()
     print("PASS: iter48 store cleanup")
