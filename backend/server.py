@@ -33,6 +33,14 @@ from crawlers import (
     sync_own_store_prices,
 )
 from store_registry import ensure_stores as registry_ensure_stores
+from salla_revenue_estimate import (
+    build_velocity_pools as salla_build_velocity_pools,
+    estimate_store_revenue as salla_estimate_store_revenue,
+    estimate_with_band as salla_estimate_with_band,
+    back_test as salla_back_test,
+    MIN_CATEGORY_SAMPLE as SALLA_MIN_CATEGORY_SAMPLE,
+    FIXED_BAND_PCT as SALLA_FIXED_BAND_PCT,
+)
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -5219,6 +5227,57 @@ async def _store_ranking_compute(db):
     async for m in db.product_matches.find({}, {"_id": 0, "my_sku": 1, "competitor_store_id": 1}):
         overlap.setdefault(m["competitor_store_id"], set()).add(m["my_sku"])
 
+    # ── iter56: estimated revenue for stores whose platform hides sold-counts ──
+    # INFORMATIONAL ONLY. This is computed after `score` is already fixed and is
+    # never fed into it — the leaderboard order stays on measured strength, so a
+    # +/-52% estimate cannot reorder anyone. Recomputed on every crawl with the
+    # rest of the ranking, so the band tightens automatically as coverage grows.
+    est_by_store = {}
+    try:
+        _cat_by_sku = {}
+        async for p in db.products.find({}, {"_id": 0, "sku": 1, "category": 1}):
+            _cat_by_sku[p.get("sku")] = p.get("category") or ""
+        _prods_by_store = {}
+        async for c in db.sku_store_coverage.find(
+                {"last_priced_at": {"$gte": since}},
+                {"_id": 0, "sku": 1, "store_id": 1, "last_priced_price": 1}):
+            _prods_by_store.setdefault(c["store_id"], []).append({
+                "sku": c["sku"], "price": c.get("last_priced_price"),
+                "category": _cat_by_sku.get(c["sku"], "")})
+        _units_by = {(p["store_id"], p["sku"]): p["units"] for p in sales_pairs}
+        _measurable = {sid for sid, s in stores_meta.items()
+                       if (s.get("platform") or "").lower() == "zid"}
+        _obs = [{"store_id": sid, "sku": pr["sku"], "category": pr["category"],
+                 "units": _units_by.get((sid, pr["sku"]), 0)}      # 0 = real non-mover
+                for sid in _measurable for pr in _prods_by_store.get(sid, [])]
+        _pools = salla_build_velocity_pools(_obs, _RANKING_WINDOW_DAYS)
+        for sid, s in stores_meta.items():
+            if sid in _measurable or s.get("is_own_store"):
+                continue
+            est, band, cov, detail = salla_estimate_with_band(
+                _prods_by_store.get(sid) or [], _pools, _RANKING_WINDOW_DAYS)
+            if est > 0:
+                # ONE FIXED band for every store. Coverage (`cov`) is computed
+                # but deliberately NOT published here: a coverage-derived band
+                # tightens per store and implies a precision the ~+/-48%
+                # back-test does not support — that error is driven by traffic
+                # differences between stores, which matching more products does
+                # nothing to reduce. These figures inform pricing decisions, so
+                # nothing downstream should be able to reconstruct a narrower
+                # band from this payload.
+                est_by_store[sid] = {
+                    "revenue_est": est,
+                    "band_pct": band,                      # always FIXED_BAND_PCT
+                    "range_low": round(est * (1 - band / 100), 2),
+                    "range_high": round(est * (1 + band / 100), 2),
+                    "products_priced": detail["priced_products"],
+                    "basis": "category_velocity_estimate",
+                    "label": "rough_estimate",
+                }
+    except Exception:
+        logger.exception("[Ranking] Salla revenue estimate failed — ranking unaffected")
+        est_by_store = {}
+
     # ── assemble rows ──
     if own_store_id:
         per_store.setdefault(own_store_id, {"products": 0, "in_stock": 0, "fresh": 0,
@@ -5282,6 +5341,10 @@ async def _store_ranking_compute(db):
             },
             "revenue_30d": revenue,
             "revenue_status": rev_status,
+            # iter56 — estimate for sold-count-less platforms. SEPARATE field:
+            # revenue_30d stays None/not_measurable so nothing can confuse the
+            # two, and the UI styles this distinctly.
+            "revenue_est_salla": est_by_store.get(sid),
             "overlap": len(overlap.get(sid, ())) if not is_own else None,
             "stale": fresh_score < _RANKING_STALE_BELOW,
         })
@@ -7658,6 +7721,105 @@ async def price_intel_store_ranking(response: Response = None, user=Depends(get_
                                          lambda: _store_ranking_compute(db), True)
     _apply_cache_headers(response, meta)
     return body
+
+
+@router.get("/admin/salla-revenue-estimate-preview")
+async def salla_revenue_estimate_preview(days: int = Query(30, ge=7, le=90),
+                                         user=Depends(get_user)):
+    """iter55 — READ-ONLY preview of the Salla revenue estimate, with the
+    leave-one-out back-test that decides whether it is fit to display.
+
+    Writes nothing and is wired into nothing: the ranking still reports Salla as
+    not_measurable until this is explicitly approved. super_admin only."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+
+    stores = {s["id"]: s async for s in db.stores.find(
+        {}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "is_own_store": 1})}
+    category_by_sku = {}
+    async for p in db.products.find({}, {"_id": 0, "sku": 1, "category": 1}):
+        category_by_sku[p.get("sku")] = p.get("category") or ""
+
+    # every PRICED product per store in the window, from the small coverage set
+    products_by_store = {}
+    async for c in db.sku_store_coverage.find(
+            {"last_priced_at": {"$gte": since}},
+            {"_id": 0, "sku": 1, "store_id": 1, "last_priced_price": 1}):
+        products_by_store.setdefault(c["store_id"], []).append({
+            "sku": c["sku"], "price": c.get("last_priced_price"),
+            "category": category_by_sku.get(c["sku"], ""),
+        })
+
+    # measured units + revenue per (store, sku)
+    pairs = await _sales_pairs_from_rollups(db, since)
+    units_by = {(p["store_id"], p["sku"]): p["units"] for p in pairs}
+    actual_by_store = {}
+    for p in pairs:
+        actual_by_store[p["store_id"]] = actual_by_store.get(p["store_id"], 0.0) + p["revenue"]
+
+    # A store is MEASURABLE when its platform exposes a sold signal at all —
+    # in practice Zid. Salla stores are the estimate targets.
+    measurable = {sid for sid, s in stores.items()
+                  if (s.get("platform") or "").lower() == "zid"}
+    observations = []
+    for sid in measurable:
+        for prod in products_by_store.get(sid, []):
+            observations.append({
+                "store_id": sid, "sku": prod["sku"], "category": prod["category"],
+                "units": units_by.get((sid, prod["sku"]), 0),   # 0 = a real non-mover
+            })
+
+    bt = salla_back_test(
+        observations, products_by_store,
+        {sid: rev for sid, rev in actual_by_store.items() if sid in measurable},
+        days)
+
+    # projected estimates for the NON-measurable (Salla) stores
+    pools = salla_build_velocity_pools(observations, days)
+    projected = []
+    for sid, s in stores.items():
+        if sid in measurable:
+            continue
+        prods = products_by_store.get(sid) or []
+        est, detail = salla_estimate_store_revenue(prods, pools, days)
+        projected.append({
+            "store_id": sid, "name": s.get("name") or sid,
+            "platform": (s.get("platform") or "").lower(),
+            "products_priced": detail["priced_products"],
+            "revenue_est": est,
+            "basis": "category_velocity_estimate",
+            "confidence": detail["confidence"],
+            "velocity_source": detail,
+        })
+    projected.sort(key=lambda r: -r["revenue_est"])
+    for i, r in enumerate(projected, 1):
+        r["est_rank_among_salla"] = i
+
+    measured = sorted(
+        ({"store_id": sid, "name": stores.get(sid, {}).get("name") or sid,
+          "revenue_30d": round(rev, 2)}
+         for sid, rev in actual_by_store.items() if sid in measurable),
+        key=lambda r: -r["revenue_30d"])
+
+    return {
+        "read_only": True,
+        "wired_into_ranking": False,
+        "window_days": days,
+        "method": "category_velocity_estimate (Option B)",
+        "pools": {"observations": pools["observations"],
+                  "global_velocity_units_per_product_day": (
+                      round(pools["global"], 6) if pools["global"] is not None else None),
+                  "categories_with_enough_sample": sorted(pools["per_category"].keys()),
+                  "min_category_sample": SALLA_MIN_CATEGORY_SAMPLE,
+                  "category_sample_sizes": pools["category_sample_sizes"]},
+        "back_test": bt,
+        "measured_stores": measured,
+        "projected_salla_stores": projected,
+        "note": ("revenue_est is NEVER merged into revenue_30d. The ranking is "
+                 "unchanged by this endpoint."),
+    }
 
 
 @router.get("/admin/store-ranking-preview")
