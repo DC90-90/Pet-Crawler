@@ -190,19 +190,30 @@ def test_dry_run_projects_and_writes_nothing():
         rep = await server.own_snapshot_vat_backfill_get(dry_run=True, sample=10, user=SUPER)
 
         assert rep["dry_run"] is True
+        assert rep["scope"] == "latest_own_snapshot_per_sku"
         assert rep["own_snapshots_total"] == 6
+        assert rep["own_snapshots_considered"] == 4       # 4 distinct own SKUs
+        assert rep["history_rows_left_untouched"] == 2    # the 2 older Hills rows
         assert rep["competitor_snapshots_untouched"] == 2
-        assert rep["would_update"] == 4, rep          # 3 Hills rows + 1 SKU-B
+        # NARROWED: 1 latest Hills row + 1 SKU-B row, not 3 Hills rows + 1
+        assert rep["would_update"] == 2, rep
         assert rep["already_correct"] == 1
         assert rep["no_my_products_target"] == 1
         assert rep["distinct_skus_affected"] == 2
-        assert rep["confirm_count_required"] == 4
-        assert rep["price_basis_counts"] == {"storefront_inc_vat": 3,
+        assert rep["confirm_count_required"] == 2
+        assert rep["price_basis_counts"] == {"storefront_inc_vat": 1,
                                              "merchant_computed_inc_vat": 1}, rep
-        # the SKU the investigation turned on
+        # one row per affected SKU
+        assert rep["would_update"] == rep["distinct_skus_affected"]
+        # the SKU the investigation turned on: exactly ONE row changes
         pr = rep["probe_052742059518"]
         assert pr["my_products_price"] == 170.0
-        assert all(s["before"] == 147.83 and s["after"] == 170.0 for s in pr["snapshots"])
+        assert pr["own_snapshot_rows"] == 3
+        assert [r["will_update"] for r in pr["rows"]] == [True, False, False], pr
+        latest_row = pr["rows"][0]
+        assert latest_row["is_latest"] and latest_row["before"] == 147.83 and latest_row["after"] == 170.0
+        for r in pr["rows"][1:]:
+            assert r["before"] == 147.83 and r["after"] == 147.83, r
         s0 = next(s for s in rep["sample"] if s["sku"] == HILLS)
         assert s0["before"] == 147.83 and s0["after"] == 170.0
         assert abs(s0["ratio"] - 1.15) < 0.001
@@ -236,7 +247,7 @@ def test_confirm_count_must_match():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed_backfill(db)
-        for bad in (None, 0, 3, 5):
+        for bad in (None, 0, 3, 5, 4):
             try:
                 await server.own_snapshot_vat_backfill(dry_run=False, confirm_count=bad,
                                                        sample=10, user=SUPER)
@@ -253,25 +264,30 @@ def test_real_run_backs_up_first_and_leaves_competitors_alone():
         await _seed_backfill(db)
         orig, calls = _patch_recompute()
         try:
-            rep = await server.own_snapshot_vat_backfill(dry_run=False, confirm_count=4,
+            rep = await server.own_snapshot_vat_backfill(dry_run=False, confirm_count=2,
                                                          sample=10, user=SUPER)
         finally:
             _unpatch(orig)
 
-        # ── backup written BEFORE the write, holding the ORIGINAL values ──
+        # ── backup written BEFORE the write, holding the ORIGINAL values, and
+        #    covering ONLY the rows that change ──
         b = rep["backup_collection"]
         assert b.startswith("snapshot_vat_backfill_backup_")
-        assert rep["backed_up"] == 4
-        assert await db[b].count_documents({}) == 4
-        assert await db[b].count_documents({"price": 147.83}) == 3
+        assert rep["backed_up"] == 2
+        assert await db[b].count_documents({}) == 2
+        assert await db[b].count_documents({"price": 147.83}) == 1
         assert await db[b].count_documents({"store_id": {"$ne": OWN}}) == 0
 
-        # ── own-store rows corrected ──
-        assert rep["snapshots_written"] == 4
-        for s in await db.product_snapshots.find({"store_id": OWN, "sku": HILLS}).to_list(None):
-            assert s["price"] == 170.0 and s["original_price"] == 170.0, s
-            assert s["price_basis"] == "storefront_inc_vat"
-            assert s["vat_backfilled_at"]
+        # ── ONLY the latest own row per SKU is corrected ──
+        assert rep["snapshots_written"] == 2
+        hills = sorted(await db.product_snapshots.find({"store_id": OWN, "sku": HILLS}).to_list(None),
+                       key=lambda r: r["crawled_at"], reverse=True)
+        assert hills[0]["price"] == 170.0 and hills[0]["original_price"] == 170.0, hills[0]
+        assert hills[0]["price_basis"] == "storefront_inc_vat"
+        assert hills[0]["vat_backfilled_at"]
+        for h in hills[1:]:
+            assert h["price"] == 147.83, h
+            assert "vat_backfilled_at" not in h, h
         assert (await db.product_snapshots.find_one({"id": "own-b"}))["price"] == 115.0
         # untouched: already-correct row and the one with no my_products target
         assert (await db.product_snapshots.find_one({"id": "own-ok"}))["price"] == 50.0
@@ -304,22 +320,19 @@ def test_detail_panel_and_market_position_read_inc_vat_after_backfill():
 
         orig, _ = _patch_recompute()
         try:
-            await server.own_snapshot_vat_backfill(dry_run=False, confirm_count=4,
+            await server.own_snapshot_vat_backfill(dry_run=False, confirm_count=2,
                                                    sample=10, user=SUPER)
         finally:
             _unpatch(orig)
 
         after = await server.get_product_full(sku=HILLS, days=30, user=SUPER)
         ours = next(sp for sp in after["store_prices"] if sp["is_own_store"])
+        # the panel shows the LATEST snapshot, which is now inc-VAT
         assert ours["price"] == 170.0, ours
-        # price history for our store is on the same basis
+        # history is deliberately NOT rewritten — the series keeps its real shape
         hist = after["history"]["Pets Houses"]
-        assert all(h["price"] == 170.0 for h in hist), hist
-        # market position now ranks us on the inc-VAT price
-        mp = after["market_position"]
-        assert mp is not None
-        assert all(abs(p - 147.83) > 0.01 for p in
-                   [after["price_range"]["min"], after["price_range"]["max"]]), after["price_range"]
+        assert hist[-1]["price"] == 170.0, hist
+        assert any(h["price"] == 147.83 for h in hist[:-1]), hist
     asyncio.run(main())
 
 
@@ -338,20 +351,113 @@ def test_backup_is_batched():
         real = db.product_snapshots.find
 
         rep_dry = await server.own_snapshot_vat_backfill(dry_run=True, sample=10, user=SUPER)
-        assert rep_dry["would_update"] == 2504, rep_dry["would_update"]
+        # 2500 extra Hills history rows do NOT inflate the count — still one
+        # latest row per affected SKU (Hills + SKU-B)
+        assert rep_dry["would_update"] == 2, rep_dry["would_update"]
+        assert rep_dry["own_snapshots_total"] == 2506
+        assert rep_dry["history_rows_left_untouched"] == 2502
         assert server._SNAP_VAT_BATCH == 1000
         assert real is not None and seen == []
+    asyncio.run(main())
+
+
+def test_backup_batching_still_chunks_a_large_affected_set():
+    """Many AFFECTED SKUs (not history) must still move in bounded batches."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed_backfill(db)
+        now = server.datetime.now(server.timezone.utc)
+        mine = [{"sku": f"BULK-{i}", "price": 115.0, "price_basis": "merchant_computed_inc_vat"}
+                for i in range(2500)]
+        snaps = [{"id": f"bulk-{i}", "store_id": OWN, "store_name": "Pets Houses",
+                  "sku": f"BULK-{i}", "price": 100.0, "original_price": 100.0,
+                  "confidence_score": 99, "crawled_at": now} for i in range(2500)]
+        await db.my_products.insert_many(mine)
+        await db.product_snapshots.insert_many(snaps)
+
+        rep_dry = await server.own_snapshot_vat_backfill(dry_run=True, sample=5, user=SUPER)
+        assert rep_dry["would_update"] == 2502, rep_dry["would_update"]   # 2500 + Hills + SKU-B
 
         orig, _ = _patch_recompute()
         try:
-            rep = await server.own_snapshot_vat_backfill(dry_run=False, confirm_count=2504,
-                                                         sample=10, user=SUPER)
+            rep = await server.own_snapshot_vat_backfill(dry_run=False, confirm_count=2502,
+                                                         sample=5, user=SUPER)
         finally:
             _unpatch(orig)
-        assert rep["backed_up"] == 2504
-        assert await db[rep["backup_collection"]].count_documents({}) == 2504
+        assert rep["backed_up"] == 2502
+        assert await db[rep["backup_collection"]].count_documents({}) == 2502
         assert await db.product_snapshots.count_documents(
-            {"store_id": OWN, "sku": HILLS, "price": 170.0}) == 2503
+            {"store_id": OWN, "sku": {"$regex": "^BULK-"}, "price": 115.0}) == 2500
+    asyncio.run(main())
+
+
+# ── (c) duplicate own-store seller ───────────────────────────────────────────
+def test_own_store_appears_exactly_once_in_the_seller_list():
+    """server.py appended a synthesized my_products seller ON TOP of the
+    own-store snapshot already in store_prices, so we appeared twice at two
+    prices — inflating total_sellers and letting the cheaper (ex-VAT) duplicate
+    win the "cheapest" label."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        for c in ("stores", "my_products", "products", "product_snapshots"):
+            await db[c].delete_many({})
+        await db.stores.insert_many([
+            {"id": OWN, "name": "Pets Houses", "domain": "pets-houses.com", "is_own_store": True},
+            {"id": "petsy", "name": "Petsy", "domain": "petsysa.com"},
+        ])
+        now = server.datetime.now(server.timezone.utc)
+        await db.products.insert_one({"id": "p", "sku": HILLS, "name_ar": "",
+                                      "name_en": "Hills GI Biome 1.5kg"})
+        await db.my_products.insert_one({"sku": HILLS, "price": 170.0,
+                                         "price_basis": "storefront_inc_vat"})
+        await db.product_snapshots.insert_many([
+            {"id": "own", "store_id": OWN, "store_name": "Pets Houses", "sku": HILLS,
+             "price": 170.0, "original_price": 170.0, "confidence_score": 99, "crawled_at": now},
+            {"id": "comp", "store_id": "petsy", "store_name": "Petsy", "sku": HILLS,
+             "price": 182.0, "original_price": 182.0, "confidence_score": 99, "crawled_at": now},
+        ])
+        server.db = db
+
+        out = await server.get_product_full(sku=HILLS, days=30, user=SUPER)
+        mp = out["market_position"]
+        # only Petsy and us -> "Cheapest of 2", not of 3
+        assert mp["total_sellers"] == 2, mp
+        assert mp["rank"] == 1 and mp["tag"] == "cheapest"
+        assert mp["my_price"] == 170.0, mp          # the corrected inc-VAT value
+        assert mp["percentile"] == 0.0
+        # store_prices itself still lists each store once
+        assert sum(1 for sp in out["store_prices"] if sp["is_own_store"]) == 1
+    asyncio.run(main())
+
+
+def test_dedupe_prefers_the_inc_vat_my_products_price():
+    """If the snapshot is still stale, the my_products value must win — and the
+    stale one must not survive as a second seller."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        for c in ("stores", "my_products", "products", "product_snapshots"):
+            await db[c].delete_many({})
+        await db.stores.insert_many([
+            {"id": OWN, "name": "Pets Houses", "domain": "pets-houses.com", "is_own_store": True},
+            {"id": "petsy", "name": "Petsy", "domain": "petsysa.com"},
+        ])
+        now = server.datetime.now(server.timezone.utc)
+        await db.products.insert_one({"id": "p", "sku": HILLS, "name_ar": "", "name_en": "Hills"})
+        await db.my_products.insert_one({"sku": HILLS, "price": 170.0})
+        await db.product_snapshots.insert_many([
+            {"id": "own", "store_id": OWN, "store_name": "Pets Houses", "sku": HILLS,
+             "price": 147.83, "original_price": 147.83, "confidence_score": 99, "crawled_at": now},
+            {"id": "comp", "store_id": "petsy", "store_name": "Petsy", "sku": HILLS,
+             "price": 160.0, "original_price": 160.0, "confidence_score": 99, "crawled_at": now},
+        ])
+        server.db = db
+
+        mp = (await server.get_product_full(sku=HILLS, days=30, user=SUPER))["market_position"]
+        assert mp["total_sellers"] == 2, mp
+        # 170 vs Petsy 160 -> we are NOT cheapest; the ex-VAT 147.83 is gone
+        assert mp["my_price"] == 170.0 and mp["rank"] == 2, mp
+        assert mp["tag"] != "cheapest"
+        assert mp["min_price"] == 160.0, mp
     asyncio.run(main())
 
 
@@ -364,4 +470,7 @@ if __name__ == "__main__":
     test_real_run_backs_up_first_and_leaves_competitors_alone()
     test_detail_panel_and_market_position_read_inc_vat_after_backfill()
     test_backup_is_batched()
+    test_backup_batching_still_chunks_a_large_affected_set()
+    test_own_store_appears_exactly_once_in_the_seller_list()
+    test_dedupe_prefers_the_inc_vat_my_products_price()
     print("PASS: iter54 own-snapshot VAT basis")
