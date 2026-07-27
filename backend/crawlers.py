@@ -346,6 +346,51 @@ def _price_amount(f):
         return 0.0
 
 
+# iter59 — cumulative units-sold counter, all platforms.
+#
+# Salla publishes it as `sold_quantity` at the product root — the number behind
+# the storefront's "تم بيعه أكثر من N مرة" badge. Zid uses `sold_count`. The
+# old extractor checked five names, none of them Salla's, so Salla always read
+# 0 and those stores were reported "not measurable".
+#
+# ORDER MATTERS: sold_quantity first, so a payload carrying both (or carrying
+# sold_count as a decoy zero) resolves to the Salla value.
+SOLD_FIELD_CANDIDATES = ("sold_quantity", "sold_count", "sales_count",
+                         "sold_products_count", "total_sold", "orders_count")
+
+# The badge is BUCKETED above a ceiling — "أكثر من 1000" / "sold more than
+# 1000 times" / "1000+". A capped value cannot be diffed: it stops moving while
+# real sales continue, so a naive diff reports 0 velocity for the store's best
+# sellers. Those readings are flagged and excluded from velocity rather than
+# silently under-counting.
+_SOLD_CAP_RE = re.compile(
+    r"(?:\+\s*$)|(?:^\s*\+)|أكثر\s*من|اكثر\s*من|more\s+than|over\s+\d", re.IGNORECASE)
+
+
+def _extract_sold_count(raw):
+    """(units, capped) from any platform's cumulative sold counter.
+
+    `capped` is driven by the RAW TEXT ("1000+", "أكثر من 1000"), not by the
+    numeric value: flagging every exact 1000 would discard real data. A value
+    genuinely pinned at a ceiling is self-limiting anyway — consecutive reads
+    are equal, so the diff contributes 0 rather than a wrong number.
+    """
+    for key in SOLD_FIELD_CANDIDATES:
+        val = raw.get(key)
+        if val is None or val == "":
+            continue
+        s = str(val).strip()
+        capped = bool(_SOLD_CAP_RE.search(s))
+        digits = re.sub(r"[^\d.]", "", s)
+        if not digits:
+            continue
+        try:
+            return max(0, int(float(digits))), capped
+        except (ValueError, TypeError):
+            continue
+    return 0, False
+
+
 def _normalize_raw_product(raw, store_name):
     """Normalize a single raw product dict from any source into a standard form."""
     name_ar = raw.get("name", raw.get("title", ""))
@@ -369,14 +414,12 @@ def _normalize_raw_product(raw, store_name):
             qty = 0
 
     # Capture cumulative sales counter (Salla: sales_count, Zid: sold_count, legacy Salla: sold_products_count)
-    sold_count = int(
-        raw.get("sales_count")
-        or raw.get("sold_count")
-        or raw.get("sold_products_count")
-        or raw.get("total_sold")
-        or raw.get("orders_count")
-        or 0
-    )
+    # iter59 — the tuple below never contained Salla's actual field name, so
+    # every Salla product resolved to 0 and those stores were reported
+    # "not measurable". The codebase already knew the right name: it sits first
+    # in ZID_SOLD_FIELD_CANDIDATES, but that list was only ever used on the
+    # own-store Zid Merchant path, never in this shared competitor extractor.
+    sold_count, sold_capped = _extract_sold_count(raw)
 
     # in_stock detection — handle multiple platform conventions defensively
     explicit_avail = raw.get("is_available")
@@ -517,6 +560,10 @@ def _normalize_raw_product(raw, store_name):
         "original_price": original_price,
         "qty": max(0, qty),
         "sold_count": max(0, sold_count),
+        # iter59 — kept SEPARATE from sold_count so a bucketed badge reading is
+        # never mistaken for an exact counter downstream.
+        "sold_count_cumulative": max(0, sold_count),
+        "sold_count_capped": bool(sold_capped),
         "in_stock": bool(in_stock),
         "img_url": img_url,
         "product_url": product_url,
@@ -587,6 +634,10 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "in_stock": norm["in_stock"],
             "qty_available": norm["qty"],
             "sold_count": norm["sold_count"],
+            # iter59 — Salla's cumulative badge counter, persisted so velocity
+            # can be diffed between crawls. Was parsed and discarded before.
+            "sold_count_cumulative": norm.get("sold_count_cumulative", 0),
+            "sold_count_capped": norm.get("sold_count_capped", False),
             "product_url": product_url,
             "source_tier": tier,
             "confidence_score": confidence,

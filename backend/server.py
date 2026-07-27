@@ -33,6 +33,10 @@ from crawlers import (
     merchant_index, resolve_own_price, KSA_VAT_RATE,
 )
 from store_registry import ensure_stores as registry_ensure_stores
+from salla_sold_velocity import (
+    diff_series as salla_diff_series,
+    store_revenue_from_velocity as salla_store_revenue_from_velocity,
+)
 from salla_revenue_estimate import (
     build_velocity_pools as salla_build_velocity_pools,
     estimate_store_revenue as salla_estimate_store_revenue,
@@ -5436,6 +5440,43 @@ async def _store_ranking_compute(db):
     async for m in db.product_matches.find({}, {"_id": 0, "my_sku": 1, "competitor_store_id": 1}):
         overlap.setdefault(m["competitor_store_id"], set()).add(m["my_sku"])
 
+    # ── iter59: MEASURED-APPROX revenue from the Salla sold badge ─────────────
+    # Salla publishes a cumulative units-sold counter. Diffing it between crawls
+    # is a real observation, so these stores no longer need the estimate — but
+    # the badge is BUCKETED, so it gets its own tier rather than being passed
+    # off as exact. Best-effort: a failure here must never break the ranking.
+    approx_by_store = {}
+    try:
+        _sold_series = {}
+        async for sn in db.product_snapshots.find(
+                {"crawled_at": {"$gte": since},
+                 "sold_count_cumulative": {"$exists": True}},
+                {"_id": 0, "store_id": 1, "sku": 1, "crawled_at": 1,
+                 "sold_count_cumulative": 1, "sold_count_capped": 1,
+                 "price": 1}).batch_size(2000):
+            _sold_series.setdefault((sn["store_id"], sn["sku"]), []).append({
+                "at": _aware(sn.get("crawled_at")),
+                "value": sn.get("sold_count_cumulative"),
+                "capped": bool(sn.get("sold_count_capped")),
+                "price": sn.get("price"),
+            })
+        _per_store = {}
+        for (sid_, sku_), readings in _sold_series.items():
+            d = salla_diff_series(readings)
+            last_price = next((r["price"] for r in sorted(
+                (x for x in readings if x["at"]), key=lambda x: x["at"], reverse=True)
+                if isinstance(r["price"], (int, float)) and r["price"] > 0), None)
+            _per_store.setdefault(sid_, []).append(
+                {"sku": sku_, "units": d["units"], "price": last_price,
+                 "status": d["status"]})
+        for sid_, prods in _per_store.items():
+            agg = salla_store_revenue_from_velocity(prods)
+            if agg["usable"]:
+                approx_by_store[sid_] = agg
+    except Exception:
+        logger.exception("[Ranking] Salla sold-badge velocity failed — ranking unaffected")
+        approx_by_store = {}
+
     # ── iter56: estimated revenue for stores whose platform hides sold-counts ──
     # INFORMATIONAL ONLY. This is computed after `score` is already fixed and is
     # never fed into it — the leaderboard order stays on measured strength, so a
@@ -5462,6 +5503,10 @@ async def _store_ranking_compute(db):
         _pools = salla_build_velocity_pools(_obs, _RANKING_WINDOW_DAYS)
         for sid, s in stores_meta.items():
             if sid in _measurable or s.get("is_own_store"):
+                continue
+            # iter59 — the estimate is now the FALLBACK. A store whose badge we
+            # can diff gets a real number instead.
+            if sid in approx_by_store:
                 continue
             est, band, cov, detail = salla_estimate_with_band(
                 _prods_by_store.get(sid) or [], _pools, _RANKING_WINDOW_DAYS)
@@ -5553,7 +5598,16 @@ async def _store_ranking_compute(db):
             # iter56 — estimate for sold-count-less platforms. SEPARATE field:
             # revenue_30d stays None/not_measurable so nothing can confuse the
             # two, and the UI styles this distinctly.
+            # iter59 — THREE tiers, deliberately three separate fields so no
+            # consumer can conflate them:
+            #   revenue_30d        exact      Zid orders ledger / stock signals
+            #   revenue_approx     measured   Salla sold-badge diff (bucketed)
+            #   revenue_est_salla  estimated  category velocity, +/-50%
             "revenue_est_salla": est_by_store.get(sid),
+            "revenue_approx": approx_by_store.get(sid),
+            "revenue_tier": ("exact" if revenue is not None
+                             else "measured_approx" if sid in approx_by_store
+                             else "estimated" if est_by_store.get(sid) else "none"),
             "overlap": len(overlap.get(sid, ())) if not is_own else None,
             "stale": fresh_score < _RANKING_STALE_BELOW,
         })
@@ -7929,6 +7983,96 @@ async def price_intel_store_ranking(response: Response = None, user=Depends(get_
                                          lambda: _store_ranking_compute(db), True)
     _apply_cache_headers(response, meta)
     return body
+
+
+@router.get("/admin/salla-sold-badge-coverage")
+async def salla_sold_badge_coverage(days: int = Query(30, ge=7, le=90),
+                                    user=Depends(get_user)):
+    """iter59 — READ-ONLY: which Salla stores actually expose the sold badge.
+
+    Answers the only question that decides how much of the market becomes
+    measurable: per store, do its snapshots carry a non-zero
+    sold_count_cumulative, how many products have TWO usable readings (the
+    minimum for a diff), and how many readings are capped. super_admin only."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    stores = {s["id"]: s async for s in db.stores.find(
+        {}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "is_own_store": 1})}
+
+    series = {}
+    async for sn in db.product_snapshots.find(
+            {"crawled_at": {"$gte": since}},
+            {"_id": 0, "store_id": 1, "sku": 1, "crawled_at": 1, "price": 1,
+             "sold_count_cumulative": 1, "sold_count_capped": 1}).batch_size(2000):
+        series.setdefault((sn["store_id"], sn["sku"]), []).append({
+            "at": _aware(sn.get("crawled_at")),
+            "value": sn.get("sold_count_cumulative"),
+            "capped": bool(sn.get("sold_count_capped")),
+            "price": sn.get("price"),
+        })
+
+    per_store, samples = {}, {}
+    for (sid, sku), readings in series.items():
+        st = per_store.setdefault(sid, {"products": 0, "with_badge": 0, "diffable": 0,
+                                        "capped": 0, "baseline_only": 0, "units": 0})
+        st["products"] += 1
+        vals = [r for r in readings if r.get("value") is not None]
+        if any((r["value"] or 0) > 0 for r in vals):
+            st["with_badge"] += 1
+        if any(r.get("capped") for r in readings):
+            st["capped"] += 1
+        d = salla_diff_series(readings)
+        if d["status"] == "measured_approx":
+            st["diffable"] += 1
+            st["units"] += d["units"] or 0
+            if sid not in samples:
+                samples[sid] = {
+                    "sku": sku, "readings": d["readings"],
+                    "usable_readings": d["usable_readings"],
+                    "units_in_window": d["units"], "steps": d["steps"],
+                    "resets": d["resets"], "capped_readings": d["capped_readings"],
+                    "values": [r["value"] for r in sorted(
+                        (x for x in readings if x["at"]), key=lambda x: x["at"])][:10],
+                }
+        elif d["status"] == "baseline_only":
+            st["baseline_only"] += 1
+
+    out = []
+    for sid, meta in stores.items():
+        plat = (meta.get("platform") or "").lower()
+        st = per_store.get(sid) or {"products": 0, "with_badge": 0, "diffable": 0,
+                                    "capped": 0, "baseline_only": 0, "units": 0}
+        exposes = st["with_badge"] > 0
+        out.append({
+            "store_id": sid, "store": meta.get("name") or sid, "platform": plat,
+            "is_own_store": bool(meta.get("is_own_store")),
+            "exposes_sold_badge": exposes,
+            "products_seen": st["products"],
+            "products_with_badge": st["with_badge"],
+            "products_diffable": st["diffable"],
+            "products_baseline_only": st["baseline_only"],
+            "products_with_capped_reading": st["capped"],
+            "units_in_window": st["units"],
+            "verdict": ("measured_approx" if st["diffable"] > 0
+                        else "awaiting_second_crawl" if exposes
+                        else "no_badge_stays_estimated"),
+            "sample": samples.get(sid),
+        })
+    out.sort(key=lambda r: (r["platform"] != "salla", -r["products_diffable"], r["store"]))
+    salla = [r for r in out if r["platform"] == "salla"]
+    return {
+        "read_only": True,
+        "window_days": days,
+        "salla_stores": len(salla),
+        "salla_exposing_badge": sum(1 for r in salla if r["exposes_sold_badge"]),
+        "salla_measured_approx": sum(1 for r in salla if r["verdict"] == "measured_approx"),
+        "note": ("A cumulative counter needs TWO crawls to yield velocity. Stores "
+                 "showing awaiting_second_crawl expose the badge but have only a "
+                 "baseline so far — they stay on the +/-50% estimate until the "
+                 "next crawl lands."),
+        "stores": out,
+    }
 
 
 @router.get("/admin/salla-revenue-estimate-preview")
