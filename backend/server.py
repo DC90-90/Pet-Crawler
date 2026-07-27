@@ -3943,6 +3943,65 @@ async def discount_aggression(user=Depends(get_user)):
     return leaderboard
 
 # ── Price Opportunity Scanner ────────────────────────────────
+# iter52 — pack/unit VARIANT detection for the market low.
+#
+# Some stores (Zarafa confirmed) list a single tin AND a multi-pack carton under
+# ONE SKU/barcode. iter51's guard can't see it: neither name states a pack
+# count. The Scanner then compares our carton against their tin —
+# SKU 5011792007325 showed market_lowest 8.10 against a 108.05 average.
+#
+# This is deliberately NOT "drop the lowest price". A single consistent low
+# price is a genuine sale and must survive: a false low is visible and
+# correctable, a hidden competitor discount is not. Exclusion requires positive
+# EVIDENCE of a variant collision — the same store, in the same crawl run,
+# publishing two prices for one SKU that differ by ≥4x. A price that merely
+# looks low is kept and flagged.
+#
+# Why "same crawl run" and not "over the window": a store that genuinely drops
+# 466 -> 118 also spans 4x across the window. Snapshots from one crawl share a
+# single `crawled_at` (process_crawled_products stamps one `now` per run), so
+# comparing within a run separates two concurrent LISTINGS from one price
+# CHANGING over time.
+_VARIANT_RATIO = 0.25          # a price below 25% of the same store's high
+_OUTLIER_RATIO = 0.25          # a price below 25% of the leave-one-out median
+
+
+async def _detect_pack_variants(db, skus, since):
+    """Find (sku, store) pairs where one store publishes pack variants.
+
+    Returns {(sku, store_id): {"excluded": [prices], "effective": price}} for
+    stores whose latest crawl carries a >=4x internal spread on one SKU. The
+    store is NOT dropped — its non-variant (higher) price is still a real
+    competitor price and stays in the comparison.
+    """
+    if not skus:
+        return {}
+    rows = {}
+    async for s in db.product_snapshots.find(
+        {"sku": {"$in": list(skus)}, "crawled_at": {"$gte": since},
+         "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
+        {"_id": 0, "sku": 1, "store_id": 1, "price": 1, "crawled_at": 1},
+    ):
+        if not (s.get("price") or 0) > 0 or not s.get("crawled_at"):
+            continue
+        rows.setdefault((s["sku"], s["store_id"]), []).append(s)
+
+    out = {}
+    for key, snaps in rows.items():
+        newest = max(x["crawled_at"] for x in snaps)
+        prices = sorted(x["price"] for x in snaps if x["crawled_at"] == newest)
+        if len(prices) < 2:
+            continue                        # one listing -> nothing to compare
+        hi = prices[-1]
+        excluded = [p for p in prices if p < hi * _VARIANT_RATIO]
+        if not excluded:
+            continue                        # spread too small to be a pack split
+        kept = [p for p in prices if p not in excluded]
+        out[key] = {"excluded": excluded, "effective": min(kept)}
+    return out
+
+
+
 @router.get("/scanner/opportunities")
 @ttl_cache(60)
 async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
@@ -3997,7 +4056,19 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     total_uplift = 0
     zero_sales_overpriced = 0
 
+    # iter52 — only SKUs whose spread is already implausible are worth the
+    # second read; that keeps this to a bounded lookup instead of a full
+    # second pass over product_snapshots.
+    _suspicious = set()
+    for sku, snaps in by_sku.items():
+        pr = [s["price"] for s in snaps if (s.get("price") or 0) > 0]
+        if len(pr) >= 2 and min(pr) < max(pr) * _VARIANT_RATIO:
+            _suspicious.add(sku)
+    variants = await _detect_pack_variants(db, _suspicious, since)
+
     pack_mismatch_skipped = []
+    variant_flags = []
+    outlier_kept = []
     for sku, store_snaps in by_sku.items():
         if len(store_snaps) < 2:
             continue
@@ -4032,6 +4103,35 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                        if s.get("price", 0) > 0 and s["store_id"] != own_id]
         if not comp_prices:
             continue          # no competitor carries it — there is no market low
+
+        # iter52 — swap a store's pack-variant price for its real comparable.
+        # The store still competes; only the unit-variant listing is dropped.
+        _corrected = []
+        for s in store_snaps:
+            if not (s.get("price") or 0) > 0 or s["store_id"] == own_id:
+                continue
+            v = variants.get((sku, s["store_id"]))
+            if v and s["price"] in v["excluded"]:
+                variant_flags.append({
+                    "sku": sku, "store_name": s.get("store_name"),
+                    "excluded_price": s["price"], "store_price_used": v["effective"],
+                    "reason": "suspected_pack_mismatch",
+                })
+                _corrected.append(v["effective"])
+            else:
+                _corrected.append(s["price"])
+        comp_prices = _corrected or comp_prices
+
+        # A price that is still a wild outlier, with NO variant evidence behind
+        # it, is KEPT — that is the genuine-deep-discount case. It is surfaced
+        # so a real mismatch we cannot prove stays visible and correctable.
+        if len(comp_prices) >= 2:
+            _lo = min(comp_prices)
+            _others = [p for p in comp_prices if p != _lo] or comp_prices
+            if _lo < statistics.median(_others) * _OUTLIER_RATIO:
+                outlier_kept.append({"sku": sku, "price": _lo,
+                                     "median_of_others": round(statistics.median(_others), 2),
+                                     "kept": True, "reason": "low_price_no_variant_evidence"})
         min_price = min(comp_prices)
         avg_price = statistics.mean(comp_prices)
         for s in store_snaps:
@@ -4082,6 +4182,12 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
             # catalogue's. Reported rather than silently dropped.
             "pack_mismatch_skipped": len(pack_mismatch_skipped),
             "pack_mismatch_sample": pack_mismatch_skipped[:20],
+            # iter52 — prices excluded from the market low on VARIANT evidence,
+            # and wild lows KEPT because no such evidence exists.
+            "suspected_pack_mismatch": len(variant_flags),
+            "suspected_pack_mismatch_sample": variant_flags[:20],
+            "low_outliers_kept": len(outlier_kept),
+            "low_outliers_kept_sample": outlier_kept[:20],
         },
     }
 
