@@ -37,11 +37,9 @@ from salla_revenue_estimate import (
     build_velocity_pools as salla_build_velocity_pools,
     estimate_store_revenue as salla_estimate_store_revenue,
     estimate_with_band as salla_estimate_with_band,
-    confidence_band_pct as salla_confidence_band_pct,
     back_test as salla_back_test,
     MIN_CATEGORY_SAMPLE as SALLA_MIN_CATEGORY_SAMPLE,
-    BAND_FLOOR_PCT as SALLA_BAND_FLOOR_PCT,
-    BAND_WIDEST_PCT as SALLA_BAND_WIDEST_PCT,
+    FIXED_BAND_PCT as SALLA_FIXED_BAND_PCT,
 )
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 from cryptography.fernet import Fernet, InvalidToken
@@ -5230,18 +5228,22 @@ async def _store_ranking_compute(db):
             est, band, cov, detail = salla_estimate_with_band(
                 _prods_by_store.get(sid) or [], _pools, _RANKING_WINDOW_DAYS)
             if est > 0:
+                # ONE FIXED band for every store. Coverage (`cov`) is computed
+                # but deliberately NOT published here: a coverage-derived band
+                # tightens per store and implies a precision the ~+/-48%
+                # back-test does not support — that error is driven by traffic
+                # differences between stores, which matching more products does
+                # nothing to reduce. These figures inform pricing decisions, so
+                # nothing downstream should be able to reconstruct a narrower
+                # band from this payload.
                 est_by_store[sid] = {
                     "revenue_est": est,
-                    "band_pct": band,
+                    "band_pct": band,                      # always FIXED_BAND_PCT
                     "range_low": round(est * (1 - band / 100), 2),
                     "range_high": round(est * (1 + band / 100), 2),
-                    "matched_coverage_pct": round(cov * 100, 1),
-                    "products_with_real_velocity": detail["per_sku"],
                     "products_priced": detail["priced_products"],
                     "basis": "category_velocity_estimate",
-                    "confidence": detail["confidence"],
-                    "band_floor_pct": SALLA_BAND_FLOOR_PCT,
-                    "band_widest_pct": SALLA_BAND_WIDEST_PCT,
+                    "label": "rough_estimate",
                 }
     except Exception:
         logger.exception("[Ranking] Salla revenue estimate failed — ranking unaffected")

@@ -120,43 +120,42 @@ function ScoreBar({ value, color = "#1E988E" }) {
   );
 }
 
-function fmtSar(n) {
-  // 250,431 -> "~250k" so a wide band never reads as a precise figure
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${Math.round(n / 1000)}k`;
-  return Math.round(n).toLocaleString();
-}
-
 function RevenueCell({ row, isRTL }) {
   // MEASURED revenue — unchanged, solid teal, no tag.
   if (row.revenue_30d != null) {
     return <span className="metric-number text-[#6AC1B5]">{row.revenue_30d.toLocaleString()} SAR</span>;
   }
 
-  // iter56 — ESTIMATED revenue for platforms that hide sold-counts. Rendered
+  // iter57 — ROUGH ESTIMATE for platforms that hide sold-counts. Rendered
   // deliberately unlike the measured value: amber not teal, reduced opacity, an
-  // explicit ESTIMATE tag, a +/- band, and a "~". The band is a function of how
-  // much of this store's catalogue is backed by real per-product velocity, so
-  // it tightens on its own as matching improves.
+  // explicit ESTIMATE tag, and a "~". ONE fixed +/-50% band for every store —
+  // a coverage-derived band would tighten per store and imply a precision the
+  // back-test does not support, and these figures inform pricing decisions.
   const est = row.revenue_est_salla;
   if (est && est.revenue_est > 0) {
-    const cov = est.matched_coverage_pct;
     const tip = isRTL
-      ? `تقدير — ليس قياساً. محسوب بتطبيق سرعة البيع المرصودة في متاجر زد على كتالوج هذا المتجر، لأن سلة لا تكشف عدادات المبيعات.\n\n`
-        + `النطاق ±${est.band_pct}% يعكس التغطية الحالية: ${cov}% من منتجاته (${est.products_with_real_velocity} من ${est.products_priced}) مطابقة لمنتج في متجر زد بسرعة بيع حقيقية؛ الباقي يستخدم متوسط الفئة.\n\n`
-        + `يضيق النطاق تلقائياً كلما زادت المطابقة، لكنه لا ينزل تحت ±${est.band_floor_pct}% لأن بيانات مبيعات سلة غير متاحة أصلاً.\n\n`
-        + `للمقارنة التقريبية فقط — لا يُستخدم في ترتيب المتاجر.`
-      : `ESTIMATE — not a measurement. Derived by applying sales velocity observed on Zid stores to this store's catalogue, because Salla exposes no sold-counts.\n\n`
-        + `The ±${est.band_pct}% band reflects current matched coverage: ${cov}% of its products (${est.products_with_real_velocity} of ${est.products_priced}) match a product in a Zid store with real per-product velocity; the rest fall back to a category average.\n\n`
-        + `The band tightens automatically as coverage grows, but floors at ±${est.band_floor_pct}% because Salla sold-data is structurally unavailable.\n\n`
-        + `Range: ${fmtSar(est.range_low)}–${fmtSar(est.range_high)} SAR. Use for rough comparison only — it does not affect ranking.`;
+      ? `تقدير تقريبي. متاجر سلة لا تكشف عدادات المبيعات، لذا يُشتق هذا الرقم من سرعة البيع المرصودة في متاجر زد مطبَّقة على كتالوج هذا المتجر — بدقة تقارب ±50% فقط. `
+        + `استخدمه للمقارنة الاتجاهية، لا كأرقام دقيقة أو أساس للقرارات.\n\n`
+        + `النطاق: ${Math.round(est.range_low).toLocaleString()}–${Math.round(est.range_high).toLocaleString()} ريال.\n\n`
+        + `تكامل "محلي" (Mahally) — إن استُعيد — هو السبيل الوحيد لجعل إيرادات سلة قابلة للقياس فعلياً، لأنه يوفر أعداد المبيعات الحقيقية.\n\n`
+        + `لا يؤثر هذا التقدير على ترتيب المتاجر.`
+      : `Rough estimate. Salla stores don't expose sold-counts, so this is projected from Zid-store sales velocity applied to this store's catalog — accurate only to roughly ±50%. `
+        + `Use for directional comparison, not exact figures or decisions.\n\n`
+        + `Range: ${Math.round(est.range_low).toLocaleString()}–${Math.round(est.range_high).toLocaleString()} SAR.\n\n`
+        + `Only a Mahally integration (if restored) could make Salla revenue truly measurable — it exposes real sold quantities.\n\n`
+        + `This estimate does not affect store ranking.`;
     return (
-      <span className="inline-flex items-center gap-1.5" title={tip} data-testid="revenue-est-salla">
-        <span className="metric-number text-[#F59E0B]/80 italic">
-          ~{fmtSar(est.revenue_est)} SAR
+      <span className="inline-flex flex-col gap-0.5" title={tip} data-testid="revenue-est-salla">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="metric-number text-[#F59E0B]/75 italic">
+            ~{Math.round(est.revenue_est).toLocaleString()} SAR
+          </span>
+          <span className="text-[9px] px-1 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B]/90 not-italic tracking-wide">
+            {isRTL ? "تقدير" : "ESTIMATE"}
+          </span>
         </span>
-        <span className="text-[9px] px-1 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B]/90 not-italic">
-          {isRTL ? "تقدير" : "EST"} ±{est.band_pct}%
+        <span className="text-[9px] text-[#F59E0B]/60 leading-none">
+          {isRTL ? `تقدير تقريبي · ±${est.band_pct}%` : `rough estimate · ±${est.band_pct}%`}
         </span>
       </span>
     );

@@ -43,53 +43,38 @@ MIN_CATEGORY_SAMPLE = 30
 TRUSTWORTHY_PCT = 30.0
 WEAK_PCT = 100.0
 
-# ── self-tightening confidence band ─────────────────────────────────────────
-# The +/- shown next to an estimate is a function of MATCHED COVERAGE, not a
-# constant:
+# ── fixed confidence band ───────────────────────────────────────────────────
+# ONE honest wide band for every Salla store. Deliberately NOT derived from
+# matched coverage.
 #
-#   coverage = products priced from per-SKU velocity (this exact product is
-#              also sold by a measurable Zid store, so we have its real rate)
-#              / all priced products of the store
+# A coverage-derived band tightens as more of a store's catalogue matches a Zid
+# product, which sounds like a virtue — but it implies a precision the evidence
+# does not support. The leave-one-out back-test measured ~+/-48% median absolute
+# error, and that error is dominated by TRAFFIC differences between stores, not
+# by how many products we matched. Matching more products does not make one
+# store's shoppers behave like another's. Showing a store at "+/-33%" because its
+# coverage is high would therefore be a precision claim the method cannot back.
 #
-# BAND_WIDEST is the production leave-one-out back-test result: at zero
-# coverage every product is priced off a category average, which is precisely
-# what that back-test measured.
+# These figures inform pricing decisions, so a number that looks more accurate
+# than it is carries real downside. The band is fixed at the back-tested error,
+# rounded to a blunt +/-50% so nobody reads a false decimal-point of rigour into
+# it.
 #
-# BAND_FLOOR is a structural limit, not a tuning parameter. Salla exposes no
-# sold-counter, so even at 100% coverage we are applying ANOTHER store's
-# velocity to this catalogue — a store with different traffic, promotions and
-# assortment. That transfer error never goes away, so the band can never
-# approach the ~+/-10% that measured Zid revenue carries.
-#
-# Interpolation is LINEAR in coverage:
-#
-#   band = FLOOR + (WIDEST - FLOOR) * (1 - coverage)
-#
-# deliberately, for two reasons. It is the first-order model of a mixture whose
-# error is a blend of the per-SKU and category-average regimes, and it is
-# predictable: an operator watching coverage climb from 20% to 40% sees the
-# band move by a proportional, explainable amount. A convex curve (sqrt) would
-# tighten faster early and flatter it than the evidence supports.
-BAND_WIDEST_PCT = 52.0
-BAND_FLOOR_PCT = 30.0
-
-
-def confidence_band_pct(coverage):
-    """Half-width of the +/- band, in percent, for a given matched coverage."""
-    c = 0.0 if coverage is None else max(0.0, min(1.0, float(coverage)))
-    return round(BAND_FLOOR_PCT + (BAND_WIDEST_PCT - BAND_FLOOR_PCT) * (1.0 - c), 1)
+# Coverage is still computed and returned as a DIAGNOSTIC (the admin preview
+# reports it) — it just does not move the band.
+FIXED_BAND_PCT = 50.0
 
 
 def estimate_with_band(products, pools, days):
-    """estimate_store_revenue plus the coverage-driven band.
+    """estimate_store_revenue plus the fixed band.
 
-    Returns (revenue_est, band_pct, coverage, detail).
+    Returns (revenue_est, band_pct, coverage, detail). `coverage` is diagnostic
+    only; band_pct is FIXED_BAND_PCT for every store, always.
     """
     est, detail = estimate_store_revenue(products, pools, days)
     priced = detail["priced_products"]
     coverage = (detail["per_sku"] / priced) if priced else 0.0
-    band = confidence_band_pct(coverage)
-    return est, band, round(coverage, 4), detail
+    return est, FIXED_BAND_PCT, round(coverage, 4), detail
 
 
 def build_velocity_pools(observations, days, exclude_store=None):

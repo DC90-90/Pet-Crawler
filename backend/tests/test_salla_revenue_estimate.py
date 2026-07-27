@@ -252,22 +252,31 @@ if __name__ == "__main__":
 
 
 # ── iter56: self-tightening band + ranking wiring ────────────────────────────
-def test_band_interpolates_from_coverage_and_never_breaks_the_floor():
-    assert E.confidence_band_pct(0.0) == E.BAND_WIDEST_PCT == 52.0
-    assert E.confidence_band_pct(1.0) == E.BAND_FLOOR_PCT == 30.0
-    assert E.confidence_band_pct(0.5) == 41.0            # linear midpoint
-    assert E.confidence_band_pct(0.25) == 46.5
-    assert E.confidence_band_pct(0.75) == 35.5
-    # monotonically tightening
-    bands = [E.confidence_band_pct(c / 20) for c in range(21)]
-    assert bands == sorted(bands, reverse=True)
-    # never below the floor, whatever is thrown at it
-    for bad in (1.5, 2.0, 99, None, -1.0, -0.3):
-        b = E.confidence_band_pct(bad)
-        assert E.BAND_FLOOR_PCT <= b <= E.BAND_WIDEST_PCT, (bad, b)
+def test_band_is_fixed_and_never_derived_from_coverage():
+    """iter57 — ONE honest wide band. A coverage-derived band would tighten per
+    store and imply a precision the ~+/-48% back-test cannot support, and these
+    figures inform pricing decisions."""
+    assert E.FIXED_BAND_PCT == 50.0
+    # the coverage-interpolating helper is GONE, not merely unused — nothing can
+    # reintroduce a per-store band by calling it
+    assert not hasattr(E, "confidence_band_pct")
+    assert not hasattr(E, "BAND_FLOOR_PCT")
+    assert not hasattr(E, "BAND_WIDEST_PCT")
+
+    obs = [{"store_id": "z", "sku": "KNOWN", "category": "c", "units": 30}]
+    obs += [{"store_id": "z", "sku": f"C{i}", "category": "c", "units": 3}
+            for i in range(E.MIN_CATEGORY_SAMPLE)]
+    pools = E.build_velocity_pools(obs, DAYS)
+    # 0% coverage and 100% coverage must yield the SAME band
+    none_matched = [{"sku": f"NEW{i}", "price": 10, "category": "c"} for i in range(4)]
+    all_matched = [{"sku": "KNOWN", "price": 10, "category": "c"} for _ in range(4)]
+    _e1, b1, c1, _d1 = E.estimate_with_band(none_matched, pools, DAYS)
+    _e2, b2, c2, _d2 = E.estimate_with_band(all_matched, pools, DAYS)
+    assert c1 == 0.0 and c2 == 1.0, (c1, c2)
+    assert b1 == b2 == 50.0, (b1, b2)
 
 
-def test_coverage_is_share_of_products_with_real_per_product_velocity():
+def test_coverage_is_still_computed_as_a_diagnostic():
     obs = [{"store_id": "z", "sku": "KNOWN", "category": "c", "units": 30}]
     obs += [{"store_id": "z", "sku": f"C{i}", "category": "c", "units": 3}
             for i in range(E.MIN_CATEGORY_SAMPLE)]
@@ -277,16 +286,14 @@ def test_coverage_is_share_of_products_with_real_per_product_velocity():
         {"sku": f"NEW{i}", "price": 10, "category": "c"} for i in range(3)]
     est, band, cov, detail = E.estimate_with_band(prods, pools, DAYS)
     assert cov == 0.25 and detail["per_sku"] == 1 and detail["priced_products"] == 4
-    assert band == E.confidence_band_pct(0.25) == 46.5
-    # all four matched -> coverage 1.0, band at the floor
-    prods_all = [{"sku": "KNOWN", "price": 10, "category": "c"} for _ in range(4)]
-    _e, band2, cov2, _d = E.estimate_with_band(prods_all, pools, DAYS)
-    assert cov2 == 1.0 and band2 == 30.0
-    assert band2 < band, "more matched coverage must tighten the band"
+    # coverage is diagnostic only — it does NOT move the band
+    assert band == E.FIXED_BAND_PCT == 50.0
 
 
-def test_band_tightens_as_matching_improves():
-    """The self-tightening property: same store, more matched products later."""
+def test_band_does_not_move_as_matching_improves():
+    """The band must stay put however much coverage grows — the back-tested
+    error is dominated by traffic differences between stores, which matching
+    more products does nothing to reduce."""
     base = [{"store_id": "z", "sku": f"C{i}", "category": "c", "units": 3}
             for i in range(E.MIN_CATEGORY_SAMPLE)]
     prods = [{"sku": f"P{i}", "price": 10, "category": "c"} for i in range(10)]
@@ -299,8 +306,8 @@ def test_band_tightens_as_matching_improves():
         seen.append((cov, band))
     covs = [c for c, _b in seen]
     bands = [b for _c, b in seen]
-    assert covs == [0.0, 0.2, 0.5, 1.0]
-    assert bands == sorted(bands, reverse=True) and bands[0] == 52.0 and bands[-1] == 30.0
+    assert covs == [0.0, 0.2, 0.5, 1.0], covs
+    assert bands == [50.0, 50.0, 50.0, 50.0], bands
 
 
 async def _seed_ranking(db):
@@ -372,17 +379,19 @@ def test_ranking_exposes_the_estimate_without_reordering_anything():
             e = r["revenue_est_salla"]
             assert e and e["revenue_est"] > 0
             assert e["basis"] == "category_velocity_estimate"
-            assert e["band_floor_pct"] == 30.0 and e["band_widest_pct"] == 52.0
-            assert 30.0 <= e["band_pct"] <= 52.0
-            assert e["range_low"] < e["revenue_est"] < e["range_high"]
+            assert e["label"] == "rough_estimate"
+            assert e["band_pct"] == 50.0
+            assert e["range_low"] == round(e["revenue_est"] * 0.5, 2)
+            assert e["range_high"] == round(e["revenue_est"] * 1.5, 2)
+            # nothing downstream can rebuild a tighter, per-store band
+            assert "matched_coverage_pct" not in e, e
+            assert "products_with_real_velocity" not in e, e
+            assert "band_floor_pct" not in e and "band_widest_pct" not in e, e
 
-        # coverage drives the band, per store
-        assert rows["Zarafa"]["revenue_est_salla"]["matched_coverage_pct"] == 100.0
-        assert rows["Zarafa"]["revenue_est_salla"]["band_pct"] == 30.0
-        assert rows["Caty"]["revenue_est_salla"]["matched_coverage_pct"] == 0.0
-        assert rows["Caty"]["revenue_est_salla"]["band_pct"] == 52.0
-        assert rows["Hamtaro"]["revenue_est_salla"]["matched_coverage_pct"] == 50.0
-        assert rows["Hamtaro"]["revenue_est_salla"]["band_pct"] == 41.0
+        # these three stores have 100% / 0% / 50% matched coverage respectively,
+        # and all three carry the IDENTICAL band
+        assert {rows[n]["revenue_est_salla"]["band_pct"]
+                for n in ("Zarafa", "Caty", "Hamtaro")} == {50.0}
 
         # ── THE CONTRACT: order and score are untouched by the estimate ──
         # Caty's estimate is the smallest but its score position must not move,
