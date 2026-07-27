@@ -220,8 +220,14 @@ def test_genuine_single_store_discount_is_never_excluded():
 
 
 def test_wild_outlier_without_variant_evidence_is_kept_and_flagged():
-    """When in doubt, KEEP. A lone deep discount with no same-store spread stays
-    in the comparison and is surfaced rather than silently dropped."""
+    """iter52 policy: when in doubt, KEEP — a lone deep discount with no
+    same-store spread stays in the comparison and is surfaced.
+
+    iter53 NARROWS this: past a 6x gap on a shared EAN, an uncorroborated low is
+    now dropped as a barcode collision. So the "kept" band is 4x-6x, below
+    iter53's threshold and above ordinary noise. The 20.0-vs-431 case this test
+    originally used is 21x and is now excluded by iter53 instead.
+    """
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _base(db)
@@ -232,19 +238,32 @@ def test_wild_outlier_without_variant_evidence_is_kept_and_flagged():
             {"id": "p3", "sku": RC, "name_ar": "", "name_en": "Royal Canin Medium Adult 15kg"})
         await db.product_snapshots.insert_many([
             _snap(RC, OWN, 466.0, now),
-            _snap(RC, "aleef", 20.0, now),      # 4.6% of the others — wild
+            # 5.1x below us — a wild low, but UNDER iter53's 6x cut, so it is
+            # still governed by iter52's keep-and-flag policy
+            _snap(RC, "aleef", 91.0, now),
             _snap(RC, "petsy", 431.0, now),
             _snap(RC, "zarafa", 440.0, now),
         ])
         out = await _scan()
 
         assert out["summary"]["suspected_pack_mismatch"] == 0
+        assert out["summary"]["barcode_unreliable"] == 0, out["summary"]
         assert out["summary"]["low_outliers_kept"] == 1, out["summary"]
         k = out["summary"]["low_outliers_kept_sample"][0]
-        assert k["sku"] == RC and k["price"] == 20.0 and k["kept"] is True
+        assert k["sku"] == RC and k["price"] == 91.0 and k["kept"] is True
         assert k["reason"] == "low_price_no_variant_evidence"
         # kept means kept: it still sets the low
-        assert _row(out, RC)["market_lowest"] == 20.0
+        assert _row(out, RC)["market_lowest"] == 91.0
+
+        # ...and past 6x the newer rule takes over and excludes it
+        await db.product_snapshots.update_one({"sku": RC, "store_id": "aleef"},
+                                              {"$set": {"price": 20.0}})
+        out2 = await _scan()
+        assert out2["summary"]["barcode_unreliable"] == 1, out2["summary"]
+        assert out2["summary"]["barcode_unreliable_sample"][0]["excluded_price"] == 20.0
+        # with the collision gone the low is 431, putting us 8.1% above it —
+        # under the 10% reporting floor, so no opportunity row at all
+        assert _row(out2, RC) is None
     asyncio.run(main())
 
 
