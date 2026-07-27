@@ -281,12 +281,15 @@ def test_scanner_drops_the_three_live_skus_when_catalogue_holds_the_single_name(
             assert sku in out["summary"]["pack_mismatch_sample"], sku
         assert out["summary"]["pack_mismatch_skipped"] == 2, out["summary"]
 
-        # Butcher's: NEITHER name has a pack descriptor, so nothing distinguishes
-        # them and it survives — the honest limit of a name-based guard
-        assert any(o["sku"] == "5011792007325" for o in out["opportunities"])
-        # and no row above +300% remains from the two guarded SKUs
-        assert [o["sku"] for o in out["opportunities"] if o["gap_pct"] > 300] \
-            == ["5011792007325"]
+        # Butcher's: NEITHER name has a pack descriptor, so THIS guard cannot
+        # distinguish them — that was the documented limit of a name-based rule.
+        # iter53 closes it from the other side (a >=6x price gap on a shared EAN
+        # with nothing corroborating sameness), so the row is gone too.
+        assert not any(o["sku"] == "5011792007325" for o in out["opportunities"])
+        assert "5011792007325" in {f["sku"] for f in
+                                   out["summary"]["barcode_unreliable_sample"]}
+        # nothing above +300% survives at all now
+        assert [o["sku"] for o in out["opportunities"] if o["gap_pct"] > 300] == []
     asyncio.run(main())
 
 
@@ -297,8 +300,13 @@ def test_scanner_unaffected_when_pack_counts_agree():
         await _seed_scanner(db, lambda sku, carton: carton)   # catalogue == our name
         out = await _scan()
         assert out["summary"]["pack_mismatch_skipped"] == 0
-        # every SKU still reported, gaps unchanged
-        assert {o["sku"] for o in out["opportunities"]} == {s for s, _, _, _ in LIVE}
+        # Beso and Kit Cat state "24 Pieces*" on BOTH sides, so iter53's shared-
+        # barcode check finds pack_qty_agrees and keeps them despite the >6x gap
+        assert {o["sku"] for o in out["opportunities"]} == {"8015912514257", "8858772603095"}
+        # Butcher's states no pack count anywhere, so nothing corroborates its
+        # 25x gap and iter53 drops it
+        assert {f["sku"] for f in out["summary"]["barcode_unreliable_sample"]} \
+            == {"5011792007325"}
     asyncio.run(main())
 
 

@@ -204,6 +204,94 @@ def _has_pack_indicator(text: str) -> bool:
     return any(t in PACK_KEYWORDS for t in tokens)
 
 
+# iter53 — BARCODE RELIABILITY.
+#
+# An EAN identifies a TRADE ITEM, and manufacturers routinely print the unit
+# barcode on the multipack too. So the same EAN legitimately appears on a single
+# 400g tin (~8 SAR) and on a 24-tin carton (~208 SAR). Barcode equality is then
+# still "correct" — and still pairs two products that are not substitutes,
+# producing the +2400% gaps on the Zarafa cluster.
+#
+# Rule: a >=6x price gap on a barcode match makes the BARCODE unreliable for
+# that pair, not the price wrong. The match then needs positive corroboration
+# that the two are the same pack size; absent that, it is dropped.
+#
+# 6x is deliberately far outside retail discounting. A 74%-off sale is 3.85x;
+# even 80% off is only 5x. Crossing 6x means an 83%+ discount, which is rarer
+# than the pack-collision it is being confused with.
+BARCODE_PRICE_RATIO_MAX = 6.0
+_NAME_CORROBORATION_MIN = 0.75
+
+
+def _pack_qty_explicit(text: str) -> Optional[int]:
+    """Pack count ONLY when a real descriptor says so.
+
+    _extract_pack_qty returns 1 for a name that says nothing about packaging,
+    conflating "a single unit" with "unstated". That conflation is safe for
+    _pack_compatible (it errs toward blocking) but useless as CORROBORATION:
+    two silent names agreeing on "1" is absence of evidence, not evidence of
+    agreement — and it is exactly the Butcher's shape, where both sides read
+    "400g" and neither mentions the carton.
+    """
+    for pattern in PACK_QTY_PATTERNS:
+        m = pattern.search(str(text))
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _name_similarity(a: str, b: str) -> float:
+    """Jaccard overlap of significant tokens."""
+    ta, tb = set(_tokenize(a)), set(_tokenize(b))
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def _names_are_independent(a: str, b: str) -> bool:
+    """Whether two names carry independent information.
+
+    db.products holds ONE row per SKU shared by every store, so a competitor's
+    "name" for a colliding EAN is frequently our own catalogue string echoed
+    back. Byte-identical names therefore corroborate nothing — they are the same
+    document, not two sources agreeing.
+    """
+    na = " ".join(sorted(_tokenize(a)))
+    nb = " ".join(sorted(_tokenize(b)))
+    return bool(na) and bool(nb) and na != nb
+
+
+def barcode_price_sane(my_price, comp_price, my_name, comp_name):
+    """(ok, reason) for a barcode-matched pair.
+
+    Symmetric in the two sides: which one is cheaper is irrelevant, only the
+    magnitude of the gap matters.
+    """
+    try:
+        p1, p2 = float(my_price or 0), float(comp_price or 0)
+    except (TypeError, ValueError):
+        return True, None
+    if p1 <= 0 or p2 <= 0:
+        return True, None                       # no price to judge on
+    ratio = max(p1, p2) / min(p1, p2)
+    if ratio < BARCODE_PRICE_RATIO_MAX:
+        return True, None                       # normal discounting range
+
+    q1, q2 = _pack_qty_explicit(my_name), _pack_qty_explicit(comp_name)
+    if q1 is not None and q2 is not None:
+        # both sides STATE a pack size: that settles it either way. A
+        # disagreement is positive evidence of different products and must not
+        # be overridden by name similarity — the names of a 24-pack and a
+        # 6-pack of the same product are nearly identical by construction.
+        if q1 == q2:
+            return True, "pack_qty_agrees"
+        return False, f"pack_qty_differs_{q1}_vs_{q2}"
+    if (_names_are_independent(my_name, comp_name)
+            and _name_similarity(my_name, comp_name) >= _NAME_CORROBORATION_MIN):
+        return True, "name_corroborated"
+    return False, f"shared_barcode_price_ratio_{ratio:.1f}x"
+
+
 def _weights_reject(w1_g: Optional[float], w2_g: Optional[float]) -> bool:
     """Fix 2: Strict weight enforcement — reject if >10% difference."""
     if w1_g is None or w2_g is None:
@@ -318,6 +406,22 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
             # every product they discounted. No new flag is added for L1
             # either — a mis-tagged barcode is a crawler ingestion bug to
             # fix at source, not a per-match annotation to spam every day.
+            # iter53 — barcode reliability. The comment above is right that a
+            # price gap does not disprove sameness for a TRUE barcode match, and
+            # that hard-rejecting on ratio killed real discounts. This check is
+            # narrower: it fires only past 6x — beyond any retail discount — and
+            # even then only drops the pair when NOTHING corroborates that the
+            # two are the same pack size. Manually confirmed matches are exempt.
+            if c_sku not in confirmed:
+                _ok, _why = barcode_price_sane(
+                    my_product.get("sale_price") or my_product.get("price"),
+                    snap.get("price"), my_name_full, c_name)
+                if not _ok:
+                    logger.info(
+                        "[Matching] barcode match dropped my_sku=%s comp_sku=%s "
+                        "store=%s reason=%s", my_sku, c_sku,
+                        snap.get("store_name"), _why)
+                    continue
             conf = 100 if c_sku in confirmed else 99
             matches.append(_build_match(my_product, snap, c_prod, conf, "barcode"))
             matched_skus.add(c_sku)
@@ -362,6 +466,20 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
         # genuinely worth annotating. But we no longer HIDE the match:
         # user's real competitors land in product_matches, and the flag
         # gives the UI a subtle "review this" indicator.
+        # iter53 — the Level-1 drop alone is not enough. These stores put the
+        # EAN in the SKU field, so a pair rejected as a barcode collision falls
+        # straight through to this exact-SKU path and matches anyway. Apply the
+        # same check whenever the matched SKU IS a barcode; a proprietary SKU
+        # string carries no trade-item ambiguity and is left alone.
+        if c_sku not in confirmed and _is_valid_barcode(c_sku):
+            _ok, _why = barcode_price_sane(
+                my_product.get("sale_price") or my_product.get("price"),
+                snap.get("price"), my_name_full, c_name)
+            if not _ok:
+                logger.info(
+                    "[Matching] EAN-shaped SKU match dropped my_sku=%s comp_sku=%s "
+                    "store=%s reason=%s", my_sku, c_sku, snap.get("store_name"), _why)
+                continue
         conf = 100 if c_sku in confirmed else 95
         matches.append(_build_match(my_product, snap, c_prod, conf, "sku"))
         matched_skus.add(c_sku)

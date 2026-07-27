@@ -4045,10 +4045,14 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     # iter51 — names come along so the pack-count guard below can compare OUR
     # descriptor against the shared catalogue one.
     _own_rows = await db.my_products.find(
-        {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1}).to_list(20000)
+        {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1,
+             "price": 1, "sale_price": 1}).to_list(20000)
     own_skus = set(p["sku"] for p in _own_rows if p.get("sku"))
     own_name = {p["sku"]: f"{p.get('name_ar') or ''} {p.get('name_en') or ''}"
                 for p in _own_rows if p.get("sku")}
+    # iter53 — our own price per SKU, for the shared-barcode sanity check
+    own_price = {p["sku"]: (p.get("sale_price") or p.get("price"))
+                 for p in _own_rows if p.get("sku")}
     if not own_skus:
         return {"opportunities": [], "well_positioned": [], "undercut": [],
                 "summary": {"total_overpriced": 0, "total_uplift": 0, "zero_sales_overpriced": 0}}
@@ -4098,6 +4102,7 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     pack_mismatch_skipped = []
     variant_flags = []
     outlier_kept = []
+    barcode_unreliable = []
     for sku, store_snaps in by_sku.items():
         if len(store_snaps) < 2:
             continue
@@ -4147,9 +4152,29 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                     "reason": "suspected_pack_mismatch",
                 })
                 _corrected.append(v["effective"])
-            else:
-                _corrected.append(s["price"])
-        comp_prices = _corrected or comp_prices
+                continue
+            # iter53 — shared-barcode price sanity. The Scanner buckets by the
+            # SKU string, which for these products IS the manufacturer EAN, so
+            # the same collision that fools the matcher fools this grouping.
+            # Same rule, same threshold, same corroboration requirement.
+            _ok, _why = barcode_price_sane(
+                own_price.get(sku), s["price"],
+                own_name.get(sku, ""), _cat_name)
+            if not _ok:
+                barcode_unreliable.append({
+                    "sku": sku, "store_name": s.get("store_name"),
+                    "excluded_price": s["price"], "our_price": own_price.get(sku),
+                    "reason": _why,
+                })
+                continue
+            _corrected.append(s["price"])
+        # iter53 — every competitor price can now be excluded, unlike iter52
+        # where variants were substituted rather than removed. With nothing
+        # trustworthy left there is no market low, so the SKU is skipped rather
+        # than falling back to the prices we just rejected.
+        if not _corrected:
+            continue
+        comp_prices = _corrected
 
         # A price that is still a wild outlier, with NO variant evidence behind
         # it, is KEPT — that is the genuine-deep-discount case. It is surfaced
@@ -4217,6 +4242,10 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
             "suspected_pack_mismatch_sample": variant_flags[:20],
             "low_outliers_kept": len(outlier_kept),
             "low_outliers_kept_sample": outlier_kept[:20],
+            # iter53 — competitor prices dropped because a shared EAN paired two
+            # different pack sizes (>=6x apart, nothing corroborating sameness)
+            "barcode_unreliable": len(barcode_unreliable),
+            "barcode_unreliable_sample": barcode_unreliable[:20],
         },
     }
 
@@ -4715,7 +4744,7 @@ async def trigger_digest(user=Depends(get_user)):
 
 # ── My Products Import & Price Intelligence ─────────────────
 from matcher import (match_my_product, run_matching_for_all, _is_valid_barcode,
-                     _pack_compatible)
+                     _pack_compatible, barcode_price_sane)
 
 # MatchActionIn moved to /app/backend/models/schemas.py (Feb 2026 refactor)
 
