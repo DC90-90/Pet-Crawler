@@ -36,8 +36,12 @@ from store_registry import ensure_stores as registry_ensure_stores
 from salla_revenue_estimate import (
     build_velocity_pools as salla_build_velocity_pools,
     estimate_store_revenue as salla_estimate_store_revenue,
+    estimate_with_band as salla_estimate_with_band,
+    confidence_band_pct as salla_confidence_band_pct,
     back_test as salla_back_test,
     MIN_CATEGORY_SAMPLE as SALLA_MIN_CATEGORY_SAMPLE,
+    BAND_FLOOR_PCT as SALLA_BAND_FLOOR_PCT,
+    BAND_WIDEST_PCT as SALLA_BAND_WIDEST_PCT,
 )
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 from cryptography.fernet import Fernet, InvalidToken
@@ -5196,6 +5200,53 @@ async def _store_ranking_compute(db):
     async for m in db.product_matches.find({}, {"_id": 0, "my_sku": 1, "competitor_store_id": 1}):
         overlap.setdefault(m["competitor_store_id"], set()).add(m["my_sku"])
 
+    # ── iter56: estimated revenue for stores whose platform hides sold-counts ──
+    # INFORMATIONAL ONLY. This is computed after `score` is already fixed and is
+    # never fed into it — the leaderboard order stays on measured strength, so a
+    # +/-52% estimate cannot reorder anyone. Recomputed on every crawl with the
+    # rest of the ranking, so the band tightens automatically as coverage grows.
+    est_by_store = {}
+    try:
+        _cat_by_sku = {}
+        async for p in db.products.find({}, {"_id": 0, "sku": 1, "category": 1}):
+            _cat_by_sku[p.get("sku")] = p.get("category") or ""
+        _prods_by_store = {}
+        async for c in db.sku_store_coverage.find(
+                {"last_priced_at": {"$gte": since}},
+                {"_id": 0, "sku": 1, "store_id": 1, "last_priced_price": 1}):
+            _prods_by_store.setdefault(c["store_id"], []).append({
+                "sku": c["sku"], "price": c.get("last_priced_price"),
+                "category": _cat_by_sku.get(c["sku"], "")})
+        _units_by = {(p["store_id"], p["sku"]): p["units"] for p in sales_pairs}
+        _measurable = {sid for sid, s in stores_meta.items()
+                       if (s.get("platform") or "").lower() == "zid"}
+        _obs = [{"store_id": sid, "sku": pr["sku"], "category": pr["category"],
+                 "units": _units_by.get((sid, pr["sku"]), 0)}      # 0 = real non-mover
+                for sid in _measurable for pr in _prods_by_store.get(sid, [])]
+        _pools = salla_build_velocity_pools(_obs, _RANKING_WINDOW_DAYS)
+        for sid, s in stores_meta.items():
+            if sid in _measurable or s.get("is_own_store"):
+                continue
+            est, band, cov, detail = salla_estimate_with_band(
+                _prods_by_store.get(sid) or [], _pools, _RANKING_WINDOW_DAYS)
+            if est > 0:
+                est_by_store[sid] = {
+                    "revenue_est": est,
+                    "band_pct": band,
+                    "range_low": round(est * (1 - band / 100), 2),
+                    "range_high": round(est * (1 + band / 100), 2),
+                    "matched_coverage_pct": round(cov * 100, 1),
+                    "products_with_real_velocity": detail["per_sku"],
+                    "products_priced": detail["priced_products"],
+                    "basis": "category_velocity_estimate",
+                    "confidence": detail["confidence"],
+                    "band_floor_pct": SALLA_BAND_FLOOR_PCT,
+                    "band_widest_pct": SALLA_BAND_WIDEST_PCT,
+                }
+    except Exception:
+        logger.exception("[Ranking] Salla revenue estimate failed — ranking unaffected")
+        est_by_store = {}
+
     # ── assemble rows ──
     if own_store_id:
         per_store.setdefault(own_store_id, {"products": 0, "in_stock": 0, "fresh": 0,
@@ -5259,6 +5310,10 @@ async def _store_ranking_compute(db):
             },
             "revenue_30d": revenue,
             "revenue_status": rev_status,
+            # iter56 — estimate for sold-count-less platforms. SEPARATE field:
+            # revenue_30d stays None/not_measurable so nothing can confuse the
+            # two, and the UI styles this distinctly.
+            "revenue_est_salla": est_by_store.get(sid),
             "overlap": len(overlap.get(sid, ())) if not is_own else None,
             "stale": fresh_score < _RANKING_STALE_BELOW,
         })

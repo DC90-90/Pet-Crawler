@@ -43,6 +43,54 @@ MIN_CATEGORY_SAMPLE = 30
 TRUSTWORTHY_PCT = 30.0
 WEAK_PCT = 100.0
 
+# ── self-tightening confidence band ─────────────────────────────────────────
+# The +/- shown next to an estimate is a function of MATCHED COVERAGE, not a
+# constant:
+#
+#   coverage = products priced from per-SKU velocity (this exact product is
+#              also sold by a measurable Zid store, so we have its real rate)
+#              / all priced products of the store
+#
+# BAND_WIDEST is the production leave-one-out back-test result: at zero
+# coverage every product is priced off a category average, which is precisely
+# what that back-test measured.
+#
+# BAND_FLOOR is a structural limit, not a tuning parameter. Salla exposes no
+# sold-counter, so even at 100% coverage we are applying ANOTHER store's
+# velocity to this catalogue — a store with different traffic, promotions and
+# assortment. That transfer error never goes away, so the band can never
+# approach the ~+/-10% that measured Zid revenue carries.
+#
+# Interpolation is LINEAR in coverage:
+#
+#   band = FLOOR + (WIDEST - FLOOR) * (1 - coverage)
+#
+# deliberately, for two reasons. It is the first-order model of a mixture whose
+# error is a blend of the per-SKU and category-average regimes, and it is
+# predictable: an operator watching coverage climb from 20% to 40% sees the
+# band move by a proportional, explainable amount. A convex curve (sqrt) would
+# tighten faster early and flatter it than the evidence supports.
+BAND_WIDEST_PCT = 52.0
+BAND_FLOOR_PCT = 30.0
+
+
+def confidence_band_pct(coverage):
+    """Half-width of the +/- band, in percent, for a given matched coverage."""
+    c = 0.0 if coverage is None else max(0.0, min(1.0, float(coverage)))
+    return round(BAND_FLOOR_PCT + (BAND_WIDEST_PCT - BAND_FLOOR_PCT) * (1.0 - c), 1)
+
+
+def estimate_with_band(products, pools, days):
+    """estimate_store_revenue plus the coverage-driven band.
+
+    Returns (revenue_est, band_pct, coverage, detail).
+    """
+    est, detail = estimate_store_revenue(products, pools, days)
+    priced = detail["priced_products"]
+    coverage = (detail["per_sku"] / priced) if priced else 0.0
+    band = confidence_band_pct(coverage)
+    return est, band, round(coverage, 4), detail
+
 
 def build_velocity_pools(observations, days, exclude_store=None):
     """observations: iterable of {"store_id", "sku", "category", "units"}.

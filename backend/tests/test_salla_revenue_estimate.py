@@ -249,3 +249,177 @@ if __name__ == "__main__":
         if _n.startswith("test_") and callable(_f):
             _f()
     print("PASS: iter55 salla revenue estimate")
+
+
+# ── iter56: self-tightening band + ranking wiring ────────────────────────────
+def test_band_interpolates_from_coverage_and_never_breaks_the_floor():
+    assert E.confidence_band_pct(0.0) == E.BAND_WIDEST_PCT == 52.0
+    assert E.confidence_band_pct(1.0) == E.BAND_FLOOR_PCT == 30.0
+    assert E.confidence_band_pct(0.5) == 41.0            # linear midpoint
+    assert E.confidence_band_pct(0.25) == 46.5
+    assert E.confidence_band_pct(0.75) == 35.5
+    # monotonically tightening
+    bands = [E.confidence_band_pct(c / 20) for c in range(21)]
+    assert bands == sorted(bands, reverse=True)
+    # never below the floor, whatever is thrown at it
+    for bad in (1.5, 2.0, 99, None, -1.0, -0.3):
+        b = E.confidence_band_pct(bad)
+        assert E.BAND_FLOOR_PCT <= b <= E.BAND_WIDEST_PCT, (bad, b)
+
+
+def test_coverage_is_share_of_products_with_real_per_product_velocity():
+    obs = [{"store_id": "z", "sku": "KNOWN", "category": "c", "units": 30}]
+    obs += [{"store_id": "z", "sku": f"C{i}", "category": "c", "units": 3}
+            for i in range(E.MIN_CATEGORY_SAMPLE)]
+    pools = E.build_velocity_pools(obs, DAYS)
+    # 1 of 4 products has real per-SKU velocity -> coverage 25%
+    prods = [{"sku": "KNOWN", "price": 10, "category": "c"}] + [
+        {"sku": f"NEW{i}", "price": 10, "category": "c"} for i in range(3)]
+    est, band, cov, detail = E.estimate_with_band(prods, pools, DAYS)
+    assert cov == 0.25 and detail["per_sku"] == 1 and detail["priced_products"] == 4
+    assert band == E.confidence_band_pct(0.25) == 46.5
+    # all four matched -> coverage 1.0, band at the floor
+    prods_all = [{"sku": "KNOWN", "price": 10, "category": "c"} for _ in range(4)]
+    _e, band2, cov2, _d = E.estimate_with_band(prods_all, pools, DAYS)
+    assert cov2 == 1.0 and band2 == 30.0
+    assert band2 < band, "more matched coverage must tighten the band"
+
+
+def test_band_tightens_as_matching_improves():
+    """The self-tightening property: same store, more matched products later."""
+    base = [{"store_id": "z", "sku": f"C{i}", "category": "c", "units": 3}
+            for i in range(E.MIN_CATEGORY_SAMPLE)]
+    prods = [{"sku": f"P{i}", "price": 10, "category": "c"} for i in range(10)]
+    seen = []
+    for matched in (0, 2, 5, 10):
+        obs = base + [{"store_id": "z", "sku": f"P{i}", "category": "c", "units": 3}
+                      for i in range(matched)]
+        pools = E.build_velocity_pools(obs, DAYS)
+        _e, band, cov, _d = E.estimate_with_band(prods, pools, DAYS)
+        seen.append((cov, band))
+    covs = [c for c, _b in seen]
+    bands = [b for _c, b in seen]
+    assert covs == [0.0, 0.2, 0.5, 1.0]
+    assert bands == sorted(bands, reverse=True) and bands[0] == 52.0 and bands[-1] == 30.0
+
+
+async def _seed_ranking(db):
+    """Two Zid stores with real sales, three Salla stores with none."""
+    for c in ("stores", "products", "sku_store_coverage", "sku_sales_daily",
+              "product_matches", "own_store_orders", "my_products"):
+        await db[c].delete_many({})
+    await db.stores.insert_many([
+        {"id": "zid1", "name": "Aleef", "domain": "aleef.com", "platform": "zid"},
+        {"id": "zid2", "name": "Petsy", "domain": "petsysa.com", "platform": "zid"},
+        {"id": "sal1", "name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla"},
+        {"id": "sal2", "name": "Caty", "domain": "caty-store.com", "platform": "salla"},
+        {"id": "sal3", "name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla"},
+    ])
+    now = server.datetime.now(server.timezone.utc)
+    prods, cov, sales = [], [], []
+    for i in range(60):
+        sku = f"SKU-{i}"
+        prods.append({"id": f"p{i}", "sku": sku, "category": "cat_food"})
+        for sid in ("zid1", "zid2", "sal1"):
+            cov.append({"_id": f"{sku}|{sid}", "sku": sku, "store_id": sid,
+                        "last_priced_price": 100.0, "last_priced_at": now,
+                        "last_in_stock": True, "last_seen_any_at": now})
+        for sid in ("zid1", "zid2"):
+            sales.append({"store_id": sid, "sku": sku, "date": server._metric_day_str(now),
+                          "units_sold": 3, "rev_sold": 300.0,
+                          "units_qty": 0, "rev_qty": 0.0, "qty_drop": 0})
+    # sal2 carries products NO Zid store sells -> 0% coverage -> widest band
+    for i in range(40):
+        sku = f"ONLY-{i}"
+        prods.append({"id": f"o{i}", "sku": sku, "category": "cat_food"})
+        cov.append({"_id": f"{sku}|sal2", "sku": sku, "store_id": "sal2",
+                    "last_priced_price": 50.0, "last_priced_at": now,
+                    "last_in_stock": True, "last_seen_any_at": now})
+    # sal3 half-and-half -> mid band
+    for i in range(20):
+        cov.append({"_id": f"SKU-{i}|sal3", "sku": f"SKU-{i}", "store_id": "sal3",
+                    "last_priced_price": 80.0, "last_priced_at": now,
+                    "last_in_stock": True, "last_seen_any_at": now})
+    for i in range(20):
+        cov.append({"_id": f"ONLY-{i}|sal3", "sku": f"ONLY-{i}", "store_id": "sal3",
+                    "last_priced_price": 80.0, "last_priced_at": now,
+                    "last_in_stock": True, "last_seen_any_at": now})
+    await db.products.insert_many(prods)
+    await db.sku_store_coverage.insert_many(cov)
+    await db.sku_sales_daily.insert_many(sales)
+    server.db = db
+
+
+def test_ranking_exposes_the_estimate_without_reordering_anything():
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed_ranking(db)
+
+        out = await server._store_ranking_compute(db)
+        rows = {r["name"]: r for r in out["stores"]}
+        order_with = [r["name"] for r in out["stores"]]
+        scores_with = {r["name"]: r["score"] for r in out["stores"]}
+
+        # measured stores keep a plain measured figure and NO estimate
+        for n in ("Aleef", "Petsy"):
+            assert rows[n]["revenue_30d"] is not None
+            assert rows[n]["revenue_est_salla"] is None, rows[n]
+
+        # Salla stores: measured stays not_measurable, estimate is separate
+        for n in ("Zarafa", "Caty", "Hamtaro"):
+            r = rows[n]
+            assert r["revenue_30d"] is None and r["revenue_status"] == "not_measurable"
+            e = r["revenue_est_salla"]
+            assert e and e["revenue_est"] > 0
+            assert e["basis"] == "category_velocity_estimate"
+            assert e["band_floor_pct"] == 30.0 and e["band_widest_pct"] == 52.0
+            assert 30.0 <= e["band_pct"] <= 52.0
+            assert e["range_low"] < e["revenue_est"] < e["range_high"]
+
+        # coverage drives the band, per store
+        assert rows["Zarafa"]["revenue_est_salla"]["matched_coverage_pct"] == 100.0
+        assert rows["Zarafa"]["revenue_est_salla"]["band_pct"] == 30.0
+        assert rows["Caty"]["revenue_est_salla"]["matched_coverage_pct"] == 0.0
+        assert rows["Caty"]["revenue_est_salla"]["band_pct"] == 52.0
+        assert rows["Hamtaro"]["revenue_est_salla"]["matched_coverage_pct"] == 50.0
+        assert rows["Hamtaro"]["revenue_est_salla"]["band_pct"] == 41.0
+
+        # ── THE CONTRACT: order and score are untouched by the estimate ──
+        # Caty's estimate is the smallest but its score position must not move,
+        # and stripping the estimates must reproduce the identical ordering.
+        order_without = [r["name"] for r in sorted(
+            out["stores"],
+            key=lambda r: (-r["score"], -r["components"]["breadth"]["products"], r["name"]))]
+        assert order_with == order_without, (order_with, order_without)
+        # score never references the estimate: recompute by hand from components
+        for r in out["stores"]:
+            c = r["components"]
+            expect = round(100 * (server._RANKING_WEIGHTS["breadth"] * c["breadth"]["score"]
+                                  + server._RANKING_WEIGHTS["price"] * c["price"]["score"]
+                                  + server._RANKING_WEIGHTS["stock"] * c["stock"]["score"]
+                                  + server._RANKING_WEIGHTS["freshness"] * c["freshness"]["score"]), 1)
+            assert r["score"] == expect, (r["name"], r["score"], expect)
+        assert scores_with  # sanity
+    asyncio.run(main())
+
+
+def test_estimate_failure_never_breaks_the_ranking():
+    """The estimate is best-effort: if it raises, the leaderboard still renders."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed_ranking(db)
+        orig = server.salla_build_velocity_pools
+
+        def _boom(*a, **k):
+            raise RuntimeError("pools exploded")
+
+        server.salla_build_velocity_pools = _boom
+        try:
+            out = await server._store_ranking_compute(db)
+        finally:
+            server.salla_build_velocity_pools = orig
+        assert len(out["stores"]) == 5
+        for r in out["stores"]:
+            assert r["revenue_est_salla"] is None
+            assert r["score"] is not None
+    asyncio.run(main())
