@@ -121,9 +121,46 @@ function ScoreBar({ value, color = "#1E988E" }) {
 }
 
 function RevenueCell({ row, isRTL }) {
+  // MEASURED revenue — unchanged, solid teal, no tag.
   if (row.revenue_30d != null) {
     return <span className="metric-number text-[#6AC1B5]">{row.revenue_30d.toLocaleString()} SAR</span>;
   }
+
+  // iter57 — ROUGH ESTIMATE for platforms that hide sold-counts. Rendered
+  // deliberately unlike the measured value: amber not teal, reduced opacity, an
+  // explicit ESTIMATE tag, and a "~". ONE fixed +/-50% band for every store —
+  // a coverage-derived band would tighten per store and imply a precision the
+  // back-test does not support, and these figures inform pricing decisions.
+  const est = row.revenue_est_salla;
+  if (est && est.revenue_est > 0) {
+    const tip = isRTL
+      ? `تقدير تقريبي. متاجر سلة لا تكشف عدادات المبيعات، لذا يُشتق هذا الرقم من سرعة البيع المرصودة في متاجر زد مطبَّقة على كتالوج هذا المتجر — بدقة تقارب ±50% فقط. `
+        + `استخدمه للمقارنة الاتجاهية، لا كأرقام دقيقة أو أساس للقرارات.\n\n`
+        + `النطاق: ${Math.round(est.range_low).toLocaleString()}–${Math.round(est.range_high).toLocaleString()} ريال.\n\n`
+        + `تكامل "محلي" (Mahally) — إن استُعيد — هو السبيل الوحيد لجعل إيرادات سلة قابلة للقياس فعلياً، لأنه يوفر أعداد المبيعات الحقيقية.\n\n`
+        + `لا يؤثر هذا التقدير على ترتيب المتاجر.`
+      : `Rough estimate. Salla stores don't expose sold-counts, so this is projected from Zid-store sales velocity applied to this store's catalog — accurate only to roughly ±50%. `
+        + `Use for directional comparison, not exact figures or decisions.\n\n`
+        + `Range: ${Math.round(est.range_low).toLocaleString()}–${Math.round(est.range_high).toLocaleString()} SAR.\n\n`
+        + `Only a Mahally integration (if restored) could make Salla revenue truly measurable — it exposes real sold quantities.\n\n`
+        + `This estimate does not affect store ranking.`;
+    return (
+      <span className="inline-flex flex-col gap-0.5" title={tip} data-testid="revenue-est-salla">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="metric-number text-[#F59E0B]/75 italic">
+            ~{Math.round(est.revenue_est).toLocaleString()} SAR
+          </span>
+          <span className="text-[9px] px-1 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B]/90 not-italic tracking-wide">
+            {isRTL ? "تقدير" : "ESTIMATE"}
+          </span>
+        </span>
+        <span className="text-[9px] text-[#F59E0B]/60 leading-none">
+          {isRTL ? `تقدير تقريبي · ±${est.band_pct}%` : `rough estimate · ±${est.band_pct}%`}
+        </span>
+      </span>
+    );
+  }
+
   if (row.revenue_status === "not_measurable") {
     // iter40 — blame Salla only when the store actually IS Salla; other
     // platforms without signals get a neutral label so the Salla claim
