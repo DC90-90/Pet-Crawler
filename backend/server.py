@@ -675,6 +675,10 @@ async def seed_database():
     await db.product_snapshots.create_index([("crawled_at", -1), ("store_id", 1)])
     await db.product_snapshots.create_index([("crawled_at", -1), ("sku", 1)])
     await db.product_snapshots.create_index([("crawled_at", -1), ("confidence_score", 1)])
+    # iter58 — the Discounts tab filters discount_pct>0 then blocking-sorts by
+    # crawled_at over 90 days. Without this the match cannot narrow before the
+    # sort, which is what pushed those pipelines past the 100MB stage limit.
+    await db.product_snapshots.create_index([("discount_pct", -1), ("crawled_at", -1)])
     await db.proxy_usage.create_index("crawled_at")
     await db.products.create_index("sku", unique=True)
     await db.stores.create_index("domain", unique=True)
@@ -3881,78 +3885,275 @@ async def create_filter(data: SavedFilterIn, user=Depends(get_user)):
     return doc
 
 # ── Discounts ────────────────────────────────────────────────
+# iter58 — all four endpoints 500'd (or, for /aggression, hung) in production.
+#
+# Root causes, which were NOT the same across the four:
+#
+#   top-pct / top-amount / timeline
+#       $sort + $group over 90 days of product_snapshots with NO
+#       allowDiskUse. Past ~100MB of in-memory stage the server throws
+#       QueryExceededMemoryLimitNoDiskUseAllowed (code 292) and the unhandled
+#       error surfaces as a 500. This is the exact iter22 failure documented in
+#       _build_competitor_lookups, and the same one that took out
+#       insights/data-freshness. Fixed the same way: bounded window +
+#       allowDiskUse, plus an index so the discount filter narrows BEFORE the
+#       blocking sort.
+#
+#   aggression
+#       Never hit the memory limit — its $group is _id:None, one output doc.
+#       It looped over every active store issuing an aggregate AND a
+#       count_documents each, i.e. ~22 sequential 90-day scans awaited one at a
+#       time. That is why this one HUNG while the others failed fast. Now two
+#       grouped queries total, regardless of store count.
+#
+#   both top-* endpoints, latent
+#       $first omits a field entirely when it is absent from the winning
+#       document, so a single row missing original_price / price / store_name
+#       took the whole endpoint down with a KeyError or a TypeError on
+#       `original_price - price`. Every field access is now guarded.
+_DISCOUNT_MAX_DAYS = 90
+
+
+def _num(v):
+    """None-safe numeric coercion — the $first guard described above."""
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def _aware(dt):
+    if isinstance(dt, datetime):
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return None
+
+
+async def _discount_history(db, rows, since):
+    """Reconstruct each discount's START and DURATION from the snapshot series.
+
+    BOUNDED BY DESIGN: only the rows actually being returned (<= limit) are
+    walked, keyed on sku so the (sku, crawled_at) index carries the read. This
+    is deliberately not a catalogue-wide pass — that is what broke these
+    endpoints in the first place.
+
+    The run is the CONTIGUOUS tail of snapshots where discount_pct > 0, walked
+    backwards from the newest. Resolution is bounded by crawl cadence (12-24h),
+    and iter24's change-only snapshot writing means an unchanged discount does
+    not emit a row every day, so `days` is a LOWER BOUND, reported as such.
+    """
+    keys = {(r["sku"], r["store_id"]) for r in rows if r.get("sku") and r.get("store_id")}
+    if not keys:
+        return {}
+    series = {}
+    async for s in db.product_snapshots.find(
+            {"sku": {"$in": sorted({k[0] for k in keys})}, "crawled_at": {"$gte": since}},
+            {"_id": 0, "sku": 1, "store_id": 1, "crawled_at": 1, "discount_pct": 1,
+             "price": 1, "original_price": 1}).batch_size(2000):
+        k = (s.get("sku"), s.get("store_id"))
+        if k in keys and _aware(s.get("crawled_at")):
+            series.setdefault(k, []).append(s)
+
+    out = {}
+    now = datetime.now(timezone.utc)
+    for k, snaps in series.items():
+        snaps.sort(key=lambda x: _aware(x["crawled_at"]))
+        run = []
+        for s in reversed(snaps):
+            if (s.get("discount_pct") or 0) > 0:
+                run.append(s)
+            else:
+                break                      # the discount ended here
+        if not run:
+            out[k] = {"started_at": None, "days_on_discount": 0, "ongoing": False,
+                      "snapshots_in_run": 0, "duration_is_lower_bound": True}
+            continue
+        run.reverse()
+        start = _aware(run[0]["crawled_at"])
+        out[k] = {
+            "started_at": start.isoformat(),
+            "days_on_discount": max(0, (now - start).days),
+            "ongoing": True,
+            "snapshots_in_run": len(run),
+            # true only when the run does NOT reach back to the window edge —
+            # otherwise the discount may predate the window entirely
+            "started_within_window": len(run) < len(snaps),
+            "duration_is_lower_bound": True,
+        }
+    return out
+
+
+async def _sold_during_discount(db, rows, history, platform_by_store):
+    """Units sold while the discount ran.
+
+    Zid exposes a cumulative sold-counter, so sku_sales_daily carries real
+    units for those stores. Salla exposes nothing of the kind — those rows
+    report "not_measurable" rather than a fabricated number.
+    """
+    out = {}
+    wanted = []
+    for r in rows:
+        k = (r.get("sku"), r.get("store_id"))
+        plat = (platform_by_store.get(r.get("store_id")) or "").lower()
+        if plat != "zid":
+            out[k] = {"units": None, "status": "not_measurable",
+                      "reason": f"{plat or 'platform'} exposes no sold-count"}
+            continue
+        h = history.get(k) or {}
+        if not h.get("started_at"):
+            out[k] = {"units": None, "status": "no_discount_run"}
+            continue
+        wanted.append((k, h["started_at"][:10]))
+    if wanted:
+        skus = sorted({k[0] for k, _d in wanted})
+        floor = min(d for _k, d in wanted)
+        acc = {}
+        async for s in db.sku_sales_daily.find(
+                {"sku": {"$in": skus}, "date": {"$gte": floor}},
+                {"_id": 0, "sku": 1, "store_id": 1, "date": 1, "units_sold": 1,
+                 "units_qty": 1}).batch_size(2000):
+            acc.setdefault((s.get("sku"), s.get("store_id")), []).append(s)
+        for k, day0 in wanted:
+            rows_k = [x for x in acc.get(k, []) if (x.get("date") or "") >= day0]
+            # same method-exclusivity as the estimator: counter units when the
+            # counter moved, else filtered qty depletion
+            counter = sum(x.get("units_sold") or 0 for x in rows_k)
+            qty = sum(x.get("units_qty") or 0 for x in rows_k)
+            units = counter if counter > 0 else qty
+            out[k] = {"units": int(units), "status": "measured",
+                      "days_counted": len(rows_k)}
+    return out
+
+
+async def _enrich_discount_rows(db, rows, since):
+    """Shared tail for top-pct / top-amount: product names, history, sold-qty."""
+    if not rows:
+        return []
+    prod_by_sku = {}
+    async for p in db.products.find(
+            {"sku": {"$in": sorted({r["sku"] for r in rows if r.get("sku")})}},
+            {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "category": 1, "image_url": 1}):
+        prod_by_sku[p["sku"]] = p
+    platform_by_store = {s["id"]: (s.get("platform") or "")
+                         async for s in db.stores.find({}, {"_id": 0, "id": 1, "platform": 1})}
+    history = await _discount_history(db, rows, since)
+    sold = await _sold_during_discount(db, rows, history, platform_by_store)
+
+    out = []
+    for r in rows:
+        k = (r.get("sku"), r.get("store_id"))
+        p = prod_by_sku.get(r.get("sku")) or {}
+        orig, price = _num(r.get("original_price")), _num(r.get("price"))
+        amount = round(orig - price, 2) if (orig is not None and price is not None) else None
+        h = history.get(k) or {}
+        s = sold.get(k) or {"units": None, "status": "unknown"}
+        out.append({
+            "sku": r.get("sku"),
+            "store_id": r.get("store_id"),
+            "store_name": r.get("store_name") or "",
+            "name_ar": p.get("name_ar", ""), "name_en": p.get("name_en", ""),
+            "category": p.get("category", ""), "image_url": p.get("image_url", ""),
+            "original_price": orig,
+            "sale_price": price,                    # the CURRENT discounted price
+            "price": price,                         # back-compat with the old shape
+            "discount_amount_sar": amount,
+            "savings_sar": amount,                  # back-compat
+            "discount_pct": r.get("discount_pct"),
+            "discount_started_at": h.get("started_at"),
+            "days_on_discount": h.get("days_on_discount"),
+            "discount_ongoing": h.get("ongoing", False),
+            "duration_is_lower_bound": h.get("duration_is_lower_bound", True),
+            "sold_during_discount": s.get("units"),
+            "sold_during_discount_status": s.get("status"),
+            "sold_during_discount_note": s.get("reason"),
+            "platform": (platform_by_store.get(r.get("store_id")) or "").lower(),
+        })
+    return out
+
+
+def _discount_match(since, store_id):
+    m = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0},
+         "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
+    if store_id and store_id != "all":
+        m["store_id"] = store_id
+    return m
+
+
+def _latest_per_pair_stage():
+    return {"$group": {
+        "_id": {"sku": "$sku", "store_id": "$store_id"},
+        "sku": {"$first": "$sku"}, "store_id": {"$first": "$store_id"},
+        "store_name": {"$first": "$store_name"},
+        "price": {"$first": "$price"},
+        "original_price": {"$first": "$original_price"},
+        "discount_pct": {"$first": "$discount_pct"},
+        "crawled_at": {"$first": "$crawled_at"},
+    }}
+
+
 @router.get("/discounts/top-pct")
 @ttl_cache(60)
 async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+    days = min(int(days or 90), _DISCOUNT_MAX_DAYS)
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    # P1 confidence floor: exclude Tier-3 noise from discount rankings.
-    match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
-    if store_id and store_id != "all": match["store_id"] = store_id
     pipeline = [
-        {"$match": match}, {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "original_price": {"$first": "$original_price"}, "discount_pct": {"$first": "$discount_pct"}, "store_name": {"$first": "$store_name"}, "crawled_at": {"$first": "$crawled_at"}, "sku": {"$first": "$sku"}}},
-        {"$sort": {"discount_pct": -1}}, {"$limit": limit},
+        {"$match": _discount_match(since, store_id)},
+        {"$sort": {"crawled_at": -1}},
+        _latest_per_pair_stage(),
+        {"$sort": {"discount_pct": -1}},
+        {"$limit": max(1, int(limit)) * 3},     # headroom for the category filter
     ]
-    results = await db.product_snapshots.aggregate(pipeline).to_list(limit)
-    out = []
-    for r in results:
-        p = await db.products.find_one({"sku": r["sku"]}, {"_id": 0, "name_ar": 1, "name_en": 1, "category": 1, "image_url": 1})
-        if p and (not category or category == "all" or p.get("category") == category):
-            ca = r["crawled_at"]
-            if isinstance(ca, datetime):
-                if ca.tzinfo is None:
-                    ca = ca.replace(tzinfo=timezone.utc)
-                days_on_sale = (datetime.now(timezone.utc) - ca).days
-            else:
-                days_on_sale = 0
-            out.append({**p, "sku": r["sku"], "store_name": r["store_name"], "price": r["price"], "original_price": r["original_price"],
-                "discount_pct": r["discount_pct"], "savings_sar": round(r["original_price"] - r["price"], 2), "days_on_sale": days_on_sale})
-    return out
+    results = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(limit * 3)
+    rows = await _enrich_discount_rows(db, results, since)
+    if category and category != "all":
+        rows = [r for r in rows if r.get("category") == category]
+    return rows[:limit]
+
 
 @router.get("/discounts/top-amount")
 @ttl_cache(60)
 async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+    days = min(int(days or 90), _DISCOUNT_MAX_DAYS)
     since = datetime.now(timezone.utc) - timedelta(days=days)
-    # P1 confidence floor: exclude Tier-3 noise from discount rankings.
-    match = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
-    if store_id and store_id != "all": match["store_id"] = store_id
     pipeline = [
-        {"$match": match}, {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": {"sku": "$sku", "store_id": "$store_id"}, "price": {"$first": "$price"}, "original_price": {"$first": "$original_price"}, "discount_pct": {"$first": "$discount_pct"}, "store_name": {"$first": "$store_name"}, "crawled_at": {"$first": "$crawled_at"}, "sku": {"$first": "$sku"}}},
-        {"$project": {"price": 1, "original_price": 1, "discount_pct": 1, "store_name": 1, "crawled_at": 1, "sku": 1, "savings": {"$subtract": ["$original_price", "$price"]}}},
-        {"$sort": {"savings": -1}}, {"$limit": limit},
+        {"$match": _discount_match(since, store_id)},
+        {"$sort": {"crawled_at": -1}},
+        _latest_per_pair_stage(),
+        {"$sort": {"discount_pct": -1}},
+        {"$limit": 500},          # bounded candidate set; ranked by SAR below
     ]
-    results = await db.product_snapshots.aggregate(pipeline).to_list(limit)
-    out = []
-    for r in results:
-        p = await db.products.find_one({"sku": r["sku"]}, {"_id": 0, "name_ar": 1, "name_en": 1, "category": 1, "image_url": 1})
-        if p and (not category or category == "all" or p.get("category") == category):
-            out.append({**p, "sku": r["sku"], "store_name": r["store_name"], "price": r["price"], "original_price": r["original_price"],
-                "discount_pct": r["discount_pct"], "savings_sar": round(r["savings"], 2)})
-    return out
+    results = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(500)
+    rows = await _enrich_discount_rows(db, results, since)
+    if category and category != "all":
+        rows = [r for r in rows if r.get("category") == category]
+    # rank by absolute saving in Python — $subtract on a null original_price
+    # yields null and sorts unpredictably; None-safe here instead.
+    rows = [r for r in rows if r.get("discount_amount_sar") is not None]
+    rows.sort(key=lambda r: r["discount_amount_sar"], reverse=True)
+    return rows[:limit]
+
 
 @router.get("/discounts/timeline")
 @ttl_cache(60)
 async def discount_timeline(user=Depends(get_user)):
-    since = datetime.now(timezone.utc) - timedelta(days=90)
+    since = datetime.now(timezone.utc) - timedelta(days=_DISCOUNT_MAX_DAYS)
     pipeline = [
-        # P1 confidence floor: exclude Tier-3 noise from discount timeline.
-        {"$match": {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
-        {"$project": {"store_name": 1, "week": {"$dateToString": {"format": "%Y-W%V", "date": "$crawled_at"}}, "discount_pct": 1}},
-        {"$group": {"_id": {"store": "$store_name", "week": "$week"}, "count": {"$sum": 1}, "avg_depth": {"$avg": "$discount_pct"}}},
+        {"$match": {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0},
+                    "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
+        {"$project": {"store_name": 1, "discount_pct": 1,
+                      "week": {"$dateToString": {"format": "%Y-W%V", "date": "$crawled_at"}}}},
+        {"$group": {"_id": {"store": "$store_name", "week": "$week"},
+                    "count": {"$sum": 1}, "avg_depth": {"$avg": "$discount_pct"}}},
         {"$sort": {"_id.week": 1}},
     ]
-    data = await db.product_snapshots.aggregate(pipeline).to_list(1000)
-    stores_set = set()
-    weeks_set = set()
-    grid = {}
+    data = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(5000)
+    stores_set, weeks_set, grid = set(), set(), {}
     for d in data:
-        s, w = d["_id"]["store"], d["_id"]["week"]
+        s = (d.get("_id") or {}).get("store")
+        w = (d.get("_id") or {}).get("week")
+        if not s or not w:
+            continue
         stores_set.add(s)
         weeks_set.add(w)
-        grid[(s, w)] = {"count": d["count"], "avg_depth": round(d["avg_depth"], 1)}
-    weeks = sorted(weeks_set)
-    stores = sorted(stores_set)
+        grid[(s, w)] = {"count": d.get("count") or 0,
+                        "avg_depth": round(d.get("avg_depth") or 0, 1)}
+    weeks, stores = sorted(weeks_set), sorted(stores_set)
     timeline = []
     for w in weeks:
         row = {"week": w}
@@ -3963,29 +4164,65 @@ async def discount_timeline(user=Depends(get_user)):
         timeline.append(row)
     return {"timeline": timeline, "stores": stores, "weeks": weeks}
 
+
 @router.get("/discounts/aggression")
 @ttl_cache(60)
 async def discount_aggression(user=Depends(get_user)):
-    since = datetime.now(timezone.utc) - timedelta(days=90)
-    stores = await db.stores.find({"is_active": True}, {"_id": 0, "id": 1, "name": 1}).to_list(20)
+    """Store discount-aggression leaderboard.
+
+    iter58 — was ~2 sequential 90-day scans PER STORE, awaited in a loop, which
+    is why this endpoint hung rather than 500'd. Now two grouped queries in
+    total, independent of store count.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=_DISCOUNT_MAX_DAYS)
+    stores = {s["id"]: s async for s in db.stores.find(
+        {"is_active": True}, {"_id": 0, "id": 1, "name": 1, "platform": 1})}
+    if not stores:
+        return []
+    base = {"crawled_at": {"$gte": since},
+            "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
+
+    disc = await db.product_snapshots.aggregate([
+        {"$match": {**base, "discount_pct": {"$gt": 0}}},
+        {"$group": {"_id": {"store_id": "$store_id", "sku": "$sku"},
+                    "depth": {"$avg": "$discount_pct"}, "rows": {"$sum": 1},
+                    "max_disc": {"$max": "$discount_pct"}}},
+        {"$group": {"_id": "$_id.store_id",
+                    "products_on_discount": {"$sum": 1},       # DISTINCT skus
+                    "avg_depth": {"$avg": "$depth"},
+                    "max_disc": {"$max": "$max_disc"},
+                    "discounted_rows": {"$sum": "$rows"}}},
+    ], allowDiskUse=True).to_list(500)
+    totals = await db.product_snapshots.aggregate([
+        {"$match": base},
+        {"$group": {"_id": "$store_id", "rows": {"$sum": 1}}},
+    ], allowDiskUse=True).to_list(500)
+
+    by_store = {d["_id"]: d for d in disc if d.get("_id")}
+    total_by_store = {t["_id"]: (t.get("rows") or 0) for t in totals if t.get("_id")}
+
     leaderboard = []
-    for store in stores:
-        pipeline = [
-            # P1 confidence floor: exclude Tier-3 noise from aggression scores.
-            {"$match": {"store_id": store["id"], "crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
-            {"$group": {"_id": None, "avg_depth": {"$avg": "$discount_pct"}, "max_disc": {"$max": "$discount_pct"}, "total_discounted": {"$sum": 1}}},
-        ]
-        result = await db.product_snapshots.aggregate(pipeline).to_list(1)
-        total_snaps = await db.product_snapshots.count_documents({"store_id": store["id"], "crawled_at": {"$gte": since}, "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}})
-        if result:
-            r = result[0]
-            avg_depth = round(r["avg_depth"], 1)
-            max_disc = r["max_disc"]
-            freq = round(r["total_discounted"] / max(total_snaps, 1) * 100, 1)
-            score = round(avg_depth * 0.4 + freq * 0.35 + max_disc * 0.25, 1)
-            leaderboard.append({"store": store["name"], "score": min(100, score), "avg_depth": avg_depth, "frequency": freq, "max_discount": max_disc})
-        else:
-            leaderboard.append({"store": store["name"], "score": 0, "avg_depth": 0, "frequency": 0, "max_discount": 0})
+    for sid, st in stores.items():
+        d = by_store.get(sid)
+        if not d:
+            leaderboard.append({
+                "store_id": sid, "store": st.get("name") or sid,
+                "platform": (st.get("platform") or "").lower(),
+                "score": 0, "avg_depth": 0, "frequency": 0, "max_discount": 0,
+                "products_on_discount": 0, "discounted_snapshots": 0})
+            continue
+        avg_depth = round(d.get("avg_depth") or 0, 1)
+        max_disc = round(d.get("max_disc") or 0, 1)
+        freq = round((d.get("discounted_rows") or 0) / max(total_by_store.get(sid, 0), 1) * 100, 1)
+        score = round(avg_depth * 0.4 + freq * 0.35 + max_disc * 0.25, 1)
+        leaderboard.append({
+            "store_id": sid, "store": st.get("name") or sid,
+            "platform": (st.get("platform") or "").lower(),
+            "score": min(100, score), "avg_depth": avg_depth,
+            "frequency": freq, "max_discount": max_disc,
+            "products_on_discount": d.get("products_on_discount") or 0,
+            "discounted_snapshots": d.get("discounted_rows") or 0,
+        })
     leaderboard.sort(key=lambda x: x["score"], reverse=True)
     if leaderboard:
         leaderboard[0]["label"] = "Most Aggressive"
@@ -3996,9 +4233,8 @@ async def discount_aggression(user=Depends(get_user)):
                 l["label"] = "Highest Single Discount"
     return leaderboard
 
+
 # ── Price Opportunity Scanner ────────────────────────────────
-
-
 # iter52 — pack/unit VARIANT detection for the market low.
 #
 # Some stores (Zarafa confirmed) list a single tin AND a multi-pack carton under
