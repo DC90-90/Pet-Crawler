@@ -26,7 +26,46 @@ NUMERIC_BARCODE_RE = re.compile(r'^\d{8,14}$')
 
 # Pack/bundle patterns
 PACK_RE = re.compile(r'(?:pack\s*(?:of\s*)?|carton\s*(?:for\s*)?|box\s*(?:of\s*)?|set\s*(?:of\s*)?|bundle\s*(?:of\s*)?|×\s*)(\d+)', re.IGNORECASE)
-PACK_AR_RE = re.compile(r'(?:علبة|كرتون|عدد|طقم|مجموعة)\s*(\d+)', re.IGNORECASE)
+PACK_AR_RE = re.compile(r'(?:علبة|عبوة|كرتون|عدد|طقم|مجموعة)\s*(\d+)', re.IGNORECASE)
+
+# iter51 — COUNT-FIRST pack descriptors. Everything above expects
+# "<keyword> N" ("pack of 24", "علبة 24"), but real catalogue names put the
+# count first and never use a keyword at all:
+#
+#   "Beso Cat Wet Food ... 24 Pieces*400g"   -> 24
+#   "Kit Cat Wet Food ... 24 Pieces*70g"     -> 24
+#   "... 24 Pcs" / "24 x 400g" / "24*70g" / "24-pack" / "24 قطعة"
+#
+# Those all parsed as qty=1 (a single unit), so a 24-count carton compared
+# clean against a single tin of the same EAN and the pack guard never fired.
+# The `×` branch in PACK_RE could not help: it needs U+00D7 specifically AND
+# expects the digits AFTER the sign, so even "24×400g" missed.
+#
+# Anchored on a number so brand names can't false-fire ("One Piece" has no
+# leading digit). The multiplier branch requires a WEIGHT unit after the
+# second number, so dimensions like "40 x 60 cm" are not read as a 40-pack.
+PACK_COUNT_FIRST_RE = re.compile(
+    r'(?<!\d)(\d{1,3})\s*(?:'
+    r'[-\s]*(?:pieces?|pcs?|packs?|units?|tins?|cans?|sachets?|pouches?)\b'
+    r'|[x×*]\s*\d+(?:\.\d+)?\s*(?:kg|g|gm|gr|ml|l|كجم|جم|جرام|مل|لتر)\b'
+    r')', re.IGNORECASE)
+PACK_COUNT_FIRST_AR_RE = re.compile(
+    r'(?<!\d)(\d{1,3})\s*(?:قطعة|قطع|حبة|حبات|كيس|أكياس|ظرف|أظرف)')
+# the reversed multiplier: "400g x 24", "1.5kg*6"
+PACK_UNIT_FIRST_RE = re.compile(
+    r'\d+(?:\.\d+)?\s*(?:kg|g|gm|gr|ml|l|كجم|جم|جرام|مل|لتر)\s*[x×*]\s*(\d{1,3})(?!\d)',
+    re.IGNORECASE)
+
+# Every pattern that yields an explicit pack COUNT, in precedence order.
+#
+# The count-first patterns MUST be tried before PACK_RE. PACK_RE's bare
+# `×\s*(\d+)` branch takes the number AFTER the sign, which in the very common
+# "N×M<unit>" form is the UNIT SIZE, not the count: it read "24×400g" as a
+# 400-pack. The count-first patterns anchor on the number before the sign and
+# require a weight unit after it, so they resolve that shape correctly and
+# PACK_RE still catches the keyword forms ("pack of 6", "Carton 24", "×24").
+PACK_QTY_PATTERNS = (PACK_COUNT_FIRST_RE, PACK_COUNT_FIRST_AR_RE,
+                     PACK_UNIT_FIRST_RE, PACK_RE, PACK_AR_RE)
 PACK_KEYWORDS = {"pack", "carton", "box", "set", "bundle", "علبة", "كرتون", "عدد", "طقم"}
 # Token boundary regex used by _has_pack_indicator. Splits on whitespace and
 # common punctuation. We deliberately exclude letter characters so compound
@@ -102,13 +141,28 @@ def _extract_weight_grams(text: str) -> Optional[float]:
 
 
 def _extract_pack_qty(text: str) -> int:
-    """Extract pack/bundle quantity from text. Returns 1 if single unit."""
-    for pattern in [PACK_RE, PACK_AR_RE]:
+    """Extract pack/bundle quantity from text. Returns 1 if single unit.
+
+    NOTE on semantics (pre-existing, deliberately preserved): a name with no
+    pack signal at all returns 1, i.e. "no descriptor" is read as "single".
+    That is what makes the guard conservative — a 24-count carton compared
+    against a competitor whose name says nothing is BLOCKED rather than
+    assumed compatible. -1 is reserved for "pack keyword present, count
+    unreadable".
+    """
+    for pattern in PACK_QTY_PATTERNS:
         m = pattern.search(str(text))
         if m:
             return int(m.group(1))
-    text_lower = str(text).lower()
-    if any(kw in text_lower for kw in PACK_KEYWORDS):
+    # iter51 — TOKEN-level keyword test, matching _has_pack_indicator. This
+    # function still used naive substring matching, so iter20's bug lived on
+    # here: "متعدد الألوان" (multi-COLOURED) contains "عدد" and returned -1,
+    # which _pack_compatible reads as "unknown multipack" and uses to block
+    # every single-unit competitor. That mattered less while Level 1 gated on
+    # _has_pack_indicator; now that _pack_compatible is the sole filter there,
+    # the two must agree.
+    tokens = [t for t in PACK_TOKEN_SPLIT_RE.split(str(text).lower()) if t]
+    if any(t in PACK_KEYWORDS for t in tokens):
         return -1  # Has pack keyword but unknown quantity
     return 1  # Single unit
 
@@ -138,9 +192,13 @@ def _has_pack_indicator(text: str) -> bool:
     not in PACK_KEYWORDS, so they don't false-fire. Legitimate multipack
     phrasing ("pack of 6", "علبة 12", "Carton 24") still matches because
     "pack" / "علبة" / "Carton" appear as standalone tokens.
+
+    iter51 — also recognises the count-first descriptors ("24 Pieces*400g",
+    "24 Pcs", "24 x 400g", "24 قطعة"), which carry no PACK_KEYWORDS token at
+    all and so read as single units before this change.
     """
     text_lower = str(text).lower()
-    if PACK_RE.search(text_lower) or PACK_AR_RE.search(text_lower):
+    if any(p.search(text_lower) for p in PACK_QTY_PATTERNS):
         return True
     tokens = [t for t in PACK_TOKEN_SPLIT_RE.split(text_lower) if t]
     return any(t in PACK_KEYWORDS for t in tokens)
@@ -216,7 +274,16 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
 
     # ── LEVEL 1: Barcode/EAN ────────────────────────────────
     # Barcode match if EITHER my barcode-candidates intersect competitor barcode-candidates
-    if my_barcode_candidates and not my_is_bundle:
+    #
+    # iter51 — this used to be `and not my_is_bundle`: a multipack was banned
+    # from barcode matching WHOLESALE, because cartons share the unit EAN. With
+    # pack counts now parsed on both sides, _pack_compatible below filters
+    # per-candidate instead, which is strictly better:
+    #   24-pack vs single  -> still blocked (a name with no descriptor reads
+    #                         as qty 1, so unknown competitors stay blocked)
+    #   24-pack vs 24-pack -> now MATCHES, where before the carton could not
+    #                         barcode-match anything at all.
+    if my_barcode_candidates:
         for snap in comp_snapshots:
             c_sku = str(snap["sku"]).strip()
             if c_sku in blacklist:
