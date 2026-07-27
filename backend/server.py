@@ -5814,6 +5814,196 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
     return report
 
 
+# ── iter54: own-store SNAPSHOT VAT backfill ──────────────────────────────────
+# iter44 corrected my_products to the inc-VAT shelf basis but left
+# product_snapshots on the Merchant API's ex-VAT price (crawlers.py wrote the
+# snapshot from the raw row, skipping resolve_own_price). Hills 052742059518
+# reads 170.00 in my_products and 147.83 in its own-store snapshot, so the
+# detail panel, price history, market position and every rollup built from
+# snapshots show our store ~15% cheap.
+#
+# Competitor snapshots are ALREADY inc-VAT (storefront shelf price) and are
+# never touched — the filter is store_id == own_store_id, always.
+_SNAP_VAT_BATCH = 1000
+
+
+@router.get("/admin/own-snapshot-vat-backfill")
+async def own_snapshot_vat_backfill_get(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+                                        user=Depends(get_user)):
+    """iter54 — browser-friendly DRY RUN ONLY. GET can never write."""
+    if not dry_run:
+        raise HTTPException(405, "GET is dry-run only — use POST /api/admin/own-snapshot-vat-backfill?dry_run=false&confirm_count=N")
+    return await own_snapshot_vat_backfill(dry_run=True, sample=sample, user=user)
+
+
+@router.post("/admin/own-snapshot-vat-backfill")
+async def own_snapshot_vat_backfill(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+                                    confirm_count: Optional[int] = Query(None),
+                                    user=Depends(get_user)):
+    """iter54 — put own-store product_snapshots on the same inc-VAT basis as
+    my_products.
+
+    The corrected price comes from my_products, which iter44-47 already resolved
+    (storefront inc-VAT where the product is listed, else the Merchant price
+    grossed up only when Zid reports is_taxable). Re-deriving it here would risk
+    the two drifting apart again, so my_products is the single source of truth.
+
+    dry_run=true (default): full projection, zero writes. Real run requires
+    confirm_count to equal the affected row count exactly; every affected
+    snapshot is copied into snapshot_vat_backfill_backup_<ts> BEFORE any write,
+    in batches, and the rollups the detail panel and market position read from
+    are recomputed afterwards. super_admin only."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+    store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1})
+    if not store:
+        raise HTTPException(400, "no store flagged is_own_store=True")
+    own_id = store["id"]
+
+    # my_products is the corrected basis (iter44-47). Rows it never corrected
+    # carry no price_basis and are left alone rather than guessed at.
+    target = {}
+    async for p in db.my_products.find(
+            {}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1, "price_basis": 1}):
+        sku = str(p.get("sku") or "").strip()
+        price = p.get("sale_price") or p.get("price")
+        if sku and isinstance(price, (int, float)) and price > 0:
+            target[sku] = (round(float(price), 2), p.get("price_basis") or "unknown")
+
+    changed, unchanged, no_target = 0, 0, 0
+    basis_counts, samples, affected_skus = {}, [], set()
+    async for s in db.product_snapshots.find(
+            {"store_id": own_id}, {"_id": 0, "sku": 1, "price": 1, "crawled_at": 1}):
+        sku = str(s.get("sku") or "").strip()
+        t = target.get(sku)
+        if not t:
+            no_target += 1
+            continue
+        new_price, basis = t
+        old = s.get("price")
+        if old is not None and abs(float(old) - new_price) <= 0.009:
+            unchanged += 1
+            continue
+        changed += 1
+        affected_skus.add(sku)
+        basis_counts[basis] = basis_counts.get(basis, 0) + 1
+        if len(samples) < sample:
+            samples.append({
+                "sku": sku, "before": old, "after": new_price,
+                "ratio": round(new_price / float(old), 4) if old else None,
+                "price_basis": basis,
+                "crawled_at": s.get("crawled_at"),
+            })
+
+    # the SKU the whole investigation turned on, always surfaced
+    probe = {}
+    _pk = "052742059518"
+    if _pk in target:
+        probe = {"sku": _pk, "my_products_price": target[_pk][0],
+                 "price_basis": target[_pk][1],
+                 "snapshots": [
+                     {"before": r.get("price"), "after": target[_pk][0],
+                      "crawled_at": r.get("crawled_at")}
+                     async for r in db.product_snapshots.find(
+                         {"store_id": own_id, "sku": _pk},
+                         {"_id": 0, "price": 1, "crawled_at": 1}).sort("crawled_at", -1).limit(5)]}
+
+    report = {
+        "dry_run": dry_run,
+        "own_store": {"id": own_id, "name": store.get("name")},
+        "own_snapshots_total": await db.product_snapshots.count_documents({"store_id": own_id}),
+        "competitor_snapshots_untouched": await db.product_snapshots.count_documents(
+            {"store_id": {"$ne": own_id}}),
+        "would_update" if dry_run else "updated": changed,
+        "already_correct": unchanged,
+        "no_my_products_target": no_target,
+        "distinct_skus_affected": len(affected_skus),
+        "price_basis_counts": basis_counts,
+        "confirm_count_required": changed,
+        "sample": samples,
+        "probe_052742059518": probe,
+        "batch_size": _SNAP_VAT_BATCH,
+    }
+    if dry_run:
+        return report
+    if confirm_count != changed:
+        raise HTTPException(
+            409,
+            f"own-snapshot-vat-backfill refused: confirm_count={confirm_count} does not match the "
+            f"live affected count {changed} — re-run the dry run, review, and confirm the exact number")
+    if not changed:
+        return report
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    bname = f"snapshot_vat_backfill_backup_{ts}"
+    if await db[bname].estimated_document_count():
+        raise HTTPException(500, {"error": f"backup collection {bname} already exists and is non-empty",
+                                  "phase": "backup"})
+
+    # ── backup FIRST, in batches (the 63k-row single-shot timeout lesson) ──
+    ids = [d["_id"] async for d in db.product_snapshots.find(
+        {"store_id": own_id, "sku": {"$in": sorted(affected_skus)}}, {"_id": 1}).batch_size(5000)]
+    backed_up = 0
+    try:
+        for i in range(0, len(ids), _SNAP_VAT_BATCH):
+            chunk = ids[i:i + _SNAP_VAT_BATCH]
+            docs = await db.product_snapshots.find({"_id": {"$in": chunk}}).to_list(length=len(chunk))
+            if docs:
+                await db[bname].insert_many(docs, ordered=False)
+                backed_up += len(docs)
+        verified = await db[bname].count_documents({})
+        if verified != len(ids):
+            raise RuntimeError(f"backup verification failed: {len(ids)} rows to back up, {verified} stored")
+    except Exception as e:
+        logger.exception("[SnapVAT] backup failed — nothing written")
+        raise HTTPException(500, {"error": "aborted during BACKUP — no snapshot was modified",
+                                  "phase": "backup", "backup_collection": bname,
+                                  "exception": type(e).__name__, "message": str(e)[:400]})
+
+    # ── write, per SKU, batched ──
+    updated = 0
+    try:
+        for sku in sorted(affected_skus):
+            new_price, basis = target[sku]
+            res = await db.product_snapshots.update_many(
+                {"store_id": own_id, "sku": sku},
+                {"$set": {"price": new_price, "original_price": new_price,
+                          "price_basis": basis,
+                          "vat_backfilled_at": datetime.now(timezone.utc).isoformat()}})
+            updated += res.modified_count
+    except Exception as e:
+        logger.exception("[SnapVAT] write failed mid-run")
+        raise HTTPException(500, {"error": "failed mid-write — restore from the backup",
+                                  "phase": "write", "backup_collection": bname,
+                                  "updated_before_failure": updated,
+                                  "exception": type(e).__name__, "message": str(e)[:400]})
+
+    # ── recompute what the detail panel / market position read from ──
+    recompute = {}
+    for label, fn in (("store_metrics", lambda: recompute_all_store_metrics(db)),
+                      ("dashboard_cache", lambda: maybe_recompute_dashboard_cache(db, force=True)),
+                      ("page_caches", lambda: maybe_recompute_page_caches(db, force=True))):
+        try:
+            r = await fn()
+            recompute[label] = r if label == "store_metrics" else ("recomputed" if r else "skipped")
+        except Exception as e:
+            logger.exception("[SnapVAT] recompute %s failed", label)
+            recompute[label] = f"ERROR: {type(e).__name__}: {str(e)[:160]}"
+
+    report["backup_collection"] = bname
+    report["backup_timestamp"] = ts
+    report["backed_up"] = backed_up
+    report["snapshots_written"] = updated
+    report["recompute"] = recompute
+    report["after_verification"] = [
+        {"sku": r["sku"], "price": r.get("price"), "price_basis": r.get("price_basis")}
+        async for r in db.product_snapshots.find(
+            {"store_id": own_id, "sku": {"$in": sorted(affected_skus)[:sample]}},
+            {"_id": 0, "sku": 1, "price": 1, "price_basis": 1}).limit(sample)
+    ]
+    return report
+
+
 @router.get("/admin/own-store-price-audit")
 async def own_store_price_audit(sample: int = Query(20, ge=1, le=200), user=Depends(get_user)):
     """iter44 STEP 1 — read-only validation of the own-store VAT-basis fix.

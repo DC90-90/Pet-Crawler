@@ -1984,6 +1984,8 @@ async def sync_own_store_prices(db, store=None):
             # tagged, so the basis is auditable rather than silently wrong.
             storefront_overlay_meta = {"ok": False, "error": str(e)[:200]}
             logger.error(f"[OwnSync] storefront overlay failed ({e}) — merchant prices retained")
+    # iter54 — resolved own price per RAW sku, shared with the snapshot writer
+    own_resolved_price = {}
     basis_counts = {"storefront_inc_vat": 0, "merchant_computed_inc_vat": 0,
                     "merchant_non_taxable": 0, "merchant_unknown_tax": 0}
 
@@ -2050,6 +2052,19 @@ async def sync_own_store_prices(db, store=None):
                 norm["price"] = shelf
                 norm["sale_price"] = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
         basis_counts[price_basis] = basis_counts.get(price_basis, 0) + 1
+        # iter54 — hand the RESOLVED price to the snapshot writer below.
+        # That writer re-read `raw["price"]` from scratch, i.e. the Zid Merchant
+        # API's EX-VAT base, so my_products was corrected to the inc-VAT shelf
+        # price while product_snapshots kept the ex-VAT one (Hills 052742059518:
+        # my_products 170.00, snapshot 147.83). Every surface that reads
+        # snapshots — the detail panel, price history, market position, the
+        # rollups behind Insights — therefore showed our store 15% cheap.
+        # Keyed by the RAW sku: the matching below may retarget to a different
+        # my_products sku, but the snapshot is written under the raw one.
+        _resolved_sku = str(norm.get("sku") or "").strip()
+        if _resolved_sku:
+            own_resolved_price[_resolved_sku] = (
+                norm.get("price"), norm.get("sale_price"), price_basis)
         crawled_sku = str(norm["sku"]).strip()
         crawled_barcode = str(norm.get("barcode") or "").strip()
 
@@ -2160,7 +2175,14 @@ async def sync_own_store_prices(db, store=None):
             sku = (raw.get("sku") or "").strip()
             if not sku:
                 continue
-            price = raw.get("price") or 0
+            # iter54 — the SAME inc-VAT basis my_products got, not the raw
+            # ex-VAT merchant price. Falls back to the raw value only for rows
+            # loop 1 never resolved (it cannot happen for zid_api rows, but the
+            # snapshot must still be written rather than dropped).
+            _res = own_resolved_price.get(sku)
+            price = (_res[0] if _res and _res[0] is not None else (raw.get("price") or 0))
+            sale_price_v = _res[1] if _res else None
+            price_basis_v = _res[2] if _res else "merchant_unknown_tax"
             qty = raw.get("qty_available") or 0
             in_stock = bool(raw.get("in_stock")) if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""
@@ -2198,6 +2220,11 @@ async def sync_own_store_prices(db, store=None):
                 "sku": sku,
                 "price": round(price, 2),
                 "original_price": round(price, 2),
+                # iter54 — the basis this price was resolved on, so a future
+                # capture regression is visible in our own data rather than
+                # only in my_products.
+                "price_basis": price_basis_v,
+                "sale_price": round(sale_price_v, 2) if sale_price_v else None,
                 "discount_pct": 0,
                 "in_stock": in_stock,
                 "qty_available": int(qty),
