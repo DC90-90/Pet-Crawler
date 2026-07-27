@@ -126,7 +126,43 @@ function RevenueCell({ row, isRTL }) {
     return <span className="metric-number text-[#6AC1B5]">{row.revenue_30d.toLocaleString()} SAR</span>;
   }
 
-  // iter57 — ROUGH ESTIMATE for platforms that hide sold-counts. Rendered
+  // iter59 — TIER 2: MEASURED (APPROX.) from the Salla sold badge. This is a
+  // real observation — the cumulative counter diffed between crawls — so it is
+  // NOT the ±50% estimate. But the badge is bucketed by Salla, so it is not the
+  // exact Zid figure either. Its own colour: sky, solid (not italic), between
+  // measured teal and estimate amber.
+  const ap = row.revenue_approx;
+  if (ap && ap.usable && ap.revenue > 0) {
+    const tip = isRTL
+      ? `مقاس (تقريبي). مأخوذ من عدّاد المبيعات التراكمي الذي يعرضه متجر سلة ("تم بيعه أكثر من N مرة")، بفرق القراءات بين عمليتي زحف — أي مبيعات مرصودة فعلاً، وليست تقديراً.\n\n`
+        + `تقريبي لأن سلة تعرض الرقم مقرَّباً/محدوداً بسقف، لا كعدد دقيق.\n\n`
+        + `مبني على ${ap.products_measured} من ${ap.products_total} منتج (${ap.coverage_pct}%).`
+        + (ap.products_capped ? ` ${ap.products_capped} منتج بقراءة محدودة بسقف واستُبعد.` : "")
+        + (ap.products_baseline_only ? ` ${ap.products_baseline_only} منتج بقراءة واحدة فقط (يحتاج زحفة ثانية).` : "")
+      : `Measured (approx.). Taken from the cumulative sold-counter Salla shows on the storefront ("sold more than N times"), diffed between crawls — real observed sales, not an estimate.\n\n`
+        + `Approximate because Salla buckets and caps that number rather than publishing an exact unit count.\n\n`
+        + `Based on ${ap.products_measured} of ${ap.products_total} products (${ap.coverage_pct}%).`
+        + (ap.products_capped ? ` ${ap.products_capped} had a capped reading and were excluded.` : "")
+        + (ap.products_baseline_only ? ` ${ap.products_baseline_only} have only one reading so far (need a second crawl).` : "");
+    return (
+      <span className="inline-flex flex-col gap-0.5" title={tip} data-testid="revenue-approx">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="metric-number text-[#38BDF8]">
+            {Math.round(ap.revenue).toLocaleString()} SAR
+          </span>
+          <span className="text-[9px] px-1 py-0.5 rounded bg-[#38BDF8]/10 text-[#38BDF8]/90 tracking-wide">
+            {isRTL ? "مقاس تقريبي" : "MEASURED ~"}
+          </span>
+        </span>
+        <span className="text-[9px] text-[#38BDF8]/60 leading-none">
+          {isRTL ? `من عدّاد سلة · ${ap.coverage_pct}% تغطية`
+                 : `from Salla sold-count · ${ap.coverage_pct}% coverage`}
+        </span>
+      </span>
+    );
+  }
+
+  // iter57 — TIER 3: ROUGH ESTIMATE for platforms that hide sold-counts. Rendered
   // deliberately unlike the measured value: amber not teal, reduced opacity, an
   // explicit ESTIMATE tag, and a "~". ONE fixed +/-50% band for every store —
   // a coverage-derived band would tighten per store and imply a precision the
