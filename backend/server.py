@@ -3981,7 +3981,13 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     own_id = own_store["id"] if own_store else None
 
     # Get all SKUs we care about (own catalog) — prevents scanning 12k+ unrelated SKUs
-    own_skus = set(p["sku"] for p in await db.my_products.find({}, {"_id": 0, "sku": 1}).to_list(20000) if p.get("sku"))
+    # iter51 — names come along so the pack-count guard below can compare OUR
+    # descriptor against the shared catalogue one.
+    _own_rows = await db.my_products.find(
+        {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1}).to_list(20000)
+    own_skus = set(p["sku"] for p in _own_rows if p.get("sku"))
+    own_name = {p["sku"]: f"{p.get('name_ar') or ''} {p.get('name_en') or ''}"
+                for p in _own_rows if p.get("sku")}
     if not own_skus:
         return {"opportunities": [], "well_positioned": [], "undercut": [],
                 "summary": {"total_overpriced": 0, "total_uplift": 0, "zero_sales_overpriced": 0}}
@@ -4018,8 +4024,28 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     total_uplift = 0
     zero_sales_overpriced = 0
 
+    pack_mismatch_skipped = []
     for sku, store_snaps in by_sku.items():
         if len(store_snaps) < 2:
+            continue
+        # iter51 — PACK-COUNT GUARD. A carton and a single tin of the same
+        # product share an EAN (and on some stores a SKU string), so they land
+        # in the same bucket here and the 24-pack is compared against one piece:
+        # "+2044% overpriced" on Beso 24 Pieces*400g against a 7.50 single.
+        # They are DIFFERENT products, so the bucket is DROPPED rather than
+        # price-normalised per unit.
+        #
+        # Coverage limit, stated plainly: product_snapshots carries no product
+        # name and db.products holds ONE row per SKU shared by every store, so
+        # the only comparison available is our my_products descriptor against
+        # that shared catalogue row. Where the shared row happens to hold OUR
+        # OWN carton name the two agree and the mismatch is invisible from
+        # stored data. Closing that needs per-store names on snapshots — a
+        # crawler change, out of scope here.
+        _cat = prod_map.get(sku, {})
+        _cat_name = f"{_cat.get('name_ar') or ''} {_cat.get('name_en') or ''}"
+        if not _pack_compatible(own_name.get(sku, ""), _cat_name):
+            pack_mismatch_skipped.append(sku)
             continue
         # iter50 — "the market" is COMPETITORS. Our own store used to be folded
         # into the min/avg, so whenever our price was the lowest raw number the
@@ -4079,6 +4105,10 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
             "zero_sales_overpriced": zero_sales_overpriced,
             "overpriced_count": total_overpriced,
             "total_uplift_sar": round(total_uplift, 2),
+            # iter51 — SKUs withheld because our pack count disagrees with the
+            # catalogue's. Reported rather than silently dropped.
+            "pack_mismatch_skipped": len(pack_mismatch_skipped),
+            "pack_mismatch_sample": pack_mismatch_skipped[:20],
         },
     }
 
@@ -4576,7 +4606,8 @@ async def trigger_digest(user=Depends(get_user)):
     return digest
 
 # ── My Products Import & Price Intelligence ─────────────────
-from matcher import match_my_product, run_matching_for_all, _is_valid_barcode
+from matcher import (match_my_product, run_matching_for_all, _is_valid_barcode,
+                     _pack_compatible)
 
 # MatchActionIn moved to /app/backend/models/schemas.py (Feb 2026 refactor)
 
