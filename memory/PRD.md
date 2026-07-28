@@ -94,7 +94,15 @@ Post-proper-fix, production 90D KPIs should surface as (per preview): matched �
 
 **Rule from now on:** if code touches `product_snapshots.find/aggregate` in a way that reads more than ~10k rows at production scale, don't ship without a documented load-test run against ~1M-snapshot fixture data.
 
+## iter61 — Matcher barcode normalization (merged Jun 2026, preview only, NOT deployed)
+- Moved GTIN-14 canonical key builder (`_BARCODE_LEAD_RE`, `barcode_keys`) into `core/utils.py` and added new `canonical_barcode()`; used by BOTH `crawlers.py` (re-exported) and `matcher.py` (which previously had NO barcode normalization and intersected raw strings).
+- `matcher._barcode_key_set()` canonicalizes both sides to GTIN-14 before comparing; records `barcode_key` = "literal"|"gtin14" on each barcode match (does not change `match_method`).
+- Crawler now PERSISTS competitor barcode to `products` and `product_snapshots` (was extracted since iter35 then discarded); backfills existing rows without overwriting. Matcher Level-1 aggregation now carries `barcode` (`$first`).
+- iter51-53 pack/collision/weight/6x-price guards left UNCHANGED and confirmed still rejecting (16/16 new tests in `tests/test_matcher_barcode_normalization.py` pass).
+- Verified: 173 pure-unit tests pass (1 pre-existing failure `test_subcategories::...backfill...` confirmed identical on baseline; integration tests fail only due to stale preview DB). Backend restarted, healthy. NOT saved to GitHub / NOT redeployed per user.
+
 ## Test Coverage
+- `/app/backend/tests/test_matcher_barcode_normalization.py` — 16 tests (iter61)
 - `/app/backend/tests/test_iteration18_sync_hardening.py` — 11 tests
 - `/app/backend/tests/test_iteration19_coverage_split.py` — 25 tests (iter21 KPI baselines widened but ROLLED BACK to iter20 values after hotfix — needs re-adjustment when iter21 proper fix ships)
 - `/app/backend/tests/test_iteration20_api_contract.py` — 28 tests (TestKpiBlockIter21 currently pins the ~1057/50.8/319 baselines that only preview shows post-revert; on production they revert to iter20 numbers)

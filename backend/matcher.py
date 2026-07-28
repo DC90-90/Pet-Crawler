@@ -7,6 +7,7 @@ CRITICAL: A wrong match is worse than no match.
 import re, logging
 from typing import Optional
 from datetime import datetime, timezone, timedelta
+from core.utils import canonical_barcode
 
 # iter22 (Jul 2026): candidate snapshots for matching are bounded to this
 # window. Nothing older should influence a match, and the bound is what lets
@@ -97,6 +98,53 @@ def _is_valid_barcode(val: str) -> bool:
 def _is_numeric_sku(val: str) -> bool:
     """Treat numeric SKU (8-14 digits) as a barcode/EAN candidate."""
     return _is_valid_barcode(val)
+
+
+# ── iter61: canonical barcode keys ──────────────────────────
+# Level 1 used to intersect RAW strings:
+#     {"052742059518"} & {"52742059518"} == set()
+# — the same GTIN written as UPC-A and as EAN, and the exact pair iter47 was
+# written to fix. iter47's normalization lived in crawlers.py and was reachable
+# only from the own-store price-resolution path, so the matcher never saw it.
+# Here the same helper canonicalises BOTH sides to GTIN-14 before comparing.
+#
+# This widens the KEY SPACE only. Every downstream guard is untouched:
+# _pack_compatible, _weights_reject and barcode_price_sane all still run on each
+# surviving candidate, so a 6x price gap with no pack corroboration is still
+# rejected exactly as in iter53.
+def _barcode_key_set(barcodes=(), skus=()):
+    """Comparable keys for one side of a candidate pair.
+
+    The two argument groups are deliberately NOT treated the same:
+
+    barcodes  a barcode/gtin/mpn FIELD. Suffix variants are expected here — the
+              own catalogue carries "9003579308936carton" for a case pack that
+              shares the unit EAN (iter45) — so the leading 8-14 digit run is
+              canonicalised even when the whole string is not numeric.
+    skus      a SKU FIELD. Only admitted when the WHOLE string is a valid
+              barcode, which is the pre-existing _is_numeric_sku gate. A
+              merchant SKU like "12345678-BLK" must NOT be read as a GTIN with a
+              suffix, or every store's internal numbering becomes a key.
+
+    The 8-digit floor keeps short numeric SKUs ("15", "4021") out entirely, so
+    canonicalisation cannot collide two unrelated small-numbered products.
+    """
+    keys = set()
+    for v in barcodes:
+        s = str(v or "").strip()
+        if not s:
+            continue
+        if _is_valid_barcode(s):
+            keys.add(s.lower())
+        k = canonical_barcode(s)        # tolerates a trailing variant suffix
+        if k:
+            keys.add(k)
+    for v in skus:
+        s = str(v or "").strip()
+        if _is_valid_barcode(s):        # whole string, no suffix tolerance
+            keys.add(s.lower())
+            keys.add(canonical_barcode(s))
+    return keys
 
 
 def _tokenize(text: str) -> list:
@@ -333,12 +381,14 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
     my_weight_g = _extract_weight_grams(my_name_en) or _extract_weight_grams(my_name_ar)
     my_is_bundle = _is_bundle_sku(my_sku) or _has_pack_indicator(my_name_full)
 
-    # Barcode candidates from MY product: explicit barcode + numeric SKU
-    my_barcode_candidates = set()
-    if _is_valid_barcode(my_barcode):
-        my_barcode_candidates.add(my_barcode)
-    if _is_numeric_sku(my_sku):
-        my_barcode_candidates.add(my_sku)
+    # Barcode candidates from MY product: explicit barcode + numeric SKU.
+    # iter61 — both go through _barcode_key_set, which adds the GTIN-14 form.
+    # The SKU is still admitted only when the whole string is a barcode, which
+    # is what makes this a cross-match in both directions: our barcode can meet
+    # their SKU and our SKU can meet their barcode.
+    my_barcode_candidates = _barcode_key_set(barcodes=(my_barcode,), skus=(my_sku,))
+    # lowercased to compare against the key set, which is lowercased throughout
+    my_literal_candidates = {v.lower() for v in (my_barcode, my_sku) if _is_valid_barcode(v)}
 
     # Get blacklisted matches
     blacklist = set()
@@ -377,16 +427,25 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
             if c_sku in blacklist:
                 continue
             c_prod = comp_products.get(c_sku, {})
-            c_barcode = str(c_prod.get("barcode", "")).strip()
-            c_gtin = str(c_prod.get("gtin", "")).strip()
-            c_mpn = str(c_prod.get("mpn", "")).strip()
-            comp_barcode_candidates = set()
-            for v in (c_barcode, c_gtin, c_mpn, c_sku):
-                if _is_valid_barcode(v):
-                    comp_barcode_candidates.add(v)
+            # iter61 — `snap.barcode` is the per-store observation. db.products
+            # holds ONE row per SKU shared by every store (first writer wins),
+            # so the snapshot is the only place a second store's barcode for the
+            # same SKU string survives.
+            comp_barcode_candidates = _barcode_key_set(
+                barcodes=(snap.get("barcode"), c_prod.get("barcode"),
+                          c_prod.get("gtin"), c_prod.get("mpn")),
+                skus=(c_sku,))
             common_barcodes = my_barcode_candidates & comp_barcode_candidates
             if not common_barcodes:
                 continue
+            # Literal equality means the raw strings already agreed; anything
+            # else was recovered by canonicalisation. Recorded as a SEPARATE
+            # field rather than a new match_method value, so that the existing
+            # `match_method == "barcode"` contract every downstream consumer
+            # relies on is untouched, and the effect of this change is still
+            # measurable in product_matches after a re-run.
+            barcode_key = ("literal" if (my_literal_candidates & comp_barcode_candidates)
+                           else "gtin14")
             c_name = _get_comp_name(c_prod)
             # Pack compatibility
             if not _pack_compatible(my_name_full, c_name):
@@ -423,7 +482,9 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
                         snap.get("store_name"), _why)
                     continue
             conf = 100 if c_sku in confirmed else 99
-            matches.append(_build_match(my_product, snap, c_prod, conf, "barcode"))
+            m = _build_match(my_product, snap, c_prod, conf, "barcode")
+            m["barcode_key"] = barcode_key
+            matches.append(m)
             matched_skus.add(c_sku)
 
     if matched_skus:
