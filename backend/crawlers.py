@@ -14,6 +14,10 @@ import itertools
 import httpx
 from datetime import datetime, timezone
 
+# iter61 — one definition of barcode canonicalisation, shared with matcher.py.
+# Re-exported here so `crawlers.barcode_keys` keeps working.
+from core.utils import _BARCODE_LEAD_RE, barcode_keys, canonical_barcode  # noqa: F401
+
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
 logger = logging.getLogger(__name__)
 
@@ -588,6 +592,13 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             category = guess_category(norm["name_ar"])
             await db.products.insert_one({
                 "id": pid, "sku": norm["sku"],
+                # iter61 — _normalize_raw_product has extracted this since
+                # iter35 (variant-aware, from skus[].barcode/gtin/mpn) and both
+                # write sites dropped it. The matcher's Level-1 barcode step
+                # therefore had NO competitor barcode to compare against and
+                # could only fire when a store happened to type a bare EAN into
+                # its SKU field. Persisting it is what makes Level 1 real.
+                "barcode": norm.get("barcode") or "",
                 "name_ar": norm["name_ar"], "name_en": norm["name_ar"],
                 "brand": extract_brand(norm["name_ar"]),
                 "category": category,
@@ -603,6 +614,12 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
         else:
             pid = existing["id"]
             patch = {}
+            # iter61 — backfill the barcode onto rows written before it was
+            # persisted, so existing products gain it on the next crawl rather
+            # than only newly-discovered ones. Never overwrites a value we
+            # already hold.
+            if norm.get("barcode") and not existing.get("barcode"):
+                patch["barcode"] = norm["barcode"]
             if norm["img_url"] and not existing.get("image_url"):
                 patch["image_url"] = norm["img_url"]
             if product_url and not existing.get("product_url"):
@@ -624,6 +641,10 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "store_id": store["id"],
             "store_name": store["name"],
             "sku": norm["sku"],
+            # iter61 — snapshots carry it too. db.products is ONE row per SKU
+            # shared across every store (first writer wins), so the per-store
+            # observation of a barcode is only recoverable from the snapshot.
+            "barcode": norm.get("barcode") or "",
             "price": round(norm["price"], 2),
             "original_price": round(norm["original_price"], 2),
             # iter35 — persist the captured sale price so a future capture
@@ -1610,34 +1631,14 @@ def storefront_shelf_price(raw):
 # "9003579308936carton" (a case/carton pack sharing the unit EAN). Match on the
 # leading 8-14 digit run as well as the literal value, in BOTH directions, so a
 # suffix on either side still matches.
-_BARCODE_LEAD_RE = re.compile(r"^(\d{8,14})(?=[^\d]|$)")
-
-
-# iter47 — the same physical product can be keyed as UPC-A (12 digits, leading
-# zero) on one side and EAN (11 digits, zero dropped) on the other:
-#   my_products 052742059518  vs  storefront 52742059518
-# Neither literal nor suffix-stripping bridges those, so both sides also get the
-# canonical GTIN-14 form (zero-padded to 14), which is identical for both.
-def barcode_keys(value, canonical=True):
-    """Candidate lookup keys for a barcode-ish value (lowercased).
-
-    canonical=False reproduces the pre-iter47 key set, used only to measure how
-    many rows the new keys recover.
-    """
-    raw = str(value or "").strip().lower()
-    if not raw:
-        return []
-    keys = [raw]
-    m = _BARCODE_LEAD_RE.match(raw)
-    if m:
-        lead = m.group(1)
-        if lead != raw:
-            keys.append(lead)
-        if canonical:
-            canon = lead.zfill(14)          # GTIN-14 canonical form
-            if canon not in keys:
-                keys.append(canon)
-    return keys
+# iter47 — plus the canonical GTIN-14 form, so UPC-A-with-leading-zero and
+# EAN-without bridge.
+#
+# iter61 — `_BARCODE_LEAD_RE` and `barcode_keys` now live in core.utils and are
+# imported at the top of this module. They used to be DEFINED here, which meant
+# the MATCHER could not reach them: it intersected raw strings and so failed on
+# exactly the pair iter47 was written to fix. `crawlers.barcode_keys` is still a
+# valid import.
 
 
 # Zid storefront product links look like /products/15 (Salla: /p15) — the

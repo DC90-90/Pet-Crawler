@@ -86,6 +86,59 @@ MAX_SOLD_COUNT_DELTA_PER_INTERVAL = 50
 MIN_AGGREGATION_CONFIDENCE = 85
 
 
+# ── Barcode canonicalisation (iter47, shared here in iter61) ────────────────
+# The same physical product is keyed as UPC-A (12 digits, leading zero) on one
+# side and EAN (11 digits, zero dropped) on the other:
+#     my_products 052742059518   vs   competitor 52742059518
+# Neither literal equality nor suffix-stripping bridges those, so every side
+# also gets the canonical GTIN-14 form (zero-padded to 14), which is identical
+# for both.
+#
+# iter61 — this lived in crawlers.py and was therefore reachable only from the
+# own-store price-resolution path. The MATCHER did a raw set intersection with
+# no normalization at all, so the exact pair iter47 was written to fix still
+# failed to link a competitor to our catalogue — costing seller coverage rather
+# than price accuracy. One definition, used by both.
+_BARCODE_LEAD_RE = re.compile(r"^(\d{8,14})(?=[^\d]|$)")
+
+
+def barcode_keys(value, canonical=True):
+    """Candidate lookup keys for a barcode-ish value (lowercased).
+
+    The 8-digit floor is what keeps short numeric SKUs ("15", "4021") out of the
+    key space entirely — they are never barcode candidates, so widening the
+    canonical form cannot collide them.
+
+    canonical=False reproduces the pre-iter47 key set, used only to measure how
+    many rows the new keys recover.
+    """
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return []
+    keys = [raw]
+    m = _BARCODE_LEAD_RE.match(raw)
+    if m:
+        lead = m.group(1)
+        if lead != raw:
+            keys.append(lead)
+        if canonical:
+            canon = lead.zfill(14)          # GTIN-14 canonical form
+            if canon not in keys:
+                keys.append(canon)
+    return keys
+
+
+def canonical_barcode(value):
+    """The single GTIN-14 form of a barcode-ish value, or None.
+
+    Set membership needs ONE key per value, not a list — two products are the
+    same trade item iff their GTIN-14 forms are equal.
+    """
+    raw = str(value or "").strip().lower()
+    m = _BARCODE_LEAD_RE.match(raw)
+    return m.group(1).zfill(14) if m else None
+
+
 def get_stock_signal(qty, in_stock=None):
     """Return a stock label.
 
