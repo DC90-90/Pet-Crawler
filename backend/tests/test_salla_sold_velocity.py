@@ -250,16 +250,36 @@ def test_badge_store_with_only_one_reading_stays_on_the_estimate():
     asyncio.run(main())
 
 
-def test_ranking_order_is_untouched_by_any_revenue_tier():
+def test_ranking_order_follows_revenue_across_all_three_tiers():
+    """iter62 — this asserted the opposite until the client required a sales
+    leaderboard: the order was on the strength score and no revenue tier could
+    move a row. Now all three tiers share one sort axis, and this fixture is
+    the proof that they really are mixed rather than grouped by tier: a
+    measured-approx store leads, an exact store is second, an estimate third —
+    purely on the numbers.
+
+    What has NOT changed is that the score is computed only from the four
+    components. Revenue must never feed back into it."""
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed_tiers(db)
         out = await server._store_ranking_compute(db)
         order = [r["name"] for r in out["stores"]]
-        by_score = [r["name"] for r in sorted(
+        by_revenue = [r["name"] for r in sorted(
             out["stores"],
-            key=lambda r: (-r["score"], -r["components"]["breadth"]["products"], r["name"]))]
-        assert order == by_score, (order, by_score)
+            key=lambda r: (r["revenue_rank_value"] is None,
+                           -(r["revenue_rank_value"] or 0.0),
+                           -r["score"], -r["components"]["breadth"]["products"], r["name"]))]
+        assert order == by_revenue, (order, by_revenue)
+        assert [r["revenue_rank_basis"] for r in out["stores"]] == [
+            "measured_approx", "exact", "estimated"]
+        # Caty has the TOP strength score and still ranks last, on revenue
+        caty = next(r for r in out["stores"] if r["name"] == "Caty")
+        assert caty["score"] == max(r["score"] for r in out["stores"])
+        assert caty["rank"] == len(out["stores"])
+        # the measured-approx row is not mislabelled as an estimate
+        z = next(r for r in out["stores"] if r["name"] == "Zarafa")
+        assert z["revenue_is_estimate"] is False and caty["revenue_is_estimate"] is True
         for r in out["stores"]:
             c = r["components"]
             expect = round(100 * (server._RANKING_WEIGHTS["breadth"] * c["breadth"]["score"]

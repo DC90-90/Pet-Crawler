@@ -357,7 +357,7 @@ async def _seed_ranking(db):
     server.db = db
 
 
-def test_ranking_exposes_the_estimate_without_reordering_anything():
+def test_ranking_exposes_the_estimate_as_a_labelled_sort_value():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed_ranking(db)
@@ -393,13 +393,43 @@ def test_ranking_exposes_the_estimate_without_reordering_anything():
         assert {rows[n]["revenue_est_salla"]["band_pct"]
                 for n in ("Zarafa", "Caty", "Hamtaro")} == {50.0}
 
-        # ── THE CONTRACT: order and score are untouched by the estimate ──
-        # Caty's estimate is the smallest but its score position must not move,
-        # and stripping the estimates must reproduce the identical ordering.
-        order_without = [r["name"] for r in sorted(
+        # ── THE CONTRACT (rewritten, iter62) ──
+        # This used to assert that the estimate could NOT reorder anyone — the
+        # leaderboard ran on the strength score, so a +/-50% number was purely
+        # informational. The client has since required a sales leaderboard, so
+        # the estimate now PLACES the row. That protection is gone by
+        # instruction; what replaces it is labelling, and that is what this now
+        # pins hardest.
+        #
+        # Caty has the HIGHEST strength score (97.6) in this fixture and the
+        # smallest revenue, so it moves from the top of the old order to last —
+        # exactly the reordering the previous contract forbade.
+        caty = rows["Caty"]
+        assert caty["score"] == max(r["score"] for r in out["stores"])
+        assert caty["rank"] == out["total_stores"]
+        order_by_revenue = [r["name"] for r in sorted(
             out["stores"],
-            key=lambda r: (-r["score"], -r["components"]["breadth"]["products"], r["name"]))]
-        assert order_with == order_without, (order_with, order_without)
+            key=lambda r: (r["revenue_rank_value"] is None,
+                           -(r["revenue_rank_value"] or 0.0),
+                           -r["score"], -r["components"]["breadth"]["products"], r["name"]))]
+        assert order_with == order_by_revenue, (order_with, order_by_revenue)
+        assert out["sorted_by"] == "revenue_desc"
+
+        # An estimate placing a row must still be READABLE as an estimate — the
+        # whole honesty guard now rests here.
+        for n in ("Zarafa", "Caty", "Hamtaro"):
+            assert rows[n]["revenue_rank_basis"] == "estimated"
+            assert rows[n]["revenue_is_estimate"] is True
+            assert rows[n]["revenue_tier"] == "estimated"
+            assert rows[n]["revenue_30d"] is None       # never laundered
+        for n in ("Aleef", "Petsy"):
+            assert rows[n]["revenue_is_estimate"] is False
+        assert out["ranked_on_estimate"] == 3 and out["ranked_on_measured"] == 2
+
+        # Zarafa's estimate ties with the two MEASURED stores at 18000 and is
+        # placed among them — the tiers are genuinely interleaved, not grouped.
+        assert rows["Zarafa"]["revenue_rank_value"] == rows["Aleef"]["revenue_rank_value"]
+
         # score never references the estimate: recompute by hand from components
         for r in out["stores"]:
             c = r["components"]
