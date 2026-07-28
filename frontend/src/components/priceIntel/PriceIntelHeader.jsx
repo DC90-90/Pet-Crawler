@@ -173,13 +173,13 @@ function RevenueCell({ row, isRTL }) {
       ? `تقدير تقريبي. متاجر سلة لا تكشف عدادات المبيعات، لذا يُشتق هذا الرقم من سرعة البيع المرصودة في متاجر زد مطبَّقة على كتالوج هذا المتجر — بدقة تقارب ±50% فقط. `
         + `استخدمه للمقارنة الاتجاهية، لا كأرقام دقيقة أو أساس للقرارات.\n\n`
         + `النطاق: ${Math.round(est.range_low).toLocaleString()}–${Math.round(est.range_high).toLocaleString()} ريال.\n\n`
-        + `تكامل "محلي" (Mahally) — إن استُعيد — هو السبيل الوحيد لجعل إيرادات سلة قابلة للقياس فعلياً، لأنه يوفر أعداد المبيعات الحقيقية.\n\n`
-        + `لا يؤثر هذا التقدير على ترتيب المتاجر.`
-      : `Rough estimate. Salla stores don't expose sold-counts, so this is projected from Zid-store sales velocity applied to this store's catalog — accurate only to roughly ±50%. `
+        + `يصبح هذا الرقم مقاساً بمجرد أن نلتقط قراءتين من عدّاد المبيعات في المتجر ونحسب الفرق بينهما.\n\n`
+        + `تنبيه: الترتيب مبني على الإيرادات، وهذا الصف مُرتَّب بهذا التقدير — أي أن موقعه قد يزيح بمقدار ±50%.`
+      : `Rough estimate. This store's sold-counts have not been captured yet, so the figure is projected from Zid-store sales velocity applied to this store's catalog — accurate only to roughly ±50%. `
         + `Use for directional comparison, not exact figures or decisions.\n\n`
         + `Range: ${Math.round(est.range_low).toLocaleString()}–${Math.round(est.range_high).toLocaleString()} SAR.\n\n`
-        + `Only a Mahally integration (if restored) could make Salla revenue truly measurable — it exposes real sold quantities.\n\n`
-        + `This estimate does not affect store ranking.`;
+        + `It becomes MEASURED once we have two readings of the storefront's cumulative sold-counter to diff.\n\n`
+        + `Note: the ranking is sorted by revenue, and this row is placed using this estimate — so its position could move by ±50%.`;
     return (
       <span className="inline-flex flex-col gap-0.5" title={tip} data-testid="revenue-est-salla">
         <span className="inline-flex items-center gap-1.5">
@@ -240,13 +240,34 @@ export function StoreRankingCard({ ranking, computedAt, isRTL }) {
         <Trophy className="w-5 h-5 text-[#F59E0B]" />
         <h3 className="text-sm font-semibold text-white">{isRTL ? "ترتيب قوة السوق" : "Market Strength Ranking"}</h3>
       </div>
+      {/* iter62 — rank is by REVENUE now, not by the strength score. Saying so
+          on the card matters: the rows still show a strength bar, and without
+          this line a reader would reasonably assume the bar produced the order. */}
+      <p className="text-[10px] text-[#A1E4DB] mb-2" data-testid="ranking-sort-note">
+        {isRTL ? "مرتَّب حسب الإيرادات (الأعلى أولاً) · درجة القوة معروضة كمعلومة ثانوية"
+               : "Ranked by revenue (highest first) · strength score shown as secondary info"}
+      </p>
       {own && (
         <div className="flex items-end gap-2 mb-1" data-testid="own-rank-headline">
           <span className="text-4xl font-bold text-[#1E988E] metric-number">#{own.rank}</span>
           <span className="text-[#A1E4DB] text-sm mb-1">
-            {isRTL ? `من ${ranking.total_stores} متجراً · قوة السوق ${own.score}` : `of ${ranking.total_stores} stores · Market Strength ${own.score}`}
+            {isRTL ? `من ${ranking.total_stores} متجراً حسب الإيرادات · قوة السوق ${own.score}`
+                   : `of ${ranking.total_stores} stores by revenue · Market Strength ${own.score}`}
           </span>
         </div>
+      )}
+      {/* How much of the order rests on a +/-50% projection rather than on
+          measurement. The per-row tags say it too, but a reader scanning the
+          ORDER needs it stated about the order itself. */}
+      {ranking.ranked_on_estimate > 0 && (
+        <p className="text-[10px] text-[#F59E0B]/85 mb-1" data-testid="ranking-estimate-note">
+          {isRTL
+            ? `${ranking.ranked_on_estimate} من ${ranking.total_stores} صفاً مرتَّب بتقدير ±50% (بالعنبري) — موضعها تقريبي`
+            : `${ranking.ranked_on_estimate} of ${ranking.total_stores} rows are placed using a ±50% estimate (shown in amber) — those positions are approximate`}
+          {ranking.no_revenue_value > 0 && (isRTL
+            ? ` · ${ranking.no_revenue_value} بلا رقم إيرادات على الإطلاق (في الأسفل)`
+            : ` · ${ranking.no_revenue_value} have no revenue figure at all (placed last)`)}
+        </p>
       )}
       {computedAt && (
         <p className="text-[10px] text-[#6AC1B5] mb-3 font-mono">
@@ -263,6 +284,8 @@ export function StoreRankingCard({ ranking, computedAt, isRTL }) {
               onClick={() => setExpanded(expanded === r.store_id ? null : r.store_id)}
               className={`w-full flex items-center gap-2 text-xs py-1.5 px-2 rounded-lg text-start transition-colors hover:bg-white/5 ${r.is_own_store ? "bg-[#1E988E]/10 border border-[#1E988E]/20" : ""}`}
               data-testid={`ranking-row-${r.store_id}`}
+              data-revenue-basis={r.revenue_rank_basis}
+              data-revenue-rank-value={r.revenue_rank_value ?? ""}
             >
               <span className="text-[#A1E4DB] w-6 text-center metric-number">#{r.rank}</span>
               <span className={`flex-1 truncate ${r.is_own_store ? "text-[#1E988E] font-semibold" : "text-white"}`}>
@@ -274,7 +297,12 @@ export function StoreRankingCard({ ranking, computedAt, isRTL }) {
                   </span>
                 )}
               </span>
-              <ScoreBar value={r.score} color={r.is_own_store ? "#1E988E" : "#6AC1B5"} />
+              {/* iter62 — the strength score is no longer the sort key, but it
+                  stays on every row (bar + number) as secondary information. */}
+              <span title={isRTL ? `قوة السوق ${r.score} (معلومة ثانوية — الترتيب حسب الإيرادات)`
+                                 : `Market Strength ${r.score} (secondary — ranking is by revenue)`}>
+                <ScoreBar value={r.score} color={r.is_own_store ? "#1E988E" : "#6AC1B5"} />
+              </span>
               <span className="w-28 text-end hidden sm:inline-block"><RevenueCell row={r} isRTL={isRTL} /></span>
             </button>
             {expanded === r.store_id && (

@@ -5440,6 +5440,36 @@ _RANKING_FRESH_HOURS = 48
 _RANKING_STALE_BELOW = 0.3     # freshness under this ⇒ "stale data" badge
 
 
+def _ranking_revenue_value(row):
+    """(value, basis) on the unified revenue axis the ranking now sorts by.
+
+    iter62 — the client ranks stores by sales, so all three revenue tiers have
+    to reduce to ONE comparable number. Precedence is by evidence quality, not
+    by size: an exact ledger figure is preferred to a bucketed sold-badge diff,
+    which is preferred to a ±50% category-velocity projection.
+
+    Returns None when the store has no revenue figure of any kind. That is
+    deliberately NOT 0.0 — zero is a measurement ("this store sold nothing"),
+    absence is not, and conflating them would rank an unmeasurable store last
+    as though we had looked and found no sales.
+
+    A genuine measured 0 (an active Zid ledger with no orders in the window)
+    keeps its 0.0 and therefore still outranks a store with no figure at all.
+    """
+    rev = row.get("revenue_30d")
+    if isinstance(rev, (int, float)) and not isinstance(rev, bool):
+        return float(rev), "exact"
+    ap = row.get("revenue_approx") or {}
+    ap_rev = ap.get("revenue")
+    if ap.get("usable") and isinstance(ap_rev, (int, float)) and ap_rev > 0:
+        return float(ap_rev), "measured_approx"
+    est = row.get("revenue_est_salla") or {}
+    est_rev = est.get("revenue_est")
+    if isinstance(est_rev, (int, float)) and est_rev > 0:
+        return float(est_rev), "estimated"
+    return None, "none"
+
+
 async def _store_ranking_compute(db):
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=_RANKING_WINDOW_DAYS)
@@ -5506,7 +5536,8 @@ async def _store_ranking_compute(db):
     # into snapshots/coverage): my_products + the SAME market-position percentile
     # the Insights card shows + the real Zid orders ledger ──
     my_prods = await db.my_products.find(
-        {}, {"_id": 0, "price": 1, "sale_price": 1, "in_stock": 1, "quantity": 1, "last_synced_at": 1}).to_list(length=None)
+        {}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1, "in_stock": 1,
+             "quantity": 1, "last_synced_at": 1}).to_list(length=None)
     own_products = sum(1 for p in my_prods if (p.get("sale_price") or p.get("price") or 0) > 0)
     own_in_stock = sum(1 for p in my_prods if p.get("in_stock") or (p.get("quantity") or 0) > 0)
 
@@ -5603,10 +5634,38 @@ async def _store_ranking_compute(db):
         _obs = [{"store_id": sid, "sku": pr["sku"], "category": pr["category"],
                  "units": _units_by.get((sid, pr["sku"]), 0)}      # 0 = real non-mover
                 for sid in _measurable for pr in _prods_by_store.get(sid, [])]
-        _pools = salla_build_velocity_pools(_obs, _RANKING_WINDOW_DAYS)
+        # iter62 — the OWN store must not contribute to the velocity pool.
+        # `_units_by` is built from the competitor sales rollups, which by
+        # construction carry no rows for our own store, so every own product
+        # entered the pool as a units=0 "non-mover". Those zeros are an artefact
+        # of where the data comes from, not an observation that we sold nothing:
+        # they pulled the category mean down for every store estimated from it,
+        # and they pinned our own per-SKU velocity at exactly 0 — which is why
+        # the own-store estimate came out 0.0 and the row still had no number.
+        _pools = salla_build_velocity_pools(_obs, _RANKING_WINDOW_DAYS,
+                                            exclude_store=own_store_id)
+
+        # iter62 — the own store needs an estimate too. Until the Zid orders
+        # ledger fills, `own_revenue` is None and the row rendered
+        # "Accumulating" with no number, which under a revenue sort would drop
+        # us to the bottom as though we sold nothing. Its product list comes
+        # from my_products (own prices are not crawled into sku_store_coverage),
+        # and it is NOT added to _measurable — the velocity pools are built from
+        # competitor sales rollups, which carry no rows for our own store.
+        if own_store_id and own_revenue is None:
+            _prods_by_store[own_store_id] = [
+                {"sku": p.get("sku"),
+                 "price": p.get("sale_price") or p.get("price"),
+                 "category": _cat_by_sku.get(p.get("sku"), "")}
+                for p in my_prods
+                if (p.get("sale_price") or p.get("price") or 0) > 0
+            ]
+
         for sid, s in stores_meta.items():
-            if sid in _measurable or s.get("is_own_store"):
+            if sid in _measurable and not s.get("is_own_store"):
                 continue
+            if s.get("is_own_store") and own_revenue is not None:
+                continue                    # real ledger figure — no estimate
             # iter59 — the estimate is now the FALLBACK. A store whose badge we
             # can diff gets a real number instead.
             if sid in approx_by_store:
@@ -5714,12 +5773,42 @@ async def _store_ranking_compute(db):
             "overlap": len(overlap.get(sid, ())) if not is_own else None,
             "stale": fresh_score < _RANKING_STALE_BELOW,
         })
-    rows.sort(key=lambda r: (-r["score"], -r["components"]["breadth"]["products"], r["name"]))
+    # ── iter62: rank on REVENUE, not on the strength score ────────────────────
+    # Client requirement. One unified revenue axis across all three tiers, so a
+    # Salla store's estimate competes directly with a Zid store's measured
+    # figure. The strength score is retained on every row and becomes the
+    # tie-break; it is no longer the primary key.
+    #
+    # The honesty contract is unchanged by this. revenue_30d / revenue_approx /
+    # revenue_est_salla stay three SEPARATE fields, `revenue_tier` still says
+    # which one a row rests on, and the UI still renders an estimate in amber
+    # with its "ESTIMATE · ±50%" tag. Sorting them together must never make them
+    # LOOK alike — the client has to be able to read, at a glance, which
+    # positions rest on measurement and which on a ±50% projection.
+    for r in rows:
+        val, basis = _ranking_revenue_value(r)
+        r["revenue_rank_value"] = val
+        r["revenue_rank_basis"] = basis
+        r["revenue_is_estimate"] = basis == "estimated"
+    # A store with NO revenue figure at all goes to the bottom on the strength
+    # of having no figure — NOT by being assigned 0, which would assert it sold
+    # nothing. Within that group the old strength order is preserved.
+    rows.sort(key=lambda r: (r["revenue_rank_value"] is None,
+                             -(r["revenue_rank_value"] or 0.0),
+                             -r["score"],
+                             -r["components"]["breadth"]["products"],
+                             r["name"]))
     for i, r in enumerate(rows, 1):
         r["rank"] = i
     own_rank = next((r["rank"] for r in rows if r["is_own_store"]), None)
     return {"window_days": _RANKING_WINDOW_DAYS, "weights": _RANKING_WEIGHTS,
-            "total_stores": len(rows), "own_rank": own_rank, "stores": rows}
+            "total_stores": len(rows), "own_rank": own_rank,
+            "sorted_by": "revenue_desc",
+            "ranked_on_measured": sum(1 for r in rows
+                                      if r["revenue_rank_basis"] in ("exact", "measured_approx")),
+            "ranked_on_estimate": sum(1 for r in rows if r["revenue_rank_basis"] == "estimated"),
+            "no_revenue_value": sum(1 for r in rows if r["revenue_rank_basis"] == "none"),
+            "stores": rows}
 
 
 async def _price_intel_dashboard_compute(db):
