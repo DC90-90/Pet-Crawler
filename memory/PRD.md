@@ -94,6 +94,13 @@ Post-proper-fix, production 90D KPIs should surface as (per preview): matched �
 
 **Rule from now on:** if code touches `product_snapshots.find/aggregate` in a way that reads more than ~10k rows at production scale, don't ship without a documented load-test run against ~1M-snapshot fixture data.
 
+## iter62 — Rank stores by revenue (merged Jun 2026, preview only, NOT deployed)
+- `_store_ranking_compute` now sorts the Market Strength Ranking by a UNIFIED revenue axis descending (exact ledger > measured_approx sold-badge > ±50% estimated), all on one axis; strength `score` kept as secondary display + tie-break. New helper `_ranking_revenue_value()`.
+- Each row carries `revenue_rank_value` + `revenue_rank_basis` (exact/measured_approx/estimated/none) + `revenue_is_estimate`; stores with NO revenue figure sort last (None, not fake 0). Response adds `sorted_by`, `ranked_on_measured`, `ranked_on_estimate`, `no_revenue_value`.
+- Own store now excluded from the Salla velocity pool (`exclude_store=own_store_id`) — its products were entering as units=0 non-movers and understating every Salla estimate; own store also gets an estimate when its Zid ledger is empty.
+- Frontend `PriceIntelHeader.jsx`: "Ranked by revenue" note, per-row `data-revenue-basis`/`data-revenue-rank-value`, amber ±50% estimate row note, ScoreBar wrapped as secondary info, updated estimate tooltip copy.
+- Updated 3 obsolete pre-iter62 tests (asserted score-only order — GitHub-main #16 shipped them stale) to the new revenue-sort contract. New `tests/test_ranking_revenue_sort.py` (20 tests) passes. Full ranking+iter61 suite green; only pre-existing `test_subcategories` backfill failure remains. Backend restarted, ranking endpoint verified, frontend renders. NOT saved to GitHub / NOT redeployed.
+
 ## iter61 — Matcher barcode normalization (merged Jun 2026, preview only, NOT deployed)
 - Moved GTIN-14 canonical key builder (`_BARCODE_LEAD_RE`, `barcode_keys`) into `core/utils.py` and added new `canonical_barcode()`; used by BOTH `crawlers.py` (re-exported) and `matcher.py` (which previously had NO barcode normalization and intersected raw strings).
 - `matcher._barcode_key_set()` canonicalizes both sides to GTIN-14 before comparing; records `barcode_key` = "literal"|"gtin14" on each barcode match (does not change `match_method`).

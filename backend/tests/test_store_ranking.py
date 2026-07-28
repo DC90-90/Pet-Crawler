@@ -146,11 +146,19 @@ def test_store_ranking_end_to_end():
         assert rows["dead"]["stale"] is True
         assert zb["stale"] is False
 
-        # ── ordering: ranks are 1..N sorted by score desc ──
+        # ── ordering: iter62 ranks by the unified revenue axis, not score ──
         ordered = sorted(out["stores"], key=lambda r: r["rank"])
         assert [r["rank"] for r in ordered] == list(range(1, 6))
-        assert all(ordered[i]["score"] >= ordered[i + 1]["score"] for i in range(len(ordered) - 1))
-        assert ordered[0]["store_id"] == "zbig"                     # dominant on every axis
+        assert out["sorted_by"] == "revenue_desc"
+        by_revenue = sorted(out["stores"],
+            key=lambda r: (r["revenue_rank_value"] is None,
+                           -(r["revenue_rank_value"] or 0.0),
+                           -r["score"],
+                           -r["components"]["breadth"]["products"],
+                           r["name"]))
+        assert [r["store_id"] for r in ordered] == [r["store_id"] for r in by_revenue]
+        # own carries the largest revenue figure on the board (ledger 99.5) → #1
+        assert ordered[0]["store_id"] == "own"
 
         # overlap column (distinct my_skus matched per store)
         assert zb["overlap"] == 1 and s1["overlap"] == 1

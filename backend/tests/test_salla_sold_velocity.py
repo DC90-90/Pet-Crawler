@@ -250,16 +250,23 @@ def test_badge_store_with_only_one_reading_stays_on_the_estimate():
     asyncio.run(main())
 
 
-def test_ranking_order_is_untouched_by_any_revenue_tier():
+def test_ranking_order_follows_revenue_tiers():
+    # iter62 — ranking now sorts by the unified revenue axis (exact >
+    # measured_approx > estimated > none) with the strength score kept only as a
+    # tie-break. This test predates iter62 and asserted the score-only order.
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed_tiers(db)
         out = await server._store_ranking_compute(db)
         order = [r["name"] for r in out["stores"]]
-        by_score = [r["name"] for r in sorted(
+        by_revenue = [r["name"] for r in sorted(
             out["stores"],
-            key=lambda r: (-r["score"], -r["components"]["breadth"]["products"], r["name"]))]
-        assert order == by_score, (order, by_score)
+            key=lambda r: (r["revenue_rank_value"] is None,
+                           -(r["revenue_rank_value"] or 0.0),
+                           -r["score"],
+                           -r["components"]["breadth"]["products"],
+                           r["name"]))]
+        assert order == by_revenue, (order, by_revenue)
         for r in out["stores"]:
             c = r["components"]
             expect = round(100 * (server._RANKING_WEIGHTS["breadth"] * c["breadth"]["score"]

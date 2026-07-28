@@ -393,13 +393,18 @@ def test_ranking_exposes_the_estimate_without_reordering_anything():
         assert {rows[n]["revenue_est_salla"]["band_pct"]
                 for n in ("Zarafa", "Caty", "Hamtaro")} == {50.0}
 
-        # ── THE CONTRACT: order and score are untouched by the estimate ──
-        # Caty's estimate is the smallest but its score position must not move,
-        # and stripping the estimates must reproduce the identical ordering.
-        order_without = [r["name"] for r in sorted(
+        # ── iter62: the estimate now DOES participate in the order — the board
+        # ranks by the unified revenue axis (exact > measured_approx > estimated
+        # > none), with score kept only as a tie-break. The honesty contract that
+        # survives is that the SCORE itself never references the estimate.
+        order_by_revenue = [r["name"] for r in sorted(
             out["stores"],
-            key=lambda r: (-r["score"], -r["components"]["breadth"]["products"], r["name"]))]
-        assert order_with == order_without, (order_with, order_without)
+            key=lambda r: (r["revenue_rank_value"] is None,
+                           -(r["revenue_rank_value"] or 0.0),
+                           -r["score"],
+                           -r["components"]["breadth"]["products"],
+                           r["name"]))]
+        assert order_with == order_by_revenue, (order_with, order_by_revenue)
         # score never references the estimate: recompute by hand from components
         for r in out["stores"]:
             c = r["components"]
