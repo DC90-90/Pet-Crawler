@@ -63,6 +63,12 @@ from core import (
     compute_market_position,
     ttl_cache, cache_clear,
 )
+from seller_set import (
+    SELLER_LOOKBACK_DAYS, SELLER_SNAPSHOT_CAP, STALE_AFTER_DAYS,
+    alias_map_from_matches, hub_skus_from_matches, snapshot_or_clauses,
+    pack_guard_ok, freshness_labels, stock_labels, latest_per_store,
+    seller_summary, _as_aware,
+)
 
 SERVER_START_TIME = time.time()
 
@@ -656,6 +662,13 @@ async def seed_database():
     # crawled_at over 90 days. Without this the match cannot narrow before the
     # sort, which is what pushed those pipelines past the 100MB stage limit.
     await db.product_snapshots.create_index([("discount_pct", -1), ("crawled_at", -1)])
+    # iter60 — the seller list now reads product_matches and then fetches each
+    # matched store's own SKU. Both sides of that need an index: the snapshot
+    # $or branch is (store_id, sku, crawled_at), and the reverse match lookup
+    # keys on competitor_sku, which is NOT a prefix of the existing
+    # (my_sku, competitor_sku, competitor_store_id) index.
+    await db.product_snapshots.create_index([("store_id", 1), ("sku", 1), ("crawled_at", -1)])
+    await db.product_matches.create_index([("competitor_sku", 1), ("competitor_store_id", 1)])
     await db.proxy_usage.create_index("crawled_at")
     await db.products.create_index("sku", unique=True)
     await db.stores.create_index("domain", unique=True)
@@ -2679,50 +2692,138 @@ async def list_products(
     products = await db.products.find(query, {"_id": 0}).skip(skip).limit(limit).to_list(limit)
     return {"products": products, "total": total}
 
+# ── iter60: the full seller set behind "Stores Carrying" ─────────────────────
+# The seller list used to be `product_snapshots WHERE sku == <sku> AND
+# crawled_at >= now-30d`. product_matches — the entire output of the matching
+# engine — was never read, so a competitor matched by barcode (or by any key
+# other than a byte-identical SKU string) was matched and then dropped at render
+# time. The 30-day cliff removed the rest: a store crawled 31 days ago did not
+# show as stale, it vanished, and the panel read "1 seller" for a product a
+# dozen stores carry.
+#
+# _seller_snapshots widens what is FETCHED. What is TRUSTED is unchanged: rows
+# admitted via product_matches are re-checked against the iter51/52 pack guard
+# before they are shown.
+async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS,
+                            cap=SELLER_SNAPSHOT_CAP):
+    """(snapshots oldest→newest, sku_keys, guard_excluded_pairs).
+
+    `sku_keys` are the SKU strings that resolve to this product WITHOUT going
+    through a match — the SKU itself plus any hub SKUs reached by the reverse
+    hop. Rows on those keys are the endpoint's pre-existing behaviour and are
+    passed through untouched; everything else was admitted by the matcher and is
+    re-checked by the pack guard.
+
+    `product` supplies the hub name for the pack guard; pass None to skip it.
+    """
+    sku = str(sku)
+    proj = {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}
+    # Hub-and-spoke: our SKU is the anchor. Read both directions so the panel
+    # shows the whole seller set regardless of which side it was opened on.
+    direct = await db.product_matches.find({"my_sku": sku}, proj).to_list(2000)
+    reverse = await db.product_matches.find({"competitor_sku": sku}, proj).to_list(2000)
+    hub_skus = hub_skus_from_matches(reverse, sku)
+    siblings = []
+    if hub_skus:
+        siblings = await db.product_matches.find(
+            {"my_sku": {"$in": hub_skus}}, proj).to_list(4000)
+    alias_by_store = alias_map_from_matches(direct + reverse + siblings, sku)
+
+    sku_keys = sorted({sku} | set(hub_skus))
+    clauses = snapshot_or_clauses(sku_keys, alias_by_store)
+
+    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    query = {"crawled_at": {"$gte": since}}
+    if len(clauses) > 1:
+        query["$or"] = clauses
+    else:
+        query.update(clauses[0])
+    # DESC + reverse: hitting `cap` must drop the OLDEST rows, never the newest.
+    rows = await db.product_snapshots.find(query, {"_id": 0}).sort("crawled_at", -1).to_list(cap)
+    rows.reverse()
+
+    # Names live in db.products (snapshots carry none), so the guard needs a
+    # lookup for every SKU admitted through a match.
+    alias_skus = sorted({str(r.get("sku")) for r in rows if str(r.get("sku")) not in sku_keys})
+    names = {}
+    if alias_skus and product:
+        async for p in db.products.find({"sku": {"$in": alias_skus}},
+                                        {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1}):
+            names[p["sku"]] = f"{p.get('name_ar', '')} {p.get('name_en', '')}".strip()
+    hub_name = (f"{product.get('name_ar', '')} {product.get('name_en', '')}".strip()
+                if product else "")
+
+    kept, excluded = [], set()
+    for r in rows:
+        rsku = str(r.get("sku"))
+        if rsku in sku_keys:
+            kept.append(r)                      # pre-existing behaviour — untouched
+            continue
+        ok, _reason = pack_guard_ok(hub_name, names.get(rsku, ""))
+        if ok:
+            kept.append(r)
+        else:
+            excluded.add((r.get("store_id"), rsku))
+    return kept, set(sku_keys), len(excluded)
+
+
+def _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name, now=None):
+    """Latest row per store, labelled rather than filtered."""
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for sid, latest in latest_per_store(snapshots).items():
+        url = latest.get("product_url") or ""
+        if not url:
+            d = stores_meta.get(sid, {}).get("domain")
+            if d:
+                url = f"https://{d}/search?keyword={latest.get('sku') or ''}"
+        row = {
+            "store_id": sid,
+            "store_name": store_id_to_name.get(sid, sid),
+            "is_own_store": stores_meta.get(sid, {}).get("is_own_store") is True,
+            "sku": latest.get("sku"),
+            "match_source": "sku" if str(latest.get("sku")) in sku_keys else "matched",
+            "price": latest.get("price"),
+            "original_price": latest.get("original_price"),
+            "discount_pct": latest.get("discount_pct"),
+            "qty_available": latest.get("qty_available"),
+            "in_stock": latest.get("in_stock"),
+            "stock_signal": get_stock_signal(latest.get("qty_available", 0), in_stock=latest.get("in_stock")),
+            "source_tier": latest.get("source_tier"),
+            "confidence_score": latest.get("confidence_score"),
+            "product_url": url,
+            "crawled_at": latest["crawled_at"].isoformat() if isinstance(latest.get("crawled_at"), datetime) else latest.get("crawled_at"),
+        }
+        row.update(freshness_labels(latest.get("crawled_at"), now))
+        row.update(stock_labels(row["stock_signal"], row["in_stock"], row["qty_available"]))
+        out.append(row)
+    out.sort(key=lambda r: (r.get("price") is None, r.get("price") or 0))
+    return out
+
+
 @router.get("/products/{sku}")
 async def get_product(sku: str, user=Depends(get_user)):
     product = await db.products.find_one({"sku": sku}, {"_id": 0})
     if not product:
         raise HTTPException(404, "Product not found")
 
-    # Get latest snapshot per store
-    pipeline = [
-        {"$match": {"sku": sku}},
-        {"$sort": {"crawled_at": -1}},
-        {"$group": {
-            "_id": "$store_id",
-            "store_name": {"$first": "$store_name"},
-            "price": {"$first": "$price"},
-            "original_price": {"$first": "$original_price"},
-            "discount_pct": {"$first": "$discount_pct"},
-            "qty_available": {"$first": "$qty_available"},
-            "in_stock": {"$first": "$in_stock"},
-            "product_url": {"$first": "$product_url"},
-            "source_tier": {"$first": "$source_tier"},
-            "confidence_score": {"$first": "$confidence_score"},
-            "crawled_at": {"$first": "$crawled_at"},
-        }},
-    ]
-    store_prices = await db.product_snapshots.aggregate(pipeline).to_list(20)
-    # Look up store domains for fallback URL building
-    store_ids = [sp["_id"] for sp in store_prices]
-    domains = {s["id"]: s.get("domain") async for s in db.stores.find({"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1})}
-    for sp in store_prices:
-        sp["store_id"] = sp.pop("_id")
-        sp["stock_signal"] = get_stock_signal(sp.get("qty_available", 0), in_stock=sp.get("in_stock"))
-        if isinstance(sp.get("crawled_at"), datetime):
-            sp["crawled_at"] = sp["crawled_at"].isoformat()
-        # Fallback: build a search URL on the competitor store using SKU
-        if not sp.get("product_url"):
-            d = domains.get(sp["store_id"])
-            if d:
-                sp["product_url"] = f"https://{d}/search?keyword={sku}"
+    # iter60 — same widened seller set as /full, so the two endpoints cannot
+    # disagree about who carries the product.
+    snaps, sku_keys, excluded = await _seller_snapshots(db, sku, product)
+    store_ids = sorted({s["store_id"] for s in snaps if s.get("store_id")})
+    stores_meta = {s["id"]: s async for s in db.stores.find(
+        {"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1, "is_own_store": 1})}
+    names = {s["store_id"]: s.get("store_name", s["store_id"]) for s in snaps}
+    store_prices = _build_store_prices(snaps, sku_keys, stores_meta, names)
 
     prices = [sp["price"] for sp in store_prices if sp["price"]]
     product["store_prices"] = store_prices
+    product["seller_count"] = len(store_prices)
+    product["seller_summary"] = seller_summary(store_prices, excluded)
     product["price_range"] = {"min": min(prices), "max": max(prices), "avg": round(statistics.mean(prices), 2)} if prices else {}
-    product["total_volume"] = sum(sp.get("qty_available", 0) for sp in store_prices)
+    product["total_volume"] = sum(sp.get("qty_available", 0) or 0 for sp in store_prices if not sp.get("is_stale"))
     return product
+
 
 @router.get("/products/{sku}/history")
 async def product_history(sku: str, days: int = Query(30), user=Depends(get_user)):
@@ -2755,9 +2856,12 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
         raise HTTPException(404, "Product not found")
     product["is_my_product"] = await db.my_products.count_documents({"sku": sku}, limit=1) > 0
 
-    snapshots = await db.product_snapshots.find(
-        {"sku": sku, "crawled_at": {"$gte": since}}, {"_id": 0}
-    ).sort("crawled_at", 1).to_list(5000)
+    # iter60 — snapshots for this SKU *and* for every competitor SKU the matcher
+    # linked to it, over a 180-day lookback. The old query (`sku == sku` inside
+    # a 30-day window) hid matched sellers outright; they are now fetched and
+    # LABELLED instead of dropped.
+    snapshots = await _seller_snapshots(db, sku, product)
+    snapshots, sku_keys, guard_excluded = snapshots
 
     # Group by store_id
     by_store_id = {}
@@ -2767,45 +2871,33 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
         store_id_to_name[sid] = s.get("store_name", sid)
         by_store_id.setdefault(sid, []).append(s)
 
-    # Per-store latest snapshot + price history series
     store_ids = list(by_store_id.keys())
     stores_meta = {s["id"]: s async for s in db.stores.find({"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1, "is_own_store": 1})}
 
-    store_prices = []
+    store_prices = _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name)
+
+    # The chart keeps the caller's `days` window — a 180-day series would be
+    # unreadable — but the seller TABLE is not bounded by it. A store whose only
+    # data predates the window appears in the table with a "price as of" label
+    # and simply has no line on the chart.
     history_by_store = {}
     for sid, snaps in by_store_id.items():
-        latest = snaps[-1]
-        url = latest.get("product_url") or ""
-        if not url:
-            d = stores_meta.get(sid, {}).get("domain")
-            if d:
-                url = f"https://{d}/search?keyword={sku}"
-        store_prices.append({
-            "store_id": sid,
-            "store_name": store_id_to_name[sid],
-            "is_own_store": stores_meta.get(sid, {}).get("is_own_store") is True,
-            "price": latest.get("price"),
-            "original_price": latest.get("original_price"),
-            "discount_pct": latest.get("discount_pct"),
-            "qty_available": latest.get("qty_available"),
-            "in_stock": latest.get("in_stock"),
-            "stock_signal": get_stock_signal(latest.get("qty_available", 0), in_stock=latest.get("in_stock")),
-            "source_tier": latest.get("source_tier"),
-            "confidence_score": latest.get("confidence_score"),
-            "product_url": url,
-            "crawled_at": latest["crawled_at"].isoformat() if isinstance(latest.get("crawled_at"), datetime) else latest.get("crawled_at"),
-        })
-        # Build per-store price history points
-        history_by_store[store_id_to_name[sid]] = [{
+        pts = [{
             "date": s["crawled_at"].isoformat() if isinstance(s["crawled_at"], datetime) else s["crawled_at"],
             "price": s.get("price"),
             "qty": s.get("qty_available", 0),
-        } for s in snaps]
+        } for s in snaps if _as_aware(s.get("crawled_at")) and _as_aware(s.get("crawled_at")) >= since]
+        if pts:
+            history_by_store[store_id_to_name[sid]] = pts
 
     prices = [sp["price"] for sp in store_prices if sp.get("price")]
     product["store_prices"] = store_prices
+    product["seller_count"] = len(store_prices)
+    product["seller_summary"] = seller_summary(store_prices, guard_excluded)
     product["price_range"] = {"min": min(prices), "max": max(prices), "avg": round(statistics.mean(prices), 2)} if prices else {}
-    product["total_volume"] = sum(sp.get("qty_available", 0) or 0 for sp in store_prices)
+    # Stock is a "right now" figure — a 90-day-old qty is not inventory. The
+    # seller itself is still listed; only its stale qty is left out of the sum.
+    product["total_volume"] = sum(sp.get("qty_available", 0) or 0 for sp in store_prices if not sp.get("is_stale"))
     product["history"] = history_by_store
 
     # Market position (Feb 2026) — rank my store vs valid competitors.
@@ -2843,13 +2935,24 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
             _own = [sp for sp in seller_list if sp.get("store_id") == own_store_id]
             if len(_own) > 1:
                 seller_list = [sp for sp in seller_list if sp.get("store_id") != own_store_id] + _own[:1]
-    product["market_position"] = compute_market_position(seller_list, own_store_id) if own_store_id else None
+    # iter60 — "Cheapest of N" must count the SAME sellers the table lists.
+    # compute_market_position defaults to a 7-day / confidence>=85 filter, which
+    # on this page produced a second, narrower seller set: the table said 8
+    # stores and the badge said "cheapest of 2". Those defaults are unchanged for
+    # every other caller (my-products, insights); only the product detail — where
+    # the user can see the full list right below the badge — opts out of them.
+    # The counts it drops are reported instead of hidden.
+    product["market_position"] = compute_market_position(
+        seller_list, own_store_id, max_age_days=None, min_confidence=0,
+    ) if own_store_id else None
 
     # Velocity (lightweight: per-day total units summed across stores using net depletion)
     daily_units = {}
     daily_revenue = {}
     for sid, snaps in by_store_id.items():
-        valid = [(s["crawled_at"], s.get("qty_available", 0) or 0, s.get("price") or 0) for s in snaps if (s.get("qty_available", 0) or 0) not in PLACEHOLDER_QTY_VALUES and (s.get("qty_available", 0) or 0) <= 200]
+        # velocity stays inside the caller's `days` window — the wider seller
+        # lookback is for "who carries this", not for the sales estimate
+        valid = [(s["crawled_at"], s.get("qty_available", 0) or 0, s.get("price") or 0) for s in snaps if (s.get("qty_available", 0) or 0) not in PLACEHOLDER_QTY_VALUES and (s.get("qty_available", 0) or 0) <= 200 and (_as_aware(s.get("crawled_at")) or since) >= since]
         if len(valid) < 3:
             continue
         for i in range(1, len(valid)):
