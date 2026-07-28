@@ -314,17 +314,28 @@ def compute_product_metrics(snapshots_by_store, days):
 #   • Only confidence_score >= MIN_AGGREGATION_CONFIDENCE (skips Tier-3 HTML noise)
 #   • Lowest price = rank 1 (best); ties at the same price share the lower rank
 #   • Returns None if fewer than 2 valid sellers OR own price absent
-def compute_market_position(seller_prices, my_store_id):
+def compute_market_position(seller_prices, my_store_id, max_age_days=7,
+                            min_confidence=MIN_AGGREGATION_CONFIDENCE):
     """
     seller_prices: list of dicts {"store_id", "store_name", "price", "confidence_score", "crawled_at"}
                    (already pre-filtered to "latest snapshot per store" by caller)
     my_store_id:   the user's own store_id
 
+    max_age_days / min_confidence (iter60): the aggregation defaults above are
+    right for list views, where the user cannot see what was filtered out. The
+    product detail page CAN — it prints the seller table directly beneath this
+    badge — so it passes max_age_days=None, min_confidence=0 to make "Cheapest
+    of N" agree with the list. `stale_sellers` / `low_confidence_sellers` in the
+    result say how many rows the defaults would have removed.
+
     Returns a dict with rank/range/percentile or None if insufficient data.
     """
     import math
     from datetime import datetime, timezone, timedelta
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)
+              if max_age_days is not None else None)
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    n_stale = n_lowconf = 0
 
     def _crawled_ts(v):
         if isinstance(v, datetime):
@@ -345,11 +356,15 @@ def compute_market_position(seller_prices, my_store_id):
         # for the user's own store. Their price is what THEY set, not crawled.
         if not is_mine:
             conf = sp.get("confidence_score", 0) or 0
-            if conf < MIN_AGGREGATION_CONFIDENCE:
+            if conf < min_confidence:
                 continue
             ts = _crawled_ts(sp.get("crawled_at"))
-            if ts is None or ts < cutoff:
+            if cutoff is not None and (ts is None or ts < cutoff):
                 continue
+            if ts is None or ts < stale_cutoff:
+                n_stale += 1
+            if conf < MIN_AGGREGATION_CONFIDENCE:
+                n_lowconf += 1
         valid.append({
             "store_id": sp.get("store_id"),
             "store_name": sp.get("store_name", ""),
@@ -421,6 +436,10 @@ def compute_market_position(seller_prices, my_store_id):
         "below_median": below_median,
         "above_median": above_median,
         "tag": tag,
+        # iter60 — how much of the ranked set is older than 7 days / below the
+        # aggregation confidence floor. Shown, not silently dropped.
+        "stale_sellers": n_stale,
+        "low_confidence_sellers": n_lowconf,
         # Compact array for the visual range bar
         "sellers": [
             {"store_name": s["store_name"], "price": s["price"], "is_mine": s["is_mine"], "rank": rank_by_idx[i]}
