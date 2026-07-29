@@ -94,6 +94,11 @@ Post-proper-fix, production 90D KPIs should surface as (per preview): matched �
 
 **Rule from now on:** if code touches `product_snapshots.find/aggregate` in a way that reads more than ~10k rows at production scale, don't ship without a documented load-test run against ~1M-snapshot fixture data.
 
+## iter63 — Fix: own store falsely ranked #1 by a fabricated estimate (Jun 2026, preview only, NOT deployed)
+- BUG (reported from production): the merchant's own store ("Pets houses", Zid, empty orders ledger) ranked #1 by revenue. Cause = iter62's "Requirement 2" block that synthesised a category-velocity estimate for the own store off its FULL catalogue; Σ(velocity×price) outranked every competitor's real MEASURED revenue since all tiers share one numeric sort axis.
+- FIX: removed the own-store estimate entirely (kept the legitimate `exclude_store=own_store_id` velocity-pool fix). Own store now shows revenue ONLY from its real Zid orders ledger; until that fills it is "Accumulating" (`revenue_rank_basis="none"`, `revenue_rank_value=None`) and sorts with the other no-revenue stores at the bottom — matching the merchant's expectation.
+- Updated `tests/test_ranking_revenue_sort.py`: `test_own_store_shows_no_fabricated_estimate_while_its_ledger_is_empty` (rewritten), own rank_value assertion in `..._do_not_poison_the_velocity_pool` → None, estimate-count comment. 51 ranking tests green. `test_own_store_uses_the_real_ledger_once_it_syncs` still passes (exact ledger when synced). Requires redeploy to reach production.
+
 ## iter62 — Rank stores by revenue (merged Jun 2026, preview only, NOT deployed)
 - `_store_ranking_compute` now sorts the Market Strength Ranking by a UNIFIED revenue axis descending (exact ledger > measured_approx sold-badge > ±50% estimated), all on one axis; strength `score` kept as secondary display + tie-break. New helper `_ranking_revenue_value()`.
 - Each row carries `revenue_rank_value` + `revenue_rank_basis` (exact/measured_approx/estimated/none) + `revenue_is_estimate`; stores with NO revenue figure sort last (None, not fake 0). Response adds `sorted_by`, `ranked_on_measured`, `ranked_on_estimate`, `no_revenue_value`.

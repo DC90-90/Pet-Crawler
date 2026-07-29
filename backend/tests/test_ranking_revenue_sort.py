@@ -331,9 +331,12 @@ def test_endpoint_sorts_by_revenue_and_reports_the_basis():
     asyncio.run(main())
 
 
-def test_own_store_gets_an_estimate_while_its_ledger_is_empty():
-    """Requirement 2 — 'Accumulating' with no number would sink us to the
-    bottom under a revenue sort as though we sold nothing."""
+def test_own_store_shows_no_fabricated_estimate_while_its_ledger_is_empty():
+    """iter63 — reverses iter62's 'Requirement 2'. Giving the own store a
+    category-velocity estimate off its full catalogue pinned it at #1 above
+    every competitor's MEASURED revenue — a number the merchant knows is false
+    (reported from production). Until the real Zid ledger fills, the own store
+    carries NO revenue figure and sorts with the other no-revenue stores."""
     async def main():
         db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
         out = await _compute(db, own_revenue=None, sales_pairs=[
@@ -341,12 +344,13 @@ def test_own_store_gets_an_estimate_while_its_ledger_is_empty():
         ])
         own = _by_name(out)["Pets houses"]
         assert own["revenue_30d"] is None                  # ledger still empty
-        assert own["revenue_est_salla"] is not None        # but we have a value
-        assert own["revenue_est_salla"]["band_pct"] == 50.0
-        assert own["revenue_rank_basis"] == "estimated"    # ...and it is tagged
-        assert own["revenue_is_estimate"] is True
-        assert own["revenue_rank_value"] > 0
-        assert own["revenue_tier"] == "estimated"
+        assert own["revenue_est_salla"] is None            # and NO invented estimate
+        assert own["revenue_rank_basis"] == "none"
+        assert own["revenue_is_estimate"] is False
+        assert own["revenue_rank_value"] is None
+        assert own["revenue_tier"] == "none"
+        # a real measured competitor now leads the board, not the own store
+        assert out["stores"][0]["name"] != "Pets houses"
     asyncio.run(main())
 
 
@@ -383,7 +387,8 @@ def test_own_store_products_do_not_poison_the_velocity_pool():
         # 12 products x 90 SAR x category velocity. With our 40 phantom zeros in
         # the pool the mean was 100/(90*30); without them it is 100/(50*30).
         assert hobba["revenue_est_salla"]["revenue_est"] == 2160.0
-        assert _by_name(out)["Pets houses"]["revenue_rank_value"] == 9600.0
+        # iter63 — the own store is no longer given an estimate of its own.
+        assert _by_name(out)["Pets houses"]["revenue_rank_value"] is None
     asyncio.run(main())
 
 
@@ -396,7 +401,7 @@ def test_endpoint_counts_how_much_of_the_order_rests_on_estimates():
         total = (out["ranked_on_measured"] + out["ranked_on_estimate"]
                  + out["no_revenue_value"])
         assert total == out["total_stores"]
-        assert out["ranked_on_estimate"] >= 1              # own store at minimum
+        assert out["ranked_on_estimate"] >= 1              # mowkly + hobba (Salla)
         for r in out["stores"]:
             assert r["revenue_is_estimate"] == (r["revenue_rank_basis"] == "estimated")
     asyncio.run(main())

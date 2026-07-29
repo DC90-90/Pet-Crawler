@@ -5563,33 +5563,21 @@ async def _store_ranking_compute(db):
         # construction carry no rows for our own store, so every own product
         # entered the pool as a units=0 "non-mover". Those zeros are an artefact
         # of where the data comes from, not an observation that we sold nothing:
-        # they pulled the category mean down for every store estimated from it,
-        # and they pinned our own per-SKU velocity at exactly 0 — which is why
-        # the own-store estimate came out 0.0 and the row still had no number.
+        # they pulled the category mean down for every store estimated from it.
         _pools = salla_build_velocity_pools(_obs, _RANKING_WINDOW_DAYS,
                                             exclude_store=own_store_id)
 
-        # iter62 — the own store needs an estimate too. Until the Zid orders
-        # ledger fills, `own_revenue` is None and the row rendered
-        # "Accumulating" with no number, which under a revenue sort would drop
-        # us to the bottom as though we sold nothing. Its product list comes
-        # from my_products (own prices are not crawled into sku_store_coverage),
-        # and it is NOT added to _measurable — the velocity pools are built from
-        # competitor sales rollups, which carry no rows for our own store.
-        if own_store_id and own_revenue is None:
-            _prods_by_store[own_store_id] = [
-                {"sku": p.get("sku"),
-                 "price": p.get("sale_price") or p.get("price"),
-                 "category": _cat_by_sku.get(p.get("sku"), "")}
-                for p in my_prods
-                if (p.get("sale_price") or p.get("price") or 0) > 0
-            ]
-
+        # iter63 — do NOT fabricate a category-velocity estimate for our OWN
+        # store. It carries the fullest catalogue, so Σ(category-mean velocity ×
+        # price) produced a number that outranked every competitor's *measured*
+        # revenue and pinned the merchant's own store at #1 — a figure they know
+        # to be false (reported from production). The own store shows revenue
+        # ONLY from its real Zid orders ledger; until that fills it stays
+        # "Accumulating" (basis "none") and sorts with the other no-revenue
+        # stores, never on an invented estimate.
         for sid, s in stores_meta.items():
-            if sid in _measurable and not s.get("is_own_store"):
+            if sid in _measurable or s.get("is_own_store"):
                 continue
-            if s.get("is_own_store") and own_revenue is not None:
-                continue                    # real ledger figure — no estimate
             # iter59 — the estimate is now the FALLBACK. A store whose badge we
             # can diff gets a real number instead.
             if sid in approx_by_store:
