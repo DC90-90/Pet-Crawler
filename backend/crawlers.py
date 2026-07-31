@@ -850,6 +850,10 @@ async def crawl_salla_tier1(db, store):
         crawl_log["endpoint_used"] = winning_endpoint["tag"]
         crawl_log["products_found"] = len(all_raw)
         await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
+        # iter64 — barcode detail supplement for Salla stores, BEFORE persistence
+        # (it mutates the raw items). No-op with a logged "skipped" entry when it
+        # cannot or should not run; nothing for non-Salla platforms.
+        await _maybe_salla_detail_supplement(db, store, all_raw, crawl_log)
         new_count, snap_count = await process_crawled_products(db, store, all_raw, now)
         crawl_log["products_new"] = new_count
         crawl_log["products_updated"] = len(all_raw) - new_count
@@ -859,6 +863,8 @@ async def crawl_salla_tier1(db, store):
         crawl_log["http_status"] = last_attempt.get("status", 0)
         crawl_log["error"] = f"Tier 1 exhausted — all {len(endpoints)} endpoints failed. Escalating to Tier 2. Last: {last_attempt.get('error', 'unknown')}"
         crawl_log["endpoint_used"] = "none — tier 2 stub"
+        # iter64 — every Salla crawl log carries a supplement entry, failures too
+        await _maybe_salla_detail_supplement(db, store, all_raw, crawl_log)
 
     await _finalize_crawl_log(db, crawl_log, store["id"])
     logger.info(f"Tier1 {store['name']}: used={crawl_log['tier_used']}, found={crawl_log['products_found']}, ep={crawl_log.get('endpoint_used')}")
@@ -1022,6 +1028,10 @@ async def crawl_tier2_xhr(db, store):
         crawl_log["tier_used"] = 2
         crawl_log["http_status"] = 200
         crawl_log["products_found"] = len(captured_products)
+        # iter64 — supplement before persistence (mutates the raw items). This
+        # is the tier that succeeded on Zarafa 2026-07-31 19:09 with 3000
+        # products while the supplement's only host path (Tier 2.5) sat blocked.
+        await _maybe_salla_detail_supplement(db, store, captured_products, crawl_log)
         new_c, snap_c = await process_crawled_products(db, store, captured_products, now, tier=2, confidence=88)
         crawl_log["products_new"] = new_c
         crawl_log["products_updated"] = len(captured_products) - new_c
@@ -1032,6 +1042,7 @@ async def crawl_tier2_xhr(db, store):
         count = len(captured_products) if captured_products else 0
         if not crawl_log["error"]:
             crawl_log["error"] = f"Tier 2 insufficient — captured {count} products (need 5+). Escalating to Tier 3"
+        await _maybe_salla_detail_supplement(db, store, captured_products, crawl_log)
 
     await _finalize_crawl_log(db, crawl_log, store["id"])
     logger.info(f"Tier2 {store['name']}: used={crawl_log['tier_used']}, found={crawl_log['products_found']}, dur={crawl_log['duration_secs']}s")
@@ -1176,6 +1187,10 @@ async def crawl_tier3_html(db, store):
         crawl_log["tier_used"] = 3
         crawl_log["http_status"] = 200
         crawl_log["products_found"] = len(products_extracted)
+        # iter64 — supplement before persistence. HTML-extracted items usually
+        # carry no Salla numeric id, in which case the wrapper's missing filter
+        # finds nothing fetchable and writes a "skipped" entry instead.
+        await _maybe_salla_detail_supplement(db, store, products_extracted, crawl_log)
         new_c, snap_c = await process_crawled_products(db, store, products_extracted, now, tier=3, confidence=75)
         crawl_log["products_new"] = new_c
         crawl_log["products_updated"] = len(products_extracted) - new_c
@@ -1183,6 +1198,7 @@ async def crawl_tier3_html(db, store):
     else:
         if not crawl_log["error"]:
             crawl_log["error"] = f"Tier 3 extracted {len(products_extracted)} products — all tiers exhausted"
+        await _maybe_salla_detail_supplement(db, store, products_extracted, crawl_log)
 
     await _finalize_crawl_log(db, crawl_log, store["id"])
     logger.info(f"Tier3 {store['name']}: used={crawl_log['tier_used']}, found={crawl_log['products_found']}, dur={crawl_log['duration_secs']}s")
@@ -1395,6 +1411,14 @@ def _select_salla_variant_barcode(detail, listed_price=0.0):
     return ""
 
 
+def _salla_missing_barcode_items(items):
+    """The items the supplement would fetch — one definition, used by both the
+    skip decision and the fetch loop so the two can never disagree."""
+    return [it for it in items
+            if isinstance(it, dict) and it.get("id") is not None
+            and not _salla_raw_barcode(it)]
+
+
 async def _salla_detail_barcode_supplement(client, captured, crawl_log,
                                            cap=SALLA_DETAIL_SUPPLEMENT_CAP):
     """Fill missing barcodes from the storefront product-DETAIL endpoint.
@@ -1408,14 +1432,23 @@ async def _salla_detail_barcode_supplement(client, captured, crawl_log,
 
     Fail-soft per product: one bad detail response is logged and skipped, never
     fatal to the crawl. Sequential on the same client — the category walk's
-    pacing. Returns (filled, missing_total, failed, bytes_consumed).
+    pacing.
+
+    iter64 — non-200 detail responses were counted but SILENT: no way to tell
+    "Salla is 403ing the detail endpoint" from "no barcodes found". Failures
+    are now bucketed per status code (exceptions under "exception") and the
+    summary entry carries them, e.g. `failed_403=12`. The entry's status is the
+    string "ran" — its skipped counterpart is written by
+    _maybe_salla_detail_supplement, so every Salla crawl log shows exactly one
+    detail_barcode_supplement line either way.
+
+    Returns (filled, missing_total, failed, bytes_consumed, failed_by_status).
     """
-    missing = [it for it in captured
-               if isinstance(it, dict) and it.get("id") is not None
-               and not _salla_raw_barcode(it)]
+    missing = _salla_missing_barcode_items(captured)
     todo = missing[:cap]
     filled = failed = 0
     bytes_consumed = 0
+    failed_by_status = {}
     for it in todo:
         pid = it.get("id")
         try:
@@ -1423,6 +1456,8 @@ async def _salla_detail_barcode_supplement(client, captured, crawl_log,
             bytes_consumed += len(r.content or b"")
             if r.status_code != 200:
                 failed += 1
+                failed_by_status[r.status_code] = failed_by_status.get(r.status_code, 0) + 1
+                logger.info(f"[DetailSupplement] product={pid} http_status={r.status_code}")
                 continue
             body = r.json()
             detail = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
@@ -1432,17 +1467,144 @@ async def _salla_detail_barcode_supplement(client, captured, crawl_log,
                 filled += 1
         except Exception as e:
             failed += 1
+            failed_by_status["exception"] = failed_by_status.get("exception", 0) + 1
             logger.info(f"[DetailSupplement] product={pid} failed: {str(e)[:80]}")
-    if missing:
+    summary = f"missing={len(missing)} attempted={len(todo)} filled={filled} failed={failed}"
+    summary += "".join(f" failed_{k}={v}" for k, v in sorted(failed_by_status.items(), key=str))
+    crawl_log["endpoints_tried"].append({
+        "endpoint": "detail_barcode_supplement", "status": "ran",
+        "products": filled, "error": summary,
+    })
+    logger.info(f"[DetailSupplement] {summary} (cap={cap})")
+    return filled, len(missing), failed, bytes_consumed, failed_by_status
+
+
+async def _lightweight_salla_identifier_capture(store):
+    """One Playwright visit to the storefront to capture `store-identifier`,
+    for crawl paths that succeeded WITHOUT a browser (Tier 1 direct API).
+    Reuses the exact Tier 2.5 capture helper. Returns the identifier or None —
+    never raises."""
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as pw:
+            launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+            if store.get("use_proxy"):
+                creds = get_proxy_credentials()
+                if creds:
+                    user, pwd, host, port = creds
+                    launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
+            browser = await pw.chromium.launch(**launch_kwargs)
+            try:
+                ctx = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    locale="ar-SA",
+                )
+                page = await ctx.new_page()
+                return await _capture_salla_store_identifier(page, f"https://{store['domain']}")
+            finally:
+                await browser.close()
+    except Exception as e:
+        logger.info(f"[DetailSupplement] identifier capture failed for {store.get('domain')}: {str(e)[:80]}")
+        return None
+
+
+# iter64 — a crawl that produced fewer products than this is degraded/blocked
+# (Zarafa production 2026-07-31: Tier 2.5 captured 0 after Salla started
+# defending). Piling detail requests onto a store that is already pushing back
+# is how a soft block becomes a hard one, so the supplement stands down.
+SALLA_DETAIL_MIN_PRODUCTS = 50
+
+
+async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
+                                         store_identifier=None, client=None):
+    """iter64 — run the detail supplement after ANY Salla crawl, any tier.
+
+    iter63 wired the supplement only inside crawl_salla_storefront_categories
+    (Tier 2.5). Production same-day evidence (Zarafa): the 19:09 crawl succeeded
+    via Tier 2 — supplement never ran; the 19:05 Tier 2.5 attempt captured 0 —
+    the supplement's only host path was itself dead. Net: a successful crawl
+    day with no chance of filling a single barcode, and nothing in the logs to
+    say why. This wrapper is called from every tier's persistence point and
+    GUARANTEES one `detail_barcode_supplement` entry per Salla crawl log:
+
+        status "ran"      with missing/attempted/filled/failed(+per-code) counts
+        status "skipped"  with reason: no_products | degraded_crawl |
+                          no_missing_barcodes | no_store_identifier |
+                          exception:<msg>
+
+    Must be called BEFORE process_crawled_products — the supplement works by
+    mutating the raw items, so it has to run before they are persisted.
+
+    store-identifier resolution: the caller's captured value (Tier 2.5), else
+    the value cached on the store doc by a previous Tier 2.5 success, else ONE
+    lightweight Playwright capture; a fresh capture is cached for next time. If
+    all three fail the supplement skips — never blocks the crawl.
+    """
+    if (store.get("platform") or "").lower() != "salla":
+        return
+
+    def _skip(reason):
         crawl_log["endpoints_tried"].append({
-            "endpoint": "detail_barcode_supplement", "status": 200,
-            "products": filled,
-            "error": f"missing={len(missing)} attempted={len(todo)} filled={filled} failed={failed}",
+            "endpoint": "detail_barcode_supplement", "status": "skipped",
+            "products": 0, "error": reason,
         })
-        logger.info(
-            f"[DetailSupplement] missing={len(missing)} attempted={len(todo)} "
-            f"filled={filled} failed={failed} (cap={cap})")
-    return filled, len(missing), failed, bytes_consumed
+        logger.info(f"[DetailSupplement] {store.get('name')}: skipped ({reason})")
+
+    try:
+        items = [it for it in (raw_items or []) if isinstance(it, dict)]
+        if not items:
+            return _skip("no_products")
+        if len(items) < SALLA_DETAIL_MIN_PRODUCTS:
+            return _skip("degraded_crawl")
+        if not _salla_missing_barcode_items(items):
+            return _skip("no_missing_barcodes")
+
+        sid = store_identifier
+        if not sid:
+            sid = store.get("salla_store_identifier")
+        if not sid:
+            doc = await db.stores.find_one(
+                {"id": store.get("id")}, {"_id": 0, "salla_store_identifier": 1})
+            sid = (doc or {}).get("salla_store_identifier")
+        freshly_captured = False
+        if not sid:
+            sid = await _lightweight_salla_identifier_capture(store)
+            freshly_captured = bool(sid)
+        if not sid:
+            return _skip("no_store_identifier")
+        if freshly_captured:
+            await db.stores.update_one(
+                {"id": store.get("id")}, {"$set": {"salla_store_identifier": sid}})
+
+        owns_client = client is None
+        if owns_client:
+            base = f"https://{store['domain']}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "ar",
+                "x-requested-with": "XMLHttpRequest",
+                "Referer": f"{base}/",
+                "Origin": base,
+                "store-identifier": sid,
+            }
+            httpx_kwargs = {"timeout": 20.0, "headers": headers}
+            if store.get("use_proxy"):
+                creds = get_proxy_credentials()
+                if creds:
+                    u, p, h, port = creds
+                    httpx_kwargs["proxy"] = f"http://{u}:{p}@{h}:{port}"
+            client = httpx.AsyncClient(**httpx_kwargs)
+        try:
+            _f, _m, _fx, nbytes, _by = await _salla_detail_barcode_supplement(
+                client, items, crawl_log)
+        finally:
+            if owns_client:
+                await client.aclose()
+        if store.get("use_proxy") and nbytes > 0:
+            await record_proxy_usage(db, store, nbytes)
+    except Exception as e:
+        _skip(f"exception:{str(e)[:80]}")
 
 
 async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=200, max_pages_per_cat=200):
@@ -1521,6 +1683,10 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
     if not store_identifier:
         crawl_log["error"] = (crawl_log.get("error") or "") + " | Failed to capture store-identifier"
         crawl_log["duration_secs"] = round(time.time() - start_time, 1)
+        # iter64 — the observability entry exists even on the dead path that hid
+        # the Zarafa 2026-07-31 outage (16:58 capture failure -> 19:05 zero
+        # products, and no supplement line anywhere to say so).
+        await _maybe_salla_detail_supplement(db, store, [], crawl_log)
         await _finalize_crawl_log(db, crawl_log, store["id"])
         return crawl_log
 
@@ -1576,15 +1742,14 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
             if cat_count > 0:
                 crawl_log["endpoints_tried"].append({"endpoint": f"category {cid}", "status": 200, "products": cat_count, "error": None})
 
-        # iter63 — bounded barcode supplement from the product-detail endpoint,
-        # same client / headers / pacing as the walk above. Fail-soft: a broken
-        # detail endpoint must never cost us the listing crawl.
-        if captured:
-            try:
-                _f, _m, _fx, _b = await _salla_detail_barcode_supplement(client, captured, crawl_log)
-                bytes_consumed += _b
-            except Exception as e:
-                logger.info(f"[DetailSupplement] skipped: {str(e)[:100]}")
+        # iter63/64 — bounded barcode supplement from the product-detail
+        # endpoint, reusing this walk's client / headers / pacing and the
+        # already-captured store-identifier. The wrapper writes the "ran" or
+        # "skipped" observability entry and never raises. Proxy bytes for the
+        # borrowed client are settled inside the wrapper via record_proxy_usage.
+        await _maybe_salla_detail_supplement(
+            db, store, captured, crawl_log,
+            store_identifier=store_identifier, client=client)
 
     now = datetime.now(timezone.utc)
     crawl_log["duration_secs"] = round(time.time() - start_time, 1)
