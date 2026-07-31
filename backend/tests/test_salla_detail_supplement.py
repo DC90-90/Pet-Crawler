@@ -135,7 +135,8 @@ class _FakeClient:
 
     async def get(self, url):
         self.calls.append(url)
-        pid = url.rstrip("/").rsplit("/", 1)[-1]
+        parts = url.rstrip("/").split("/")
+        pid = parts[-2] if parts[-1] == "details" else parts[-1]
         entry = self.by_id.get(pid)
         if entry == "boom":
             raise RuntimeError("connection reset")
@@ -157,27 +158,28 @@ def test_supplement_fills_only_missing_and_injects_gtin():
     ]
     client = _FakeClient({"1694697895": _detail(
         [_v(310.0, barcode=HILLS_3KG, stock=4), _v(162.5, barcode=HILLS, stock=2)])})
-    log = {"endpoints_tried": []}
     filled, missing, failed, nbytes, by_status = _run(
-        crawlers._salla_detail_barcode_supplement(client, listing, log))
+        crawlers._salla_detail_barcode_supplement(
+            client, listing, store_domain="zarafaksa.com"))
     assert (filled, missing, failed) == (1, 1, 0)
     assert by_status == {}
     assert nbytes == 100
     assert listing[0]["gtin"] == HILLS                      # injected
     assert listing[1]["gtin"] == "3182550702263"            # untouched
     assert len(client.calls) == 1                           # no fetch for item 2
+    # iter65 — the working route: store domain, /details suffix
+    assert client.calls[0] == "https://zarafaksa.com/en/api/v1/products/1694697895/details"
     # price fields untouched — the supplement must never reprice the listing
     assert listing[0]["price"] == {"amount": 162.5}
-    assert log["endpoints_tried"][0]["endpoint"] == "detail_barcode_supplement"
 
 
 def test_cap_bounds_the_fetches_per_crawl():
     listing = [{"id": i, "sku": f"S{i}", "price": {"amount": 10.0}} for i in range(10)]
     client = _FakeClient({str(i): _detail([_v(10.0, barcode=f"{1000000000000 + i}")])
                           for i in range(10)})
-    log = {"endpoints_tried": []}
     filled, missing, failed, _b, _by = _run(
-        crawlers._salla_detail_barcode_supplement(client, listing, log, cap=3))
+        crawlers._salla_detail_barcode_supplement(
+            client, listing, store_domain="zarafaksa.com", cap=3))
     assert missing == 10 and len(client.calls) == 3 and filled == 3
     assert sum(1 for it in listing if it.get("gtin")) == 3   # the rest wait for tomorrow
 
@@ -188,9 +190,9 @@ def test_supplement_is_fail_soft_per_product():
                {"id": 3, "sku": "C", "price": {"amount": 7.0}}]   # works
     client = _FakeClient({"1": "boom",
                           "3": _detail([_v(7.0, barcode=HILLS)])})
-    log = {"endpoints_tried": []}
     filled, missing, failed, _b, by_status = _run(
-        crawlers._salla_detail_barcode_supplement(client, listing, log))
+        crawlers._salla_detail_barcode_supplement(
+            client, listing, store_domain="zarafaksa.com"))
     assert (filled, missing, failed) == (1, 3, 2)
     # iter64 — the two failures are attributed: one exception, one HTTP 404
     assert by_status == {"exception": 1, 404: 1}
@@ -227,7 +229,8 @@ def test_recovered_barcode_reaches_products_and_snapshots():
         client = _FakeClient({"1694697895": _detail(
             [_v(310.0, barcode=HILLS_3KG, stock=4),
              _v(162.5, barcode="52742059518", stock=2)])})   # zero-dropped form
-        await crawlers._salla_detail_barcode_supplement(client, listing, {"endpoints_tried": []})
+        await crawlers._salla_detail_barcode_supplement(
+            client, listing, store_domain="zarafaksa.com")
 
         db = _RecDB()
         now = crawlers.datetime.now(crawlers.timezone.utc)
