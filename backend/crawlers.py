@@ -1306,6 +1306,145 @@ async def _capture_salla_store_identifier(page, base):
     return sid_holder["value"]
 
 
+# ── iter63: Salla detail supplement — recover barcodes the LISTING omits ─────
+# Live evidence (Zarafa, Hills GI Biome p1694697895): the Tier 2.5 listing
+# payload (api.salla.dev/store/v1/products?source=categories) carries NO
+# per-variant skus[] barcodes — the static page's JSON-LD "sku" is a different
+# number entirely, and the real barcode (052742059518) only arrives client-side
+# from the product-DETAIL XHR. So for these stores iter61's barcode persistence
+# has nothing to persist, and the matcher's Level 1 stays blind.
+#
+# The supplement re-fetches ONLY products whose listing yielded no barcode,
+# capped per crawl so remaining gaps fill over successive daily crawls, using
+# the SAME captured store-identifier header and the same httpx client the
+# category walk just used.
+SALLA_DETAIL_SUPPLEMENT_CAP = 300
+
+
+def _salla_raw_barcode(raw):
+    """The barcode the normalizer would extract from this raw payload, or "".
+
+    Mirrors _normalize_raw_product's candidate scan exactly (variants first,
+    iter35 key order, then root) so "missing" here means "iter61 will persist
+    nothing for this product".
+    """
+    variants = raw.get("skus")
+    if isinstance(variants, list):
+        for v in variants:
+            if not isinstance(v, dict):
+                continue
+            for key in ("barcode", "gtin", "mpn"):
+                cand = str(v.get(key) or "").strip()
+                if _NUMERIC_BARCODE_RE.match(cand):
+                    return cand
+    for key in ("gtin", "mpn", "barcode", "ean", "upc"):
+        cand = str(raw.get(key) or "").strip()
+        if _NUMERIC_BARCODE_RE.match(cand):
+            return cand
+    return ""
+
+
+def _select_salla_variant_barcode(detail, listed_price=0.0):
+    """Barcode of the variant that matches the LISTED product, or "".
+
+    Selection order (the listing's price is what Daleel displays, so the
+    barcode must describe that same item — attaching another variant's GTIN to
+    this price is exactly the pack-size collision iter51-53 guard against):
+      1. the variant whose price equals the listed price
+      2. else the first in-stock variant
+      3. else the first variant
+    Only the CHOSEN variant's identifiers are read; if it carries none, fall
+    back to the detail payload's root fields, else give up ("").
+
+    A candidate counts only if canonical_barcode() accepts it. Returned as the
+    raw digits when the whole string is already an EAN, else as the canonical
+    GTIN-14 form (a suffixed variant value like "9003579308936carton" persists
+    as its digits-only canonical form, since the normalizer's root scan
+    requires a full-digit match).
+    """
+    def _usable(cand):
+        cand = str(cand or "").strip()
+        if not cand:
+            return ""
+        canon = canonical_barcode(cand)
+        if not canon:
+            return ""
+        return cand if _NUMERIC_BARCODE_RE.match(cand) else canon
+
+    variants = [v for v in (detail.get("skus") or []) if isinstance(v, dict)] \
+        if isinstance(detail, dict) else []
+    chosen = None
+    if variants:
+        if listed_price and listed_price > 0:
+            chosen = next((v for v in variants
+                           if abs(_price_amount(v.get("price")) - listed_price) < 0.01), None)
+        if chosen is None:
+            chosen = next((v for v in variants
+                           if (v.get("stock_quantity") or 0) > 0), None)
+        if chosen is None:
+            chosen = variants[0]
+        for key in ("barcode", "gtin", "mpn"):
+            got = _usable(chosen.get(key))
+            if got:
+                return got
+    if isinstance(detail, dict):
+        for key in ("gtin", "mpn", "barcode", "ean", "upc"):
+            got = _usable(detail.get(key))
+            if got:
+                return got
+    return ""
+
+
+async def _salla_detail_barcode_supplement(client, captured, crawl_log,
+                                           cap=SALLA_DETAIL_SUPPLEMENT_CAP):
+    """Fill missing barcodes from the storefront product-DETAIL endpoint.
+
+    Mutates the raw listing items in place: a recovered barcode is injected as
+    the item's root `gtin`, which _normalize_raw_product's root scan picks up —
+    so persistence to products + product_snapshots flows through the exact
+    iter61 path, and the listing's price fields stay untouched (injecting the
+    full skus[] array instead would let the normalizer's variant-price logic
+    reprice the product from a different variant).
+
+    Fail-soft per product: one bad detail response is logged and skipped, never
+    fatal to the crawl. Sequential on the same client — the category walk's
+    pacing. Returns (filled, missing_total, failed, bytes_consumed).
+    """
+    missing = [it for it in captured
+               if isinstance(it, dict) and it.get("id") is not None
+               and not _salla_raw_barcode(it)]
+    todo = missing[:cap]
+    filled = failed = 0
+    bytes_consumed = 0
+    for it in todo:
+        pid = it.get("id")
+        try:
+            r = await client.get(f"https://api.salla.dev/store/v1/products/{pid}")
+            bytes_consumed += len(r.content or b"")
+            if r.status_code != 200:
+                failed += 1
+                continue
+            body = r.json()
+            detail = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+            barcode = _select_salla_variant_barcode(detail, listed_price=_price_amount(it.get("price")))
+            if barcode:
+                it["gtin"] = barcode
+                filled += 1
+        except Exception as e:
+            failed += 1
+            logger.info(f"[DetailSupplement] product={pid} failed: {str(e)[:80]}")
+    if missing:
+        crawl_log["endpoints_tried"].append({
+            "endpoint": "detail_barcode_supplement", "status": 200,
+            "products": filled,
+            "error": f"missing={len(missing)} attempted={len(todo)} filled={filled} failed={failed}",
+        })
+        logger.info(
+            f"[DetailSupplement] missing={len(missing)} attempted={len(todo)} "
+            f"filled={filled} failed={failed} (cap={cap})")
+    return filled, len(missing), failed, bytes_consumed
+
+
 async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=200, max_pages_per_cat=200):
     """
     Direct-API crawler for Salla stores that disabled their public /api/v1/products endpoint.
@@ -1436,6 +1575,16 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
                     break
             if cat_count > 0:
                 crawl_log["endpoints_tried"].append({"endpoint": f"category {cid}", "status": 200, "products": cat_count, "error": None})
+
+        # iter63 — bounded barcode supplement from the product-detail endpoint,
+        # same client / headers / pacing as the walk above. Fail-soft: a broken
+        # detail endpoint must never cost us the listing crawl.
+        if captured:
+            try:
+                _f, _m, _fx, _b = await _salla_detail_barcode_supplement(client, captured, crawl_log)
+                bytes_consumed += _b
+            except Exception as e:
+                logger.info(f"[DetailSupplement] skipped: {str(e)[:100]}")
 
     now = datetime.now(timezone.utc)
     crawl_log["duration_secs"] = round(time.time() - start_time, 1)
