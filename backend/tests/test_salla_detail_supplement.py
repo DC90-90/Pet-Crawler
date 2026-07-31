@@ -158,9 +158,10 @@ def test_supplement_fills_only_missing_and_injects_gtin():
     client = _FakeClient({"1694697895": _detail(
         [_v(310.0, barcode=HILLS_3KG, stock=4), _v(162.5, barcode=HILLS, stock=2)])})
     log = {"endpoints_tried": []}
-    filled, missing, failed, nbytes = _run(
+    filled, missing, failed, nbytes, by_status = _run(
         crawlers._salla_detail_barcode_supplement(client, listing, log))
     assert (filled, missing, failed) == (1, 1, 0)
+    assert by_status == {}
     assert nbytes == 100
     assert listing[0]["gtin"] == HILLS                      # injected
     assert listing[1]["gtin"] == "3182550702263"            # untouched
@@ -175,7 +176,7 @@ def test_cap_bounds_the_fetches_per_crawl():
     client = _FakeClient({str(i): _detail([_v(10.0, barcode=f"{1000000000000 + i}")])
                           for i in range(10)})
     log = {"endpoints_tried": []}
-    filled, missing, failed, _ = _run(
+    filled, missing, failed, _b, _by = _run(
         crawlers._salla_detail_barcode_supplement(client, listing, log, cap=3))
     assert missing == 10 and len(client.calls) == 3 and filled == 3
     assert sum(1 for it in listing if it.get("gtin")) == 3   # the rest wait for tomorrow
@@ -188,9 +189,11 @@ def test_supplement_is_fail_soft_per_product():
     client = _FakeClient({"1": "boom",
                           "3": _detail([_v(7.0, barcode=HILLS)])})
     log = {"endpoints_tried": []}
-    filled, missing, failed, _ = _run(
+    filled, missing, failed, _b, by_status = _run(
         crawlers._salla_detail_barcode_supplement(client, listing, log))
     assert (filled, missing, failed) == (1, 3, 2)
+    # iter64 — the two failures are attributed: one exception, one HTTP 404
+    assert by_status == {"exception": 1, 404: 1}
     assert listing[2]["gtin"] == HILLS
 
 
