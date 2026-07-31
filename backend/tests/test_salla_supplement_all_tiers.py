@@ -71,7 +71,8 @@ class _FakeClient:
         self.calls.append(url)
         if self.status != 200:
             return _Resp(status=self.status)
-        pid = url.rstrip("/").rsplit("/", 1)[-1]
+        parts = url.rstrip("/").split("/")
+        pid = parts[-2] if parts[-1] == "details" else parts[-1]
         d = self.detail_by_id.get(pid)
         return _Resp(body={"data": d}) if d else _Resp(status=404)
 
@@ -188,50 +189,25 @@ def test_every_tier_call_site_exists_and_precedes_persistence():
                     < src.index("process_crawled_products")), fn.__name__
 
 
-# ── (c) identifier resolution ───────────────────────────────────────────────
+# ── (c) identifier is OPTIONAL since iter65 ─────────────────────────────────
 
-def test_skipped_with_no_store_identifier_when_capture_fails():
+def test_runs_without_any_store_identifier_via_the_store_domain_route():
+    """iter65 — the primary /details route needs no store-identifier, so a
+    missing identifier no longer skips the supplement (iter64 skipped with
+    no_store_identifier here)."""
     async def main():
         store = {k: v for k, v in SALLA_STORE.items() if k != "salla_store_identifier"}
-        orig = crawlers._lightweight_salla_identifier_capture
-
-        async def _no_capture(_s):
-            return None
-        crawlers._lightweight_salla_identifier_capture = _no_capture
-        try:
-            log = _log()
-            await crawlers._maybe_salla_detail_supplement(
-                _DB(store_doc={}), store, _listing(80), log)
-        finally:
-            crawlers._lightweight_salla_identifier_capture = orig
-        entries = _supp_entries(log)
-        assert len(entries) == 1
-        assert entries[0]["status"] == "skipped"
-        assert entries[0]["error"] == "no_store_identifier"
-    asyncio.run(main())
-
-
-def test_fresh_capture_is_used_and_cached_on_the_store_doc():
-    async def main():
-        store = {k: v for k, v in SALLA_STORE.items() if k != "salla_store_identifier"}
-        orig = crawlers._lightweight_salla_identifier_capture
-
-        async def _capture(_s):
-            return "888777666"
-        crawlers._lightweight_salla_identifier_capture = _capture
         items = _listing(60)
         client = _FakeClient({str(i): _detail_for(items[i]) for i in range(60)})
-        db = _DB(store_doc={})
-        try:
-            with _patched_client(client):
-                log = _log()
-                await crawlers._maybe_salla_detail_supplement(db, store, items, log)
-        finally:
-            crawlers._lightweight_salla_identifier_capture = orig
-        assert _supp_entries(log)[0]["status"] == "ran"
-        # cached for the next crawl — one Playwright launch, not one per day
-        assert db.stores.updates == [({"id": "zarafa"},
-                                      {"$set": {"salla_store_identifier": "888777666"}})]
+        log = _log()
+        with _patched_client(client):
+            await crawlers._maybe_salla_detail_supplement(
+                _DB(store_doc={}), store, items, log)
+        e = _supp_entries(log)[0]
+        assert e["status"] == "ran" and e["products"] == 60
+        # every fetch went to the store domain — no identifier, no fallback host
+        assert all(c.startswith("https://zarafaksa.com/en/api/v1/products/") for c in client.calls)
+        assert all(c.endswith("/details") for c in client.calls)
     asyncio.run(main())
 
 
@@ -276,13 +252,23 @@ def test_403_responses_are_counted_per_status_code_in_the_summary():
     async def main():
         items = _listing(60)
         client = _FakeClient(status=403)          # Salla defending the detail path
-        log = _log()
-        with _patched_client(client):
-            await crawlers._maybe_salla_detail_supplement(_DB(), SALLA_STORE, items, log)
+        orig_dom = crawlers._salla_dom_barcode_supplement
+
+        async def _no_dom(_store, still, cap=None, dom_reader=None):
+            return 0, len(still[:crawlers.SALLA_DOM_BARCODE_CAP]), len(still[:crawlers.SALLA_DOM_BARCODE_CAP])
+        crawlers._salla_dom_barcode_supplement = _no_dom
+        try:
+            log = _log()
+            with _patched_client(client):
+                await crawlers._maybe_salla_detail_supplement(_DB(), SALLA_STORE, items, log)
+        finally:
+            crawlers._salla_dom_barcode_supplement = orig_dom
         e = _supp_entries(log)[0]
         assert e["status"] == "ran" and e["products"] == 0
         assert "failed_403=60" in e["error"], e["error"]
         assert "filled=0" in e["error"] and "failed=60" in e["error"]
+        # iter65 — stage 2 was attempted on what stage 1 could not fill
+        assert "dom_attempted=60" in e["error"] and "dom_failed=60" in e["error"]
     asyncio.run(main())
 
 

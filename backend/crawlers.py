@@ -1419,30 +1419,70 @@ def _salla_missing_barcode_items(items):
             and not _salla_raw_barcode(it)]
 
 
-async def _salla_detail_barcode_supplement(client, captured, crawl_log,
+# ── iter65: strict GTIN validation for weak-signal sources ───────────────────
+# Production 31 Jul: the details route's root `sku` is often a merchant-internal
+# numeric code ("5274204208") that HAPPENS to pass the 8-14 digit gate — and by
+# luck can even pass the mod-10 check digit. What it cannot fake is GTIN
+# LENGTH: real trade-item numbers are GTIN-8/12/13/14 exactly. Sources that are
+# not barcode fields by declaration (root sku, DOM text) must pass BOTH tests;
+# declared barcode/gtin fields keep the shipped canonical-only gate.
+_GTIN_LENGTHS = {8, 12, 13, 14}
+
+
+def _is_strict_gtin(val):
+    """Digits only, a real GTIN length, and a valid mod-10 check digit."""
+    s = str(val or "").strip()
+    if not s.isdigit() or len(s) not in _GTIN_LENGTHS:
+        return False
+    total = sum(int(c) * (3 if i % 2 == 0 else 1)
+                for i, c in enumerate(reversed(s[:-1])))
+    return (10 - total % 10) % 10 == int(s[-1])
+
+
+def _stage1_extract_barcode(detail, listed_price=0.0):
+    """Barcode from a /details response, or "".
+
+    Order: the iter63 variant/root scan first (skus[] when present, then the
+    declared root gtin/mpn/barcode/ean/upc fields, canonical-gated) — then, new
+    in iter65, the root `sku` under STRICT GTIN validation only. The details
+    route's root sku is usually an internal code ("5274204208", length 10) and
+    must never be promoted to a barcode on the digit-run gate alone.
+    """
+    got = _select_salla_variant_barcode(detail, listed_price=listed_price)
+    if got:
+        return got
+    if isinstance(detail, dict):
+        sku = str(detail.get("sku") or "").strip()
+        if _is_strict_gtin(sku):
+            return sku
+    return ""
+
+
+async def _salla_detail_barcode_supplement(client, captured, store_domain=None,
+                                           store_identifier=None,
                                            cap=SALLA_DETAIL_SUPPLEMENT_CAP):
-    """Fill missing barcodes from the storefront product-DETAIL endpoint.
+    """Stage 1 — cheap HTTP fill from the product-DETAILS route.
+
+    iter65 — the iter63/64 route GET api.salla.dev/store/v1/products/{id} is
+    RETIRED: production 31 Jul returned 410 for all 299 attempts
+    (failed_410=299). The working route, found by direct testing, is
+
+        GET https://{store_domain}/en/api/v1/products/{id}/details      (no
+            store-identifier needed)
+
+    with GET https://api.salla.dev/store/v1/products/{id}/details (identifier
+    required) as the fallback when the store domain answers 4xx/5xx.
 
     Mutates the raw listing items in place: a recovered barcode is injected as
     the item's root `gtin`, which _normalize_raw_product's root scan picks up —
-    so persistence to products + product_snapshots flows through the exact
-    iter61 path, and the listing's price fields stay untouched (injecting the
-    full skus[] array instead would let the normalizer's variant-price logic
-    reprice the product from a different variant).
+    persistence flows through the exact iter61 path and the listing's price
+    fields stay untouched. Fail-soft per product, sequential on the same
+    client. The combined ran/skipped observability entry is written by
+    _maybe_salla_detail_supplement, which also runs stage 2 on what this stage
+    could not fill.
 
-    Fail-soft per product: one bad detail response is logged and skipped, never
-    fatal to the crawl. Sequential on the same client — the category walk's
-    pacing.
-
-    iter64 — non-200 detail responses were counted but SILENT: no way to tell
-    "Salla is 403ing the detail endpoint" from "no barcodes found". Failures
-    are now bucketed per status code (exceptions under "exception") and the
-    summary entry carries them, e.g. `failed_403=12`. The entry's status is the
-    string "ran" — its skipped counterpart is written by
-    _maybe_salla_detail_supplement, so every Salla crawl log shows exactly one
-    detail_barcode_supplement line either way.
-
-    Returns (filled, missing_total, failed, bytes_consumed, failed_by_status).
+    Returns (filled, missing_total, failed, bytes_consumed, failed_by_status);
+    failures are bucketed by the LAST status observed for the product.
     """
     missing = _salla_missing_barcode_items(captured)
     todo = missing[:cap]
@@ -1451,39 +1491,151 @@ async def _salla_detail_barcode_supplement(client, captured, crawl_log,
     failed_by_status = {}
     for it in todo:
         pid = it.get("id")
-        try:
-            r = await client.get(f"https://api.salla.dev/store/v1/products/{pid}")
-            bytes_consumed += len(r.content or b"")
-            if r.status_code != 200:
-                failed += 1
-                failed_by_status[r.status_code] = failed_by_status.get(r.status_code, 0) + 1
-                logger.info(f"[DetailSupplement] product={pid} http_status={r.status_code}")
-                continue
-            body = r.json()
-            detail = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
-            barcode = _select_salla_variant_barcode(detail, listed_price=_price_amount(it.get("price")))
-            if barcode:
-                it["gtin"] = barcode
-                filled += 1
-        except Exception as e:
+        urls = []
+        if store_domain:
+            urls.append(f"https://{store_domain}/en/api/v1/products/{pid}/details")
+        if store_identifier or not store_domain:
+            urls.append(f"https://api.salla.dev/store/v1/products/{pid}/details")
+        last_status = None
+        detail = None
+        for url in urls:
+            try:
+                r = await client.get(url)
+                bytes_consumed += len(r.content or b"")
+                last_status = r.status_code
+                if r.status_code == 200:
+                    body = r.json()
+                    detail = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+                    break
+                logger.info(f"[DetailSupplement] product={pid} http_status={r.status_code} url={url}")
+            except Exception as e:
+                last_status = "exception"
+                logger.info(f"[DetailSupplement] product={pid} failed: {str(e)[:80]}")
+        if detail is None:
             failed += 1
-            failed_by_status["exception"] = failed_by_status.get("exception", 0) + 1
-            logger.info(f"[DetailSupplement] product={pid} failed: {str(e)[:80]}")
-    summary = f"missing={len(missing)} attempted={len(todo)} filled={filled} failed={failed}"
-    summary += "".join(f" failed_{k}={v}" for k, v in sorted(failed_by_status.items(), key=str))
-    crawl_log["endpoints_tried"].append({
-        "endpoint": "detail_barcode_supplement", "status": "ran",
-        "products": filled, "error": summary,
-    })
-    logger.info(f"[DetailSupplement] {summary} (cap={cap})")
+            key = last_status if last_status is not None else "exception"
+            failed_by_status[key] = failed_by_status.get(key, 0) + 1
+            continue
+        barcode = _stage1_extract_barcode(detail, listed_price=_price_amount(it.get("price")))
+        if barcode:
+            it["gtin"] = barcode
+            filled += 1
     return filled, len(missing), failed, bytes_consumed, failed_by_status
 
 
-async def _lightweight_salla_identifier_capture(store):
-    """One Playwright visit to the storefront to capture `store-identifier`,
-    for crawl paths that succeeded WITHOUT a browser (Tier 1 direct API).
-    Reuses the exact Tier 2.5 capture helper. Returns the identifier or None —
-    never raises."""
+# ── iter65 stage 2: the barcode that exists ONLY in the rendered DOM ─────────
+# Zarafa 31 Jul, confirmed in-browser: the real variant barcode (052742059518)
+# is displayed as text under the variant picker next to a barcode icon — an
+# in-page find locates it, while a DevTools network search across ALL variant
+# XHRs finds nothing, and plain curl of the HTML lacks it (JS-rendered). For
+# these products no API response carries the value; reading the rendered page
+# is the only remaining source.
+SALLA_DOM_BARCODE_CAP = 100
+
+# digit runs with hard boundaries — "12345678901" inside a longer number is not
+# a candidate
+_DOM_DIGIT_RUN_RE = re.compile(r"(?<!\d)(\d{8,14})(?!\d)")
+
+# JS evaluated in the product page: texts of elements that look barcode-related
+# (class/id mentioning barcode, or the visible words), texts of the
+# variant/options component, and the full visible body text as last resort.
+_DOM_BARCODE_JS = """
+() => {
+  const texts = (sel) => Array.from(document.querySelectorAll(sel))
+      .map(el => el.innerText || el.textContent || "").filter(Boolean);
+  const labelled = texts('[class*="barcode" i], [id*="barcode" i]');
+  for (const el of document.querySelectorAll('span, div, p, li, small, bdi')) {
+    const t = (el.innerText || "");
+    if (t.length < 120 && (/barcode/i.test(t) || t.includes("\u0628\u0627\u0631\u0643\u0648\u062f"))) {
+      labelled.push(t);
+      if (el.parentElement) labelled.push(el.parentElement.innerText || "");
+    }
+  }
+  const options = texts('[class*="option" i], [class*="variant" i], salla-product-options');
+  return { preferred: labelled.concat(options).slice(0, 60),
+           body: (document.body ? document.body.innerText : "").slice(0, 20000) };
+}
+"""
+
+
+def _pick_dom_barcode(preferred_texts, body_text):
+    """Choose one barcode from rendered-page text, or "".
+
+    Preference order:
+      1. a strict GTIN inside a barcode-labelled / variant-picker element —
+         first hit wins (that is the value the merchant is displaying AS the
+         barcode of the selected variant);
+      2. else the body-wide digit runs, but only when EXACTLY ONE distinct
+         strict GTIN appears — a page with several candidates and no label to
+         disambiguate is skipped rather than guessed at. Page text is full of
+         8-14 digit runs that are not barcodes (a 12-digit Saudi phone number
+         passes the length gate), which is why every DOM candidate must pass
+         _is_strict_gtin, not just the canonical gate.
+    """
+    for t in preferred_texts or []:
+        for run in _DOM_DIGIT_RUN_RE.findall(str(t)):
+            if _is_strict_gtin(run):
+                return run
+    body_hits = {run for run in _DOM_DIGIT_RUN_RE.findall(str(body_text or ""))
+                 if _is_strict_gtin(run)}
+    if len(body_hits) == 1:
+        return next(iter(body_hits))
+    return ""
+
+
+def _salla_item_page_url(it, store_domain):
+    """The customer-facing product page URL for a raw listing item, or ""."""
+    url = ""
+    urls = it.get("urls")
+    if isinstance(urls, dict):
+        url = str(urls.get("customer") or "").strip()
+    if not url:
+        url = str(it.get("url") or "").strip()
+    return _absolutize_url(url, store_domain) if url else ""
+
+
+async def _salla_dom_barcode_supplement(store, items, cap=SALLA_DOM_BARCODE_CAP,
+                                        dom_reader=None):
+    """Stage 2 — read the barcode out of the rendered product page.
+
+    `items` are the products still missing after stage 1. One browser context,
+    sequential navigation, the same render wait the category-discovery pass
+    uses. Fail-soft per product; a page that yields no unambiguous strict GTIN
+    counts as failed, never guessed.
+
+    dom_reader: injectable async (page, url) -> (preferred_texts, body_text).
+    Tests supply one and no browser is launched; production leaves it None.
+
+    Returns (filled, attempted, failed).
+    """
+    todo = items[:cap]
+    if not todo:
+        return 0, 0, 0
+    filled = failed = 0
+
+    async def _fill(read, page):
+        nonlocal filled, failed
+        for it in todo:
+            url = _salla_item_page_url(it, store.get("domain"))
+            if not url:
+                failed += 1
+                continue
+            try:
+                preferred, body = await read(page, url)
+                barcode = _pick_dom_barcode(preferred, body)
+                if barcode:
+                    it["gtin"] = barcode
+                    filled += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                failed += 1
+                logger.info(f"[DomBarcode] product={it.get('id')} failed: {str(e)[:80]}")
+
+    if dom_reader is not None:
+        await _fill(dom_reader, None)
+        return filled, len(todo), failed
+
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
@@ -1500,12 +1652,21 @@ async def _lightweight_salla_identifier_capture(store):
                     locale="ar-SA",
                 )
                 page = await ctx.new_page()
-                return await _capture_salla_store_identifier(page, f"https://{store['domain']}")
+
+                async def _read(pg, url):
+                    await page.goto(url, wait_until="domcontentloaded", timeout=18000)
+                    await page.wait_for_timeout(1500)   # same render wait as category discovery
+                    got = await page.evaluate(_DOM_BARCODE_JS)
+                    return (got or {}).get("preferred") or [], (got or {}).get("body") or ""
+
+                await _fill(_read, page)
             finally:
                 await browser.close()
     except Exception as e:
-        logger.info(f"[DetailSupplement] identifier capture failed for {store.get('domain')}: {str(e)[:80]}")
-        return None
+        # browser-level failure: everything unprocessed is failed, never fatal
+        logger.info(f"[DomBarcode] browser unavailable for {store.get('domain')}: {str(e)[:80]}")
+        failed = len(todo) - filled
+    return filled, len(todo), failed
 
 
 # iter64 — a crawl that produced fewer products than this is degraded/blocked
@@ -1517,28 +1678,27 @@ SALLA_DETAIL_MIN_PRODUCTS = 50
 
 async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
                                          store_identifier=None, client=None):
-    """iter64 — run the detail supplement after ANY Salla crawl, any tier.
+    """iter64/65 — run the barcode supplement after ANY Salla crawl, any tier.
 
-    iter63 wired the supplement only inside crawl_salla_storefront_categories
-    (Tier 2.5). Production same-day evidence (Zarafa): the 19:09 crawl succeeded
-    via Tier 2 — supplement never ran; the 19:05 Tier 2.5 attempt captured 0 —
-    the supplement's only host path was itself dead. Net: a successful crawl
-    day with no chance of filling a single barcode, and nothing in the logs to
-    say why. This wrapper is called from every tier's persistence point and
-    GUARANTEES one `detail_barcode_supplement` entry per Salla crawl log:
+    Two stages (iter65): a cheap HTTP pass against the working /details route,
+    then a bounded Playwright DOM read for the products whose barcode exists
+    only in the rendered page (Zarafa evidence 31 Jul: no API response carries
+    it). The iter64 framework is unchanged — any-tier wiring, caps, politeness
+    guard, and EXACTLY ONE `detail_barcode_supplement` entry per Salla crawl:
 
-        status "ran"      with missing/attempted/filled/failed(+per-code) counts
-        status "skipped"  with reason: no_products | degraded_crawl |
-                          no_missing_barcodes | no_store_identifier |
-                          exception:<msg>
+        status "ran"      counts: missing/attempted/filled with the split
+                          filled_details/filled_dom, failed(+failed_<status>
+                          buckets for stage 1), dom_attempted, dom_failed
+        status "skipped"  reason: no_products | degraded_crawl |
+                          no_missing_barcodes | exception:<msg>
 
-    Must be called BEFORE process_crawled_products — the supplement works by
-    mutating the raw items, so it has to run before they are persisted.
+    Must be called BEFORE process_crawled_products — both stages mutate the raw
+    items, so they have to run before persistence.
 
-    store-identifier resolution: the caller's captured value (Tier 2.5), else
-    the value cached on the store doc by a previous Tier 2.5 success, else ONE
-    lightweight Playwright capture; a fresh capture is cached for next time. If
-    all three fail the supplement skips — never blocks the crawl.
+    store-identifier is now OPTIONAL (iter65): the primary /details route runs
+    against the store domain with no identifier, so nothing is skipped for the
+    lack of one. The identifier (caller's captured value, else the one cached
+    on the store doc) only unlocks the api.salla.dev fallback host.
     """
     if (store.get("platform") or "").lower() != "salla":
         return
@@ -1556,25 +1716,15 @@ async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
             return _skip("no_products")
         if len(items) < SALLA_DETAIL_MIN_PRODUCTS:
             return _skip("degraded_crawl")
-        if not _salla_missing_barcode_items(items):
+        missing_total = len(_salla_missing_barcode_items(items))
+        if not missing_total:
             return _skip("no_missing_barcodes")
 
-        sid = store_identifier
-        if not sid:
-            sid = store.get("salla_store_identifier")
+        sid = store_identifier or store.get("salla_store_identifier")
         if not sid:
             doc = await db.stores.find_one(
                 {"id": store.get("id")}, {"_id": 0, "salla_store_identifier": 1})
             sid = (doc or {}).get("salla_store_identifier")
-        freshly_captured = False
-        if not sid:
-            sid = await _lightweight_salla_identifier_capture(store)
-            freshly_captured = bool(sid)
-        if not sid:
-            return _skip("no_store_identifier")
-        if freshly_captured:
-            await db.stores.update_one(
-                {"id": store.get("id")}, {"$set": {"salla_store_identifier": sid}})
 
         owns_client = client is None
         if owns_client:
@@ -1586,8 +1736,9 @@ async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
                 "x-requested-with": "XMLHttpRequest",
                 "Referer": f"{base}/",
                 "Origin": base,
-                "store-identifier": sid,
             }
+            if sid:
+                headers["store-identifier"] = sid
             httpx_kwargs = {"timeout": 20.0, "headers": headers}
             if store.get("use_proxy"):
                 creds = get_proxy_credentials()
@@ -1596,13 +1747,35 @@ async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
                     httpx_kwargs["proxy"] = f"http://{u}:{p}@{h}:{port}"
             client = httpx.AsyncClient(**httpx_kwargs)
         try:
-            _f, _m, _fx, nbytes, _by = await _salla_detail_barcode_supplement(
-                client, items, crawl_log)
+            filled_details, _m, s1_failed, nbytes, by_status = \
+                await _salla_detail_barcode_supplement(
+                    client, items, store_domain=store.get("domain"),
+                    store_identifier=sid)
         finally:
             if owns_client:
                 await client.aclose()
         if store.get("use_proxy") and nbytes > 0:
             await record_proxy_usage(db, store, nbytes)
+
+        # Stage 2 — only what stage 1 could not fill, under its own smaller cap
+        still_missing = _salla_missing_barcode_items(items)
+        filled_dom = dom_attempted = dom_failed = 0
+        if still_missing:
+            filled_dom, dom_attempted, dom_failed = \
+                await _salla_dom_barcode_supplement(store, still_missing)
+
+        attempted = min(missing_total, SALLA_DETAIL_SUPPLEMENT_CAP)
+        filled = filled_details + filled_dom
+        summary = (f"missing={missing_total} attempted={attempted} filled={filled}"
+                   f" filled_details={filled_details} filled_dom={filled_dom}"
+                   f" failed={s1_failed}")
+        summary += "".join(f" failed_{k}={v}" for k, v in sorted(by_status.items(), key=str))
+        summary += f" dom_attempted={dom_attempted} dom_failed={dom_failed}"
+        crawl_log["endpoints_tried"].append({
+            "endpoint": "detail_barcode_supplement", "status": "ran",
+            "products": filled, "error": summary,
+        })
+        logger.info(f"[DetailSupplement] {store.get('name')}: {summary}")
     except Exception as e:
         _skip(f"exception:{str(e)[:80]}")
 
