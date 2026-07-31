@@ -146,19 +146,37 @@ def test_store_ranking_end_to_end():
         assert rows["dead"]["stale"] is True
         assert zb["stale"] is False
 
-        # ── ordering: iter62 ranks by the unified revenue axis, not score ──
+        # ── ordering: ranks are 1..N sorted by REVENUE desc (iter62) ──
+        # This used to assert score-desc. The client requires a sales
+        # leaderboard, so revenue is now the primary key and the score is the
+        # tie-break; zbig is dominant on every score axis and still ranks below
+        # `own` because `own` sold more.
         ordered = sorted(out["stores"], key=lambda r: r["rank"])
         assert [r["rank"] for r in ordered] == list(range(1, 6))
+        vals = [r["revenue_rank_value"] for r in ordered]
+        numeric = [v for v in vals if v is not None]
+        assert numeric == sorted(numeric, reverse=True), vals
+        # every None is at the END — no revenue figure sorts last, and is not
+        # given a fabricated 0
+        assert all(v is None for v in vals[len(numeric):]), vals
+        assert ordered[0]["store_id"] == "own" and ordered[0]["revenue_rank_value"] == 99.5
+        assert ordered[-1]["store_id"] == "dead"
+        assert ordered[-1]["revenue_rank_value"] is None
+        assert ordered[-1]["revenue_rank_basis"] == "none"
+        # the score is still on every row, and still computed only from the
+        # four components — revenue never feeds it
+        for r in ordered:
+            c = r["components"]
+            assert r["score"] == round(100 * (W["breadth"] * c["breadth"]["score"]
+                                              + W["price"] * c["price"]["score"]
+                                              + W["stock"] * c["stock"]["score"]
+                                              + W["freshness"] * c["freshness"]["score"]), 1)
+        # zbig outscores own but is outsold by it — proof the score is not the key
+        assert zb["score"] > rows["own"]["score"]
+        assert zb["rank"] > rows["own"]["rank"]
         assert out["sorted_by"] == "revenue_desc"
-        by_revenue = sorted(out["stores"],
-            key=lambda r: (r["revenue_rank_value"] is None,
-                           -(r["revenue_rank_value"] or 0.0),
-                           -r["score"],
-                           -r["components"]["breadth"]["products"],
-                           r["name"]))
-        assert [r["store_id"] for r in ordered] == [r["store_id"] for r in by_revenue]
-        # own carries the largest revenue figure on the board (ledger 99.5) → #1
-        assert ordered[0]["store_id"] == "own"
+        assert (out["ranked_on_measured"] + out["ranked_on_estimate"]
+                + out["no_revenue_value"]) == out["total_stores"]
 
         # overlap column (distinct my_skus matched per store)
         assert zb["overlap"] == 1 and s1["overlap"] == 1
