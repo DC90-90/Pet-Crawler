@@ -331,9 +331,15 @@ def test_endpoint_sorts_by_revenue_and_reports_the_basis():
     asyncio.run(main())
 
 
-def test_own_store_gets_an_estimate_while_its_ledger_is_empty():
-    """Requirement 2 — 'Accumulating' with no number would sink us to the
-    bottom under a revenue sort as though we sold nothing."""
+def test_own_store_gets_no_estimate_while_its_ledger_is_empty():
+    """iter70 (drift reconciliation) — this test used to assert the OPPOSITE:
+    iter62 gave the own store a ±50% estimate as its sort value while the
+    orders ledger was empty. In production that fabricated figure ranked Pets
+    Houses #1 and the client flagged it. The intended contract, made on the
+    workspace and now reconciled into main: the own store's revenue axis uses
+    ONLY the real orders ledger — ledger empty means revenue None, sorted with
+    the no-figure group ("Accumulating"), NEVER the category-velocity estimate.
+    """
     async def main():
         db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
         out = await _compute(db, own_revenue=None, sales_pairs=[
@@ -341,17 +347,20 @@ def test_own_store_gets_an_estimate_while_its_ledger_is_empty():
         ])
         own = _by_name(out)["Pets houses"]
         assert own["revenue_30d"] is None                  # ledger still empty
-        assert own["revenue_est_salla"] is not None        # but we have a value
-        assert own["revenue_est_salla"]["band_pct"] == 50.0
-        assert own["revenue_rank_basis"] == "estimated"    # ...and it is tagged
-        assert own["revenue_is_estimate"] is True
-        assert own["revenue_rank_value"] > 0
-        assert own["revenue_tier"] == "estimated"
+        assert own["revenue_est_salla"] is None            # and NO estimate stands in
+        assert own["revenue_rank_basis"] == "none"
+        assert own["revenue_is_estimate"] is False
+        assert own["revenue_rank_value"] is None           # sorts with the no-figure group
+        assert own["revenue_tier"] == "none"
+        assert own["revenue_status"] == "accumulating"
+        # and it cannot outrank any store with a real figure
+        with_figures = [r for r in out["stores"] if r["revenue_rank_value"] is not None]
+        assert all(own["rank"] > r["rank"] for r in with_figures)
     asyncio.run(main())
 
 
 def test_own_store_uses_the_real_ledger_once_it_syncs():
-    """The estimate is a stand-in, not a permanent substitute."""
+    """The ledger is the only own-store revenue source, and it works."""
     async def main():
         db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
         out = await _compute(db, own_revenue=88_000.0, sales_pairs=[])
@@ -372,8 +381,9 @@ def test_own_store_products_do_not_poison_the_velocity_pool():
     from it, and pinned our own per-SKU velocity at exactly 0 — which is why the
     own-store estimate came out 0.0.
 
-    Asserted via a competitor, so this cannot pass just because the own store
-    is now excluded from its own estimate."""
+    Asserted via a competitor: the pool-exclusion guard survives iter70's
+    removal of the own-store estimate — the own store contributes nothing to
+    the pools AND receives nothing from them."""
     async def main():
         db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
         out = await _compute(db, own_revenue=None, sales_pairs=[
@@ -383,7 +393,8 @@ def test_own_store_products_do_not_poison_the_velocity_pool():
         # 12 products x 90 SAR x category velocity. With our 40 phantom zeros in
         # the pool the mean was 100/(90*30); without them it is 100/(50*30).
         assert hobba["revenue_est_salla"]["revenue_est"] == 2160.0
-        assert _by_name(out)["Pets houses"]["revenue_rank_value"] == 9600.0
+        # iter70 — and the own store gets NO value from that pool
+        assert _by_name(out)["Pets houses"]["revenue_rank_value"] is None
     asyncio.run(main())
 
 
@@ -396,7 +407,11 @@ def test_endpoint_counts_how_much_of_the_order_rests_on_estimates():
         total = (out["ranked_on_measured"] + out["ranked_on_estimate"]
                  + out["no_revenue_value"])
         assert total == out["total_stores"]
-        assert out["ranked_on_estimate"] >= 1              # own store at minimum
+        assert out["ranked_on_estimate"] >= 1              # Salla competitors
+        # iter70 — the own store counts in the NO-FIGURE bucket, not the
+        # estimate bucket, while its ledger is empty
+        assert out["no_revenue_value"] >= 1
+        assert _by_name(out)["Pets houses"]["revenue_rank_basis"] == "none"
         for r in out["stores"]:
             assert r["revenue_is_estimate"] == (r["revenue_rank_basis"] == "estimated")
     asyncio.run(main())
