@@ -32,29 +32,70 @@ function AlertTypeIcon({ type }) {
 }
 
 export default function AlertsPage() {
-  const { t } = useI18n();
+  const { t, isRTL } = useI18n();
   const [alerts, setAlerts] = useState([]);
   const [feed, setFeed] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [checking, setChecking] = useState(false);
-  const [products, setProducts] = useState([]);
   const [form, setForm] = useState({ product_sku: "", alert_type: "price_drop", threshold: 5, channel: "in_app" });
+
+  // iter69 — searchable SKU combobox replacing the old 200-item dropdown
+  // (which was doubly broken: unusable at ~2,600 products AND silently capped
+  // at the first 200, so most SKUs were not selectable at all). Reuses the
+  // EXISTING /products endpoint whose `search` param already matches
+  // sku / name_ar / name_en case-insensitively server-side — whole catalog,
+  // no new backend.
+  const [skuQuery, setSkuQuery] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [skuSearching, setSkuSearching] = useState(false);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
 
   const fetchAll = useCallback(() => {
     setLoading(true);
     Promise.all([
       api.get("/alerts"),
       api.get("/alerts/feed?days=30"),
-      api.get("/products?limit=200"),
-    ]).then(([a, f, p]) => {
+    ]).then(([a, f]) => {
       setAlerts(a.data);
       setFeed(f.data);
-      setProducts(p.data.products || []);
     }).catch(console.error).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // Debounced live search. An exact typed SKU (case-insensitive) is accepted
+  // as a selection without clicking — the canonical catalog SKU is what lands
+  // in form.product_sku, so the create-alert request contract is unchanged.
+  useEffect(() => {
+    const q = skuQuery.trim();
+    if (!dialogOpen || !q) { setSuggestions([]); setSkuSearching(false); return; }
+    setSkuSearching(true);
+    const timer = setTimeout(() => {
+      api.get(`/products?search=${encodeURIComponent(q)}&limit=10`)
+        .then(({ data }) => {
+          const list = data.products || [];
+          setSuggestions(list);
+          const exact = list.find((p) => (p.sku || "").toLowerCase() === q.toLowerCase());
+          setForm((f) => (f.product_sku === (exact ? exact.sku : "") ? f : { ...f, product_sku: exact ? exact.sku : "" }));
+        })
+        .catch(() => setSuggestions([]))
+        .finally(() => setSkuSearching(false));
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [skuQuery, dialogOpen]);
+
+  const pickSuggestion = (p) => {
+    setForm((f) => ({ ...f, product_sku: p.sku }));
+    setSkuQuery(p.sku);
+    setSuggestionsOpen(false);
+  };
+
+  const resetSkuSearch = () => {
+    setSkuQuery("");
+    setSuggestions([]);
+    setSuggestionsOpen(false);
+  };
 
   const handleCreate = async () => {
     if (!form.product_sku) { toast.error("Select a product"); return; }
@@ -63,6 +104,7 @@ export default function AlertsPage() {
       toast.success("Alert created");
       setDialogOpen(false);
       setForm({ product_sku: "", alert_type: "price_drop", threshold: 5, channel: "in_app" });
+      resetSkuSearch();
       fetchAll();
     } catch (e) { toast.error(e.response?.data?.detail || "Failed"); }
   };
@@ -213,12 +255,56 @@ export default function AlertsPage() {
           <div className="space-y-3 py-2">
             <div>
               <label className="text-xs font-medium text-white mb-1 block">Product (SKU)</label>
-              <Select value={form.product_sku} onValueChange={(v) => setForm((f) => ({ ...f, product_sku: v }))}>
-                <SelectTrigger className="rounded-md" data-testid="alert-sku-select"><SelectValue placeholder="Select product" /></SelectTrigger>
-                <SelectContent className="max-h-[200px]">
-                  {products.map((p) => <SelectItem key={p.sku} value={p.sku}>{p.name_ar} ({p.sku})</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <div className="relative">
+                <Input
+                  value={skuQuery}
+                  onChange={(e) => { setSkuQuery(e.target.value); setSuggestionsOpen(true); }}
+                  onFocus={() => setSuggestionsOpen(true)}
+                  onBlur={() => setTimeout(() => setSuggestionsOpen(false), 150)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && suggestionsOpen && suggestions.length > 0 && !form.product_sku) {
+                      e.preventDefault();
+                      pickSuggestion(suggestions[0]);
+                    }
+                    if (e.key === "Escape") setSuggestionsOpen(false);
+                  }}
+                  placeholder={isRTL ? "اكتب رمز المنتج SKU" : "Type product SKU"}
+                  autoComplete="off"
+                  className="rounded-md"
+                  data-testid="alert-sku-search"
+                />
+                {suggestionsOpen && skuQuery.trim() && suggestions.length > 0 && (
+                  <div
+                    className="absolute start-0 end-0 top-full mt-1 z-[70] max-h-[220px] overflow-y-auto rounded-md border border-white/10 bg-[#0A2728] shadow-lg"
+                    data-testid="alert-sku-suggestions"
+                  >
+                    {suggestions.map((p) => (
+                      <button
+                        key={p.sku}
+                        type="button"
+                        onMouseDown={(e) => { e.preventDefault(); pickSuggestion(p); }}
+                        className={`w-full px-3 py-2 text-start hover:bg-white/5 transition-colors ${form.product_sku === p.sku ? "bg-[#1E988E]/15" : ""}`}
+                        data-testid={`alert-sku-option-${p.sku}`}
+                      >
+                        <p className="text-xs text-white truncate">{isRTL ? (p.name_ar || p.name_en) : (p.name_en || p.name_ar)}</p>
+                        <p className="text-[10px] text-[#A1E4DB] font-mono" dir="ltr">{p.sku}</p>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {skuQuery.trim() && !skuSearching && !form.product_sku && (
+                  <p className="text-[10px] text-[#F59E0B] mt-1" data-testid="alert-sku-not-found">
+                    {suggestions.length > 0
+                      ? (isRTL ? "اختر منتجاً من القائمة أو اكتب رمز SKU كاملاً" : "Pick a product from the list or type a full SKU")
+                      : (isRTL ? "رمز SKU غير موجود في الكتالوج" : "SKU not found in your catalog")}
+                  </p>
+                )}
+                {form.product_sku && (
+                  <p className="text-[10px] text-[#6AC1B5] mt-1" data-testid="alert-sku-selected">
+                    {isRTL ? "المنتج المحدد:" : "Selected:"} <span className="font-mono" dir="ltr">{form.product_sku}</span>
+                  </p>
+                )}
+              </div>
             </div>
             <div>
               <label className="text-xs font-medium text-white mb-1 block">Alert Type</label>
@@ -242,8 +328,8 @@ export default function AlertsPage() {
             </div>
           </div>
           <DialogFooter className="relative z-[60]">
-            <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="rounded-md" type="button">{t("btn_cancel")}</Button>
-            <Button size="sm" onClick={handleCreate} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md" data-testid="alert-save-btn" type="button">Create Alert</Button>
+            <Button variant="outline" size="sm" onClick={() => { setDialogOpen(false); resetSkuSearch(); }} className="rounded-md" type="button">{t("btn_cancel")}</Button>
+            <Button size="sm" onClick={handleCreate} disabled={!form.product_sku} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md disabled:opacity-50" data-testid="alert-save-btn" type="button">Create Alert</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
