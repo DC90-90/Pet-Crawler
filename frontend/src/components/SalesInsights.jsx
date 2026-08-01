@@ -25,6 +25,7 @@ const STOCK_TONE = {
   MEDIUM: { bg: "rgba(251,191,36,0.12)",  border: "rgba(251,191,36,0.45)", color: "#FBBF24" },
   LOW:    { bg: "rgba(245,158,11,0.14)",  border: "rgba(245,158,11,0.5)",  color: "#F59E0B" },
   OOS:    { bg: "rgba(239,68,68,0.14)",   border: "rgba(239,68,68,0.5)",   color: "#EF4444" },
+  AVAIL:  { bg: "rgba(16,185,129,0.12)",  border: "rgba(16,185,129,0.45)", color: "#10B981" },
 };
 
 function fmtSar(n) {
@@ -186,8 +187,13 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
               </TableHeader>
               <TableBody>
                 {products.map((p, i) => {
-                  const stockKey = (p.stock_signal || "").toUpperCase();
-                  const tone = STOCK_TONE[stockKey] || STOCK_TONE.MEDIUM;
+                  // iter72 — the Stock column is MY stock. A level renders only
+                  // for catalog rows with real inventory data; market rows get a
+                  // neutral "not in my catalog" chip and unknown renders "—".
+                  // No default tone: an unrecognized/absent signal is never
+                  // dressed up as MEDIUM.
+                  const stockKey = (p.my_stock_signal || "").toUpperCase();
+                  const tone = STOCK_TONE[stockKey] || null;
                   const name = isRTL ? (p.name_ar || p.name_en) : (p.name_en || p.name_ar);
                   return (
                     <TableRow key={p.sku} className="border-b border-white/5 hover:bg-white/[0.02]" data-testid={`si-product-row-${i}`}>
@@ -201,14 +207,26 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
                       <TableCell className="text-sm text-white font-mono text-end">{(p.avg_price || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
                       <TableCell className="text-sm text-[#A1E4DB] font-mono text-center">{p.num_sellers || 0}</TableCell>
                       <TableCell className="text-center">
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] tracking-wider"
-                          style={{ background: tone.bg, border: `1px solid ${tone.border}`, color: tone.color, fontFamily: "'JetBrains Mono', monospace" }}
-                          data-testid={`si-product-stock-${i}`}
-                        >
-                          {t(`stock_${stockKey.toLowerCase()}`) || stockKey || "—"}
-                        </Badge>
+                        {p.my_stock_status === "not_in_catalog" ? (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] tracking-wider bg-white/5 border-white/10 text-[#A1E4DB]"
+                            data-testid="stock-not-in-catalog"
+                          >
+                            {isRTL ? "غير موجود في متجري" : "Not in my catalog"}
+                          </Badge>
+                        ) : tone ? (
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] tracking-wider"
+                            style={{ background: tone.bg, border: `1px solid ${tone.border}`, color: tone.color, fontFamily: "'JetBrains Mono', monospace" }}
+                            data-testid={`si-product-stock-${i}`}
+                          >
+                            {t(`stock_${stockKey.toLowerCase()}`) || stockKey}
+                          </Badge>
+                        ) : (
+                          <span className="text-xs text-[#A1E4DB]/60" data-testid={`si-product-stock-${i}`}>—</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-sm text-[#A1E4DB] font-mono text-end">{p.confidence_score || 0}%</TableCell>
                     </TableRow>

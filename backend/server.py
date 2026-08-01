@@ -60,7 +60,7 @@ from core import (
     PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
     MAX_SOLD_COUNT_DELTA_PER_INTERVAL,
     MIN_AGGREGATION_CONFIDENCE,
-    get_stock_signal, _coerce_num, _coerce_int,
+    get_stock_signal, canonical_barcode, _coerce_num, _coerce_int,
     _estimate_sales_from_snapshots, compute_product_metrics,
     compute_market_position,
     ttl_cache, cache_clear,
@@ -2136,6 +2136,14 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
     my_url_by_sku = {p["sku"]: p.get("product_url") for p in my_products_docs if p.get("product_url")}
     my_skus_set = {p["sku"] for p in my_products_docs if p.get("sku")}
     my_price_lookup = {p["sku"]: p for p in my_products_docs}
+    # iter72 — exact catalog membership by barcode identity. GTIN-14 canonical
+    # form only (same key space as the matcher); no fuzzy/name matching. Used
+    # solely to decide whether a row may carry a "my stock" value at all.
+    my_canon_to_sku = {}
+    for _mp in my_products_docs:
+        _cb = canonical_barcode(_mp.get("barcode"))
+        if _cb and _mp.get("sku"):
+            my_canon_to_sku.setdefault(_cb, _mp["sku"])
     my_presence_lookup = {p["sku"]: p for p in my_products_docs}
 
     # Own-store gate (Feb 2026): when own_only=True, restrict to SKUs that exist
@@ -2266,7 +2274,11 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
                     "vs_lowest_pct": 0, "vs_median_pct": 0,
                     "qty_sold_est": 0, "revenue_est": 0.0,
                     "num_sellers": 0, "latest_qty": 0,
-                    "stock_signal": "MEDIUM", "confidence_score": 0, "source_tier": 1,
+                    # iter72 — no snapshot history means the MARKET stock is
+                    # unknown; a default level here would be fabricated. My-store
+                    # stock still resolves below from db.my_products (the only
+                    # honest source for it).
+                    "stock_signal": None, "confidence_score": 0, "source_tier": 1,
                 }
             row = {**p, **metrics}
 
@@ -2300,6 +2312,36 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
             row["last_seen_on_store"] = _mp.get("last_seen_on_store")
             row["discovered_via"] = _mp.get("discovered_via")
 
+            # ── iter72: My-Stock honesty ─────────────────────────────
+            # Exact catalog membership — exact SKU or canonical-barcode (GTIN-14)
+            # equality against db.my_products, nothing fuzzy — decides whether a
+            # row may carry a my-stock level AT ALL:
+            #   not in my catalog        → my_stock_status="not_in_catalog",
+            #                              my_stock_signal=None (never a level)
+            #   mine, real qty/in_stock  → level from that data ("ok")
+            #   mine, data missing       → my_stock_signal=None ("unknown"),
+            #                              never an invented constant
+            _catalog_sku = p["sku"] if p["sku"] in my_skus_set else None
+            if _catalog_sku is None:
+                _row_canon = canonical_barcode(p.get("barcode")) or canonical_barcode(p.get("sku"))
+                _catalog_sku = my_canon_to_sku.get(_row_canon) if _row_canon else None
+            if _catalog_sku is None:
+                row["my_stock_status"] = "not_in_catalog"
+                row["my_stock_signal"] = None
+            elif _catalog_sku != p["sku"]:
+                # Mine by barcode identity only (row keyed by a competitor SKU).
+                # The sku-keyed override block below won't run for it, so the
+                # stock fields resolve here from the matching my_products doc.
+                _bc_doc = my_price_lookup.get(_catalog_sku) or {}
+                _bq, _bs = _bc_doc.get("quantity"), _bc_doc.get("in_stock")
+                if _bq is None and _bs is None:
+                    row["my_stock_status"] = "unknown"
+                    row["my_stock_signal"] = None
+                else:
+                    row["my_stock_signal"] = get_stock_signal(
+                        int(_bq) if _bq is not None else None, in_stock=_bs)
+                    row["my_stock_status"] = "ok"
+
             # ── My-store-centric fields (Feb 2026) ───────────────────
             # "My Products" page needs the SKU, name, price and stock to reflect the
             # user's Zid store, not the market aggregate. We override the catalog
@@ -2330,10 +2372,16 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
                 row["my_price"] = round(my_price, 2) if my_price is not None else None
                 row["my_quantity"] = int(my_qty) if my_qty is not None else None
                 row["my_in_stock"] = bool(my_in_stock) if my_in_stock is not None else None
-                row["my_stock_signal"] = get_stock_signal(
-                    row["my_quantity"] if row["my_quantity"] is not None else 0,
-                    in_stock=row["my_in_stock"],
-                ) if my_price is not None else None
+                # iter72 — level ONLY from real my_products data. Both fields
+                # absent → unknown ("—"), never a default level and never a
+                # fabricated OOS from treating missing quantity as zero.
+                if my_qty is None and my_in_stock is None:
+                    row["my_stock_signal"] = None
+                    row["my_stock_status"] = "unknown"
+                else:
+                    row["my_stock_signal"] = get_stock_signal(
+                        row["my_quantity"], in_stock=row["my_in_stock"])
+                    row["my_stock_status"] = "ok"
 
                 # Competitor discovery — barcode-safe UNION of two sources:
                 #   (A) product_matches link table (matcher's truth — barcode at conf 99,
@@ -3914,6 +3962,12 @@ async def _insights_sales_compute(db, days, date_from, date_to, search, sort, us
         "avg_price":        p.get("price", 0.0) or 0.0,
         "num_sellers":      p.get("num_sellers", 0) or 0,
         "stock_signal":     p.get("stock_signal", "") or "",
+        # iter72 — the Stock column renders MY stock, never the market signal:
+        # a level only for catalog rows with real data, a neutral
+        # "not in my catalog" state otherwise. stock_signal above stays for
+        # payload-contract compatibility but is no longer displayed as stock.
+        "my_stock_signal":  p.get("my_stock_signal"),
+        "my_stock_status":  p.get("my_stock_status", "") or "",
         "confidence_score": p.get("confidence_score", 0) or 0,
     } for p in src_products]
 
@@ -4977,7 +5031,9 @@ async def export_csv(days: int = Query(30), user=Depends(get_user)):
     writer = csv.writer(output)
     writer.writerow(["SKU", "Name (AR)", "Name (EN)", "Category", "Price (SAR)", "Min Price", "Max Price", "Est. Sales", "Est. Revenue", "Sellers", "Stock Signal", "Confidence"])
     for p in data["products"]:
-        writer.writerow([p["sku"], p["name_ar"], p["name_en"], p["category"], p.get("price", ""), p.get("min_price", ""), p.get("max_price", ""), p.get("qty_sold_est", ""), p.get("revenue_est", ""), p.get("num_sellers", ""), p.get("stock_signal", ""), p.get("confidence_score", "")])
+        # iter72 — export MY stock (db.my_products truth); blank when unknown,
+        # never the market-aggregate signal under a "Stock Signal" header.
+        writer.writerow([p["sku"], p["name_ar"], p["name_en"], p["category"], p.get("price", ""), p.get("min_price", ""), p.get("max_price", ""), p.get("qty_sold_est", ""), p.get("revenue_est", ""), p.get("num_sellers", ""), p.get("my_stock_signal") or "", p.get("confidence_score", "")])
     output.seek(0)
     return StreamingResponse(io.BytesIO(output.getvalue().encode("utf-8-sig")), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=daleel_pets_export.csv"})
 
