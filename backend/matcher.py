@@ -7,6 +7,7 @@ CRITICAL: A wrong match is worse than no match.
 import re, logging
 from typing import Optional
 from datetime import datetime, timezone, timedelta
+
 from core.utils import canonical_barcode
 
 # iter22 (Jul 2026): candidate snapshots for matching are bounded to this
@@ -630,6 +631,10 @@ async def _build_competitor_lookups(db, own_store_id):
         {"$group": {
             "_id": {"sku": "$sku", "store_id": "$store_id"},
             "sku": {"$first": "$sku"},
+            # iter61 — the per-store barcode observation, now that the crawler
+            # persists it. Level 1 has no other source for a competitor's
+            # barcode: db.products is shared across stores.
+            "barcode": {"$first": "$barcode"},
             "store_id": {"$first": "$store_id"},
             "store_name": {"$first": "$store_name"},
             "price": {"$first": "$price"},

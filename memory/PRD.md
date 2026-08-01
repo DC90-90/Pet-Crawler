@@ -7,23 +7,17 @@ SaaS web application "Daleel" for Saudi store owners to track and monitor compet
 
 ## Architecture
 - React 18 + Tailwind frontend (`/app/frontend`)
-- FastAPI backend (`/app/backend/server.py`, >8500 lines — refactor to routes/ requested LAST)
-- MongoDB (Motor) — write-time rollups: `metric_daily_rollups`, `sku_store_coverage`, `sku_sales_daily`, `dashboard_cache`
-- Crawler: `crawlers.py` (multi-tier, VAT inflation, pagination, iter63 Salla detail-supplement)
-- Matcher: `matcher.py` (GTIN-14 normalization, pack/collision guards iter51-53)
-- `salla_revenue_estimate.py`, `salla_sold_velocity.py`, `zid_orders.py`, `store_registry.py`
+- FastAPI backend (`/app/backend/server.py`, >8700 lines — refactor to routes/ requested LAST)
+- MongoDB (Motor) — write-time rollups: `metric_daily_rollups`, `sku_store_coverage`, `sku_sales_daily`, `dashboard_cache`; append-only `daily_ledger` + `daily_ledger_store` (iter67)
+- Crawler: `crawlers.py` (multi-tier, VAT inflation, two-stage barcode supplement iter65)
+- Matcher: `matcher.py`; Seller set: `seller_set.py` (iter60/70)
+- `salla_revenue_estimate.py`, `salla_sold_velocity.py`, `zid_orders.py`, `store_registry.py`, `ledger.py`
 
-## PRESERVATION RULE (recurrence count: 7)
-User uploads GitHub main ZIPs. NEVER overwrite workspace wholesale — surgically merge.
-Workspace-only fixes that must survive every ZIP sync:
-- server.py: Atlas timeouts, asyncio.wait_for health probes, **iter63 ranking fix (own store gets NO fabricated revenue estimate)**
-- tests/test_ranking_revenue_sort.py: workspace iter63 version KEPT over ZIP iter62 version (user ruling, Jun 2026)
-- tests/test_page_cache.py: 6-line isolation guard KEPT (user ruling)
-- tests/test_iter45_regression.py: workspace-only, kept
-
-## Known ZIP-ahead drift NOT yet synced (user deferred — "separate task later")
-- iter60 "seller list full set": ZIP has `seller_set.py` module + server.py integration + core/utils.py `compute_market_position(max_age_days, min_confidence)` signature + matcher.py `barcode $first` line + `tests/test_seller_list_full_set.py`. All deliberately skipped in ZIP(17) sync per user ruling.
-- ZIP tools files not copied: tools_match_gap.py, tools_seller_coverage.py, tools_zarafa_probe.js
+## SYNC STATE (as of Aug 1 2026 — iter70 PR #49 reconciliation)
+**GitHub main is now a strict superset of the workspace; /app/backend is BYTE-IDENTICAL to main.**
+ALL previous drift rules are RETIRED: server.py, core/utils.py, matcher.py, test_ranking_revenue_sort.py, test_page_cache.py are byte-synced; iter60 files (seller_set.py, tools_*, test_seller_list_full_set.py) are IN.
+Workspace-only extra kept: tests/test_iter45_regression.py (passes; not in main).
+Frontend drift remaining (report-only, NOT synced): MyProductsPage.jsx (workspace KPI tooltip variant), ProductDetailPanel.jsx (ZIP iter60 stale-sellers UI — backend now emits those fields, so this CAN be synced when user asks).
 
 ## Implemented (chronological highlights)
 - iter25/26: dashboard_cache + page caches (write-time, 24h max-age, debounced post-crawl recompute)
@@ -35,6 +29,7 @@ Workspace-only fixes that must survive every ZIP sync:
 - iter62: ranking sorted by unified revenue axis (exact > approx > estimate > none)
 - iter63 (workspace): removed fabricated own-store velocity estimate (production bug: "pets houses #1")
 - **Jun 2026 — ZIP(17) sync**: crawlers.py +149 lines (Salla Tier 2.5 detail-supplement, `SALLA_DETAIL_SUPPLEMENT_CAP=300`, line 1321) + test_salla_detail_supplement.py (12 tests) + PR#42 updates to test_salla_revenue_estimate/sold_velocity/store_ranking. 67/67 tests pass on sync-affected suites. Backend restarted healthy.
+- **Aug 1 2026 — iter70 FULL PARITY SYNC (PR #49)**: GitHub main reconciled all drift → /app/backend byte-synced to ZIP. server.py gained iter60 seller_set integration while KEEPING iter63/66/67/68 fixes + Atlas timeouts (verified by marker greps before overwrite). core/utils.py: compute_market_position(max_age_days, min_confidence). matcher.py: barcode $first. New: seller_set.py, tools_match_gap.py, tools_seller_coverage.py, tools_zarafa_probe.js, test_seller_list_full_set.py. Must-pass suites 59/59 (seller_list, ranking_revenue_sort, page_cache, iter45). Full suite 449 passed/80 failed — same 16 known families. Backend healthy, 24 scheduler jobs. Drift rules RETIRED.
 - **Aug 1 2026 — iter69 (PR #48)**: AlertsPage.jsx byte-synced — Create Alert dropdown (200-item cap) replaced with debounced SKU/name search combobox on existing `/products?search=` endpoint, exact-SKU auto-accept, "SKU not found" feedback. Frontend-only; craco build compiled clean; verified live in preview (dialog renders combobox, debounce fires, validation shows). ZIP frontend drift NOT applied (report-only): MyProductsPage.jsx (workspace KPI tooltip block kept) and ProductDetailPanel.jsx (ZIP's iter60 stale-sellers UI — companion to the excluded iter60 backend).
 - **Aug 1 2026 — iter68 HOTFIX (PR #47)**: repaired the iter67 sync incident — previous session issued 6 parallel search_replace edits on server.py; racing writes silently dropped the `_ledger_obs = []` init (append site NameError'd per-row → every ingested product "skipped", 200 OK, no snapshots). iter68 hunks applied SEQUENTIALLY: init anchored on the auth block before the outer try (L7505) + fail-soft try/except around the append (L7626). test_ingest_ledger_hotfix.py 3/3. E2E-proven: live ingest POST → inserted=1, snapshot + daily_ledger row written, probe cleaned. Full suite 471 passed/64 failed (best yet; same known families). Lesson recorded in /app/memory/lessons_learned.md: same-file edits NEVER in parallel; verify every hunk via grep after multi-hunk merges.
 - **Aug 1 2026 — iter67 Ledger Phase 1 (PR #46)**: NEW ledger.py (byte-identical; daily_ledger + daily_ledger_store collections, KSA-day semantics, no_data markers) + crawlers.py byte-synced (iter65 + 39 additive ledger-hook lines) + 6 surgical server.py hunks (import ledger; _ledger_obs init/append + fail-soft record_observations in /crawler/ingest; ensure_ledger_indexes at startup; 21:30 UTC ledger_day_seal cron job). Write-only phase — nothing reads the ledger yet. test_ledger_phase1.py 11/11 green; test_refactor_regression 22/22 in isolation (full-run spikes are rate-limiter noise). Scheduler now 22 jobs incl. ledger day-seal. server.py NOT byte-synced (iter63 fix + iter66 hunk + Atlas comments kept; iter60 seller_set still out).
