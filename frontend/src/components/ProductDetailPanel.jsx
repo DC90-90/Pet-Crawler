@@ -111,7 +111,16 @@ export default function ProductDetailPanel({ sku, onClose }) {
             )}
 
             {/* Market Position bar (Feb 2026) */}
-            {product.market_position && <MarketPositionBar mp={product.market_position} />}
+            {product.market_position && (
+              <div>
+                <MarketPositionBar mp={product.market_position} />
+                {product.market_position.stale_sellers > 0 && (
+                  <p className="text-[10px] text-[#A1E4DB]/70 mt-1" data-testid="mp-stale-note">
+                    {product.market_position.stale_sellers} of {product.market_position.total_sellers} prices are older than 7 days — see "price as of" below.
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* Confidence Badge */}
             {product.store_prices?.[0] && (
@@ -122,7 +131,21 @@ export default function ProductDetailPanel({ sku, onClose }) {
 
             {/* Price by Store Table */}
             <div>
-              <h4 className="text-xs font-semibold text-white mb-2">{t("stores_carrying")}</h4>
+              <div className="flex items-baseline justify-between mb-2">
+                <h4 className="text-xs font-semibold text-white">
+                  {t("stores_carrying")}
+                  {product.seller_count != null && (
+                    <span className="ms-1.5 font-normal text-[#A1E4DB]" data-testid="seller-count">({product.seller_count})</span>
+                  )}
+                </h4>
+                {product.seller_summary && (
+                  <span className="text-[10px] text-[#A1E4DB]/70" data-testid="seller-summary">
+                    {product.seller_summary.live} live
+                    {product.seller_summary.stale > 0 && ` · ${product.seller_summary.stale} stale`}
+                    {product.seller_summary.oos > 0 && ` · ${product.seller_summary.oos} OOS`}
+                  </span>
+                )}
+              </div>
               <div className="border border-white/10 rounded-md overflow-hidden">
                 <Table className="dense-table">
                   <TableHeader>
@@ -145,9 +168,13 @@ export default function ProductDetailPanel({ sku, onClose }) {
                         ? series.map((p, i) => `${(i / (series.length - 1)) * 100},${30 - ((p - minP) / range) * 28 - 1}`).join(" ")
                         : "";
                       const trendPct = series.length > 1 ? Math.round(((series[series.length - 1] - series[0]) / series[0]) * 100) : 0;
-                      const stale = isStale(sp.crawled_at);
+                      // iter60 — staleness comes from the backend (7-day rule,
+                      // same one that labels the row) and only DIMS the row. It
+                      // never removes it: the client needs to know who carries
+                      // the product even when our last look is old.
+                      const stale = sp.is_stale != null ? sp.is_stale : isStale(sp.crawled_at);
                       return (
-                      <TableRow key={sp.store_id} style={stale ? { opacity: 0.5 } : undefined} data-stale={stale} data-testid={`store-row-${sp.store_id}`}>
+                      <TableRow key={sp.store_id} style={stale ? { opacity: 0.7 } : undefined} data-stale={stale} data-testid={`store-row-${sp.store_id}`}>
                         <TableCell className="text-xs font-medium">
                           {sp.product_url ? (
                             <a href={sp.product_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-white hover:text-[#6AC1B5] transition-colors" data-testid={`store-link-${sp.store_id}`} title={sp.product_url}>
@@ -158,9 +185,19 @@ export default function ProductDetailPanel({ sku, onClose }) {
                           {sp.is_own_store && (
                             <span className="ms-1.5 inline-flex items-center text-[8px] font-bold tracking-[0.1em] uppercase px-1 py-0.5 rounded bg-[#1E988E]/15 text-[#1E988E] border border-[#1E988E]/30" data-testid={`my-store-tag-${sp.store_id}`}>My Store</span>
                           )}
+                          {sp.match_source === "matched" && sp.sku && (
+                            <div className="text-[9px] text-[#A1E4DB]/60 font-mono mt-0.5" data-testid={`store-matched-sku-${sp.store_id}`} title="Linked by the matching engine, not by an identical SKU">
+                              matched · {sp.sku}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell>
                           <span className="text-xs font-semibold">{sp.price} SAR</span>
+                          {stale && sp.price_as_of && (
+                            <div className="text-[9px] text-[#FBBF24]/90 mt-0.5" data-testid={`store-price-asof-${sp.store_id}`}>
+                              as of {sp.price_as_of}
+                            </div>
+                          )}
                           {sp.discount_pct > 0 && <span className="text-[10px] text-green-600 ms-1">-{sp.discount_pct}%</span>}
                           {sp.tier4_member_price && sp.tier4_member_price !== sp.price && (
                             <div className="text-[10px] text-emerald-600 font-medium mt-0.5">Member: {sp.tier4_member_price} SAR</div>
@@ -179,7 +216,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
                             </div>
                           ) : (<span className="text-[10px] text-[#A1E4DB]/60">—</span>)}
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-stock-status={sp.stock_status}>
                           <StockBadge signal={sp.stock_signal} />
                           {sp.tier4_qty_exact != null && (
                             <span className="text-[10px] text-emerald-600 ms-1 font-medium">{sp.tier4_qty_exact} exact</span>
