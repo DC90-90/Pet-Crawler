@@ -16,9 +16,26 @@ import DataFreshnessBanner from "@/components/DataFreshnessBanner";
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
 function StockBadge({ signal }) {
+  // iter72 — no signal means UNKNOWN, rendered as a plain dash. Never invent
+  // a level (the old market-signal fallback painted "HIGH" on rows we don't
+  // even sell).
+  if (!signal) return <span className="text-xs text-[#A1E4DB]/60">—</span>;
   const cls = { HIGH: "stock-high", MEDIUM: "stock-medium", LOW: "stock-low", OOS: "stock-oos", AVAIL: "stock-high" };
   const labelMap = { AVAIL: "IN STOCK" };
   return <span className={`text-xs font-bold ${cls[signal] || ""}`}>{labelMap[signal] || signal}</span>;
+}
+
+// iter72 — neutral (non-alarming) chip for market rows that are not in the
+// user's catalog: there is no "my stock" to show, and that's not an error.
+function NotInCatalogChip({ isRTL }) {
+  return (
+    <span
+      className="inline-flex w-fit items-center text-[10px] px-1.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-[#A1E4DB]"
+      data-testid="stock-not-in-catalog"
+    >
+      {isRTL ? "غير موجود في متجري" : "Not in my catalog"}
+    </span>
+  );
 }
 
 function ConfBadge({ tier, score }) {
@@ -419,7 +436,9 @@ export default function MyProductsPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-col gap-0.5">
-                      <StockBadge signal={p.my_stock_signal || p.stock_signal} />
+                      {p.my_stock_status === "not_in_catalog"
+                        ? <NotInCatalogChip isRTL={isRTL} />
+                        : <StockBadge signal={p.my_stock_signal} />}
                       {p.my_quantity != null && (
                         <span className="text-[10px] text-[#A1E4DB] font-mono" data-testid={`my-stock-qty-${p.sku}`}>
                           {p.my_quantity} {isRTL ? "متوفر" : "in stock"}
