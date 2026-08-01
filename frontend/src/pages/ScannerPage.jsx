@@ -101,7 +101,7 @@ export default function ScannerPage() {
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">My Price</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Market Low</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Gap %</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Sales ({days}d)</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]" title={summary.sales_window ? `Sales cover complete KSA days ${summary.sales_window.start_ksa_date} → ${summary.sales_window.end_ksa_date} (${summary.sales_window.sealed_days}/${summary.sales_window.expected_days} sealed)` : ""}>Sales ({days}d)</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Revenue Uplift</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Badge</TableHead>
             </TableRow>
@@ -119,7 +119,7 @@ export default function ScannerPage() {
                   <TableCell><span className="text-sm font-semibold text-red-500">{o.my_price} ﷼</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-green-600">{o.market_lowest} ﷼</span></TableCell>
                   <TableCell><span className="text-xs font-bold text-red-500">+{o.gap_pct}%</span></TableCell>
-                  <TableCell><span className="text-xs">{o.units_sold}</span></TableCell>
+                  <TableCell><span className="text-xs">{o.units_sold}{o.market_sold > o.units_sold ? <span className="text-[10px] text-[#A1E4DB] ms-1">/ {o.market_sold}</span> : null}</span></TableCell>
                   <TableCell><span className="text-sm font-bold text-green-600">{o.revenue_uplift.toLocaleString()} ﷼</span></TableCell>
                   <TableCell><Badge variant="outline" className={`text-[9px] gap-1 ${bcfg.cls}`}><BIcon className="w-2.5 h-2.5" />{bcfg.label}</Badge></TableCell>
                 </TableRow>

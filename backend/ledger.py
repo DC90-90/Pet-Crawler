@@ -207,6 +207,68 @@ async def record_observations(db, store_id, store_name, observations, observed_a
     return out
 
 
+def sealed_ksa_window(days, now=None):
+    """iter73 — Ledger Phase 2 read helper.
+
+    Return `(start_utc, end_utc)` covering the `days` most-recent FULLY-SEALED
+    KSA calendar days. The `end` is KSA-midnight of TODAY (so today's still-
+    accumulating hours are excluded); the `start` is KSA-midnight of the day
+    that closed `days` days before that.
+
+    This is the stability primitive for revenue / units KPIs: within one KSA
+    calendar day every call to `sealed_ksa_window(N)` returns the SAME UTC
+    boundaries, so a "past N days" reader that respects them cannot shift its
+    answer between page visits. The window only advances at KSA midnight, when
+    a new day seals.
+
+    Anything that happened today is NOT in the returned window — it belongs to
+    a separate "today so far" surface that clients may show alongside, never
+    mixed in, because it is by definition provisional.
+    """
+    now = now or datetime.now(timezone.utc)
+    now_ksa = now.astimezone(KSA_TZ)
+    end_ksa = now_ksa.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_ksa = end_ksa - timedelta(days=int(days))
+    return start_ksa.astimezone(timezone.utc), end_ksa.astimezone(timezone.utc)
+
+
+async def sealed_days_in_window(db, days, now=None):
+    """Count how many of the `days` calendar days in the sealed window ACTUALLY
+    have their `daily_ledger_store.sealed_at` set — the honest health signal
+    for callers that need to know whether the window is fully covered by the
+    ledger or is falling back to live rollups for holes.
+
+    Returns {"expected": days, "sealed_days": int, "unsealed_days": int,
+             "start_ksa_date": "YYYY-MM-DD", "end_ksa_date": "YYYY-MM-DD"}.
+    Never raises — a broken ledger must not brick the KPI it accompanies.
+    """
+    now = now or datetime.now(timezone.utc)
+    start_utc, end_utc = sealed_ksa_window(days, now)
+    start_day = ksa_day_str(start_utc)
+    # end_utc is EXCLUSIVE — the last covered KSA day is end_utc - 1s
+    end_day = ksa_day_str(end_utc - timedelta(seconds=1))
+    try:
+        # DISTINCT sealed days across ALL stores — one sealed store means the
+        # day is sealed (silence for a store is a `no_data` sealed row, still
+        # sealed). We report the SET size, not the row count.
+        sealed = set()
+        cur = db.daily_ledger_store.find(
+            {"ksa_date": {"$gte": start_day, "$lte": end_day},
+             "sealed_at": {"$ne": None}},
+            {"_id": 0, "ksa_date": 1}).batch_size(2000)
+        async for r in cur:
+            sealed.add(r["ksa_date"])
+        n = int(days)
+        return {"expected": n, "sealed_days": len(sealed),
+                "unsealed_days": max(0, n - len(sealed)),
+                "start_ksa_date": start_day, "end_ksa_date": end_day}
+    except Exception as e:
+        logger.warning("[Ledger] sealed_days_in_window failed: %s", str(e)[:120])
+        return {"expected": int(days), "sealed_days": 0,
+                "unsealed_days": int(days),
+                "start_ksa_date": start_day, "end_ksa_date": end_day}
+
+
 async def seal_ksa_day(db, day=None, now=None):
     """Seal a finished KSA day. Idempotent; safe to re-run.
 

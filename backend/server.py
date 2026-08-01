@@ -3487,14 +3487,25 @@ async def _restock_rows_from_coverage(db, since):
 
 
 # ── iter34 read helper: windowed sales per (store, sku) from sku_sales_daily ──
-async def _sales_pairs_from_rollups(db, since, store_id=None):
+async def _sales_pairs_from_rollups(db, since, store_id=None, until=None):
     """Per (store_id, sku): windowed units + revenue with the estimator's
     method-exclusivity preserved per pair: if the pair had ANY positive
     sold_count step in the window, the cumulative-counter figures are used and
     qty depletion is ignored (exactly _estimate_sales_from_snapshots' Method 1
     preference); otherwise the filtered qty-depletion figures. qty_drop (raw
-    depletion, trending's definition) is returned alongside."""
+    depletion, trending's definition) is returned alongside.
+
+    iter73 Ledger Phase 2: `until` clamps the window's UPPER bound. When
+    callers pass a sealed-KSA-day end (see `ledger.sealed_ksa_window`), today's
+    still-accumulating rollup rows are dropped and the answer becomes stable
+    across page visits within the same KSA day. Absent → open-ended (backwards
+    compatible with the pre-Phase-2 signature)."""
     match = {"date": {"$gte": _metric_day_str(since)}}
+    if until is not None:
+        # rollups' `date` is an INCLUSIVE UTC calendar-day string; sealed window
+        # ends at KSA-midnight (exclusive) — subtract one second so the last
+        # KSA day whose rollup we WANT is still in range.
+        match["date"]["$lte"] = _metric_day_str(until - timedelta(seconds=1))
     if store_id:
         match["store_id"] = store_id
     # Streamed, projected find + Python sums. The window's sales docs are SPARSE
@@ -4439,6 +4450,25 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     """Returns price opportunities — uses MongoDB aggregation instead of loading 100K snapshots into memory."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
+    # iter73 — Scanner Sales Column. Until now `units_sold` on every row was a
+    # hardcoded 0 because the Scanner never joined the sales rollups. That
+    # left one of the page's most-scanned columns visibly dead and made
+    # "Zero Sales + Overpriced" ranking meaningless. Read the SEALED KSA-day
+    # window (Ledger Phase 2) so the number is real AND stable across page
+    # visits — clients no longer see the same product's `Sales (14d)` flicker
+    # when they reopen the tab.
+    sealed_start_utc, sealed_end_utc = ledger.sealed_ksa_window(days)
+    _sales_pairs = await _sales_pairs_from_rollups(
+        db, sealed_start_utc, until=sealed_end_utc)
+    # Total UNITS per SKU across all stores (market sales) and per (SKU, store)
+    # for the seller-specific figure the row is actually about. The former
+    # powers "Market sold"; the latter fills the row-local `units_sold`.
+    _units_by_sku = {}
+    _units_by_pair = {}
+    for _p in _sales_pairs:
+        _units_by_sku[_p["sku"]] = _units_by_sku.get(_p["sku"], 0) + int(_p["units"] or 0)
+        _units_by_pair[(_p["sku"], _p["store_id"])] = int(_p["units"] or 0)
+
     # Get own store id
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
     own_id = own_store["id"] if own_store else None
@@ -4609,6 +4639,15 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                 continue
             uplift = round((s["price"] - min_price) * len(store_snaps), 2)
             p = prod_map.get(sku, {})
+            # iter73 — real 14D (or requested-window) sales from the sealed
+            # sales rollups, no more hardcoded 0. The badge logic below still
+            # keys on `qty_available` for `quick_win` (immediate stock-in-hand
+            # signal) and on `gap_pct` for `overpriced_risk`; adding a units
+            # signal to `zero_sales_overpriced` would silently redefine an
+            # existing KPI, so that count stays gap-only until product signs
+            # off on a wider rule.
+            _units_row = _units_by_pair.get((sku, s["store_id"]), 0)
+            _market_units = _units_by_sku.get(sku, 0)
             badge = "overpriced_risk" if gap_pct >= 25 else "quick_win" if uplift >= 500 and s.get("qty_available", 0) > 0 else "overpriced"
             if badge == "overpriced_risk":
                 zero_sales_overpriced += 1
@@ -4618,12 +4657,13 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                 "sku": sku, "name_ar": p.get("name_ar", sku), "name_en": p.get("name_en", ""), "category": p.get("category", ""),
                 "image_url": p.get("image_url", ""), "store_name": s["store_name"], "store_id": s["store_id"],
                 "my_price": s["price"], "market_lowest": min_price, "market_avg": round(avg_price, 2),
-                "gap_pct": gap_pct, "units_sold": 0, "market_sold": 0,
+                "gap_pct": gap_pct, "units_sold": _units_row, "market_sold": _market_units,
                 "revenue_uplift": uplift, "badge": badge, "num_sellers": len(store_snaps),
                 "in_stock": s.get("in_stock", False), "qty": s.get("qty_available", 0),
             })
 
     opportunities.sort(key=lambda x: x["revenue_uplift"], reverse=True)
+    _sealed_health = await ledger.sealed_days_in_window(db, days)
     return {
         "opportunities": opportunities[:200],
         "well_positioned": well_positioned[:50],
@@ -4648,6 +4688,17 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
             # different pack sizes (>=6x apart, nothing corroborating sameness)
             "barcode_unreliable": len(barcode_unreliable),
             "barcode_unreliable_sample": barcode_unreliable[:20],
+            # iter73 — Sales-column window health so the client can render
+            # a "Sales cover the last N complete KSA days" tooltip and know
+            # the number won't drift again until the next KSA midnight.
+            "sales_window": {
+                "basis": "sealed_ksa_days",
+                "start_ksa_date": _sealed_health["start_ksa_date"],
+                "end_ksa_date": _sealed_health["end_ksa_date"],
+                "expected_days": _sealed_health["expected"],
+                "sealed_days": _sealed_health["sealed_days"],
+                "unsealed_days": _sealed_health["unsealed_days"],
+            },
         },
     }
 
@@ -5535,6 +5586,14 @@ async def _store_ranking_compute(db):
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=_RANKING_WINDOW_DAYS)
     fresh_floor = now - timedelta(hours=_RANKING_FRESH_HOURS)
+    # iter73 Ledger Phase 2 — revenue and units come from a KSA-day-aligned
+    # window that ends at TODAY's KSA midnight (i.e. yesterday's seal
+    # boundary), never at `now`. The breadth / freshness signals still use
+    # `since` because those are "how live is your data" — an intentionally
+    # provisional read. Revenue must not flicker between page visits, so it
+    # ONLY moves at KSA midnight.
+    sealed_start_utc, sealed_end_utc = ledger.sealed_ksa_window(_RANKING_WINDOW_DAYS, now)
+    sealed_health = await ledger.sealed_days_in_window(db, _RANKING_WINDOW_DAYS, now)
 
     stores_meta = {s["id"]: s async for s in db.stores.find(
         {}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "is_own_store": 1, "domain": 1})}
@@ -5621,11 +5680,17 @@ async def _store_ranking_compute(db):
 
     # own revenue — iter40: the SAME shared ledger helper the My Products KPI
     # uses (single source; the two surfaces can no longer disagree).
-    own_agg = await _own_orders_aggregate(db, since)
+    # iter73 Phase 2 — sealed KSA-day window so the number stops sliding when
+    # a client reopens the page mid-day. The Zid ledger is authoritative and
+    # ALREADY per-KSA-day bucketed by the sync job, so clamping to the sealed
+    # window is exact, not approximate.
+    own_agg = await _own_orders_aggregate(db, sealed_start_utc, sealed_end_utc)
     own_revenue = round(own_agg["revenue"], 2) if own_agg else None
 
     # competitor revenue from the sales rollups (leaderboard's source)
-    sales_pairs = await _sales_pairs_from_rollups(db, since)
+    # iter73 Phase 2 — same sealed-KSA window; passing `until` clamps today's
+    # partial rollup out so ranked revenue is stable across page visits.
+    sales_pairs = await _sales_pairs_from_rollups(db, sealed_start_utc, until=sealed_end_utc)
     revenue_by_store = {}
     for p in sales_pairs:
         revenue_by_store[p["store_id"]] = revenue_by_store.get(p["store_id"], 0.0) + p["revenue"]
@@ -5861,6 +5926,18 @@ async def _store_ranking_compute(db):
                                       if r["revenue_rank_basis"] in ("exact", "measured_approx")),
             "ranked_on_estimate": sum(1 for r in rows if r["revenue_rank_basis"] == "estimated"),
             "no_revenue_value": sum(1 for r in rows if r["revenue_rank_basis"] == "none"),
+            # iter73 Phase 2 — revenue/units KPIs come from the sealed KSA-day
+            # window. Health surfaces alongside so clients can show "N of D
+            # days sealed" and reassure users that the number won't move again
+            # until KSA midnight rolls over.
+            "revenue_window": {
+                "basis": "sealed_ksa_days",
+                "start_ksa_date": sealed_health["start_ksa_date"],
+                "end_ksa_date": sealed_health["end_ksa_date"],
+                "expected_days": sealed_health["expected"],
+                "sealed_days": sealed_health["sealed_days"],
+                "unsealed_days": sealed_health["unsealed_days"],
+            },
             "stores": rows}
 
 
@@ -7645,6 +7722,29 @@ async def admin_recent_snapshots(limit: int = Query(200, ge=1, le=1000), user=De
             s["crawled_at"] = ca.isoformat()
 
     return {"count": len(snaps), "snapshots": snaps}
+
+
+@router.get("/admin/salla-category-audit")
+async def admin_salla_category_audit(user=Depends(get_user)):
+    """iter73 — surface the latest Salla category-discovery health check.
+
+    Zarafa was silently invisible in Daleel for weeks because its theme uses a
+    non-legacy `/c{id}` category URL shape that the discovery regex didn't
+    match — 0 categories → 0 products → whole store dark. This endpoint reads
+    the audit persisted by `tools_salla_category_audit.py` so operators can
+    see, at a glance, which Salla stores are STILL at risk of the same class
+    of silent failure before a client reports the SKU gap.
+
+    Returns 404 with a clear message when the audit has never been run, so
+    the caller knows to launch the tool rather than staring at an empty
+    payload.
+    """
+    doc = await db.salla_category_audits_latest.find_one({"_id": "latest"}, {"_id": 0})
+    if not doc:
+        raise HTTPException(
+            404, "No audit found. Run `python tools_salla_category_audit.py` "
+                 "from /app/backend to generate one.")
+    return doc
 
 
 @router.get("/admin/snapshot-horizon")
