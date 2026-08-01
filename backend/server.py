@@ -7496,6 +7496,14 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
     if not auth_header.startswith("Bearer ") or auth_header[7:] != CRAWLER_TOKEN:
         raise HTTPException(401, "Invalid or missing crawler token")
 
+    # iter68 HOTFIX — the ledger buffer is bound at HANDLER START, before any
+    # branch. iter67 initialised it further down; on the drifted workspace copy
+    # that hunk missed its anchor, the append site NameError'd inside the
+    # per-row try/except, and every ingested product was "skipped" — 200 OK
+    # with no price snapshot written. Anchored here on the auth block, which
+    # predates all drift.
+    _ledger_obs = []
+
     try:
         # Upsert by domain (unique index). Handles both:
         #  - Brand-new store: insert full record
@@ -7606,18 +7614,28 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                         await db.products.update_one({"id": pid}, {"$set": update_fields})
                     updated += 1
 
-                # iter67 — same values the snapshot below records, ledger-shaped
-                _ledger_obs.append({
-                    "sku": sku,
-                    "close_price": round(effective_price, 2),
-                    "close_sale_price": round(sale_price, 2) if 0 < sale_price < price else None,
-                    "close_original_price": round(original_price, 2),
-                    "discount_pct": max(0, disc_pct),
-                    "on_sale": 0 < sale_price < price or disc_pct > 0,
-                    "in_stock": in_stock,
-                    "qty_available": max(0, quantity),
-                    "sold_count_cumulative": sold_count,
-                })
+                # iter67/68 — same values the snapshot below records, ledger-
+                # shaped. The append itself is fail-soft: ANY ledger-side
+                # problem here (including an unbound buffer if the init hunk
+                # ever misses its anchor again on the drifted workspace copy)
+                # may cost ledger rows, never the snapshot below. Without this
+                # guard the per-row except treated a ledger NameError as a row
+                # failure and skipped the snapshot — the iter67 production
+                # regression.
+                try:
+                    _ledger_obs.append({
+                        "sku": sku,
+                        "close_price": round(effective_price, 2),
+                        "close_sale_price": round(sale_price, 2) if 0 < sale_price < price else None,
+                        "close_original_price": round(original_price, 2),
+                        "discount_pct": max(0, disc_pct),
+                        "on_sale": 0 < sale_price < price or disc_pct > 0,
+                        "in_stock": in_stock,
+                        "qty_available": max(0, quantity),
+                        "sold_count_cumulative": sold_count,
+                    })
+                except Exception as _ledger_err:
+                    logger.warning("ingest ledger obs skipped for %s: %s", sku, _ledger_err)
                 await db.product_snapshots.insert_one({
                     "id": str(uuid.uuid4()),
                     "product_id": pid,
