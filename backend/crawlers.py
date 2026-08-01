@@ -18,6 +18,10 @@ from datetime import datetime, timezone
 # Re-exported here so `crawlers.barcode_keys` keeps working.
 from core.utils import _BARCODE_LEAD_RE, barcode_keys, canonical_barcode  # noqa: F401
 
+# iter67 — the append-only daily ledger (Phase 1: written alongside the
+# rollups from every persistence path; nothing reads it yet).
+import ledger
+
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
 logger = logging.getLogger(__name__)
 
@@ -579,8 +583,10 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
     new_count = 0
     snap_count = 0
     store_domain = store.get("domain", "")
+    ledger_obs = []            # iter67 — one ledger observation per normalized item
     for raw in all_raw:
         norm = _normalize_raw_product(raw, store["name"])
+        ledger_obs.append(ledger.crawl_observation(norm))
         product_url = _absolutize_url(norm.get("product_url"), store_domain)
 
         existing = await db.products.find_one({"sku": norm["sku"]})
@@ -665,6 +671,15 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "crawled_at": now,
         })
         snap_count += 1
+
+    # iter67 — Phase-1 ledger write, ALONGSIDE the rollups (nothing reads it
+    # yet). Fail-soft: the ledger must never cost a crawl its snapshots.
+    try:
+        await ledger.record_observations(
+            db, store["id"], store["name"], ledger_obs, now,
+            source_tier=tier, confidence=confidence)
+    except Exception:
+        logger.exception("[Ledger] crawl-path write failed for %s — crawl unaffected", store.get("name"))
 
     return new_count, snap_count
 
@@ -2700,6 +2715,7 @@ async def sync_own_store_prices(db, store=None):
         #     sums or sold-counter diffs (equal-adjacent values contribute 0).
         _today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         _todays_latest = {}
+        _ledger_obs = []       # iter67 — ledger sees every product, dedup or not
         async for _snap in db.product_snapshots.find(
             {"store_id": own_store_id, "crawled_at": {"$gte": _today_start}},
             {"_id": 0, "sku": 1, "price": 1, "qty_available": 1, "sold_count": 1, "in_stock": 1, "crawled_at": 1},
@@ -2725,6 +2741,21 @@ async def sync_own_store_prices(db, store=None):
             qty = raw.get("qty_available") or 0
             in_stock = bool(raw.get("in_stock")) if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""
+            # iter67 — the ledger records EVERY observed product, including the
+            # ones the change-only snapshot dedup below skips: "unchanged" is
+            # still an observation of that KSA day, and skipping it would make
+            # a quiet day look like an uncrawled one.
+            _ledger_obs.append({
+                "sku": sku,
+                "close_price": round(float(price), 2),
+                "close_sale_price": round(sale_price_v, 2) if sale_price_v else None,
+                "close_original_price": round(float(price), 2),
+                "discount_pct": 0,
+                "on_sale": bool(sale_price_v),
+                "in_stock": in_stock,
+                "qty_available": int(qty),
+                "sold_count_cumulative": int(raw.get("sold_count") or 0),
+            })
             _prev = _todays_latest.get(sku)
             _snapshot_unchanged_today = _prev is not None and (
                 round(float(_prev.get("price") or 0), 2) == round(float(price), 2)
@@ -2782,6 +2813,14 @@ async def sync_own_store_prices(db, store=None):
         if snap_docs:
             await db.product_snapshots.insert_many(snap_docs)
             snapshots_created = len(snap_docs)
+        # iter67 — own-store ledger write (source_tier 0 = authenticated API,
+        # confidence 99: the same labels the synthetic snapshots carry).
+        try:
+            await ledger.record_observations(
+                db, own_store_id, store["name"], _ledger_obs, started_at,
+                source_tier=0, confidence=99)
+        except Exception:
+            logger.exception("[Ledger] own-sync write failed — sync unaffected")
 
     # ── Mark every my_products row NOT seen in this crawl as archived ──
     # Soft-archive only: row + history are preserved, but `present_on_store=False`

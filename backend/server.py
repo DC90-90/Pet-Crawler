@@ -54,6 +54,8 @@ from models import (
     Tier4CredentialsIn, OtpSubmitIn, MatchActionIn, IngestPayload,
     AdminCreateUserIn, AdminUpdatePasswordIn, AdminUpdateRoleIn, AdminUpdatePagesIn,
 )
+# iter67 — the append-only daily ledger (Phase 1: write-only, alongside rollups)
+import ledger
 from core import (
     PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU,
     MAX_SOLD_COUNT_DELTA_PER_INTERVAL,
@@ -7604,6 +7606,18 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
                         await db.products.update_one({"id": pid}, {"$set": update_fields})
                     updated += 1
 
+                # iter67 — same values the snapshot below records, ledger-shaped
+                _ledger_obs.append({
+                    "sku": sku,
+                    "close_price": round(effective_price, 2),
+                    "close_sale_price": round(sale_price, 2) if 0 < sale_price < price else None,
+                    "close_original_price": round(original_price, 2),
+                    "discount_pct": max(0, disc_pct),
+                    "on_sale": 0 < sale_price < price or disc_pct > 0,
+                    "in_stock": in_stock,
+                    "qty_available": max(0, quantity),
+                    "sold_count_cumulative": sold_count,
+                })
                 await db.product_snapshots.insert_one({
                     "id": str(uuid.uuid4()),
                     "product_id": pid,
@@ -7636,6 +7650,15 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
             "last_crawl_products": inserted + updated,
             "last_crawl_endpoint": "external_ingest",
         }})
+
+        # iter67 — Phase-1 ledger write for the external-ingest path. Fail-soft:
+        # the ledger must never cost an ingest its snapshots.
+        try:
+            await ledger.record_observations(
+                db, canonical_store_id, payload.store_name, _ledger_obs, now,
+                source_tier=0, confidence=99, crawl_run_id="external_ingest")
+        except Exception:
+            logger.exception("[Ledger] ingest write failed for %s — ingest unaffected", payload.domain)
 
         # ── Own-store sync (Feb 2026) ───────────────────────
         # If the ingested domain is flagged as the user's own store, also mirror
@@ -8407,6 +8430,7 @@ async def startup():
     await ensure_stores()
     # Idempotent indexes (safe to run on every startup; no-op if already present)
     try:
+        await ledger.ensure_ledger_indexes(db)     # iter67 — daily ledger (Phase 1)
         await db.product_snapshots.create_index("crawled_at")
         await db.product_snapshots.create_index([("sku", 1), ("crawled_at", -1)])
         await db.product_snapshots.create_index([("store_id", 1), ("crawled_at", -1)])
@@ -8481,7 +8505,19 @@ async def startup():
     async def _scheduled_own_sync():
         await _run_sync_and_match("scheduled")
     scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
-    logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync")
+
+    # iter67 — seal the KSA day that just ended. 21:30 UTC = 00:30 Asia/Riyadh,
+    # after midnight KSA and before the 01:00-01:55 UTC crawl window opens, so
+    # the seal never races the next day's writes. Also writes no_data store-day
+    # rows for stores that produced nothing — absence recorded as a fact.
+    async def _scheduled_ledger_seal():
+        try:
+            await ledger.seal_ksa_day(db)
+        except Exception:
+            logger.exception("[Ledger] scheduled day-seal failed")
+    scheduler.add_job(_scheduled_ledger_seal, CronTrigger(hour=21, minute=30, timezone="UTC"),
+                      id="ledger_day_seal", replace_existing=True)
+    logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync + ledger day-seal")
 
     # iter25 — warm the my-products dashboard cache in the background so the first
     # request after a deploy/restart is fast instead of paying the live-compute
