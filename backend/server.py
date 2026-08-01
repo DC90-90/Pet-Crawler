@@ -5808,6 +5808,63 @@ async def _store_ranking_compute(db):
             "stores": rows}
 
 
+# ── iter71: Price Intel serves LIVE prices, never match-time frozen ones ─────
+# Client report: "prices in Price Intelligence still show prices without VAT".
+# Root cause (both audit passes): this page read product_matches.competitor_price
+# — a price FROZEN when the matcher ran. The VAT-basis fix landed AFTER many
+# matches were written, so Price Intel kept serving pre-VAT-fix competitor
+# prices and stale own prices while My Products read live snapshots. Same
+# metric, different eras.
+#
+# product_matches stays the MATCH IDENTITY record (which pairs match, at what
+# confidence, by what method). Every price/diff/gap now resolves at read time
+# through the exact My-Products rules — latest snapshot in the window, the
+# MIN_AGGREGATION_CONFIDENCE floor, the VAT-normalized snapshot basis — so the
+# two pages cannot disagree again. A matched pair with no valid in-window
+# snapshot is SHOWN with its price marked unavailable and kept out of the
+# summary buckets, never silently served frozen.
+PRICE_INTEL_WINDOW_DAYS = 30       # matches the My Products page default window
+
+
+async def _resolve_match_prices(db, matches, now=None,
+                                window_days=PRICE_INTEL_WINDOW_DAYS):
+    """{(competitor_sku, store_id): latest in-window accepted snapshot}.
+
+    Chunked by SKU (iter24 pattern) so the scan stays bounded at production
+    scale. Snapshots below the aggregation confidence floor are ignored — the
+    same predicate _my_products_dataset applies.
+    """
+    keys = {(m.get("competitor_sku"), m.get("competitor_store_id"))
+            for m in matches or [] if m.get("competitor_sku")}
+    if not keys:
+        return {}
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=window_days)
+    resolved = {}
+    skus = sorted({k[0] for k in keys})
+    for i in range(0, len(skus), MY_PRODUCTS_CHUNK_SIZE):
+        chunk = skus[i:i + MY_PRODUCTS_CHUNK_SIZE]
+        async for sn in db.product_snapshots.find(
+            {"sku": {"$in": chunk}, "crawled_at": {"$gte": since},
+             "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}},
+            {"_id": 0, "sku": 1, "store_id": 1, "price": 1, "in_stock": 1,
+             "crawled_at": 1, "source_tier": 1, "confidence_score": 1},
+        ).sort("crawled_at", -1):
+            key = (sn["sku"], sn["store_id"])
+            if key in keys and key not in resolved:
+                resolved[key] = sn
+    return resolved
+
+
+def _live_match_price(m, resolved):
+    """(price, in_stock, crawled_at) for a match from the resolver — or
+    (None, None, None) when no valid in-window snapshot exists. The frozen
+    match-doc values are deliberately never consulted for prices."""
+    sn = resolved.get((m.get("competitor_sku"), m.get("competitor_store_id")))
+    if not sn or not isinstance(sn.get("price"), (int, float)) or sn["price"] <= 0:
+        return None, (sn or {}).get("in_stock"), (sn or {}).get("crawled_at")
+    return float(sn["price"]), sn.get("in_stock"), sn.get("crawled_at")
+
+
 async def _price_intel_dashboard_compute(db):
     """Price Intelligence Dashboard — all sections."""
     now = datetime.now(timezone.utc)
@@ -5826,20 +5883,11 @@ async def _price_intel_dashboard_compute(db):
     matches = await db.product_matches.find(matches_query, {"_id": 0}).to_list(50000)
     my_products = {p["sku"]: p async for p in db.my_products.find(my_products_query, {"_id": 0})}
 
-    # Latest snapshot crawled_at per (competitor_sku, competitor_store_id) — used
-    # for the market_position freshness check (Feb 2026). product_matches.crawled_at
-    # is set at match time and grows stale even when snapshots are fresh.
-    comp_keys = list({(m["competitor_sku"], m["competitor_store_id"]) for m in matches})
-    latest_comp_crawl = {}
-    if comp_keys:
-        snap_since = now - timedelta(days=7)
-        async for sn in db.product_snapshots.find(
-            {"sku": {"$in": [k[0] for k in comp_keys]}, "crawled_at": {"$gte": snap_since}},
-            {"_id": 0, "sku": 1, "store_id": 1, "crawled_at": 1}
-        ).sort("crawled_at", -1):
-            key = (sn["sku"], sn["store_id"])
-            if key not in latest_comp_crawl:
-                latest_comp_crawl[key] = sn["crawled_at"]
+    # iter71 — the live price resolver replaces both the frozen
+    # competitor_price reads AND the old crawled_at-only freshness scan (the
+    # resolved snapshot carries its own crawled_at, which feeds the
+    # market-position freshness check).
+    resolved_prices = await _resolve_match_prices(db, matches, now=now)
 
     # Fix 5: Separate high-confidence (>=75) from unverified (<75)
     high_conf_matches = [m for m in matches if m.get("confidence", 0) >= 75]
@@ -5862,45 +5910,76 @@ async def _price_intel_dashboard_compute(db):
 
     now = datetime.now(timezone.utc)
 
+    rows_without_live_price = 0
     for my_sku, ms in by_sku.items():
         mp = my_products.get(my_sku)
         if not mp:
             continue
+        # Own side (iter71): my_products IS the resolve_own_price output — the
+        # inc-VAT basis written at sync — never any value frozen on a match doc.
         my_price = float(mp.get("sale_price") or mp.get("price") or 0)
         my_qty = int(mp.get("quantity", 0))
         if my_price <= 0:
             continue
 
-        cheapest = min(ms, key=lambda x: x["competitor_price"]) if ms else None
-        if not cheapest:
-            continue
+        # iter71 — every competitor price is the LIVE resolved snapshot price.
+        # A match with no valid in-window snapshot stays in the row's identity
+        # (sellers count) but contributes no price, no OOS signal, no ranking.
+        live = []
+        for m in ms:
+            price, in_stock, crawled_at = _live_match_price(m, resolved_prices)
+            if price is not None:
+                live.append((m, price, in_stock, crawled_at))
 
-        cheapest_price = cheapest["competitor_price"]
-        diff_pct = round(((my_price - cheapest_price) / cheapest_price) * 100, 1) if cheapest_price > 0 else 0
         sellers = len(set(m["competitor_store_id"] for m in ms))
-        any_oos = any(not m["competitor_in_stock"] for m in ms)
-        all_oos = all(not m["competitor_in_stock"] for m in ms)
-
-        row = {
+        base = {
             "my_sku": my_sku,
             "my_barcode": mp.get("barcode", ""),
             "my_name_ar": mp.get("name_ar", ""),
             "my_name_en": mp.get("name_en", ""),
             "my_price": my_price,
             "my_qty": my_qty,
-            "cheapest_competitor": cheapest["competitor_store_name"],
-            "cheapest_price": cheapest_price,
-            "diff_pct": diff_pct,
             "sellers": sellers,
-            "confidence": cheapest["confidence"],
-            "match_method": cheapest["match_method"],
-            "flags": cheapest.get("flags", []),
             "image_url": mp.get("image_url", ""),
         }
 
-        # Market position (Feb 2026) — own price always counts; competitors use
-        # the freshest available crawled_at from product_snapshots (not match.crawled_at,
-        # which goes stale).
+        if not live:
+            # Matched, but nothing priced inside the window: the row is SHOWN
+            # as stale/unavailable and kept out of every summary bucket —
+            # serving the frozen match-time price here is exactly the bug.
+            best = max(ms, key=lambda x: x.get("confidence", 0))
+            full_table.append({
+                **base,
+                "cheapest_competitor": best.get("competitor_store_name", ""),
+                "cheapest_price": None, "diff_pct": None,
+                "price_status": "stale",
+                "confidence": best.get("confidence", 0),
+                "match_method": best.get("match_method", ""),
+                "flags": best.get("flags", []),
+                "market_position": None,
+            })
+            rows_without_live_price += 1
+            continue
+
+        cheapest_m, cheapest_price, _cin, _cca = min(live, key=lambda x: x[1])
+        diff_pct = round(((my_price - cheapest_price) / cheapest_price) * 100, 1)
+        # OOS signals come from the live snapshots, not frozen match flags
+        any_oos = any(x[2] is False for x in live)
+        all_oos = all(x[2] is False for x in live)
+
+        row = {
+            **base,
+            "cheapest_competitor": cheapest_m["competitor_store_name"],
+            "cheapest_price": round(cheapest_price, 2),
+            "diff_pct": diff_pct,
+            "price_status": "live",
+            "confidence": cheapest_m["confidence"],
+            "match_method": cheapest_m["match_method"],
+            "flags": cheapest_m.get("flags", []),
+        }
+
+        # Market position — own price always counts; competitor prices and
+        # freshness both come from the resolved snapshots.
         seller_list = [{
             "store_id": own_store_id or "own",
             "store_name": "My Store",
@@ -5908,17 +5987,17 @@ async def _price_intel_dashboard_compute(db):
             "confidence_score": 99,
             "crawled_at": mp.get("last_synced_at") or now,
         }]
-        for cm in ms:
+        for m, price, _ins, crawled_at in live:
             seller_list.append({
-                "store_id": cm.get("competitor_store_id"),
-                "store_name": cm.get("competitor_store_name", ""),
-                "price": cm.get("competitor_price"),
-                "confidence_score": cm.get("confidence", 0),
-                "crawled_at": latest_comp_crawl.get((cm.get("competitor_sku"), cm.get("competitor_store_id"))) or cm.get("crawled_at"),
+                "store_id": m.get("competitor_store_id"),
+                "store_name": m.get("competitor_store_name", ""),
+                "price": price,
+                "confidence_score": m.get("confidence", 0),
+                "crawled_at": crawled_at,
             })
         row["market_position"] = compute_market_position(seller_list, own_store_id or "own")
 
-        # Section A: Action Required
+        # Section A: Action Required — classified from the RESOLVED prices
         if diff_pct > 15:
             action_required.append({**row, "severity": "red", "reason": f"Overpriced by {diff_pct}%"})
         elif diff_pct > 5:
@@ -5934,7 +6013,7 @@ async def _price_intel_dashboard_compute(db):
 
         full_table.append(row)
 
-    # Build unverified matches list
+    # Build unverified matches list — same live resolution (iter71)
     for my_sku, ms in unverified_by_sku.items():
         mp = my_products.get(my_sku)
         if not mp:
@@ -5942,27 +6021,45 @@ async def _price_intel_dashboard_compute(db):
         my_price = float(mp.get("sale_price") or mp.get("price") or 0)
         if my_price <= 0:
             continue
-        cheapest = min(ms, key=lambda x: x["competitor_price"]) if ms else None
-        if not cheapest:
+        live = []
+        for m in ms:
+            price, _ins, _ca = _live_match_price(m, resolved_prices)
+            if price is not None:
+                live.append((m, price))
+        if not live:
+            best = max(ms, key=lambda x: x.get("confidence", 0))
+            unverified.append({
+                "my_sku": my_sku,
+                "my_name_ar": mp.get("name_ar", ""),
+                "my_name_en": mp.get("name_en", ""),
+                "my_price": my_price,
+                "cheapest_competitor": best.get("competitor_store_name", ""),
+                "cheapest_price": None, "diff_pct": None, "price_status": "stale",
+                "confidence": best.get("confidence", 0),
+                "match_method": best.get("match_method", ""),
+                "flags": best.get("flags", []),
+            })
             continue
+        cheapest_m, cheapest_price = min(live, key=lambda x: x[1])
         unverified.append({
             "my_sku": my_sku,
             "my_name_ar": mp.get("name_ar", ""),
             "my_name_en": mp.get("name_en", ""),
             "my_price": my_price,
-            "cheapest_competitor": cheapest["competitor_store_name"],
-            "cheapest_price": cheapest["competitor_price"],
-            "diff_pct": round(((my_price - cheapest["competitor_price"]) / cheapest["competitor_price"]) * 100, 1) if cheapest["competitor_price"] > 0 else 0,
-            "confidence": cheapest["confidence"],
-            "match_method": cheapest["match_method"],
-            "flags": cheapest.get("flags", []),
+            "cheapest_competitor": cheapest_m["competitor_store_name"],
+            "cheapest_price": round(cheapest_price, 2),
+            "diff_pct": round(((my_price - cheapest_price) / cheapest_price) * 100, 1),
+            "price_status": "live",
+            "confidence": cheapest_m["confidence"],
+            "match_method": cheapest_m["match_method"],
+            "flags": cheapest_m.get("flags", []),
         })
 
-    # Sort
+    # Sort — stale rows (diff_pct None) sink to the end of their lists
     action_required.sort(key=lambda x: -x["diff_pct"])
     my_advantages.sort(key=lambda x: -(x.get("saving_sar", 0)))
-    full_table.sort(key=lambda x: -abs(x["diff_pct"]))
-    unverified.sort(key=lambda x: -abs(x.get("diff_pct", 0)))
+    full_table.sort(key=lambda x: -abs(x["diff_pct"]) if x.get("diff_pct") is not None else 1)
+    unverified.sort(key=lambda x: -abs(x["diff_pct"]) if x.get("diff_pct") is not None else 1)
 
     # Confidence distribution across all matches
     conf_dist = {"barcode_99": 0, "sku_95": 0, "name_85": 0, "name_80": 0, "name_70": 0, "baseline_80": 0, "confirmed_100": 0}
@@ -5997,6 +6094,10 @@ async def _price_intel_dashboard_compute(db):
             "overpriced_yellow": len([a for a in action_required if a["severity"] == "yellow"]),
             "cheapest_count": len([a for a in my_advantages if a.get("advantage") == "cheapest"]),
             "oos_opportunities": len([a for a in my_advantages if a.get("advantage") == "competitor_oos"]),
+            # iter71 — matched rows with NO valid in-window snapshot price:
+            # shown in the table as stale/unavailable, excluded from every
+            # bucket above. Observability, so a resolver regression is visible.
+            "rows_without_live_price": rows_without_live_price,
         },
         "confidence_distribution": conf_dist,
     }
@@ -6034,8 +6135,12 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
         async for p in db.products.find({"sku": {"$in": comp_skus}}, {"_id": 0, "sku": 1, "barcode": 1})
     } if comp_skus else {}
 
-    # Get price history for each matched competitor (last 90 days)
+    # iter71 — live price resolution for the cards (match docs stay identity-only)
     now = datetime.now(timezone.utc)
+    resolved_prices = await _resolve_match_prices(db, matches, now=now)
+    my_price_live = float(mp.get("sale_price") or mp.get("price") or 0)
+
+    # Get price history for each matched competitor (last 90 days)
     cutoff = now - timedelta(days=90)
     competitors = []
     for m in matches:
@@ -6057,7 +6162,12 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
             elif avg_recent < avg_older * 0.97:
                 trend = "falling"
 
-        competitors.append({
+        # iter71 — the card's price fields are LIVE-resolved; the frozen
+        # match-time competitor_price / my_price / diffs are overwritten so the
+        # sheet can never disagree with My Products. The match doc contributes
+        # only identity (store, sku, confidence, method, flags).
+        live_price, live_in_stock, _live_ca = _live_match_price(m, resolved_prices)
+        card = {
             **m,
             "competitor_barcode": comp_barcodes_by_sku.get(m["competitor_sku"], ""),
             "price_history": [{"price": h["price"], "in_stock": h.get("in_stock"), "date": h["crawled_at"].isoformat() if hasattr(h["crawled_at"], 'isoformat') else str(h["crawled_at"])} for h in history[-60:]],
@@ -6068,18 +6178,39 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
                 history[-1]["crawled_at"].isoformat() if history and hasattr(history[-1]["crawled_at"], "isoformat")
                 else (history[-1]["crawled_at"] if history else None)
             ),
-        })
+        }
+        card["my_price"] = my_price_live
+        if live_price is not None:
+            card["competitor_price"] = round(live_price, 2)
+            card["competitor_in_stock"] = bool(live_in_stock)
+            card["price_status"] = "live"
+            if my_price_live > 0:
+                card["diff_sar"] = round(live_price - my_price_live, 2)
+                card["diff_pct"] = round((live_price - my_price_live) / my_price_live * 100, 1)
+                card["position"] = ("cheaper" if card["diff_sar"] > 0
+                                    else ("equal" if card["diff_sar"] == 0 else "expensive"))
+        else:
+            card["competitor_price"] = None
+            card["price_status"] = "stale"
+            card["diff_sar"] = None
+            card["diff_pct"] = None
+            card["position"] = None
+        competitors.append(card)
 
-    all_prices = [c["competitor_price"] for c in competitors if c["competitor_price"] > 0]
+    live_prices = [c["competitor_price"] for c in competitors
+                   if c.get("price_status") == "live" and c["competitor_price"]]
     return {
         "my_product": {**mp, "is_own_store": True},
         "own_store_id": own_store_id,
         "competitors": competitors,
         "market_summary": {
-            "lowest_price": min(all_prices) if all_prices else 0,
-            "highest_price": max(all_prices) if all_prices else 0,
-            "sellers_count": len(competitors),
-            "my_price": float(mp.get("sale_price") or mp.get("price") or 0),
+            # iter71 — summary spans LIVE prices only; stale cards are shown in
+            # the list but never counted into the market figures.
+            "lowest_price": min(live_prices) if live_prices else 0,
+            "highest_price": max(live_prices) if live_prices else 0,
+            "sellers_count": len(live_prices),
+            "matched_count": len(competitors),
+            "my_price": my_price_live,
         },
     }
 
