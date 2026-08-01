@@ -1240,11 +1240,21 @@ async def _discover_salla_category_ids(page, base):
             pass
 
         # Visit each category page to discover its subcategories (nested-only on page-load)
+        # iter73 (Feb 2026) — Zarafa (and other newer Salla themes) link
+        # categories as `/{locale}/{slug-or-dash}/c{id}` (e.g. `/ar/-/c622249111`)
+        # instead of the legacy `/categories/{id}` shape. The old query missed
+        # every category on Zarafa's homepage (0 discovered → 0 products
+        # captured → whole store went dark), which is why SKU 5060122491365
+        # (Applaws Chicken 400 g) and the rest of Zarafa's catalog were absent
+        # from Price Intel. Match BOTH shapes so any theme works.
         ids = await page.evaluate("""
             () => {
               const out = new Set();
-              document.querySelectorAll('a[href*="/categories/"], a[href*="/redirect/categories/"]').forEach(a => {
-                const m = a.href.match(/categories\\/(\\d+)/);
+              document.querySelectorAll('a[href]').forEach(a => {
+                const h = a.href || a.getAttribute('href') || '';
+                let m = h.match(/categories\\/(\\d+)/);
+                if (m) out.add(m[1]);
+                m = h.match(/\\/c(\\d{6,})(?:$|[\\/?#])/);
                 if (m) out.add(m[1]);
               });
               return Array.from(out);
@@ -1850,8 +1860,11 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
                     new_sub = await page.evaluate("""
                         () => {
                           const out = new Set();
-                          document.querySelectorAll('a[href*="/categories/"], a[href*="/redirect/categories/"]').forEach(a => {
-                            const m = a.href.match(/categories\\/(\\d+)/);
+                          document.querySelectorAll('a[href]').forEach(a => {
+                            const h = a.href || a.getAttribute('href') || '';
+                            let m = h.match(/categories\\/(\\d+)/);
+                            if (m) out.add(m[1]);
+                            m = h.match(/\\/c(\\d{6,})(?:$|[\\/?#])/);
                             if (m) out.add(m[1]);
                           });
                           return Array.from(out);
