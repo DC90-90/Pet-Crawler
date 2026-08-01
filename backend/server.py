@@ -4191,6 +4191,16 @@ async def _enrich_discount_rows(db, rows, since):
         p = prod_by_sku.get(r.get("sku")) or {}
         orig, price = _num(r.get("original_price")), _num(r.get("price"))
         amount = round(orig - price, 2) if (orig is not None and price is not None) else None
+        # iter73 — READ-TIME discount_pct fallback. When the stored value is 0
+        # (or missing) but `original_price > price > 0` on the SAME row, the
+        # row IS discounted and the arithmetic tells us by how much. Not
+        # doing this hid every genuine Zid own-store sale for weeks because
+        # the Zid sync used to hardcode discount_pct=0 even for sale rows.
+        # The read never falsifies a stored non-zero pct — only recomputes
+        # from the row's OWN prices when it wasn't populated.
+        pct = r.get("discount_pct")
+        if (pct is None or pct == 0) and orig and price and orig > price > 0:
+            pct = round((1 - price / orig) * 100)
         h = history.get(k) or {}
         s = sold.get(k) or {"units": None, "status": "unknown"}
         out.append({
@@ -4204,7 +4214,7 @@ async def _enrich_discount_rows(db, rows, since):
             "price": price,                         # back-compat with the old shape
             "discount_amount_sar": amount,
             "savings_sar": amount,                  # back-compat
-            "discount_pct": r.get("discount_pct"),
+            "discount_pct": pct,
             "discount_started_at": h.get("started_at"),
             "days_on_discount": h.get("days_on_discount"),
             "discount_ongoing": h.get("ongoing", False),
@@ -4218,8 +4228,26 @@ async def _enrich_discount_rows(db, rows, since):
 
 
 def _discount_match(since, store_id):
-    m = {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0},
-         "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
+    # iter73 — the Discounts tab returned empty even when the market was
+    # visibly on sale, because the tab filter demanded `discount_pct > 0` but
+    # write-time paths (Zid own-store sync, external ingest without a
+    # `sale_price` field, some legacy baseline snapshots) were setting
+    # `discount_pct = 0` even when `original_price > price` was already TRUE
+    # on the SAME row. That's inconsistent, and it hid every real Zid
+    # discount for weeks. Read-side defence: also accept snapshots whose
+    # arithmetic itself proves a discount, so the tab is honest about the
+    # data we ALREADY have. The write-side sources are being fixed in
+    # parallel (crawlers.py Zid sync) so new rows land coherent.
+    m = {"crawled_at": {"$gte": since},
+         "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE},
+         "$or": [
+             {"discount_pct": {"$gt": 0}},
+             {"$expr": {"$and": [
+                 {"$gt": ["$original_price", 0]},
+                 {"$gt": ["$price", 0]},
+                 {"$gt": ["$original_price", "$price"]},
+             ]}},
+         ]}
     if store_id and store_id != "all":
         m["store_id"] = store_id
     return m
@@ -4283,13 +4311,30 @@ async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = 
 @ttl_cache(60)
 async def discount_timeline(user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=_DISCOUNT_MAX_DAYS)
+    # iter73 — accept the same "row-level arithmetic proves a discount" fallback
+    # `_discount_match` uses. Otherwise this endpoint stayed empty even when
+    # top-pct/top-amount now show data, because the timeline still filtered
+    # discount_pct>0 only. And the $group's avg_depth uses the SAME row-level
+    # $ifNull so a stored 0 doesn't drag the weekly average toward zero.
+    row_disc_expr = {
+        "$let": {
+            "vars": {"o": {"$ifNull": ["$original_price", 0]},
+                     "p": {"$ifNull": ["$price", 0]}},
+            "in": {"$cond": [
+                {"$and": [{"$gt": ["$$o", 0]}, {"$gt": ["$$p", 0]}, {"$gt": ["$$o", "$$p"]}]},
+                {"$round": [{"$multiply": [{"$subtract": [1, {"$divide": ["$$p", "$$o"]}]}, 100]}, 0]},
+                {"$ifNull": ["$discount_pct", 0]},
+            ]},
+        }
+    }
     pipeline = [
-        {"$match": {"crawled_at": {"$gte": since}, "discount_pct": {"$gt": 0},
-                    "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}},
-        {"$project": {"store_name": 1, "discount_pct": 1,
+        {"$match": _discount_match(since, None)},
+        {"$project": {"store_name": 1,
+                      "effective_disc": row_disc_expr,
                       "week": {"$dateToString": {"format": "%Y-W%V", "date": "$crawled_at"}}}},
+        {"$match": {"effective_disc": {"$gt": 0}}},
         {"$group": {"_id": {"store": "$store_name", "week": "$week"},
-                    "count": {"$sum": 1}, "avg_depth": {"$avg": "$discount_pct"}}},
+                    "count": {"$sum": 1}, "avg_depth": {"$avg": "$effective_disc"}}},
         {"$sort": {"_id.week": 1}},
     ]
     data = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(5000)
@@ -4332,11 +4377,35 @@ async def discount_aggression(user=Depends(get_user)):
     base = {"crawled_at": {"$gte": since},
             "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
 
+    # iter73 — row-level effective discount: honour `discount_pct` when > 0,
+    # else fall back to the price arithmetic the row itself carries. Same
+    # rule as the read-time enricher, applied INSIDE the aggregation so the
+    # depth/frequency/max_disc figures reflect the arithmetic proof, not a
+    # stored zero from a Zid-sync path that never populated the field.
+    _eff_disc = {
+        "$let": {
+            "vars": {"o": {"$ifNull": ["$original_price", 0]},
+                     "p": {"$ifNull": ["$price", 0]},
+                     "d": {"$ifNull": ["$discount_pct", 0]}},
+            "in": {"$cond": [
+                {"$gt": ["$$d", 0]},
+                "$$d",
+                {"$cond": [
+                    {"$and": [{"$gt": ["$$o", 0]}, {"$gt": ["$$p", 0]}, {"$gt": ["$$o", "$$p"]}]},
+                    {"$round": [{"$multiply": [{"$subtract": [1, {"$divide": ["$$p", "$$o"]}]}, 100]}, 0]},
+                    0,
+                ]},
+            ]},
+        }
+    }
+
     disc = await db.product_snapshots.aggregate([
-        {"$match": {**base, "discount_pct": {"$gt": 0}}},
+        {"$match": base},
+        {"$addFields": {"_eff_disc": _eff_disc}},
+        {"$match": {"_eff_disc": {"$gt": 0}}},
         {"$group": {"_id": {"store_id": "$store_id", "sku": "$sku"},
-                    "depth": {"$avg": "$discount_pct"}, "rows": {"$sum": 1},
-                    "max_disc": {"$max": "$discount_pct"}}},
+                    "depth": {"$avg": "$_eff_disc"}, "rows": {"$sum": 1},
+                    "max_disc": {"$max": "$_eff_disc"}}},
         {"$group": {"_id": "$_id.store_id",
                     "products_on_discount": {"$sum": 1},       # DISTINCT skus
                     "avg_depth": {"$avg": "$depth"},

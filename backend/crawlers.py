@@ -2754,24 +2754,48 @@ async def sync_own_store_prices(db, store=None):
             qty = raw.get("qty_available") or 0
             in_stock = bool(raw.get("in_stock")) if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""
+            _prev = _todays_latest.get(sku)
+            # iter73 — the Zid own-store sync used to always write
+            # `original_price = price, discount_pct = 0` even when the row
+            # DID have a sale_price. That's the write-time origin of every
+            # empty Discounts panel: the row's OWN arithmetic proved a
+            # discount, but the fields it carried disagreed. The correct
+            # semantics match the ingest-path / snapshot-writer contract:
+            #   • price          = effective price the shopper pays
+            #   • original_price = pre-sale reference; equals `price` when
+            #                      no genuine sale (sale_price is None or
+            #                      the sale isn't actually cheaper)
+            #   • discount_pct   = round((1 - price/original) * 100) when
+            #                      original > price > 0, else 0
+            # The ledger observation right below now reads the SAME derived
+            # values, so ledger + snapshot cannot disagree.
+            _price_v = float(price)
+            _sale_v = float(sale_price_v) if sale_price_v else 0.0
+            if 0 < _sale_v < _price_v:
+                _snap_price = round(_sale_v, 2)
+                _snap_original = round(_price_v, 2)
+                _snap_disc_pct = round((1 - _snap_price / _snap_original) * 100)
+            else:
+                _snap_price = round(_price_v, 2)
+                _snap_original = round(_price_v, 2)
+                _snap_disc_pct = 0
             # iter67 — the ledger records EVERY observed product, including the
             # ones the change-only snapshot dedup below skips: "unchanged" is
             # still an observation of that KSA day, and skipping it would make
             # a quiet day look like an uncrawled one.
             _ledger_obs.append({
                 "sku": sku,
-                "close_price": round(float(price), 2),
-                "close_sale_price": round(sale_price_v, 2) if sale_price_v else None,
-                "close_original_price": round(float(price), 2),
-                "discount_pct": 0,
-                "on_sale": bool(sale_price_v),
+                "close_price": _snap_price,
+                "close_sale_price": _snap_price if _snap_disc_pct > 0 else None,
+                "close_original_price": _snap_original,
+                "discount_pct": _snap_disc_pct,
+                "on_sale": _snap_disc_pct > 0,
                 "in_stock": in_stock,
                 "qty_available": int(qty),
                 "sold_count_cumulative": int(raw.get("sold_count") or 0),
             })
-            _prev = _todays_latest.get(sku)
             _snapshot_unchanged_today = _prev is not None and (
-                round(float(_prev.get("price") or 0), 2) == round(float(price), 2)
+                round(float(_prev.get("price") or 0), 2) == _snap_price
                 and int(_prev.get("qty_available") or 0) == int(qty)
                 and int(_prev.get("sold_count") or 0) == int(raw.get("sold_count") or 0)
                 and bool(_prev.get("in_stock")) == in_stock
@@ -2801,14 +2825,19 @@ async def sync_own_store_prices(db, store=None):
                 "store_id": own_store_id,
                 "store_name": store["name"],
                 "sku": sku,
-                "price": round(price, 2),
-                "original_price": round(price, 2),
+                # iter73 — derived above, coherent with the ledger obs.
+                # A row on sale now truthfully carries the sale price under
+                # `price`, the regular reference under `original_price`, and
+                # a non-zero `discount_pct` so Discounts / Insights read it
+                # without a read-time repair pass.
+                "price": _snap_price,
+                "original_price": _snap_original,
                 # iter54 — the basis this price was resolved on, so a future
                 # capture regression is visible in our own data rather than
                 # only in my_products.
                 "price_basis": price_basis_v,
-                "sale_price": round(sale_price_v, 2) if sale_price_v else None,
-                "discount_pct": 0,
+                "sale_price": _snap_price if _snap_disc_pct > 0 else None,
+                "discount_pct": _snap_disc_pct,
                 "in_stock": in_stock,
                 "qty_available": int(qty),
                 # Real cumulative sold counter from the Zid Merchant API (was
