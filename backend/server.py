@@ -3414,11 +3414,14 @@ async def _insights_summary_compute(db, days):
         _conf_avg_from_rollups(db, since),
     )
 
-    # Preserve the legacy empty-result behaviour exactly: the old drops $count stage
-    # emitted no document when zero groups qualified and the code fell back to a
-    # random demo value. The rollup sum returns a real 0 in that case, so map 0 →
-    # the same random fallback (also covers a not-yet-backfilled deploy).
-    price_drops = drops_count if drops_count > 0 else random.randint(8, 25)
+    # iter66 — the KPI reports the TRUE windowed count, including an honest 0.
+    # This line used to be `drops_count if drops_count > 0 else
+    # random.randint(8, 25)`: a legacy demo fallback that survived into
+    # production, so whenever the real count was zero (quiet window, or an
+    # un-backfilled deploy) the card showed an INVENTED number to the client
+    # and could never legitimately read 0. Fabricated values are never an
+    # acceptable stand-in for missing data.
+    price_drops = drops_count
     # median_spread now spans ALL products (the old snapshot pipeline was capped at
     # .to_list(500) — an arbitrary, order-dependent subset; removing the cap makes
     # the median reflect the whole catalog). Subtraction in Python keeps the read
