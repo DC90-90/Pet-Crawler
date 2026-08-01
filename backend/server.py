@@ -5541,7 +5541,7 @@ async def _store_ranking_compute(db):
     # into snapshots/coverage): my_products + the SAME market-position percentile
     # the Insights card shows + the real Zid orders ledger ──
     my_prods = await db.my_products.find(
-        {}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1, "in_stock": 1,
+        {}, {"_id": 0, "price": 1, "sale_price": 1, "in_stock": 1,
              "quantity": 1, "last_synced_at": 1}).to_list(length=None)
     own_products = sum(1 for p in my_prods if (p.get("sale_price") or p.get("price") or 0) > 0)
     own_in_stock = sum(1 for p in my_prods if p.get("in_stock") or (p.get("quantity") or 0) > 0)
@@ -5650,27 +5650,19 @@ async def _store_ranking_compute(db):
         _pools = salla_build_velocity_pools(_obs, _RANKING_WINDOW_DAYS,
                                             exclude_store=own_store_id)
 
-        # iter62 — the own store needs an estimate too. Until the Zid orders
-        # ledger fills, `own_revenue` is None and the row rendered
-        # "Accumulating" with no number, which under a revenue sort would drop
-        # us to the bottom as though we sold nothing. Its product list comes
-        # from my_products (own prices are not crawled into sku_store_coverage),
-        # and it is NOT added to _measurable — the velocity pools are built from
-        # competitor sales rollups, which carry no rows for our own store.
-        if own_store_id and own_revenue is None:
-            _prods_by_store[own_store_id] = [
-                {"sku": p.get("sku"),
-                 "price": p.get("sale_price") or p.get("price"),
-                 "category": _cat_by_sku.get(p.get("sku"), "")}
-                for p in my_prods
-                if (p.get("sale_price") or p.get("price") or 0) > 0
-            ]
-
+        # iter70 (drift reconciliation) — the OWN store gets NO estimate, ever.
+        # iter62 gave the own store a ±50% category-velocity estimate as its
+        # sort value while its orders ledger was empty; in production that
+        # fabricated figure ranked Pets Houses #1 and the client flagged it.
+        # The workspace fix (never merged to main until now): the own store's
+        # revenue axis uses ONLY the real orders ledger — ledger empty means
+        # revenue None ("Accumulating", sorted with the no-figure group on the
+        # strength tie-break), never an estimate. Competitor estimates are
+        # unchanged, and the own store still never contributes to the velocity
+        # pools (exclude_store above).
         for sid, s in stores_meta.items():
-            if sid in _measurable and not s.get("is_own_store"):
+            if sid in _measurable or s.get("is_own_store"):
                 continue
-            if s.get("is_own_store") and own_revenue is not None:
-                continue                    # real ledger figure — no estimate
             # iter59 — the estimate is now the FALLBACK. A store whose badge we
             # can diff gets a real number instead.
             if sid in approx_by_store:

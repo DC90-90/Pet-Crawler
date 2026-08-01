@@ -50,6 +50,13 @@ def _norm(body):
 async def _fresh_db():
     db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
     server.db = db
+    # iter70 — isolation guard (reconciled from the workspace copy): the cached
+    # endpoints read the sales rollups, and rows left behind by OTHER suites on
+    # the shared FerretDB instance made byte-identity flake. Clear them so
+    # every run computes from exactly the seeded state.
+    for _c in ("sku_sales_daily", "metric_daily_rollups", "sku_store_coverage",
+               "metric_rollup_meta"):
+        await db[_c].delete_many({})
     await seed(db, 40, 30)
     await db.dashboard_cache.drop()
     await db.dashboard_cache.create_index("key", unique=True)
