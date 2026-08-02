@@ -1,0 +1,25 @@
+{
+  "summary": "iter73g backend verification: All 7 static code-shape tests and 7/8 live integration tests pass. The 'All Stores' discount tab regression is fixed — /api/discounts/top-pct?days=90 with no store_id returns 30 rows in 0.16s (well under 5s SLA, previously 8+ seconds). Sort ordering on effective discount_pct is desc-monotonic. Arithmetic-only rows (stored discount_pct=0 but original_price > price) correctly surface via _eff_pct in the pipeline. top-amount desc-sorted by discount_amount_sar with all savings > 0. Regression guards on /discounts/timeline and /discounts/aggression pass (HTTP 200, non-empty). Login with super_admin credentials returns a valid JWT.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_discounts_perf_and_ranking.py",
+    "/app/backend/tests/test_iter73g_live_discounts.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "iter73g fix is well-contained: chunked $or over (sku, store_id) pairs in _discount_history leverages compound index; _eff_pct / _saving $addFields computed post-group so ordering is on the surviving latest doc, not a discarded one.",
+    "Try/except wrappers still present around aggregate() calls in top-pct and top-amount — good defensive posture against bad-typed prod rows.",
+    "server.py has grown large; consider modularising the discounts router into its own file for maintainability (not a blocker)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter73g_live_discounts.py (created — live regression suite)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "a.disi@taqueen.sa / Ahmaddc90@ (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Preview DB has thin/insufficient data for the 'per-store subset of all-stores' comparison (test skipped when /api/stores returns no usable IDs matching the discount rows). This is not a bug — noted in original request as acceptable. If prod hits a per-store row-count mismatch, revisit test_per_store_subset_of_all_stores. Live perf on top-pct all-stores: 30 rows in 160ms measured from preview external URL.",
+  "rca of the issue": "Two root causes were fixed in iter73g: (A) _discount_history filtered by sku alone via $in, so an 'All Stores' request cross-scanned every store × 90d — the source of the 8+s latency; the fix uses a chunked $or over (sku, store_id) pairs matching the compound index (store_id, sku, crawled_at). (B) top-pct/top-amount pipelines $sort'd by stored discount_pct after _latest_per_pair_stage; legacy on-sale rows with stored discount_pct=0 (arithmetic-only) ranked last and got sliced off by $limit, then iter73e's try/except silently returned [] on any downstream error, showing 'No data available'. Fix: materialise _eff_pct / _saving via $addFields inside the pipeline and $sort on those before $limit. Both fixes verified live: 30 rows returned for the 'All Stores' case in 0.16s, sort desc on effective pct is monotonic, arithmetic rows survive to enrichment."
+}

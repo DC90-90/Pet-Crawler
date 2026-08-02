@@ -4087,18 +4087,31 @@ async def _discount_history(db, rows, since):
     backwards from the newest. Resolution is bounded by crawl cadence (12-24h),
     and iter24's change-only snapshot writing means an unchanged discount does
     not emit a row every day, so `days` is a LOWER BOUND, reported as such.
+
+    iter73g — the previous version filtered ONLY by `sku ∈ {...}`, so the
+    "All Stores" case pulled every snapshot for those SKUs across every
+    store × 90 days. On production this was the 8+ second load the client
+    reported. Filter on the (sku, store_id) PAIRS we actually care about and
+    the fetch shrinks by an order of magnitude.
     """
     keys = {(r["sku"], r["store_id"]) for r in rows if r.get("sku") and r.get("store_id")}
     if not keys:
         return {}
+    # $or over each pair uses the (store_id, sku, crawled_at) index Mongo has
+    # on this collection — the scan touches only rows we can possibly display.
+    # Chunked so an outsized limit doesn't create an unreasonably large filter.
     series = {}
-    async for s in db.product_snapshots.find(
-            {"sku": {"$in": sorted({k[0] for k in keys})}, "crawled_at": {"$gte": since}},
-            {"_id": 0, "sku": 1, "store_id": 1, "crawled_at": 1, "discount_pct": 1,
-             "price": 1, "original_price": 1}).batch_size(2000):
-        k = (s.get("sku"), s.get("store_id"))
-        if k in keys and _aware(s.get("crawled_at")):
-            series.setdefault(k, []).append(s)
+    pairs_list = list(keys)
+    for start in range(0, len(pairs_list), 200):
+        chunk = pairs_list[start:start + 200]
+        or_clause = [{"sku": s, "store_id": st} for (s, st) in chunk]
+        async for s in db.product_snapshots.find(
+                {"$or": or_clause, "crawled_at": {"$gte": since}},
+                {"_id": 0, "sku": 1, "store_id": 1, "crawled_at": 1, "discount_pct": 1,
+                 "price": 1, "original_price": 1}).batch_size(2000):
+            k = (s.get("sku"), s.get("store_id"))
+            if k in keys and _aware(s.get("crawled_at")):
+                series.setdefault(k, []).append(s)
 
     out = {}
     now = datetime.now(timezone.utc)
@@ -4106,7 +4119,15 @@ async def _discount_history(db, rows, since):
         snaps.sort(key=lambda x: _aware(x["crawled_at"]))
         run = []
         for s in reversed(snaps):
-            if (s.get("discount_pct") or 0) > 0:
+            # iter73g — accept the arithmetic proof of a discount (original_
+            # price > price > 0) alongside the stored discount_pct > 0. Legacy
+            # rows without discount_pct populated used to break the run
+            # detection here and drop days_on_discount to 0 even for genuinely
+            # discounted products.
+            stored_pct = s.get("discount_pct") or 0
+            op = _num(s.get("original_price")) or 0
+            pp = _num(s.get("price")) or 0
+            if stored_pct > 0 or (op > 0 and pp > 0 and op > pp):
                 run.append(s)
             else:
                 break                      # the discount ended here
@@ -4281,11 +4302,38 @@ def _latest_per_pair_stage():
 async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
     days = min(int(days or 90), _DISCOUNT_MAX_DAYS)
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    # iter73g — sort by the EFFECTIVE discount pct (row-level), not the stored
+    # one. Legacy rows carry `discount_pct=0` even when their `original_price
+    # > price` proves a real sale (iter73c enricher fills the stored zero at
+    # read time). If we sort by stored pct BEFORE limit, the arithmetic-only
+    # rows sink below the cutoff and the "All Stores" case degenerates to an
+    # empty tab. Compute _eff_pct inside the pipeline and rank on that.
+    _eff_pct_expr = {
+        "$let": {
+            "vars": {
+                "o": {"$convert": {"input": "$original_price", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+                "p": {"$convert": {"input": "$price", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+                "d": {"$convert": {"input": "$discount_pct", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+            },
+            "in": {"$cond": [
+                {"$gt": ["$$d", 0]}, "$$d",
+                {"$cond": [
+                    {"$and": [{"$gt": ["$$o", 0]}, {"$gt": ["$$p", 0]}, {"$gt": ["$$o", "$$p"]}]},
+                    {"$round": [{"$multiply": [{"$subtract": [1, {"$divide": ["$$p", "$$o"]}]}, 100]}, 0]},
+                    0,
+                ]},
+            ]},
+        }
+    }
     pipeline = [
         {"$match": _discount_match(since, store_id)},
         {"$sort": {"crawled_at": -1}},
         _latest_per_pair_stage(),
-        {"$sort": {"discount_pct": -1}},
+        {"$addFields": {"_eff_pct": _eff_pct_expr}},
+        {"$sort": {"_eff_pct": -1}},
         {"$limit": max(1, int(limit)) * 3},     # headroom for the category filter
     ]
     # iter73e — a single bad row (unexpected type, coercion failure) used to
@@ -4308,12 +4356,32 @@ async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Que
 async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
     days = min(int(days or 90), _DISCOUNT_MAX_DAYS)
     since = datetime.now(timezone.utc) - timedelta(days=days)
+    # iter73g — rank by absolute SAR saving via row-level $subtract inside the
+    # pipeline. The former path piped through a $sort on stored discount_pct
+    # then re-ranked in Python; that lost the arithmetic-only rows entirely
+    # on "All Stores" for the same reason top-pct did.
+    _saving_expr = {
+        "$let": {
+            "vars": {
+                "o": {"$convert": {"input": "$original_price", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+                "p": {"$convert": {"input": "$price", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+            },
+            "in": {"$cond": [
+                {"$and": [{"$gt": ["$$o", 0]}, {"$gt": ["$$p", 0]}, {"$gt": ["$$o", "$$p"]}]},
+                {"$subtract": ["$$o", "$$p"]},
+                0,
+            ]},
+        }
+    }
     pipeline = [
         {"$match": _discount_match(since, store_id)},
         {"$sort": {"crawled_at": -1}},
         _latest_per_pair_stage(),
-        {"$sort": {"discount_pct": -1}},
-        {"$limit": 500},          # bounded candidate set; ranked by SAR below
+        {"$addFields": {"_saving": _saving_expr}},
+        {"$sort": {"_saving": -1}},
+        {"$limit": 500},          # bounded candidate set; enriched below
     ]
     try:
         results = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(500)
@@ -4323,9 +4391,9 @@ async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = 
         return []
     if category and category != "all":
         rows = [r for r in rows if r.get("category") == category]
-    # rank by absolute saving in Python — $subtract on a null original_price
-    # yields null and sorts unpredictably; None-safe here instead.
-    rows = [r for r in rows if r.get("discount_amount_sar") is not None]
+    # tail-filter to rows with a positive saving (protects against the
+    # $convert=0 fallback slipping non-discounts through)
+    rows = [r for r in rows if (r.get("discount_amount_sar") or 0) > 0]
     rows.sort(key=lambda r: r["discount_amount_sar"], reverse=True)
     return rows[:limit]
 
