@@ -4238,14 +4238,25 @@ def _discount_match(since, store_id):
     # arithmetic itself proves a discount, so the tab is honest about the
     # data we ALREADY have. The write-side sources are being fixed in
     # parallel (crawlers.py Zid sync) so new rows land coherent.
+    #
+    # iter73e — HTTP 500 hardening. On production, some legacy snapshots
+    # carry `original_price` as a string ("100.00") or missing entirely.
+    # MongoDB's `$expr $gt` blows up when it can't coerce the operand,
+    # crashing the endpoint. `$convert onError/onNull` gives us a numeric
+    # 0 fallback per row, so the query is total and can never 500 on a
+    # single bad document. `$gt: 0` filters those coerced zeros back out.
+    _num_orig = {"$convert": {"input": "$original_price", "to": "double",
+                              "onError": 0, "onNull": 0}}
+    _num_price = {"$convert": {"input": "$price", "to": "double",
+                               "onError": 0, "onNull": 0}}
     m = {"crawled_at": {"$gte": since},
          "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE},
          "$or": [
              {"discount_pct": {"$gt": 0}},
              {"$expr": {"$and": [
-                 {"$gt": ["$original_price", 0]},
-                 {"$gt": ["$price", 0]},
-                 {"$gt": ["$original_price", "$price"]},
+                 {"$gt": [_num_orig, 0]},
+                 {"$gt": [_num_price, 0]},
+                 {"$gt": [_num_orig, _num_price]},
              ]}},
          ]}
     if store_id and store_id != "all":
@@ -4277,8 +4288,16 @@ async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Que
         {"$sort": {"discount_pct": -1}},
         {"$limit": max(1, int(limit)) * 3},     # headroom for the category filter
     ]
-    results = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(limit * 3)
-    rows = await _enrich_discount_rows(db, results, since)
+    # iter73e — a single bad row (unexpected type, coercion failure) used to
+    # crash the whole endpoint and leave the tab showing "No data available"
+    # via the frontend's null-fallback. Return [] with a log line instead so
+    # the Discounts UI stays truthful even when a specific document is bad.
+    try:
+        results = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(limit * 3)
+        rows = await _enrich_discount_rows(db, results, since)
+    except Exception as e:
+        logger.exception("[Discounts] top-pct aggregation failed: %s", str(e)[:200])
+        return []
     if category and category != "all":
         rows = [r for r in rows if r.get("category") == category]
     return rows[:limit]
@@ -4296,8 +4315,12 @@ async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = 
         {"$sort": {"discount_pct": -1}},
         {"$limit": 500},          # bounded candidate set; ranked by SAR below
     ]
-    results = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(500)
-    rows = await _enrich_discount_rows(db, results, since)
+    try:
+        results = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(500)
+        rows = await _enrich_discount_rows(db, results, since)
+    except Exception as e:
+        logger.exception("[Discounts] top-amount aggregation failed: %s", str(e)[:200])
+        return []
     if category and category != "all":
         rows = [r for r in rows if r.get("category") == category]
     # rank by absolute saving in Python — $subtract on a null original_price
@@ -4316,14 +4339,22 @@ async def discount_timeline(user=Depends(get_user)):
     # top-pct/top-amount now show data, because the timeline still filtered
     # discount_pct>0 only. And the $group's avg_depth uses the SAME row-level
     # $ifNull so a stored 0 doesn't drag the weekly average toward zero.
+    # iter73e — same $convert hardening as _discount_match. Legacy production
+    # snapshots with string-typed prices used to crash the whole endpoint;
+    # $convert with onError/onNull=0 keeps the aggregation total.
     row_disc_expr = {
         "$let": {
-            "vars": {"o": {"$ifNull": ["$original_price", 0]},
-                     "p": {"$ifNull": ["$price", 0]}},
+            "vars": {
+                "o": {"$convert": {"input": "$original_price", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+                "p": {"$convert": {"input": "$price", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+            },
             "in": {"$cond": [
                 {"$and": [{"$gt": ["$$o", 0]}, {"$gt": ["$$p", 0]}, {"$gt": ["$$o", "$$p"]}]},
                 {"$round": [{"$multiply": [{"$subtract": [1, {"$divide": ["$$p", "$$o"]}]}, 100]}, 0]},
-                {"$ifNull": ["$discount_pct", 0]},
+                {"$convert": {"input": "$discount_pct", "to": "double",
+                              "onError": 0, "onNull": 0}},
             ]},
         }
     }
@@ -4337,7 +4368,11 @@ async def discount_timeline(user=Depends(get_user)):
                     "count": {"$sum": 1}, "avg_depth": {"$avg": "$effective_disc"}}},
         {"$sort": {"_id.week": 1}},
     ]
-    data = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(5000)
+    try:
+        data = await db.product_snapshots.aggregate(pipeline, allowDiskUse=True).to_list(5000)
+    except Exception as e:
+        logger.exception("[Discounts] timeline aggregation failed: %s", str(e)[:200])
+        return {"timeline": [], "stores": [], "weeks": []}
     stores_set, weeks_set, grid = set(), set(), {}
     for d in data:
         s = (d.get("_id") or {}).get("store")
@@ -4382,11 +4417,18 @@ async def discount_aggression(user=Depends(get_user)):
     # rule as the read-time enricher, applied INSIDE the aggregation so the
     # depth/frequency/max_disc figures reflect the arithmetic proof, not a
     # stored zero from a Zid-sync path that never populated the field.
+    # iter73e — $convert hardening (legacy production docs with string-typed
+    # prices used to crash the aggregation).
     _eff_disc = {
         "$let": {
-            "vars": {"o": {"$ifNull": ["$original_price", 0]},
-                     "p": {"$ifNull": ["$price", 0]},
-                     "d": {"$ifNull": ["$discount_pct", 0]}},
+            "vars": {
+                "o": {"$convert": {"input": "$original_price", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+                "p": {"$convert": {"input": "$price", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+                "d": {"$convert": {"input": "$discount_pct", "to": "double",
+                                   "onError": 0, "onNull": 0}},
+            },
             "in": {"$cond": [
                 {"$gt": ["$$d", 0]},
                 "$$d",
@@ -4399,23 +4441,27 @@ async def discount_aggression(user=Depends(get_user)):
         }
     }
 
-    disc = await db.product_snapshots.aggregate([
-        {"$match": base},
-        {"$addFields": {"_eff_disc": _eff_disc}},
-        {"$match": {"_eff_disc": {"$gt": 0}}},
-        {"$group": {"_id": {"store_id": "$store_id", "sku": "$sku"},
-                    "depth": {"$avg": "$_eff_disc"}, "rows": {"$sum": 1},
-                    "max_disc": {"$max": "$_eff_disc"}}},
-        {"$group": {"_id": "$_id.store_id",
-                    "products_on_discount": {"$sum": 1},       # DISTINCT skus
-                    "avg_depth": {"$avg": "$depth"},
-                    "max_disc": {"$max": "$max_disc"},
-                    "discounted_rows": {"$sum": "$rows"}}},
-    ], allowDiskUse=True).to_list(500)
-    totals = await db.product_snapshots.aggregate([
-        {"$match": base},
-        {"$group": {"_id": "$store_id", "rows": {"$sum": 1}}},
-    ], allowDiskUse=True).to_list(500)
+    try:
+        disc = await db.product_snapshots.aggregate([
+            {"$match": base},
+            {"$addFields": {"_eff_disc": _eff_disc}},
+            {"$match": {"_eff_disc": {"$gt": 0}}},
+            {"$group": {"_id": {"store_id": "$store_id", "sku": "$sku"},
+                        "depth": {"$avg": "$_eff_disc"}, "rows": {"$sum": 1},
+                        "max_disc": {"$max": "$_eff_disc"}}},
+            {"$group": {"_id": "$_id.store_id",
+                        "products_on_discount": {"$sum": 1},       # DISTINCT skus
+                        "avg_depth": {"$avg": "$depth"},
+                        "max_disc": {"$max": "$max_disc"},
+                        "discounted_rows": {"$sum": "$rows"}}},
+        ], allowDiskUse=True).to_list(500)
+        totals = await db.product_snapshots.aggregate([
+            {"$match": base},
+            {"$group": {"_id": "$store_id", "rows": {"$sum": 1}}},
+        ], allowDiskUse=True).to_list(500)
+    except Exception as e:
+        logger.exception("[Discounts] aggression aggregation failed: %s", str(e)[:200])
+        return []
 
     by_store = {d["_id"]: d for d in disc if d.get("_id")}
     total_by_store = {t["_id"]: (t.get("rows") or 0) for t in totals if t.get("_id")}

@@ -35,9 +35,12 @@ def test_discount_match_accepts_arithmetic_proof():
     body = m.group("body")
     assert '"discount_pct": {"$gt": 0}' in body, \
         "must still accept explicit non-zero discount_pct"
-    # arithmetic branch present with the RIGHT comparison
-    assert '"$gt": ["$original_price", "$price"]' in body, \
-        "arithmetic branch missing — Zid discounts will remain hidden"
+    # arithmetic branch present with the RIGHT comparison — iter73e wraps
+    # both operands in $convert (BSON-tolerant) so a string-typed field on
+    # a legacy row can't 500 the endpoint. Both wrapped operands and the
+    # $gt comparison must be present.
+    assert "$convert" in body and "original_price" in body, \
+        "arithmetic branch must $convert original_price for type safety"
     # both branches must live under an $or, not $and (otherwise the arithmetic
     # branch would ADD to, not replace, the original zero-blocker)
     assert '"$or"' in body
@@ -143,3 +146,57 @@ def test_derivation_example():
     # no discount when equal — MUST NOT report a spurious 0-boundary hit
     orig, price = 10.0, 10.0
     assert (orig > price > 0) is False
+
+
+# ── iter73e — $convert hardening: no aggregation on production data can 500 ──
+def test_discount_match_wraps_price_fields_in_convert_with_zero_fallback():
+    """Production HTTP 500 came from a legacy snapshot whose `original_price`
+    or `price` was a string. `$convert onError=0, onNull=0` on both operands
+    means an unexpected type coerces to 0 (harmless — filtered out by the
+    `$gt: 0` check), never crashes the pipeline."""
+    m = re.search(
+        r"def _discount_match\([^)]*\):(?P<body>.+?)^def ",
+        SERVER, re.DOTALL | re.MULTILINE)
+    body = m.group("body")
+    # $convert must appear for BOTH original_price and price
+    assert body.count('"$convert"') >= 2, \
+        "both original_price and price must be $convert-wrapped"
+    assert '"onError": 0' in body and '"onNull": 0' in body, \
+        "$convert must supply onError/onNull fallbacks so the query is total"
+
+
+def test_timeline_and_aggression_effective_disc_are_convert_wrapped():
+    """Same defensive rule for the two other Discounts endpoints — they
+    share the same class of legacy-typed input, so they get the same
+    hardening or they're vulnerable to the same 500."""
+    for name in ("timeline", "aggression"):
+        m = re.search(
+            r'@router\.get\("/discounts/' + name + r'"\)(?P<body>.+?)@router\.',
+            SERVER, re.DOTALL)
+        assert m, f"/discounts/{name} endpoint missing"
+        body = m.group("body")
+        assert '"$convert"' in body, \
+            f"{name} must $convert its price/discount_pct inputs"
+        assert '"onError": 0' in body and '"onNull": 0' in body, \
+            f"{name} must supply onError/onNull=0"
+
+
+def test_discount_endpoints_wrap_aggregation_in_try_except():
+    """The pipeline is a moving target — new legacy shapes will appear.
+    Every Discounts endpoint that runs an aggregation must fail SAFE
+    (return [] and log) rather than 500-ing the whole tab."""
+    for name in ("top-pct", "top-amount", "timeline", "aggression"):
+        m = re.search(
+            r'@router\.get\("/discounts/' + name + r'"\)(?P<body>.+?)@router\.',
+            SERVER, re.DOTALL)
+        # aggression is the last route in the file section — grab till EOF
+        if not m and name == "aggression":
+            m = re.search(
+                r'@router\.get\("/discounts/aggression"\)(?P<body>.+)',
+                SERVER, re.DOTALL)
+        assert m, f"/discounts/{name} not found"
+        body = m.group("body")
+        assert re.search(r"try:\s*\n[^\n]*aggregate", body), \
+            f"{name} must wrap its aggregate() call in try/except so a single bad row can't 500 the endpoint"
+        assert "logger.exception" in body, \
+            f"{name} must log the exception rather than swallow it silently"
