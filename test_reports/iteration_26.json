@@ -1,0 +1,22 @@
+{
+  "summary": "iter73f backend-only regression: verified revenue consistency contract across /api/stores/{id}/profile, /api/insights/leaderboard, and /api/price-intel/store-ranking, plus discount-endpoint 500 regression guard and auth login. 8/8 pytest checks pass against the preview backend.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter73f_revenue_consistency.py",
+    "/app/test_reports/pytest/iter73f_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is very large (>5000 lines). Consider splitting store/profile, insights, discounts, and price-intel into separate router modules for maintainability (out of scope for this iteration).",
+    "revenue_status enum is duplicated in three code paths (profile, leaderboard, ranking). Extracting a shared constant/enum would prevent drift as new states are added."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "not tested (skip per request)"},
+  "test_credentials": "a.disi@taqueen.sa / Ahmaddc90@ (super_admin) — login returned JWT successfully.",
+  "seed_data_creation": "None — used existing preview DB (3 stores in leaderboard, 4 in ranking, 5 stores tested for profile shape).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Preview DB is thin: leaderboard has 3 stores, all with revenue_est=0 and status='sales_data_unavailable' — so the positive-revenue cross-surface consistency check (leaderboard revenue_est>0 => profile est_monthly_revenue>0) is vacuously true here. To exercise the positive path, either seed sku_sales_daily rollups OR run against a production/populated DB. Store-ranking sort: 4 rows returned, sort order assertion (non-null revenue_rank_value descending, nulls last) passes. All 4 discount endpoints return 200 (iter73e $convert hardening intact). revenue_status field is correctly present on both /api/insights/leaderboard rows and /api/stores/{id}/profile.kpis with value in ('computed','sales_data_unavailable','insufficient_history').",
+  "rca of the issue": "Not applicable — this iteration verifies iter73f fix (store profile now reads revenue from sku_sales_daily via _sales_pairs_from_rollups, matching the leaderboard/ranking data source; profile KPI exposes revenue_status so the frontend can render honest 'Not measurable'/'Accumulating' labels instead of a misleading '0 SAR'). Contract is intact per shape checks."
+}

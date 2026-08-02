@@ -5065,55 +5065,54 @@ async def store_profile(store_id: str, user=Depends(get_user)):
 
     avg_disc = round(statistics.mean([l["discount_pct"] for l in latest if l["discount_pct"] > 0]) if any(l["discount_pct"] > 0 for l in latest) else 0, 1)
 
-    # Revenue estimation over 90 days — use defensive sales algorithm
+    # Revenue estimation over 90 days — iter73f: read from the SAME sku_sales_
+    # daily rollup the Insights Leaderboard and Market Strength Ranking use, so
+    # the three surfaces cannot disagree per store. The pre-iter73f path
+    # recomputed revenue from raw snapshots via _estimate_sales_from_snapshots,
+    # which lacked the Salla sold-badge diff (iter59) that DOES feed the rollup.
+    # That's why Hamtaro read 2.85M SAR on Insights but 0 SAR on this page.
     snaps_90d = await db.product_snapshots.find({"store_id": store_id, "crawled_at": {"$gte": since_90d}}, {"_id": 0}).sort("crawled_at", 1).to_list(50000)
     by_sku = {}
     for s in snaps_90d:
         by_sku.setdefault(s["sku"], []).append(s)
 
+    # Pull sales from the rollup (real observation window)
+    _sales_pairs_all = await _sales_pairs_from_rollups(
+        db, since_90d, store_id=store_id)
+    _sales_by_sku_units = {}
     total_rev = 0.0
     total_sold = 0
+    for _p in _sales_pairs_all:
+        _u = int(_p.get("units") or 0)
+        _r = float(_p.get("revenue") or 0.0)
+        _sales_by_sku_units[_p["sku"]] = _sales_by_sku_units.get(_p["sku"], 0) + _u
+        total_sold += _u
+        total_rev += _r
+
+    # Per-day / per-week revenue for the trend charts — also from the rollup so
+    # the chart's aggregate matches the KPI card.
     weekly_rev = {}
     daily_rev = {}
-    sku_sales = {}
-
-    for sku, slist in by_sku.items():
-        if len(slist) < 2:
+    sku_sales = dict(_sales_by_sku_units)
+    async for r in db.sku_sales_daily.find(
+            {"store_id": store_id, "date": {"$gte": _metric_day_str(since_90d)}},
+            {"_id": 0, "date": 1, "revenue": 1, "revenue_qty_drop": 1}).batch_size(2000):
+        _rev_day = float(r.get("revenue") or r.get("revenue_qty_drop") or 0.0)
+        if _rev_day <= 0:
             continue
-        # Estimate aggregate sales (units + revenue) for this SKU over the window using the defensible method
-        units_total, rev_total, _ = _estimate_sales_from_snapshots(slist, days=90)
-        if units_total <= 0:
-            continue
-        total_sold += units_total
-        total_rev += rev_total
-        sku_sales[sku] = sku_sales.get(sku, 0) + units_total
+        _date_str = r["date"]                 # already "YYYY-MM-DD"
+        daily_rev[_date_str] = daily_rev.get(_date_str, 0.0) + _rev_day
+        # Cheap Monday-anchored ISO-ish weekly bucket
+        try:
+            _d = datetime.strptime(_date_str, "%Y-%m-%d")
+            _wk_key = _d.strftime("%Y-W%W")
+        except Exception:
+            _wk_key = _date_str[:7]
+        weekly_rev[_wk_key] = weekly_rev.get(_wk_key, 0.0) + _rev_day
 
-        # For trend distribution, attribute deltas to their snapshot date — same algorithm, per-pair, with same caps
-        sold_counts = [s.get("sold_count", 0) or 0 for s in slist]
-        use_sold_counter = max(sold_counts) > 0
-        for i in range(1, len(slist)):
-            ca = slist[i]["crawled_at"]
-            week_key = ca.strftime("%Y-W%W") if isinstance(ca, datetime) else ca[:10]
-            day_key = ca.strftime("%Y-%m-%d") if isinstance(ca, datetime) else ca[:10]
-            price = slist[i].get("price") or 0
-            inc = 0
-            if use_sold_counter:
-                inc = max(0, (sold_counts[i] - sold_counts[i - 1]))
-                inc = min(inc, MAX_DAILY_SALES_PER_SKU)
-            else:
-                prev_q = slist[i - 1].get("qty_available", 0) or 0
-                curr_q = slist[i].get("qty_available", 0) or 0
-                if prev_q in PLACEHOLDER_QTY_VALUES or curr_q in PLACEHOLDER_QTY_VALUES or prev_q > 500:
-                    continue
-                d = prev_q - curr_q
-                if d <= 0:
-                    continue
-                inc = min(d, MAX_QTY_DELTA_PER_INTERVAL)
-            if inc <= 0:
-                continue
-            rev = inc * price
-            weekly_rev[week_key] = weekly_rev.get(week_key, 0) + rev
-            daily_rev[day_key] = daily_rev.get(day_key, 0) + rev
+    # Trend charts use whatever day resolution the rollup wrote — the aggregate
+    # matches total_rev by construction so the KPI card, weekly chart and
+    # daily chart cannot disagree on any store.
 
     # Compute the actual time span of data for accurate monthly normalization
     if snaps_90d:
@@ -5167,6 +5166,26 @@ async def store_profile(store_id: str, user=Depends(get_user)):
     est_daily_revenue = round(total_rev / max(span_days, 1), 2) if total_rev > 0 else 0
     est_daily_units = round(total_sold / max(span_days, 1), 1) if total_sold > 0 else 0
 
+    # iter73f — same revenue-status classification the Insights Leaderboard
+    # uses, so a Salla store with no sold-count exposure reads "Not measurable
+    # (Salla)" on the KPI card instead of a misleading `0 SAR`. Consumers of
+    # the store profile can now render tier-appropriate copy without touching
+    # a separate endpoint.
+    _has_signal = False
+    try:
+        _has_signal = await db.sku_store_coverage.count_documents(
+            {"store_id": store_id, "$or": [
+                {"last_sold_pos_at": {"$gte": since_90d}},
+                {"last_usable_qty_at": {"$gte": since_90d}}]}, limit=1) > 0
+    except Exception:
+        _has_signal = True
+    if total_rev > 0:
+        revenue_status = "computed"
+    elif not _has_signal:
+        revenue_status = "sales_data_unavailable"
+    else:
+        revenue_status = "insufficient_history"
+
     return {
         "store": store,
         "kpis": {
@@ -5174,6 +5193,7 @@ async def store_profile(store_id: str, user=Depends(get_user)):
             "est_monthly_revenue": est_monthly_revenue,
             "est_daily_revenue": est_daily_revenue,
             "est_daily_sales": est_daily_units,
+            "revenue_status": revenue_status,        # iter73f
             "data_span_days": span_days,
             "avg_discount_rate": avg_disc, "last_crawled": store.get("last_crawled_at"),
         },

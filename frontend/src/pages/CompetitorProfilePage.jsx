@@ -58,7 +58,16 @@ export default function CompetitorProfilePage() {
         {[
           { label: "Catalog Size", val: kpis.catalog_size },
           { label: "Active SKUs", val: kpis.active_skus },
-          { label: "Est. Monthly Revenue", val: `${(kpis.est_monthly_revenue || 0).toLocaleString()} SAR` },
+          {
+            label: "Est. Monthly Revenue",
+            /* iter73f — honest labels: a Salla store the platform never
+               exposes sold_count for renders "Not measurable" instead of a
+               misleading 0 SAR that used to contradict the Insights
+               Leaderboard's tier-aware number. */
+            val: kpis.revenue_status === "sales_data_unavailable" ? "Not measurable"
+              : kpis.revenue_status === "insufficient_history" ? "Accumulating"
+              : `${(kpis.est_monthly_revenue || 0).toLocaleString()} SAR`,
+          },
           { label: "Avg Discount Rate", val: `${kpis.avg_discount_rate}%` },
           { label: "Last Crawled", val: kpis.last_crawled ? new Date(kpis.last_crawled).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) : "-" },
         ].map((k) => (
