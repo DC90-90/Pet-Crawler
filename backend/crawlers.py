@@ -82,7 +82,180 @@ KNOWN_BRANDS = [
     "Friskies", "فريسكيز", "Me-O", "مي-او", "Kong", "كونغ", "FURminator", "فرمينيتور",
     "Frontline", "فرونت لاين", "Versele-Laga", "فيرسيل", "Catit", "Oxbow", "Tetra",
     "Virbac", "Ever Clean", "Josera", "Brit", "Schesir", "Gimcat", "Trixie", "Beaphar",
+    # iter73h — extended so the read-time normalizer resolves more product
+    # names than the tiny original list did. These are the brands that
+    # dominate our crawl footprint but were falling into "Unknown".
+    "Applaws", "أبلاوز", "Sheba", "شيبا", "Felix", "فيليكس", "Cesar", "سيزار",
+    "IAMS", "أيمز", "Eukanuba", "يوكانوبا", "Pro Plan", "برو بلان",
+    "Advance", "أدفانس", "Farmina", "فارمينا", "Almo Nature", "المو ناتشر",
+    "Bosch", "بوش", "Wellness", "ويلنس", "Taste of the Wild", "طيست اوف ذا ولد",
+    "Nutro", "نيوترو", "Solid Gold", "سوليد قولد", "Merrick", "ميريك",
+    "Fromm", "فروم", "Canidae", "كانيديا", "Zignature", "زيقنيتشر",
+    "Chicken Soup", "شيكن سوب", "Nutrisource", "نيوتري سورس",
+    "Whiskas", "Cat Chow", "كات تشاو", "Feliway", "فيلوي",
+    "Bio Groom", "بايو قروم", "Furminator", "Sentry", "سنتري",
+    "Hartz", "هارتز", "PetSafe", "بيت سيف", "Kaytee", "كايتي",
+    "Petromax", "بيتروماكس", "Vitakraft", "فيتاكرافت",
+    "Ziwi Peak", "زيوي بيك", "Zoetis", "زوتيس", "AATU", "اتو",
+    "Prima Cat", "بريما كات", "Prima Dog", "بريما دوق",
+    "Pro-Sense", "برو سنس", "Sanicat", "سانيكات", "Catsan", "كاتسان",
+    "Fussie Cat", "فوسي كات", "Nulo", "نولو", "Instinct", "انستنكت",
+    "Blue Buffalo", "بلو بافلو", "Wellness Core", "ويلنس كور",
+    "Cesar", "Cats Best", "كات بست", "Marshall", "مارشال",
+    "Zolux", "زولوكس", "Camon", "كامون", "Ferplast", "فيربلاست",
+    "Savic", "سافيك", "Rotweiler", "روت وايلر", "Almo", "ألمو",
+    "Josera", "Nature's Miracle", "معجزة الطبيعة",
+    # KSA / Regional & Mahally-observed brands
+    "Petex", "بتيكس", "Petex Pro", "Katze", "كاتزي",
+    "Meow", "ميو", "Bark", "بارك", "PetTime", "بت تايم",
+    "Petpourri", "بت بوري", "Mera", "ميرا", "Bewi Dog", "بيوي دوق",
+    "MonPetit", "مون بتيت", "GimDog", "جيم دوق", "GimCat",
+    "Sanabo", "سنابو", "Reptomin",
 ]
+
+# iter73h — canonical brand map. Merges Arabic + English variants of the same
+# brand into ONE display bucket so a product tagged "رويال كانين" (Ar) and
+# another tagged "Royal Canin" (En) don't split the same brand across two
+# rows on Top Brands. Keys are lowercase for case-insensitive matching.
+CANONICAL_BRAND_MAP = {
+    "royal canin": "Royal Canin", "رويال كانين": "Royal Canin",
+    "whiskas": "Whiskas", "ويسكاس": "Whiskas",
+    "pedigree": "Pedigree", "بيدقري": "Pedigree",
+    "purina": "Purina", "بورينا": "Purina",
+    "pro plan": "Pro Plan", "برو بلان": "Pro Plan",
+    "hills": "Hill's", "هيلز": "Hill's", "hill's": "Hill's",
+    "orijen": "Orijen", "اوريجن": "Orijen", "أوريجن": "Orijen",
+    "acana": "Acana", "اكانا": "Acana", "أكانا": "Acana",
+    "friskies": "Friskies", "فريسكيز": "Friskies",
+    "me-o": "Me-O", "meo": "Me-O", "مي-او": "Me-O",
+    "kong": "Kong", "كونغ": "Kong",
+    "furminator": "FURminator", "فرمينيتور": "FURminator",
+    "frontline": "Frontline", "فرونت لاين": "Frontline",
+    "versele-laga": "Versele-Laga", "versele laga": "Versele-Laga", "فيرسيل": "Versele-Laga",
+    "catit": "Catit", "oxbow": "Oxbow", "tetra": "Tetra",
+    "virbac": "Virbac", "ever clean": "Ever Clean", "josera": "Josera",
+    "brit": "Brit", "brit care": "Brit", "brit premium": "Brit",
+    "schesir": "Schesir", "gimcat": "GimCat", "trixie": "Trixie",
+    "beaphar": "Beaphar", "applaws": "Applaws", "أبلاوز": "Applaws",
+    "sheba": "Sheba", "شيبا": "Sheba",
+    "felix": "Felix", "فيليكس": "Felix",
+    "cesar": "Cesar", "سيزار": "Cesar",
+    "iams": "IAMS", "أيمز": "IAMS",
+    "eukanuba": "Eukanuba", "يوكانوبا": "Eukanuba",
+    "advance": "Advance", "أدفانس": "Advance",
+    "farmina": "Farmina", "فارمينا": "Farmina", "n&d": "Farmina", "farmina n&d": "Farmina",
+    "almo nature": "Almo Nature", "المو ناتشر": "Almo Nature", "almo": "Almo Nature",
+    "bosch": "Bosch", "بوش": "Bosch",
+    "wellness": "Wellness", "ويلنس": "Wellness", "wellness core": "Wellness",
+    "taste of the wild": "Taste of the Wild", "طيست اوف ذا ولد": "Taste of the Wild",
+    "nutro": "Nutro", "نيوترو": "Nutro",
+    "solid gold": "Solid Gold", "سوليد قولد": "Solid Gold",
+    "merrick": "Merrick", "ميريك": "Merrick",
+    "fromm": "Fromm", "فروم": "Fromm",
+    "canidae": "Canidae", "كانيديا": "Canidae",
+    "zignature": "Zignature", "زيقنيتشر": "Zignature",
+    "chicken soup": "Chicken Soup", "شيكن سوب": "Chicken Soup",
+    "nutrisource": "NutriSource", "نيوتري سورس": "NutriSource",
+    "cat chow": "Cat Chow", "كات تشاو": "Cat Chow",
+    "feliway": "Feliway", "فيلوي": "Feliway",
+    "sentry": "Sentry", "سنتري": "Sentry",
+    "hartz": "Hartz", "هارتز": "Hartz",
+    "petsafe": "PetSafe", "بيت سيف": "PetSafe",
+    "kaytee": "Kaytee", "كايتي": "Kaytee",
+    "vitakraft": "Vitakraft", "فيتاكرافت": "Vitakraft",
+    "ziwi peak": "Ziwi Peak", "زيوي بيك": "Ziwi Peak",
+    "aatu": "AATU", "اتو": "AATU",
+    "sanicat": "Sanicat", "سانيكات": "Sanicat",
+    "catsan": "Catsan", "كاتسان": "Catsan",
+    "fussie cat": "Fussie Cat", "فوسي كات": "Fussie Cat",
+    "nulo": "Nulo", "نولو": "Nulo",
+    "instinct": "Instinct", "انستنكت": "Instinct",
+    "blue buffalo": "Blue Buffalo", "بلو بافلو": "Blue Buffalo",
+    "cats best": "Cats Best", "cat's best": "Cats Best", "كات بست": "Cats Best",
+    "zolux": "Zolux", "زولوكس": "Zolux",
+    "camon": "Camon", "كامون": "Camon",
+    "ferplast": "Ferplast", "فيربلاست": "Ferplast",
+    "savic": "Savic", "سافيك": "Savic",
+    "mera": "Mera", "ميرا": "Mera",
+    "bewi dog": "Bewi Dog", "بيوي دوق": "Bewi Dog",
+    "gimdog": "GimDog", "جيم دوق": "GimDog",
+}
+
+
+def canonical_brand(raw):
+    """iter73h — read-time brand normalisation.
+
+    Turn a raw brand tag (from the ingest-time `extract_brand`, or a store's
+    own field) into a display-ready canonical name. Handles Arabic/English
+    variants of the same brand, common punctuation drift ("Hill's" vs
+    "Hills"), and case. Returns None when the input is genuinely blank —
+    callers filter these OUT of Top Brands so the client never sees an
+    "Unknown" bucket dominating the ranking.
+    """
+    if not raw:
+        return None
+    key = raw.strip().lower()
+    if not key:
+        return None
+    if key in CANONICAL_BRAND_MAP:
+        return CANONICAL_BRAND_MAP[key]
+    # Second try: strip punctuation and re-look-up ("hill's" → "hills")
+    stripped = "".join(c for c in key if c.isalnum() or c in " -")
+    if stripped in CANONICAL_BRAND_MAP:
+        return CANONICAL_BRAND_MAP[stripped]
+    # Third: the raw value doesn't match a known canonical form. Return the
+    # raw string trimmed so it still shows up as its own bucket rather than
+    # falling into "Unknown" — callers apply an explicit `is None` filter,
+    # NOT a truthiness test, so real brand strings pass through.
+    return raw.strip()
+
+
+def extract_brand_smart(name_ar, name_en, existing=None):
+    """iter73h — smarter than the ingest-time `extract_brand`. Tries in order:
+
+      1. an EXISTING non-empty brand tag on the product (from crawl)
+      2. `extract_brand()` on the English name (KNOWN_BRANDS scan)
+      3. `extract_brand()` on the Arabic name
+      4. the first non-generic leading tokens of the English name — brands
+         are typically the first word on the packshot ("Applaws Cat Dry
+         Food" → "Applaws").
+
+    Returns the canonical form via `canonical_brand()` or None if nothing
+    lands. Never returns "Unknown".
+    """
+    if existing:
+        c = canonical_brand(existing)
+        if c:
+            return c
+    for nm in (name_en, name_ar):
+        if not nm:
+            continue
+        got = extract_brand(nm)
+        if got:
+            return canonical_brand(got) or got
+    # Fallback: leading English word(s) heuristic. Only fires when the string
+    # is Latin (avoiding false positives on Arabic-only names) and the token
+    # doesn't sit on the "generic descriptor" blocklist.
+    _GENERIC = {"the", "cat", "dog", "pet", "premium", "natural", "organic",
+                "adult", "kitten", "puppy", "senior", "royal", "for", "food",
+                "dry", "wet", "chicken", "beef", "salmon", "tuna", "lamb",
+                "with", "gr", "kg", "grams", "kilogram", "flavor", "flavour",
+                "treats", "snack", "biscuit", "biscuits", "and", "canned"}
+    if name_en:
+        # Take the first 1-2 alphabetic tokens as the candidate brand
+        parts = [w for w in name_en.split() if any(c.isalpha() for c in w)]
+        if parts and all(ord(c) < 128 for c in parts[0]):
+            cand = parts[0].strip(".,-()[]{}").strip()
+            if cand.lower() not in _GENERIC and len(cand) >= 2:
+                # Prefer a two-token brand ("Blue Buffalo") when the second
+                # token is Latin AND not generic
+                if len(parts) > 1 and all(ord(c) < 128 for c in parts[1]):
+                    two = f"{cand} {parts[1].strip(chr(46) + chr(44)).strip()}"
+                    c2 = canonical_brand(two)
+                    if c2 and c2 != two.strip():        # matched an alias
+                        return c2
+                return canonical_brand(cand) or cand
+    return None
 
 XHR_PATTERNS = ["/api/", "/products", "/collection", "product-list", "catalog", "items", "inventory"]
 STORE_PAGES = ["/products", "/shop", "/collection/all", "/store", "/"]

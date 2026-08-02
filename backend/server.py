@@ -27,6 +27,10 @@ from crawlers import (
     extract_brand, guess_category, guess_animal, extract_weight,
     classify_food_subcategory, FOOD_SUBCATEGORIES, FOOD_SUBCATEGORY_PARENTS,
     sync_own_store_prices,
+    # iter73h — smarter read-time brand resolution: prefers canonical
+    # Arabic/English mapping, falls back to the English leading-token
+    # heuristic so "Unknown" is not the top bucket on Top Brands anymore.
+    canonical_brand, extract_brand_smart,
     # iter44 Step-1 validation (read-only VAT-basis audit)
     fetch_own_storefront_catalog_raw, _fetch_zid_api_catalog, _price_amount,
     _storefront_price_index, storefront_price_lookup,
@@ -3951,6 +3955,18 @@ async def _insights_sales_compute(db, days, date_from, date_to, search, sort, us
     )
     src_products = data.get("products", []) or []
 
+    # iter73h — project a smart-resolved `brand` on each product row so the
+    # search filter (below) and any client-side "brand" column agree with
+    # the Top Brands aggregation. Products whose canonical brand can't be
+    # resolved keep an empty string here (they simply won't match a search
+    # by brand and won't inflate any brand's total).
+    def _row_brand(p):
+        return extract_brand_smart(
+            p.get("name_ar") or "", p.get("name_en") or "",
+            existing=p.get("brand") or "") or ""
+    for p in src_products:
+        p["brand"] = _row_brand(p)
+
     # Apply search across name (ar/en), SKU and brand
     if search:
         q = search.lower().strip()
@@ -3982,14 +3998,34 @@ async def _insights_sales_compute(db, days, date_from, date_to, search, sort, us
         "confidence_score": p.get("confidence_score", 0) or 0,
     } for p in src_products]
 
-    # Top brands — aggregate revenue + units per brand
+    # iter73h — Top Brands aggregation, hardened:
+    #  * `extract_brand_smart` resolves Arabic/English variants of the same
+    #    brand into ONE canonical bucket (Royal Canin + رويال كانين), and
+    #    falls back to the leading English token when the product's brand
+    #    tag is blank — so genuinely-branded products don't land in "Unknown".
+    #  * Rows with no resolvable brand are DROPPED, not bucketed as
+    #    "Unknown". Client explicitly asked "I don't want to see Unknown".
+    #  * Rows with zero units AND zero revenue are ALSO dropped — an empty
+    #    brand row on the leaderboard is user-confusing noise.
+    #  * market_share_pct is now computed against the SUM of the KEPT
+    #    (resolvable) brand revenue only, so the percentages a client sees
+    #    add up to 100% across the displayed rows (and can never be
+    #    dragged down by an inflated Unknown bucket).
     brand_acc = {}
     for p in src_products:
-        brand = (p.get("brand") or "").strip() or "Unknown"
-        a = brand_acc.setdefault(brand, {"units": 0, "revenue": 0.0})
+        # brand resolution: existing tag → known-brand scan → leading-token
+        canonical = extract_brand_smart(
+            p.get("name_ar") or "", p.get("name_en") or "",
+            existing=p.get("brand") or "")
+        if not canonical:
+            continue                       # never bucket as "Unknown"
+        a = brand_acc.setdefault(canonical, {"units": 0, "revenue": 0.0})
         a["units"]   += p.get("qty_sold_est", 0) or 0
         a["revenue"] += p.get("revenue_est", 0.0) or 0.0
 
+    # Drop dead rows (no measured units AND no revenue) — cleaner ranking.
+    brand_acc = {b: v for b, v in brand_acc.items()
+                 if (v["units"] or 0) > 0 or (v["revenue"] or 0) > 0}
     total_brand_revenue = sum(v["revenue"] for v in brand_acc.values())
     top_brands = sorted(
         [{
