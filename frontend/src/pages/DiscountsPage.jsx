@@ -75,7 +75,7 @@ export default function DiscountsPage() {
         <h3 className="text-sm font-semibold text-white mb-3">Store Discount Aggression Leaderboard</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
           {aggression.map((a, i) => (
-            <div key={a.store} className="border border-white/10 rounded-md p-3 hover:shadow-sm transition-all" data-testid={`aggression-${a.store}`}>
+            <div key={a.store_id || `${a.store}-${i}`} className="border border-white/10 rounded-md p-3 hover:shadow-sm transition-all" data-testid={`aggression-${a.store}`}>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
                   <div className="w-7 h-7 bg-[#1E988E] text-white text-[10px] font-bold rounded flex items-center justify-center">{a.store[0]}</div>
@@ -123,7 +123,7 @@ export default function DiscountsPage() {
                         <TableCell><span className="text-xs text-[#A1E4DB] line-through">{d.original_price} ﷼</span></TableCell>
                         <TableCell><span className="text-xs font-semibold text-green-600">{d.price} ﷼</span></TableCell>
                         <TableCell><span className="text-xs font-bold text-red-500">{tab === "pct" ? `${d.discount_pct}%` : `${d.savings_sar} ﷼`}</span></TableCell>
-                        {tab === "pct" && <TableCell><span className="text-[10px] text-[#A1E4DB]">{d.days_on_sale}d</span></TableCell>}
+                        {tab === "pct" && <TableCell><span className="text-[10px] text-[#A1E4DB]">{d.days_on_discount ?? d.days_on_sale ?? "—"}d</span></TableCell>}
                       </TableRow>
                     ))}
                   </TableBody>
