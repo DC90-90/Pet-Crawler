@@ -6642,10 +6642,11 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
                                          "price": p.get("price")})
             continue
         match_methods[method or m_method] = match_methods.get(method or m_method, 0) + 1
-        new_price, new_sale, basis = resolve_own_price(
+        new_price, new_sale, new_original, basis = resolve_own_price(
             hit,
             merchant_price=(m_row or {}).get("price"),
             merchant_sale_price=(m_row or {}).get("sale_price"),
+            merchant_list_price=(m_row or {}).get("list_price") or (m_row or {}).get("price"),
             is_taxable=(m_row or {}).get("is_taxable"),
         )
         basis_counts[basis] = basis_counts.get(basis, 0) + 1
@@ -6660,6 +6661,7 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
             "before_price": old_price, "before_sale_price": p.get("sale_price"),
             "before_effective": round(float(old_eff), 2) if old_eff else None,
             "after_price": new_price, "after_sale_price": new_sale,
+            "after_original_price": new_original,
             "ratio": round(new_price / float(old_eff), 4) if old_eff else None,
             "before_basis": p.get("price_basis"), "after_basis": basis,
         })
@@ -6693,6 +6695,7 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
         await db.my_products.update_one({"sku": c["sku"]}, {"$set": {
             "price": c["after_price"],
             "sale_price": c["after_sale_price"],
+            "original_price": c["after_original_price"],   # iter73d
             "price_basis": c["after_basis"],
             "vat_backfilled_at": datetime.now(timezone.utc).isoformat(),
         }})

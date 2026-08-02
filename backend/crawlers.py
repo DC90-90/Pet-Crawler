@@ -2089,13 +2089,23 @@ async def _fetch_zid_api_catalog(db, store):
                 items = payload.get("results") or []
                 for p in items:
                     name_obj = p.get("name") or {}
+                    # iter73d — preserve the LIST price separately so
+                    # `resolve_own_price` can gross both list AND sale to the
+                    # same VAT basis. Before, `raw.price` collapsed to
+                    # `sale_price OR list`, dropping the list on on-sale
+                    # products — which erased the strikethrough / discount %
+                    # everywhere the Discounts / detail panels expect it.
+                    _list = p.get("price") or 0
+                    _sale = p.get("sale_price") or 0
+                    _eff = _sale if _sale and _sale > 0 else _list
                     out.append({
                         "sku": str(p.get("sku") or "").strip(),
                         "barcode": str(p.get("barcode") or "").strip(),
                         "name_ar": name_obj.get("ar") or "",
                         "name_en": name_obj.get("en") or "",
-                        "price": p.get("sale_price") or p.get("price") or 0,
-                        "sale_price": p.get("sale_price"),
+                        "price": _eff,
+                        "sale_price": _sale if _sale and _sale > 0 else None,
+                        "list_price": _list,       # NEW — always the regular price
                         "qty_available": 0 if p.get("is_infinite") else (p.get("quantity") or 0),
                         "in_stock": bool(p.get("is_infinite")) or ((p.get("quantity") or 0) > 0),
                         # Cumulative units-sold counter — feeds the estimator's
@@ -2388,29 +2398,59 @@ async def _paginate_own_storefront(http, ep, initial_items, max_pages=OWN_SF_MAX
 #   on the storefront            -> its inc-VAT shelf price   storefront_inc_vat
 #   not on it, is_taxable True   -> merchant price x (1+VAT)  merchant_computed_inc_vat
 #   not on it, is_taxable False  -> merchant price unchanged  merchant_non_taxable
-#   not on it, is_taxable None   -> merchant price unchanged  merchant_unknown_tax
+#   not on it, is_taxable None   -> merchant price x (1+VAT)  merchant_assumed_inc_vat
+#                                                             (iter73d — Saudi
+#                                                             default: retail
+#                                                             goods are taxable)
 #
-# The last case is deliberately NOT grossed up: inflating a price on a guess is
-# worse than leaving a known-basis value, and the tag makes the gap countable.
-def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None, is_taxable=None):
-    """Return (price, sale_price, price_basis). All outputs are 2dp."""
+# iter73d — the previous "unknown → keep ex-VAT" rule was correct in principle
+# ("inflating a real price by 15% is a bug") but wrong in Saudi practice: 99%
+# of retail goods ARE taxable, Zid's Merchant API doesn't always populate
+# is_taxable, and the resulting mixed-basis rows were the cause of the "my
+# prices show without VAT on some tabs" client report. The `merchant_assumed_
+# inc_vat` tag keeps the auto-grossed rows countable, so operators can spot-
+# check them; a genuinely non-taxable product must set is_taxable=False in
+# Zid so the resolver keeps its ex-VAT basis.
+def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
+                      merchant_list_price=None, is_taxable=None):
+    """Return (price, sale_price, original_price, price_basis). All outputs 2dp.
+
+    `original_price` is the pre-sale LIST/regular price grossed to the SAME
+    basis as `price` — never dropped for on-sale items. Downstream writers
+    can now emit `original_price > price` faithfully and Discounts / strike-
+    through displays no longer need to reconstruct it after the fact.
+    """
     if sf_hit:
         shelf, list_price = sf_hit
         on_sale = list_price > 0 and shelf < list_price - 0.009
-        return round(shelf, 2), (round(shelf, 2) if on_sale else None), "storefront_inc_vat"
+        _orig = round(list_price, 2) if list_price > 0 else round(shelf, 2)
+        return (round(shelf, 2),
+                (round(shelf, 2) if on_sale else None),
+                _orig,
+                "storefront_inc_vat")
 
     price = _price_amount(merchant_price)
     sale = _price_amount(merchant_sale_price)
-    if is_taxable is True:
-        mult = 1 + KSA_VAT_RATE
-        # sale_price must be grossed up TOO: every consumer reads
-        # `sale_price or price`, so leaving an ex-VAT sale behind would defeat
-        # the conversion on exactly the discounted products.
-        return (round(price * mult, 2),
-                round(sale * mult, 2) if sale > 0 else None,
-                "merchant_computed_inc_vat")
-    basis = "merchant_non_taxable" if is_taxable is False else "merchant_unknown_tax"
-    return round(price, 2), (round(sale, 2) if sale > 0 else None), basis
+    # The list-price argument is optional so pre-iter73d callers still work;
+    # when absent, the effective merchant_price is the best list-price proxy
+    # we have (equal to the sale on on-sale items — the same info we had
+    # before the argument existed, no regression).
+    list_p = _price_amount(merchant_list_price) if merchant_list_price is not None else price
+
+    if is_taxable is False:
+        return (round(price, 2),
+                (round(sale, 2) if sale > 0 else None),
+                round(list_p, 2),
+                "merchant_non_taxable")
+
+    # is_taxable True OR None (Saudi default): gross up. Tag records which
+    # path so a taxability regression is countable in the vat-audit surface.
+    mult = 1 + KSA_VAT_RATE
+    basis = "merchant_computed_inc_vat" if is_taxable is True else "merchant_assumed_inc_vat"
+    return (round(price * mult, 2),
+            round(sale * mult, 2) if sale > 0 else None,
+            round(list_p * mult, 2),
+            basis)
 
 
 async def fetch_own_storefront_catalog_raw(store, max_pages=OWN_SF_MAX_PAGES):
@@ -2554,7 +2594,7 @@ async def sync_own_store_prices(db, store=None):
     # iter54 — resolved own price per RAW sku, shared with the snapshot writer
     own_resolved_price = {}
     basis_counts = {"storefront_inc_vat": 0, "merchant_computed_inc_vat": 0,
-                    "merchant_non_taxable": 0, "merchant_unknown_tax": 0}
+                    "merchant_non_taxable": 0, "merchant_assumed_inc_vat": 0}
 
     # ── Pre-build lookup tables of my_products by barcode + SKU ──
     my_by_sku, my_by_barcode = {}, {}
@@ -2589,10 +2629,11 @@ async def sync_own_store_prices(db, store=None):
             # iter46 — two-tier basis: storefront shelf price when the product
             # is listed, else the Merchant price grossed up ONLY when Zid says
             # the product is taxable.
-            price_v, sale_v, price_basis = resolve_own_price(
+            price_v, sale_v, orig_v, price_basis = resolve_own_price(
                 sf_hit,
                 merchant_price=raw.get("price"),
                 merchant_sale_price=raw.get("sale_price"),
+                merchant_list_price=raw.get("list_price"),
                 is_taxable=raw.get("is_taxable"),
             )
             norm = {
@@ -2602,6 +2643,7 @@ async def sync_own_store_prices(db, store=None):
                 "name_en": raw.get("name_en") or "",
                 "price": price_v,
                 "sale_price": sale_v,
+                "original_price": orig_v,   # iter73d — surfaced through the norm
                 "qty": raw.get("qty_available") or 0,
                 "in_stock": raw.get("in_stock", False),
                 "img_url": raw.get("img_url", ""),
@@ -2618,6 +2660,12 @@ async def sync_own_store_prices(db, store=None):
             if shelf > 0:
                 norm["price"] = shelf
                 norm["sale_price"] = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
+                # iter73d — record the LIST price so the my_products /
+                # snapshot writers pick it up as `original_price`. Fall back
+                # to shelf when the storefront didn't carry a distinct list.
+                norm["original_price"] = list_price if list_price > 0 else shelf
+            else:
+                norm["original_price"] = norm.get("price")
         basis_counts[price_basis] = basis_counts.get(price_basis, 0) + 1
         # iter54 — hand the RESOLVED price to the snapshot writer below.
         # That writer re-read `raw["price"]` from scratch, i.e. the Zid Merchant
@@ -2631,7 +2679,8 @@ async def sync_own_store_prices(db, store=None):
         _resolved_sku = str(norm.get("sku") or "").strip()
         if _resolved_sku:
             own_resolved_price[_resolved_sku] = (
-                norm.get("price"), norm.get("sale_price"), price_basis)
+                norm.get("price"), norm.get("sale_price"),
+                norm.get("original_price"), price_basis)
         crawled_sku = str(norm["sku"]).strip()
         crawled_barcode = str(norm.get("barcode") or "").strip()
 
@@ -2662,6 +2711,10 @@ async def sync_own_store_prices(db, store=None):
                 "product_url": norm.get("product_url", ""),
                 "price": round(norm["price"], 2),
                 "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
+                # iter73d — persist the LIST price alongside the effective /
+                # sale so downstream readers (Discounts strikethrough,
+                # detail-panel history) never need to reconstruct it.
+                "original_price": round(norm["original_price"], 2) if norm.get("original_price") else round(norm["price"], 2),
                 "quantity": int(norm["qty"]),
                 "in_stock": bool(norm["in_stock"]),
                 "is_own_store": True,
@@ -2692,6 +2745,8 @@ async def sync_own_store_prices(db, store=None):
         update_doc = {
             "price": round(norm["price"], 2),
             "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
+            # iter73d — see setOnInsert comment above; must land on updates too.
+            "original_price": round(norm["original_price"], 2) if norm.get("original_price") else round(norm["price"], 2),
             "quantity": int(norm["qty"]),
             "in_stock": bool(norm["in_stock"]),
             "last_synced_at": sync_ts,
@@ -2750,7 +2805,8 @@ async def sync_own_store_prices(db, store=None):
             _res = own_resolved_price.get(sku)
             price = (_res[0] if _res and _res[0] is not None else (raw.get("price") or 0))
             sale_price_v = _res[1] if _res else None
-            price_basis_v = _res[2] if _res else "merchant_unknown_tax"
+            list_price_v = _res[2] if _res else None
+            price_basis_v = _res[3] if _res else "merchant_assumed_inc_vat"
             qty = raw.get("qty_available") or 0
             in_stock = bool(raw.get("in_stock")) if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""
@@ -2771,13 +2827,21 @@ async def sync_own_store_prices(db, store=None):
             # values, so ledger + snapshot cannot disagree.
             _price_v = float(price)
             _sale_v = float(sale_price_v) if sale_price_v else 0.0
-            if 0 < _sale_v < _price_v:
+            _list_v = float(list_price_v) if list_price_v else _price_v
+            # iter73d — the LIST price now flows through end-to-end. When the
+            # product is on sale (`sale_v > 0` AND `list_v > sale_v`) we
+            # record original_price = list_v (the pre-sale reference the
+            # storefront strikethrough would show). If the list is silently
+            # equal to the sale, the sale isn't a real discount — treat as
+            # no-sale. This gives the Discounts tab a truthful original_price
+            # WITH VAT for every genuinely discounted own-store product.
+            if _sale_v > 0 and _list_v > _sale_v + 0.009:
                 _snap_price = round(_sale_v, 2)
-                _snap_original = round(_price_v, 2)
+                _snap_original = round(_list_v, 2)
                 _snap_disc_pct = round((1 - _snap_price / _snap_original) * 100)
             else:
                 _snap_price = round(_price_v, 2)
-                _snap_original = round(_price_v, 2)
+                _snap_original = round(max(_list_v, _price_v), 2)
                 _snap_disc_pct = 0
             # iter67 — the ledger records EVERY observed product, including the
             # ones the change-only snapshot dedup below skips: "unchanged" is

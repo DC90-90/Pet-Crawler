@@ -102,19 +102,36 @@ async def _prep(db):
 def test_resolve_own_price_covers_all_four_bases():
     R = crawlers.resolve_own_price
     assert crawlers.KSA_VAT_RATE == 0.15
-    # 1. on the storefront -> shelf price (list==shelf, so not "on sale")
-    assert R((170.0, 170.0)) == (170.0, None, "storefront_inc_vat")
-    # ...on sale -> both fields carry the shelf price
-    assert R((170.0, 200.0)) == (170.0, 170.0, "storefront_inc_vat")
-    # 2. not on storefront + taxable -> x1.15
-    assert R(None, merchant_price=147.83, is_taxable=True) == (170.0, None, "merchant_computed_inc_vat")
-    # a discounted merchant row grosses up BOTH fields
+    # iter73d — resolver now returns a 4-tuple (price, sale, original, basis).
+    # The `original_price` element is the LIST/regular price grossed to the
+    # SAME basis as `price`, so downstream writers never need to reconstruct
+    # a strikethrough after the fact.
+    #
+    # 1. on the storefront, list==shelf, not on sale
+    assert R((170.0, 170.0)) == (170.0, None, 170.0, "storefront_inc_vat")
+    # ...on sale → shelf under list, both effective fields carry shelf,
+    # original carries list.
+    assert R((170.0, 200.0)) == (170.0, 170.0, 200.0, "storefront_inc_vat")
+    # 2. not on storefront + explicit taxable → ×1.15 across all three
+    assert R(None, merchant_price=147.83, is_taxable=True) == (
+        170.0, None, 170.0, "merchant_computed_inc_vat")
+    # discounted merchant row grosses up price+sale, list defaults to `price`
+    # when not provided (backwards-compatible caller). merchant_price here is
+    # already the effective price (see _fetch_zid_api_catalog line 2097).
     assert R(None, merchant_price=100, merchant_sale_price=80, is_taxable=True) == (
-        115.0, 92.0, "merchant_computed_inc_vat")
-    # 3. explicitly non-taxable -> unchanged
-    assert R(None, merchant_price=40, is_taxable=False) == (40.0, None, "merchant_non_taxable")
-    # 4. unknown -> unchanged AND tagged (never silently inflated)
-    assert R(None, merchant_price=30, is_taxable=None) == (30.0, None, "merchant_unknown_tax")
+        115.0, 92.0, 115.0, "merchant_computed_inc_vat")
+    # when the caller DOES pass a distinct list price, it flows through
+    assert R(None, merchant_price=80, merchant_sale_price=80,
+             merchant_list_price=100, is_taxable=True) == (
+        92.0, 92.0, 115.0, "merchant_computed_inc_vat")
+    # 3. explicitly non-taxable → unchanged
+    assert R(None, merchant_price=40, is_taxable=False) == (
+        40.0, None, 40.0, "merchant_non_taxable")
+    # 4. iter73d — is_taxable=None NOW grosses up (Saudi default) instead of
+    # leaving the row at ex-VAT. Tag switches so the auto-inflation is
+    # countable at the VAT-audit surface.
+    assert R(None, merchant_price=30, is_taxable=None) == (
+        34.5, None, 34.5, "merchant_assumed_inc_vat")
 
 
 def test_is_taxable_is_a_tristate():
@@ -163,13 +180,15 @@ def test_sync_applies_two_tier_basis():
         assert rows["NT-1"]["price"] == 40.00
         assert rows["NT-1"]["price_basis"] == "merchant_non_taxable"
 
-        # 4. unknown tax -> flat AND tagged (not inflated)
-        assert rows["UNK-1"]["price"] == 30.00
-        assert rows["UNK-1"]["price_basis"] == "merchant_unknown_tax"
+        # 4. iter73d — unknown tax NOW auto-grosses (Saudi default) with a
+        # distinct basis tag so an operator can audit which rows relied on
+        # the assumption. Old behaviour was flat + `merchant_unknown_tax`.
+        assert rows["UNK-1"]["price"] == round(30.00 * 1.15, 2) == 34.5
+        assert rows["UNK-1"]["price_basis"] == "merchant_assumed_inc_vat"
 
         assert res["price_basis_counts"] == {
             "storefront_inc_vat": 3, "merchant_computed_inc_vat": 1,
-            "merchant_non_taxable": 1, "merchant_unknown_tax": 1}
+            "merchant_non_taxable": 1, "merchant_assumed_inc_vat": 1}
     asyncio.run(main())
 
 
@@ -190,10 +209,11 @@ def test_sync_survives_storefront_outage_via_taxable_fallback():
         assert rows["052742059518"]["price_basis"] == "merchant_computed_inc_vat"
         assert rows["052742059518"]["quantity"] == 7          # stock still synced
         assert rows["NT-1"]["price"] == 40.00                 # exempt stays flat
-        assert rows["UNK-1"]["price"] == 30.00                # unknown stays flat
+        # iter73d — unknown tax NOW auto-grosses (Saudi default policy).
+        assert rows["UNK-1"]["price"] == 34.5                 # 30 × 1.15
         assert res["price_basis_counts"]["merchant_computed_inc_vat"] == 4
         assert res["price_basis_counts"]["merchant_non_taxable"] == 1
-        assert res["price_basis_counts"]["merchant_unknown_tax"] == 1
+        assert res["price_basis_counts"]["merchant_assumed_inc_vat"] == 1
     asyncio.run(main())
 
 
@@ -211,7 +231,7 @@ def test_backfill_reports_bases_and_applies_them():
             assert dry["no_live_source"] == 0
             assert dry["price_basis_counts"] == {
                 "storefront_inc_vat": 3, "merchant_computed_inc_vat": 1,
-                "merchant_non_taxable": 1, "merchant_unknown_tax": 1}
+                "merchant_non_taxable": 1, "merchant_assumed_inc_vat": 1}
             assert dry["merchant"]["vat_rate"] == 0.15
             by = {r["sku"]: r for r in dry["sample"]}
             assert by["052742059518"]["after_price"] == 170
@@ -233,7 +253,8 @@ def test_backfill_reports_bases_and_applies_them():
         assert rows["052742059518"]["price"] == 170
         assert rows["ONLY-MERCH"]["price"] == 57.5
         assert rows["NT-1"]["price"] == 40.00 and rows["NT-1"]["price_basis"] == "merchant_non_taxable"
-        assert rows["UNK-1"]["price"] == 30.00 and rows["UNK-1"]["price_basis"] == "merchant_unknown_tax"
+        # iter73d — the unknown-tax row is auto-grossed with the new basis tag.
+        assert rows["UNK-1"]["price"] == 34.5 and rows["UNK-1"]["price_basis"] == "merchant_assumed_inc_vat"
     asyncio.run(main())
 
 
