@@ -170,25 +170,36 @@ def test_sync_applies_two_tier_basis():
         # matched to the storefront by barcode
         assert rows["MERCH-SKU"]["price"] == 100
 
-        # 2. NOT on the storefront + taxable -> grossed up, tagged
+        # 2. NOT on the storefront + taxable -> iter73i: storefront ran
+        # authoritatively, so this row's merchant sale is a phantom the
+        # shopper can't see. Anchor on the merchant LIST price (falls back
+        # to merchant `price` since _m() doesn't set list_price) × 1.15,
+        # and tag the new hidden basis so ops can audit the phantom-sale drop.
         only = rows["ONLY-MERCH"]
         assert only["price"] == round(50.00 * 1.15, 2) == 57.5
-        assert only["price_basis"] == "merchant_computed_inc_vat"
+        assert only["price_basis"] == "merchant_hidden_from_storefront_inc_vat"
         assert only["quantity"] == 4                     # stock still from merchant
 
-        # 3. non-taxable -> flat
+        # 3. non-taxable + not on storefront -> iter73i: same anchor-on-list
+        # policy, but flat (no VAT). Different tag so the audit surface can
+        # count both branches.
         assert rows["NT-1"]["price"] == 40.00
-        assert rows["NT-1"]["price_basis"] == "merchant_non_taxable"
+        assert rows["NT-1"]["price_basis"] == "merchant_hidden_non_taxable"
 
-        # 4. iter73d — unknown tax NOW auto-grosses (Saudi default) with a
-        # distinct basis tag so an operator can audit which rows relied on
-        # the assumption. Old behaviour was flat + `merchant_unknown_tax`.
+        # 4. iter73d + iter73i — unknown tax NOW auto-grosses (Saudi default)
+        # AND rides the hidden-from-storefront branch when the storefront is
+        # authoritative but doesn't carry this SKU.
         assert rows["UNK-1"]["price"] == round(30.00 * 1.15, 2) == 34.5
-        assert rows["UNK-1"]["price_basis"] == "merchant_assumed_inc_vat"
+        assert rows["UNK-1"]["price_basis"] == "merchant_hidden_from_storefront_inc_vat"
 
         assert res["price_basis_counts"] == {
-            "storefront_inc_vat": 3, "merchant_computed_inc_vat": 1,
-            "merchant_non_taxable": 1, "merchant_assumed_inc_vat": 1}
+            "storefront_inc_vat": 3,
+            "merchant_computed_inc_vat": 0,
+            "merchant_non_taxable": 0,
+            "merchant_assumed_inc_vat": 0,
+            "merchant_hidden_from_storefront_inc_vat": 2,   # ONLY-MERCH + UNK-1
+            "merchant_hidden_non_taxable": 1,               # NT-1
+        }
     asyncio.run(main())
 
 
@@ -230,14 +241,16 @@ def test_backfill_reports_bases_and_applies_them():
             assert dry["would_update"] == 6, dry["would_update"]
             assert dry["no_live_source"] == 0
             assert dry["price_basis_counts"] == {
-                "storefront_inc_vat": 3, "merchant_computed_inc_vat": 1,
-                "merchant_non_taxable": 1, "merchant_assumed_inc_vat": 1}
+                "storefront_inc_vat": 3,
+                "merchant_hidden_from_storefront_inc_vat": 2,   # iter73i
+                "merchant_hidden_non_taxable": 1,               # iter73i
+            }
             assert dry["merchant"]["vat_rate"] == 0.15
             by = {r["sku"]: r for r in dry["sample"]}
             assert by["052742059518"]["after_price"] == 170
             assert abs(by["052742059518"]["ratio"] - 1.15) <= 0.005
             assert by["ONLY-MERCH"]["after_price"] == 57.5
-            assert by["ONLY-MERCH"]["after_basis"] == "merchant_computed_inc_vat"
+            assert by["ONLY-MERCH"]["after_basis"] == "merchant_hidden_from_storefront_inc_vat"
             assert by["NT-1"]["after_price"] == 40.00
             # dry run wrote nothing
             assert (await db.my_products.find_one({"sku": "052742059518"}))["price"] == 147.83
@@ -252,9 +265,10 @@ def test_backfill_reports_bases_and_applies_them():
         rows = {p["sku"]: p async for p in db.my_products.find({}, {"_id": 0})}
         assert rows["052742059518"]["price"] == 170
         assert rows["ONLY-MERCH"]["price"] == 57.5
-        assert rows["NT-1"]["price"] == 40.00 and rows["NT-1"]["price_basis"] == "merchant_non_taxable"
-        # iter73d — the unknown-tax row is auto-grossed with the new basis tag.
-        assert rows["UNK-1"]["price"] == 34.5 and rows["UNK-1"]["price_basis"] == "merchant_assumed_inc_vat"
+        # iter73i — storefront ran authoritatively during the backfill (see the
+        # 502-guard fetch above), so hidden-SKU rows carry the new bases.
+        assert rows["NT-1"]["price"] == 40.00 and rows["NT-1"]["price_basis"] == "merchant_hidden_non_taxable"
+        assert rows["UNK-1"]["price"] == 34.5 and rows["UNK-1"]["price_basis"] == "merchant_hidden_from_storefront_inc_vat"
     asyncio.run(main())
 
 

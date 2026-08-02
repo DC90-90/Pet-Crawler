@@ -6812,12 +6812,17 @@ async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Quer
                                          "price": p.get("price")})
             continue
         match_methods[method or m_method] = match_methods.get(method or m_method, 0) + 1
+        # iter73i — the backfill is triggered ONLY after a successful storefront
+        # fetch (see raise above), so the storefront index is authoritative for
+        # this whole loop. A my_products row with no `hit` but a `m_row` is the
+        # exact phantom-sale case we're fixing: gross the LIST price only.
         new_price, new_sale, new_original, basis = resolve_own_price(
             hit,
             merchant_price=(m_row or {}).get("price"),
             merchant_sale_price=(m_row or {}).get("sale_price"),
             merchant_list_price=(m_row or {}).get("list_price") or (m_row or {}).get("price"),
             is_taxable=(m_row or {}).get("is_taxable"),
+            storefront_authoritative=True,
         )
         basis_counts[basis] = basis_counts.get(basis, 0) + 1
         old_price = p.get("price")

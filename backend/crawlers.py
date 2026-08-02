@@ -2584,14 +2584,32 @@ async def _paginate_own_storefront(http, ep, initial_items, max_pages=OWN_SF_MAX
 # inc_vat` tag keeps the auto-grossed rows countable, so operators can spot-
 # check them; a genuinely non-taxable product must set is_taxable=False in
 # Zid so the resolver keeps its ex-VAT basis.
+#
+# iter73i — new signal `storefront_authoritative` (Aug 3 2026). When the
+# storefront overlay ran and produced a NON-EMPTY index, it is the source of
+# truth for what a shopper actually pays. A SKU that is IN the merchant
+# catalogue but MISSING from the storefront index means the shopper never
+# sees the merchant's `sale_price` — that price is a phantom (scheduled
+# promo, archived draft, unpublished variant). Trusting it produced the
+# client-reported bug on SKU 8595602540877: website 237.02 SAR
+# (= list × 1.15), Daleel 180.17 SAR (= phantom sale × 1.15).
+# When authoritative + no sf_hit, drop the merchant sale_price entirely and
+# gross up the LIST price only — matching what the shopper actually pays.
 def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
-                      merchant_list_price=None, is_taxable=None):
+                      merchant_list_price=None, is_taxable=None,
+                      storefront_authoritative=False):
     """Return (price, sale_price, original_price, price_basis). All outputs 2dp.
 
     `original_price` is the pre-sale LIST/regular price grossed to the SAME
     basis as `price` — never dropped for on-sale items. Downstream writers
     can now emit `original_price > price` faithfully and Discounts / strike-
     through displays no longer need to reconstruct it after the fact.
+
+    When `storefront_authoritative=True` and `sf_hit=None`, this row exists
+    in the merchant catalogue but not on the public storefront. The shopper
+    cannot see any merchant-side sale, so we drop `merchant_sale_price` and
+    treat `merchant_list_price` (fall-back: `merchant_price`) as the sole
+    effective price. Basis tags this branch so operators can audit the drift.
     """
     if sf_hit:
         shelf, list_price = sf_hit
@@ -2609,6 +2627,23 @@ def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
     # we have (equal to the sale on on-sale items — the same info we had
     # before the argument existed, no regression).
     list_p = _price_amount(merchant_list_price) if merchant_list_price is not None else price
+
+    # iter73i — storefront ran, this SKU isn't on it: the merchant sale is
+    # invisible to the shopper. Anchor on the LIST price only.
+    if storefront_authoritative:
+        # Effective price = list_price (fall back to merchant_price when the
+        # merchant didn't distinguish list vs sale).
+        eff = list_p if list_p > 0 else price
+        if is_taxable is False:
+            return (round(eff, 2),
+                    None,
+                    round(eff, 2),
+                    "merchant_hidden_non_taxable")
+        mult = 1 + KSA_VAT_RATE
+        return (round(eff * mult, 2),
+                None,
+                round(eff * mult, 2),
+                "merchant_hidden_from_storefront_inc_vat")
 
     if is_taxable is False:
         return (round(price, 2),
@@ -2767,7 +2802,17 @@ async def sync_own_store_prices(db, store=None):
     # iter54 — resolved own price per RAW sku, shared with the snapshot writer
     own_resolved_price = {}
     basis_counts = {"storefront_inc_vat": 0, "merchant_computed_inc_vat": 0,
-                    "merchant_non_taxable": 0, "merchant_assumed_inc_vat": 0}
+                    "merchant_non_taxable": 0, "merchant_assumed_inc_vat": 0,
+                    "merchant_hidden_from_storefront_inc_vat": 0,
+                    "merchant_hidden_non_taxable": 0}
+    # iter73i — the storefront index is AUTHORITATIVE when it fetched
+    # successfully and produced any keyed entry. A SKU missing from an
+    # authoritative index means the shopper never sees any merchant-side
+    # sale on that product (see resolve_own_price for the rationale).
+    storefront_authoritative = bool(
+        sf_index.get("by_sku") or sf_index.get("by_barcode")
+        or sf_index.get("by_id")
+    )
 
     # ── Pre-build lookup tables of my_products by barcode + SKU ──
     my_by_sku, my_by_barcode = {}, {}
@@ -2802,12 +2847,15 @@ async def sync_own_store_prices(db, store=None):
             # iter46 — two-tier basis: storefront shelf price when the product
             # is listed, else the Merchant price grossed up ONLY when Zid says
             # the product is taxable.
+            # iter73i — plumb storefront_authoritative so hidden-SKU rows
+            # anchor on the LIST price only (the phantom-sale fix).
             price_v, sale_v, orig_v, price_basis = resolve_own_price(
                 sf_hit,
                 merchant_price=raw.get("price"),
                 merchant_sale_price=raw.get("sale_price"),
                 merchant_list_price=raw.get("list_price"),
                 is_taxable=raw.get("is_taxable"),
+                storefront_authoritative=storefront_authoritative,
             )
             norm = {
                 "sku": raw.get("sku") or "",
