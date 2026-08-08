@@ -2365,7 +2365,11 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
                 if mp_barcode:
                     row["barcode"] = mp_barcode
 
-                my_price = mp_doc.get("sale_price") or mp_doc.get("price")
+                # iter73i — read-side heal: use `_effective_own_price` so
+                # merchant phantom-sales the storefront never confirmed do
+                # not leak below the shopper-facing shelf price.
+                _eff = _effective_own_price(mp_doc)
+                my_price = _eff if _eff > 0 else None
                 my_qty = mp_doc.get("quantity")
                 my_in_stock = mp_doc.get("in_stock")
 
@@ -2498,7 +2502,9 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
             # the my_products row directly. Competitors come from matched snapshots.
             if own_store_id and p["sku"] in my_skus_set:
                 mp_row = my_price_lookup.get(p["sku"]) or {}
-                own_price = mp_row.get("sale_price") or mp_row.get("price")
+                # iter73i — phantom-sale heal (see _effective_own_price)
+                _own_eff = _effective_own_price(mp_row)
+                own_price = _own_eff if _own_eff > 0 else None
                 if own_price:
                     seller_prices = [{
                         "store_id": own_store_id,
@@ -2972,9 +2978,12 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
     own_store_id = own_store_doc.get("id") if own_store_doc else None
     seller_list = list(store_prices)
     if own_store_id:
-        my_row = await db.my_products.find_one({"sku": sku}, {"_id": 0, "price": 1, "sale_price": 1, "last_synced_at": 1})
-        my_price_val = (my_row or {}).get("sale_price") or (my_row or {}).get("price")
-        if my_row and isinstance(my_price_val, (int, float)) and my_price_val > 0:
+        my_row = await db.my_products.find_one({"sku": sku}, {"_id": 0, "price": 1, "sale_price": 1,
+                                                              "original_price": 1, "price_basis": 1,
+                                                              "last_synced_at": 1})
+        # iter73i — phantom-sale heal (see _effective_own_price)
+        my_price_val = _effective_own_price(my_row)
+        if my_row and my_price_val > 0:
             # drop any own-store snapshot entry; the my_products row replaces it
             seller_list = [sp for sp in seller_list if sp.get("store_id") != own_store_id]
             seller_list.append({
@@ -3653,7 +3662,9 @@ async def _compute_market_position_summary(db):
             now_ts = datetime.now(timezone.utc)
             for sku in my_skus:
                 mp_row = my_price_lookup.get(sku) or {}
-                my_price = mp_row.get("sale_price") or mp_row.get("price")
+                # iter73i — phantom-sale heal (see _effective_own_price)
+                _eff = _effective_own_price(mp_row)
+                my_price = _eff if _eff > 0 else None
                 if not my_price:
                     continue
                 seller_prices = [{
@@ -5053,7 +5064,8 @@ async def auto_generate_alerts(user=Depends(get_user)):
         mp = my_products.get(my_sku)
         if not mp:
             continue
-        my_price = float(mp.get("sale_price") or mp.get("price") or 0)
+        # iter73i — phantom-sale heal (see _effective_own_price)
+        my_price = _effective_own_price(mp)
         if my_price <= 0:
             continue
         cheapest = min(ms, key=lambda x: x["competitor_price"])
@@ -6237,6 +6249,58 @@ def _live_match_price(m, resolved):
     return float(sn["price"]), sn.get("in_stock"), sn.get("crawled_at")
 
 
+# iter73i — read-side phantom-sale heal (Aug 3 2026). The Zid Merchant API
+# routinely reports a `sale_price` that is NEVER active on the public
+# storefront (scheduled promo, archived draft, unpublished variant). Trusting
+# that phantom means Daleel renders my_price BELOW what the shopper actually
+# pays on the storefront — the client-reported bug on SKU 8595602540877 (my_
+# products.price 180.17 vs storefront 237.02). The write-time fix
+# (`storefront_authoritative` on `resolve_own_price`) prevents new rows from
+# carrying the phantom; this read-time helper heals ROWS ALREADY WRITTEN by
+# earlier code so operators don't need to wait for the next sync or run the
+# backfill endpoint to see the correct price. Rule:
+#
+#   * storefront_inc_vat rows are truth — use the effective (sale_price OR
+#     price) as-is.
+#   * merchant-derived rows: whenever `original_price` is materially higher
+#     than `price` (typically list × 1.15 vs sale × 1.15), we ignore the
+#     phantom sale and return `original_price` — because the shopper on the
+#     storefront never sees the merchant sale.
+#   * pre-iter73d rows without a persisted `original_price` fall through to
+#     the effective price — no regression for older data shapes.
+def _effective_own_price(mp):
+    """Shopper-facing effective price for a my_products row (float, ≥0)."""
+    if not mp:
+        return 0.0
+    basis = mp.get("price_basis") or ""
+    try:
+        price_v = float(mp.get("price") or 0)
+    except (TypeError, ValueError):
+        price_v = 0.0
+    try:
+        sale_v = float(mp.get("sale_price") or 0)
+    except (TypeError, ValueError):
+        sale_v = 0.0
+    try:
+        orig_v = float(mp.get("original_price") or 0)
+    except (TypeError, ValueError):
+        orig_v = 0.0
+
+    # Storefront-derived rows are truth — trust the effective as-written.
+    if basis == "storefront_inc_vat":
+        return sale_v if sale_v > 0 else price_v
+
+    # Merchant-derived rows: if `original_price` was persisted and is
+    # materially above `price`, the difference is a merchant-side "sale" the
+    # storefront never confirmed. The shopper pays `original_price`.
+    # `1.005` margin absorbs 2-dp rounding drift on the VAT gross-up.
+    if orig_v > 0 and price_v > 0 and orig_v > price_v * 1.005:
+        return orig_v
+
+    # Otherwise legacy shape: fall back to the effective price as-written.
+    return sale_v if sale_v > 0 else price_v
+
+
 async def _price_intel_dashboard_compute(db):
     """Price Intelligence Dashboard — all sections."""
     now = datetime.now(timezone.utc)
@@ -6289,7 +6353,12 @@ async def _price_intel_dashboard_compute(db):
             continue
         # Own side (iter71): my_products IS the resolve_own_price output — the
         # inc-VAT basis written at sync — never any value frozen on a match doc.
-        my_price = float(mp.get("sale_price") or mp.get("price") or 0)
+        # iter73i — read-side phantom-sale heal on top: rows written by pre-
+        # iter73i code still carry the merchant sale × 1.15. `_effective_own_
+        # price` prefers `original_price` (list × 1.15) when the row's basis
+        # is merchant-derived and a distinct list price was persisted — the
+        # exact shopper-facing shelf price.
+        my_price = _effective_own_price(mp)
         my_qty = int(mp.get("quantity", 0))
         if my_price <= 0:
             continue
@@ -6390,7 +6459,8 @@ async def _price_intel_dashboard_compute(db):
         mp = my_products.get(my_sku)
         if not mp:
             continue
-        my_price = float(mp.get("sale_price") or mp.get("price") or 0)
+        # iter73i — phantom-sale heal (see _effective_own_price)
+        my_price = _effective_own_price(mp)
         if my_price <= 0:
             continue
         live = []
@@ -6508,9 +6578,11 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
     } if comp_skus else {}
 
     # iter71 — live price resolution for the cards (match docs stay identity-only)
+    # iter73i — my_price rendered on the product detail panel must also heal
+    # from the phantom-sale pattern so it matches the storefront shelf.
     now = datetime.now(timezone.utc)
     resolved_prices = await _resolve_match_prices(db, matches, now=now)
-    my_price_live = float(mp.get("sale_price") or mp.get("price") or 0)
+    my_price_live = _effective_own_price(mp)
 
     # Get price history for each matched competitor (last 90 days)
     cutoff = now - timedelta(days=90)

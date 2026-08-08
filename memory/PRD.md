@@ -41,7 +41,23 @@ Workspace-only extra kept: tests/test_iter45_regression.py (passes; not in main)
 - **Jun 2026 — Metric computation audit (report-only)**: full map of every dashboard metric → source collection / window / compute-time. Flags found: Insights price_drops random 8-25 fallback when 0; Scanner Sales(14d) column hardcoded 0; Scanner "Zero Sales" KPI actually counts gap≥25%; Discounts frontend reads `days_on_sale` but backend sends `days_on_discount` (renders undefined); Discounts+Scanner still read raw product_snapshots at request time (60s TTL only); market avg / velocity computed differently across detail panel vs scanner vs rollups.
 - **Aug 1 2026 — iter72 (PR #51) My Stock Honesty**: byte-synced server.py + MyProductsPage.jsx + SalesInsights.jsx + i18n.js + tests/test_my_stock_honesty.py. "Not in my catalog" chip, catalog-gated stock signals, no hardcoded stock constants. Full suite 423 passed/70 failed/52 errors (same known families). Caches force-recomputed. No Save to GitHub.
 - **Aug 1 2026 — iter73a Zarafa Category Discovery Fix**: `_discover_salla_category_ids` in crawlers.py (+ subcategory walker) now also matches Zarafa's `/{locale}/-/c{id}` shape (was legacy `/categories/{id}` only, hit 0 cats on Zarafa → whole store dark). Live probe confirms 88 cats now discovered + Applaws Chicken (SKU 5060122491365) captured under cat 806316219. New test file: `tests/test_zarafa_category_discovery.py` (7 tests). Root-caused only, applies to ALL Salla stores using newer theme.
-- **Aug 3 2026 — iter73i "My Advantage" phantom Zid sale_price** (client-reported: SKU 8595602540877, website 237.02 SAR, Daleel 180.17 SAR):
+- **Aug 3 2026 — iter73i (read-side) phantom-sale heal — INSTANT fix, no backfill required**:
+  * **Symptom**: user re-reported the same 180.17 vs 237.02 gap on SKU 8595602540877 in Price Intel → My Advantage AFTER iter73i (write-side) landed in preview. Reason: write-side only heals rows the NEXT sync (or backfill) rewrites; existing my_products rows in production still carry the phantom `sale_price × 1.15` from before the fix.
+  * **Fix**: NEW helper `server._effective_own_price(mp)` in server.py L6240-6296. Rule:
+    - `price_basis == "storefront_inc_vat"` → trust the effective as-written (storefront is truth).
+    - Merchant-derived rows where `original_price > price × 1.005` → return `original_price` (the phantom-sale detector: the difference is a merchant "sale" the storefront never confirmed).
+    - Otherwise fall back to legacy `sale_price OR price` (no regression for older data shapes).
+  * **Wired into 6 my_price computation sites**:
+    1. My Products page row builder (L2373)
+    2. Market position seller list (L2508)
+    3. Market position percentile loop (L3665)
+    4. Alerts generator (L5062)
+    5. Price Intel My Advantage / Full Comparison / Unverified loops (L6357, L6465)
+    6. Product detail panel `my_price_live` (L6585)
+  * Tests: NEW `tests/test_iter73i_read_side_heal.py` (20 tests: canonical repro of 237.02 heal, storefront trust, phantom detection, VAT-rounding margin, legacy row fallback, no double-heal on iter73i write-side rows, bad-input defence, structural wiring at all 5 core sites). 20/20 pass. 61/61 VAT-suite tests green overall (no regression on iter73i write-side, iter73d, iter46).
+  * **Deploy note**: fixed in preview. Once redeployed, every "phantom-sale" my_products row heals INSTANTLY at read time — no sync-wait, no backfill needed. SKU 8595602540877 will show 237.02 SAR everywhere it's referenced.
+
+- **Aug 3 2026 — iter73i (write-side) Phantom Zid sale_price fix** (client-reported: SKU 8595602540877, website 237.02 SAR, Daleel 180.17 SAR):
   * **Symptom**: Price Intel → My Advantage rendered a "my store" price 24% below the actual public shelf price on tqween.com for SKU 8595602540877.
   * **Root cause**: iter73d correctly grossed the Zid merchant `sale_price` (156.67 ex-VAT × 1.15 = 180.17). But the merchant `sale_price` is a PHANTOM — it never appears on the public storefront. The shopper actually pays 237.02 = merchant `list_price` (206.10) × 1.15. When the storefront overlay ran and priced OTHER SKUs but couldn't find THIS one, `resolve_own_price` fell into the merchant branch and grossed the invisible sale.
   * **Fix (iter73i)**:
