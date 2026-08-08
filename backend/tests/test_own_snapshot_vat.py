@@ -306,7 +306,12 @@ def test_real_run_backs_up_first_and_leaves_competitors_alone():
 
 
 def test_detail_panel_and_market_position_read_inc_vat_after_backfill():
-    """The reported symptom: our store showing 147.83 in the panel."""
+    """iter73l — the read-side heal now handles the reported symptom BEFORE
+    the backfill runs: `_build_store_prices` prefers `my_products.price`
+    (already inc-VAT since iter73d) over any stale ex-VAT snapshot. So
+    pre-backfill the panel already shows 170.0. The backfill still upgrades
+    the underlying SNAPSHOT so history + downstream aggregations agree.
+    """
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed_backfill(db)
@@ -316,7 +321,12 @@ def test_detail_panel_and_market_position_read_inc_vat_after_backfill():
 
         before = await server.get_product_full(sku=HILLS, days=30, user=SUPER)
         ours = next(sp for sp in before["store_prices"] if sp["is_own_store"])
-        assert ours["price"] == 147.83, "pre-backfill the panel shows the ex-VAT price"
+        # iter73l — the panel now shows the healed my_products.price
+        # (170.0 inc-VAT) even when the LATEST snapshot is still the stale
+        # ex-VAT 147.83 row. This is the fix for the reported symptom —
+        # the panel no longer needs to wait for a snapshot backfill.
+        assert ours["price"] == 170.0, ("iter73l heal should render "
+                                        f"my_products.price=170.0 pre-backfill, got {ours['price']!r}")
 
         orig, _ = _patch_recompute()
         try:
@@ -327,7 +337,9 @@ def test_detail_panel_and_market_position_read_inc_vat_after_backfill():
 
         after = await server.get_product_full(sku=HILLS, days=30, user=SUPER)
         ours = next(sp for sp in after["store_prices"] if sp["is_own_store"])
-        # the panel shows the LATEST snapshot, which is now inc-VAT
+        # Post-backfill, the LATEST snapshot itself is now 170.0 — the
+        # panel value is unchanged (still 170.0 via the same read-side
+        # heal or now directly from the snapshot; the two sources agree).
         assert ours["price"] == 170.0, ours
         # history is deliberately NOT rewritten — the series keeps its real shape
         hist = after["history"]["Pets Houses"]

@@ -7,9 +7,25 @@ import os
 import math
 import pytest
 import requests
+from pathlib import Path
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
-assert BASE_URL, "REACT_APP_BACKEND_URL must be set"
+
+def _resolve_base_url():
+    """Resolve preview base URL from env, then from /app/frontend/.env
+    (dev fallback), then finally from localhost. Keeps the suite runnable
+    both inside CI (env var supplied) and from a raw pytest invocation."""
+    val = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
+    if val:
+        return val
+    dotenv = Path(__file__).resolve().parents[2] / "frontend" / ".env"
+    if dotenv.exists():
+        for line in dotenv.read_text().splitlines():
+            if line.startswith("REACT_APP_BACKEND_URL="):
+                return line.split("=", 1)[1].strip().rstrip("/")
+    return "http://localhost:8001"
+
+
+BASE_URL = _resolve_base_url()
 
 EMAIL = "a.disi@taqueen.sa"
 PASSWORD = "Ahmaddc90@"
