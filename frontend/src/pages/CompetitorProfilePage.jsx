@@ -63,17 +63,51 @@ export default function CompetitorProfilePage() {
             /* iter73f — honest labels: a Salla store the platform never
                exposes sold_count for renders "Not measurable" instead of a
                misleading 0 SAR that used to contradict the Insights
-               Leaderboard's tier-aware number. */
+               Leaderboard's tier-aware number.
+               iter73s (Aug 8 2026) — Salla stores now route through the
+               tiered cascade (Tier 2.5 MEASURED ~ / Tier 3 ESTIMATE ±50%),
+               so this cell renders a small chip next to the number when
+               the value came from a non-Tier-1 source. Chip colours match
+               the Ranking's RevenueCell so operators read the same signal
+               on both surfaces. */
             val: kpis.revenue_status === "sales_data_unavailable" ? "Not measurable"
               : kpis.revenue_status === "insufficient_history" ? "Accumulating"
               : `${(kpis.est_monthly_revenue || 0).toLocaleString()} SAR`,
+            chip: kpis.revenue_basis === "estimated" ? {
+              text: `ESTIMATE ±${kpis.revenue_band_pct || 50}%`,
+              bg: "rgba(245,158,11,0.10)", color: "#F59E0B",
+              tip: `Rough estimate. Salla storefronts don't expose sold counters, so this figure is projected from Zid-store sales velocity applied to this store's catalog — accurate only to roughly ±${kpis.revenue_band_pct || 50}%.\n\nRange: ${(kpis.revenue_range_low || 0).toLocaleString()} – ${(kpis.revenue_range_high || 0).toLocaleString()} SAR.\n\nBecomes MEASURED once we have two readings of the storefront's cumulative sold-counter to diff.`,
+              testId: "kpi-revenue-chip-estimate",
+            } : kpis.revenue_basis === "measured_approx" ? {
+              text: "MEASURED ~",
+              bg: "rgba(56,189,248,0.10)", color: "#38BDF8",
+              tip: "Measured (approx.). Taken from the cumulative sold-counter Salla shows on the storefront (\"sold more than N times\"), diffed between crawls — real observed sales, not an estimate. Approximate because Salla buckets that number rather than publishing an exact unit count.",
+              testId: "kpi-revenue-chip-approx",
+            } : null,
           },
           { label: "Avg Discount Rate", val: `${kpis.avg_discount_rate}%` },
           { label: "Last Crawled", val: kpis.last_crawled ? new Date(kpis.last_crawled).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) : "-" },
         ].map((k) => (
           <div key={k.label} className="kpi-card" data-testid={`profile-kpi-${k.label}`}>
             <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">{k.label}</p>
-            <p className="text-lg font-bold tracking-tighter text-white mt-1">{k.val}</p>
+            <div className="flex items-baseline gap-1.5 mt-1 flex-wrap">
+              <p className="text-lg font-bold tracking-tighter text-white">{k.val}</p>
+              {k.chip && (
+                <span
+                  className="text-[9px] px-1 py-0.5 rounded tracking-wide font-semibold"
+                  style={{ background: k.chip.bg, color: k.chip.color }}
+                  title={k.chip.tip}
+                  data-testid={k.chip.testId}
+                >
+                  {k.chip.text}
+                </span>
+              )}
+            </div>
+            {k.chip && k.chip.text.startsWith("ESTIMATE") && kpis.revenue_range_low != null && kpis.revenue_range_high != null && (
+              <p className="text-[9px] text-[#F59E0B]/70 mt-0.5" data-testid="kpi-revenue-range">
+                range: {kpis.revenue_range_low.toLocaleString()} – {kpis.revenue_range_high.toLocaleString()} SAR
+              </p>
+            )}
           </div>
         ))}
       </div>

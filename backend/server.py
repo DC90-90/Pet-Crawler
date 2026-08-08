@@ -5458,15 +5458,146 @@ async def store_profile(store_id: str, user=Depends(get_user)):
 
     # Estimated monthly revenue: scale total_rev (over span_days) to a 30-day month
     # Avoid the old `/3` hack — that assumed exactly 90 days of perfect data
+    #
+    # iter73s (Aug 8 2026) — client confirmed Zarafa (Salla store) really
+    # sells >1M SAR/month, yet this page rendered 162.5 SAR. Root cause: for
+    # Salla stores, `_sales_pairs_from_rollups` above (Tier 1,
+    # `sku_sales_daily`) captures well under 1% of actual sales — Salla only
+    # publishes bucketed "sold X times" badges on a few bestsellers, and
+    # those buckets rarely tick over during a crawl window. The measurement
+    # exists but is not representative.
+    #
+    # Fix: for Salla stores, route through the SAME tiered cascade the
+    # Market Strength Ranking uses (Tier 2.5 MEASURED ~ badge diff → Tier 3
+    # ±50% category-velocity ESTIMATE). Zid stores keep the Tier 1 path
+    # because Zid Merchant API's sold_count is authoritative. The two
+    # surfaces (ranking + this profile) now converge to the SAME tier
+    # per-store — iter73o's alignment contract holds by construction.
+    revenue_basis = "computed"           # "computed" | "measured_approx" | "estimated" | ...
+    revenue_band_pct = None
+    revenue_range_low = None
+    revenue_range_high = None
+    _is_salla = (store.get("platform") or "").lower() == "salla"
+    if _is_salla:
+        # Reset the Tier 1 aggregates — Salla's Tier 1 signal is discarded
+        # for the KPI to avoid the sparse-measurement underestimate. The
+        # daily/weekly trend chart above still shows whichever real days
+        # DID tick over (honest per-day evidence), but the headline monthly
+        # figure comes from the cascade below.
+        total_rev = 0.0
+        total_sold = 0
+        _sales_by_sku_units = {}
+
+        # ── Tier 2.5: MEASURED ~ from Salla sold-badge diff ──────────────
+        try:
+            _sold_readings = {}
+            async for sn in db.product_snapshots.find(
+                    {"store_id": store_id,
+                     "crawled_at": {"$gte": since_90d},
+                     "sold_count_cumulative": {"$exists": True}},
+                    {"_id": 0, "sku": 1, "crawled_at": 1,
+                     "sold_count_cumulative": 1, "sold_count_capped": 1,
+                     "price": 1}).batch_size(2000):
+                _sca = sn.get("crawled_at")
+                if _sca is not None and _sca.tzinfo is None:
+                    _sca = _sca.replace(tzinfo=timezone.utc)
+                _sold_readings.setdefault(sn["sku"], []).append({
+                    "at": _sca,
+                    "value": sn.get("sold_count_cumulative"),
+                    "capped": bool(sn.get("sold_count_capped")),
+                    "price": sn.get("price"),
+                })
+            _approx_prods = []
+            for _sku, _readings in _sold_readings.items():
+                _d = salla_diff_series(_readings)
+                _lp = next((r["price"] for r in sorted(
+                    (x for x in _readings if x["at"]),
+                    key=lambda x: x["at"], reverse=True)
+                    if isinstance(r["price"], (int, float)) and r["price"] > 0), None)
+                _approx_prods.append({"sku": _sku, "units": _d["units"],
+                                      "price": _lp, "status": _d["status"]})
+            _approx_agg = salla_store_revenue_from_velocity(_approx_prods)
+        except Exception:
+            logger.exception("[Store Profile] Salla badge-diff failed for %s", store_id)
+            _approx_agg = {"usable": False, "revenue": 0.0}
+
+        if _approx_agg.get("usable") and _approx_agg.get("revenue", 0) > 0:
+            # `salla_store_revenue_from_velocity` already returns a monthly
+            # rate (see salla_sold_velocity.py — it multiplies by 30 / window).
+            total_rev = float(_approx_agg["revenue"])
+            span_days = 30            # already monthly-normalised; keep formula neutral
+            revenue_basis = "measured_approx"
+        else:
+            # ── Tier 3: ±50% ESTIMATE from category velocity ─────────────
+            try:
+                # Build velocity pools from Zid competitor measured sales
+                # in the SAME 30d window the ranking uses. Widening this
+                # window would inflate per-day velocity — keep tight.
+                _pool_since = now - timedelta(days=_RANKING_WINDOW_DAYS)
+                _pool_pairs = await _sales_pairs_from_rollups(
+                    db, _pool_since, until=now)
+                # Restrict pool to Zid stores only (measurable platforms).
+                _zid_ids = set()
+                async for s in db.stores.find(
+                        {"platform": "zid"}, {"_id": 0, "id": 1}):
+                    _zid_ids.add(s["id"])
+                _units_by = {(p["store_id"], p["sku"]): p["units"]
+                             for p in _pool_pairs if p["store_id"] in _zid_ids}
+                # Pull each Zid store's catalog (30d) to build the pool
+                # observation set — same shape ranking uses (L6238-6265).
+                _cat_by_sku = {}
+                async for p in db.products.find({}, {"_id": 0, "sku": 1, "category": 1}):
+                    _cat_by_sku[p.get("sku")] = p.get("category") or ""
+                _pool_obs = []
+                async for c in db.sku_store_coverage.find(
+                        {"last_priced_at": {"$gte": _pool_since},
+                         "store_id": {"$in": list(_zid_ids)}},
+                        {"_id": 0, "sku": 1, "store_id": 1, "last_priced_price": 1}):
+                    _pool_obs.append({
+                        "store_id": c["store_id"], "sku": c["sku"],
+                        "category": _cat_by_sku.get(c["sku"], ""),
+                        "units": _units_by.get((c["store_id"], c["sku"]), 0),
+                    })
+                _pools = salla_build_velocity_pools(_pool_obs, _RANKING_WINDOW_DAYS)
+
+                # Build THIS Salla store's priced catalog (widened to 365d
+                # per iter73l so stale-but-once-crawled stores still get an
+                # estimate — the catalog is a structural fact).
+                _catalog_floor = now - timedelta(days=365)
+                _this_catalog = []
+                async for c in db.sku_store_coverage.find(
+                        {"store_id": store_id,
+                         "last_priced_at": {"$gte": _catalog_floor}},
+                        {"_id": 0, "sku": 1, "last_priced_price": 1}):
+                    _this_catalog.append({
+                        "sku": c["sku"],
+                        "price": c.get("last_priced_price"),
+                        "category": _cat_by_sku.get(c["sku"], ""),
+                    })
+                _est, _band, _cov, _det = salla_estimate_with_band(
+                    _this_catalog, _pools, _RANKING_WINDOW_DAYS)
+            except Exception:
+                logger.exception("[Store Profile] Salla estimate failed for %s", store_id)
+                _est, _band = 0.0, 0.0
+
+            if _est and _est > 0:
+                # `_est` is per-window (30d) — the monthly figure we want.
+                # Normalize formula parity: total_rev × 30 / span_days must
+                # equal `_est`, so set span_days=30 and total_rev=_est.
+                total_rev = float(_est)
+                span_days = 30
+                revenue_basis = "estimated"
+                revenue_band_pct = float(_band)
+                revenue_range_low = round(_est * (1 - _band / 100), 2)
+                revenue_range_high = round(_est * (1 + _band / 100), 2)
+
     est_monthly_revenue = round(total_rev * 30 / max(span_days, 1), 2) if total_rev > 0 else 0
     est_daily_revenue = round(total_rev / max(span_days, 1), 2) if total_rev > 0 else 0
     est_daily_units = round(total_sold / max(span_days, 1), 1) if total_sold > 0 else 0
 
-    # iter73f — same revenue-status classification the Insights Leaderboard
-    # uses, so a Salla store with no sold-count exposure reads "Not measurable
-    # (Salla)" on the KPI card instead of a misleading `0 SAR`. Consumers of
-    # the store profile can now render tier-appropriate copy without touching
-    # a separate endpoint.
+    # iter73f + iter73s — revenue_status classification. `computed` for Zid
+    # measured, `measured_approx` / `estimated` for Salla routed rows,
+    # `sales_data_unavailable` when even the estimator produces 0.
     _has_signal = False
     try:
         _has_signal = await db.sku_store_coverage.count_documents(
@@ -5476,7 +5607,9 @@ async def store_profile(store_id: str, user=Depends(get_user)):
     except Exception:
         _has_signal = True
     if total_rev > 0:
-        revenue_status = "computed"
+        # revenue_status carries the tier so the frontend can render the
+        # right chip (ESTIMATE ±50%, MEASURED ~, or plain).
+        revenue_status = revenue_basis           # "computed" | "measured_approx" | "estimated"
     elif not _has_signal:
         revenue_status = "sales_data_unavailable"
     else:
@@ -5489,7 +5622,11 @@ async def store_profile(store_id: str, user=Depends(get_user)):
             "est_monthly_revenue": est_monthly_revenue,
             "est_daily_revenue": est_daily_revenue,
             "est_daily_sales": est_daily_units,
-            "revenue_status": revenue_status,        # iter73f
+            "revenue_status": revenue_status,        # iter73f + iter73s
+            "revenue_basis": revenue_basis,          # iter73s — "computed" | "measured_approx" | "estimated"
+            "revenue_band_pct": revenue_band_pct,    # iter73s — ±N% for ESTIMATE tier, else None
+            "revenue_range_low": revenue_range_low,  # iter73s — set only for ESTIMATE tier
+            "revenue_range_high": revenue_range_high,# iter73s — set only for ESTIMATE tier
             "data_span_days": span_days,
             "avg_discount_rate": avg_disc, "last_crawled": store.get("last_crawled_at"),
         },
@@ -6391,7 +6528,27 @@ async def _store_ranking_compute(db):
             else:
                 revenue, rev_status = None, "accumulating"
         else:
-            rev = round(revenue_by_store.get(sid, 0.0), 2)
+            # iter73s (Aug 8 2026) — for Salla competitors, `revenue_by_store`
+            # (Tier 1, `sku_sales_daily` rollup) is sparse measurement noise:
+            # Salla only publishes bucketed "sold X times" badges on a
+            # handful of bestsellers, and those badges tick over rarely, so
+            # the rollup captures well under 1% of real store revenue.
+            # Client-confirmed: Zarafa (a large Salla store) rendered 162.5
+            # SAR here while real sales are >1M SAR/month.
+            #
+            # Fix: for Salla stores, skip Tier 1 and let the cascade fall
+            # through to Tier 2.5 (`revenue_approx`, MEASURED ~ from
+            # `salla_diff_series`) or Tier 3 (`revenue_est_salla`, ±50%
+            # ESTIMATE from category velocity). Zid stores' Merchant API
+            # sold_count is authoritative — Tier 1 stays their primary
+            # source. `_ranking_revenue_value` already prefers the exact
+            # tier when present, so this is a pure suppression of the
+            # unreliable branch for one platform.
+            platform_low = (meta.get("platform") or "").lower()
+            if platform_low == "salla":
+                rev = 0.0
+            else:
+                rev = round(revenue_by_store.get(sid, 0.0), 2)
             if rev > 0:
                 revenue, rev_status = rev, "computed"
             elif not st["sold_sig"] and not st["qty_sig"]:

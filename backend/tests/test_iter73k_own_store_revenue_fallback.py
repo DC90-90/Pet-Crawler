@@ -28,10 +28,19 @@ def _ranking_source():
 
 
 def _own_revenue_block():
-    """Return just the own-store revenue branch inside `_store_ranking_compute`."""
+    """Return just the own-store revenue branch inside `_store_ranking_compute`.
+
+    iter73s (Aug 2026) introduced a Salla-suppression branch inside the
+    competitor `else:` arm, so the historic anchor
+    `else:\\n            rev = round(revenue_by_store` no longer exists
+    verbatim. The stable anchor is the `        else:` line that starts
+    the competitor branch (matches both pre-iter73s and post-iter73s
+    layouts)."""
     src = _ranking_source()
     a = src.index("# revenue column — value where measurable, explicit status where not")
-    b = src.index("else:\n            rev = round(revenue_by_store", a)
+    # Anchor: the exact `        else:` that closes the `if is_own:` branch.
+    # (Indent is 8 spaces — inside `for sid in ...:` in `_store_ranking_compute`.)
+    b = src.index("\n        else:\n", a)
     return src[a:b]
 
 
