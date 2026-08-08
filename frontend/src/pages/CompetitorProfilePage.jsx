@@ -115,10 +115,17 @@ export default function CompetitorProfilePage() {
               <div key={p.sku} className="flex items-center gap-3 py-1.5 border-b border-white/5 last:border-0" data-testid={`top-product-${i}`}>
                 <span className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#1E988E] text-white" : "bg-[#0A2728]/80/5 text-[#A1E4DB]"}`}>{i + 1}</span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-white truncate">{p.name_ar}</p>
-                  <p className="text-[10px] text-[#A1E4DB]">{p.brand} - {p.category}</p>
+                  <p className="text-xs font-medium text-white truncate">{p.name_ar || p.name_en || p.sku}</p>
+                  <p className="text-[10px] text-[#A1E4DB]">{[p.brand, p.category].filter(Boolean).join(" · ") || "—"}</p>
                 </div>
-                <span className="text-xs font-bold text-white">{p.units_sold} sold</span>
+                {/* iter73n — measured sales get the "sold" figure; catalog-fill rows carry `basis:"catalog"` and render an "in catalog" tag so the two are not confusable. */}
+                {p.basis === "catalog" ? (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#A1E4DB]/10 text-[#A1E4DB]/80" title="This product is in the store's catalog but has no measured sales in the window. Shown to fill the top-10 for stores whose platform (e.g. Salla without a sold-counter) does not expose sales.">
+                    in catalog
+                  </span>
+                ) : (
+                  <span className="text-xs font-bold text-white">{p.units_sold} sold</span>
+                )}
               </div>
             ))}
             {top_products.length === 0 && <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p>}

@@ -5298,12 +5298,78 @@ async def store_profile(store_id: str, user=Depends(get_user)):
     daily_trend = [{"date": k, "revenue": round(v, 2)} for k, v in sorted(daily_rev.items())]
 
     # Top 10 products by sales
-    top_10 = sorted(sku_sales.items(), key=lambda x: x[1], reverse=True)[:10]
+    #
+    # iter73n (Aug 3 2026) — client report: "why i see only one product in the
+    # production, and the other stores the product 100% is not correct that
+    # shown top 10 products. investigate and fix for all stores".
+    #
+    # Root cause: `sku_sales` is dense only for stores whose platform exposes a
+    # sold-counter with observed positive deltas (Zid own-store, some Zid
+    # competitors). For Salla stores that don't publish sold badges and for
+    # Zid stores whose products stayed at unchanged stock across the window,
+    # the dict has 0-3 SKUs — the "1 sold" card the client screenshotted. The
+    # `db.products` lookup silently dropped SKUs that WERE in the dict but
+    # missing a product doc (edge case: snapshot written before the products
+    # upsert landed), further shrinking the list.
+    #
+    # Fix: guarantee up to 10 rows on EVERY store profile by (1) keeping the
+    # real sales figures at the top; (2) if we still have < 10, fall back to
+    # the store's most-recently-crawled catalog rows, sorted by revenue-
+    # potential (latest price × latest observable qty) so the fallback rows
+    # are still an informative "here's what this store carries" rather than
+    # a random tail. Fallback rows carry `units_sold=0` and a `basis` tag so
+    # the UI can render them differently if desired.
     top_products = []
-    for sku, sales in top_10:
-        p = await db.products.find_one({"sku": sku}, {"_id": 0, "name_ar": 1, "name_en": 1, "category": 1, "brand": 1})
+    _seen_skus = set()
+    _top_measured = sorted(sku_sales.items(), key=lambda x: x[1], reverse=True)
+    for sku, sales in _top_measured:
+        if len(top_products) >= 10:
+            break
+        p = await db.products.find_one({"sku": sku},
+                                       {"_id": 0, "name_ar": 1, "name_en": 1, "category": 1, "brand": 1})
+        # iter73n — if products lookup fails, use the snapshot's own store_name/
+        # brand as a fallback so we don't drop the row silently.
+        if not p:
+            _fallback_snap = next((s for s in by_sku.get(sku, []) if s.get("sku") == sku), None)
+            if _fallback_snap:
+                p = {"name_ar": "", "name_en": _fallback_snap.get("store_name") or sku,
+                     "category": "", "brand": ""}
         if p:
-            top_products.append({**p, "sku": sku, "units_sold": sales})
+            top_products.append({**p, "sku": sku, "units_sold": sales,
+                                 "basis": "measured"})
+            _seen_skus.add(sku)
+
+    # iter73n — fill remaining slots with catalog rows for stores whose sales
+    # data is thin. `by_sku` was already built above from snaps_90d; ranking
+    # by (latest price × latest observable qty) approximates "revenue this
+    # product COULD generate if it sold" — a stable, non-fabricated ordering
+    # for Salla stores without sold-counters.
+    if len(top_products) < 10:
+        _catalog_score = {}
+        for sku, snaps in by_sku.items():
+            if sku in _seen_skus:
+                continue
+            snaps_sorted = sorted(snaps, key=lambda s: s.get("crawled_at") or "")
+            _latest = snaps_sorted[-1] if snaps_sorted else None
+            if not _latest:
+                continue
+            _p = _latest.get("price") or 0
+            _q = _latest.get("qty_available") or 0
+            if _p <= 0:
+                continue
+            # Products with qty > 200 are typically "unlimited stock" markers
+            # on Zid — cap the score contribution so they don't dominate.
+            _q_clip = min(_q, 200) if _q and _q > 0 else 1
+            _catalog_score[sku] = _p * _q_clip
+        for sku, _score in sorted(_catalog_score.items(), key=lambda x: x[1], reverse=True):
+            if len(top_products) >= 10:
+                break
+            p = await db.products.find_one({"sku": sku},
+                                           {"_id": 0, "name_ar": 1, "name_en": 1, "category": 1, "brand": 1})
+            if p:
+                top_products.append({**p, "sku": sku, "units_sold": 0,
+                                     "basis": "catalog"})
+                _seen_skus.add(sku)
 
     # Category distribution
     cat_count = {}
