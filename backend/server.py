@@ -5230,7 +5230,7 @@ async def store_profile(store_id: str, user=Depends(get_user)):
     ]
     latest = await db.product_snapshots.aggregate(pipeline_latest).to_list(500)
 
-    avg_disc = round(statistics.mean([l["discount_pct"] for l in latest if l["discount_pct"] > 0]) if any(l["discount_pct"] > 0 for l in latest) else 0, 1)
+    avg_disc = round(statistics.mean([l["discount_pct"] for l in latest if (l.get("discount_pct") or 0) > 0]) if any((l.get("discount_pct") or 0) > 0 for l in latest) else 0, 1)
 
     # Revenue estimation over 90 days — iter73f: read from the SAME sku_sales_
     # daily rollup the Insights Leaderboard and Market Strength Ranking use, so
@@ -5258,13 +5258,23 @@ async def store_profile(store_id: str, user=Depends(get_user)):
 
     # Per-day / per-week revenue for the trend charts — also from the rollup so
     # the chart's aggregate matches the KPI card.
+    #
+    # iter73q (Aug 8 2026) — client-reported bug: Revenue Trend (90 days) chart
+    # on every store profile rendered "No data available" even when the KPI
+    # card above it showed a positive Est. Monthly Revenue. Root cause: this
+    # loop read fields named `revenue` and `revenue_qty_drop`, but the writer
+    # at L3310-3318 emits `rev_sold` and `rev_qty`. Every `r.get(...)`
+    # returned None → `_rev_day = 0.0` → the daily/weekly buckets stayed
+    # empty → trend chart empty. Fixed by using the correct field names, with
+    # the same estimator-method preference (`rev_sold` when the day had any
+    # sold-counter delta, else `rev_qty` from qty-depletion).
     weekly_rev = {}
     daily_rev = {}
     sku_sales = dict(_sales_by_sku_units)
     async for r in db.sku_sales_daily.find(
             {"store_id": store_id, "date": {"$gte": _metric_day_str(since_90d)}},
-            {"_id": 0, "date": 1, "revenue": 1, "revenue_qty_drop": 1}).batch_size(2000):
-        _rev_day = float(r.get("revenue") or r.get("revenue_qty_drop") or 0.0)
+            {"_id": 0, "date": 1, "rev_sold": 1, "rev_qty": 1}).batch_size(2000):
+        _rev_day = float(r.get("rev_sold") or r.get("rev_qty") or 0.0)
         if _rev_day <= 0:
             continue
         _date_str = r["date"]                 # already "YYYY-MM-DD"
@@ -5281,17 +5291,37 @@ async def store_profile(store_id: str, user=Depends(get_user)):
     # matches total_rev by construction so the KPI card, weekly chart and
     # daily chart cannot disagree on any store.
 
-    # Compute the actual time span of data for accurate monthly normalization
-    if snaps_90d:
-        first_ca = snaps_90d[0]["crawled_at"]
-        last_ca = snaps_90d[-1]["crawled_at"]
-        if isinstance(first_ca, str):
-            first_ca = datetime.fromisoformat(first_ca.replace("Z", "+00:00"))
-        if isinstance(last_ca, str):
-            last_ca = datetime.fromisoformat(last_ca.replace("Z", "+00:00"))
-        span_days = max(1, (last_ca - first_ca).days)
-    else:
-        span_days = 1
+    # Compute the actual time span of data for accurate monthly normalization.
+    #
+    # iter73q (Aug 8 2026) — client-reported bug: Zarafa (4,177 products, ~90d
+    # of history) showed 1,218.75 SAR "Est. Monthly Revenue" on the profile
+    # but 162.5 SAR on the Market Strength Ranking — an exact 7.5× inflation.
+    # Root cause: `snaps_90d` above is bounded by `.to_list(50000)`; a store
+    # with more than 50K snapshots in 90d (which any large store hits: 4177
+    # products × 90 days × ≥1 crawl/day ≈ 375K) returns only the OLDEST 50K
+    # docs after the ascending sort. `snaps_90d[-1]` is then the 50000th
+    # oldest, NOT the true newest → span_days is severely underestimated →
+    # `total_rev × 30 / span_days` inflates 5-10×.
+    #
+    # Fix: derive span_days from a `$group` `$min`/`$max` aggregation over
+    # THIS store's snapshots in the 90d window — the exact shape the Market
+    # Strength Ranking uses at L6082-6094. Cheap (one grouped query on the
+    # already-indexed `(store_id, crawled_at)` compound), correct across any
+    # snapshot volume, and forces the two surfaces to always agree.
+    span_days = 1
+    async for r in db.product_snapshots.aggregate([
+        {"$match": {"store_id": store_id, "crawled_at": {"$gte": since_90d}}},
+        {"$group": {"_id": None,
+                    "first": {"$min": "$crawled_at"},
+                    "last":  {"$max": "$crawled_at"}}}
+    ]):
+        _first = r.get("first"); _last = r.get("last")
+        if _first and _last:
+            if isinstance(_first, str):
+                _first = datetime.fromisoformat(_first.replace("Z", "+00:00"))
+            if isinstance(_last, str):
+                _last = datetime.fromisoformat(_last.replace("Z", "+00:00"))
+            span_days = max(1, (_last - _first).days)
 
     # Revenue trend (weekly)
     revenue_trend = [{"week": k, "revenue": round(v, 2)} for k, v in sorted(weekly_rev.items())]
