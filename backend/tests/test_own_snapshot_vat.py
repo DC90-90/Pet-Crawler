@@ -455,7 +455,12 @@ def test_dedupe_prefers_the_inc_vat_my_products_price():
         ])
         now = server.datetime.now(server.timezone.utc)
         await db.products.insert_one({"id": "p", "sku": HILLS, "name_ar": "", "name_en": "Hills"})
-        await db.my_products.insert_one({"sku": HILLS, "price": 170.0})
+        # iter73p — seed the row with an explicit inc-VAT basis so
+        # `_effective_own_price` trusts 170.0 as-written (the intent of
+        # this test is to prove my_products WINS over the stale ex-VAT
+        # snapshot, not to exercise the legacy-basis defensive gross).
+        await db.my_products.insert_one({"sku": HILLS, "price": 170.0,
+                                          "price_basis": "storefront_inc_vat"})
         await db.product_snapshots.insert_many([
             {"id": "own", "store_id": OWN, "store_name": "Pets Houses", "sku": HILLS,
              "price": 147.83, "original_price": 147.83, "confidence_score": 99, "crawled_at": now},

@@ -6473,25 +6473,36 @@ def _live_match_price(m, resolved):
     return float(sn["price"]), sn.get("in_stock"), sn.get("crawled_at")
 
 
-# iter73i — read-side phantom-sale heal (Aug 3 2026). The Zid Merchant API
-# routinely reports a `sale_price` that is NEVER active on the public
-# storefront (scheduled promo, archived draft, unpublished variant). Trusting
-# that phantom means Daleel renders my_price BELOW what the shopper actually
-# pays on the storefront — the client-reported bug on SKU 8595602540877 (my_
-# products.price 180.17 vs storefront 237.02). The write-time fix
-# (`storefront_authoritative` on `resolve_own_price`) prevents new rows from
-# carrying the phantom; this read-time helper heals ROWS ALREADY WRITTEN by
-# earlier code so operators don't need to wait for the next sync or run the
-# backfill endpoint to see the correct price. Rule:
+# iter73i — read-side phantom-sale heal (Aug 3 2026).
+# iter73p — ALSO grosses up legacy pre-iter73d rows that carry no VAT tag
+# (Aug 3 2026). The Zid Merchant API returns prices ex-VAT. A row written
+# by pre-iter73d code with `price_basis = "merchant_unknown_tax"` or an
+# empty/None basis is EX-VAT — trusting it as-written renders the client's
+# real Saudi-retail products BELOW the shopper-facing shelf. Rule:
 #
-#   * storefront_inc_vat rows are truth — use the effective (sale_price OR
-#     price) as-is.
-#   * merchant-derived rows: whenever `original_price` is materially higher
-#     than `price` (typically list × 1.15 vs sale × 1.15), we ignore the
-#     phantom sale and return `original_price` — because the shopper on the
-#     storefront never sees the merchant sale.
-#   * pre-iter73d rows without a persisted `original_price` fall through to
-#     the effective price — no regression for older data shapes.
+#   * storefront_inc_vat rows are TRUTH — use the effective (sale OR price)
+#     as-is. The storefront is the actual shopper's view.
+#   * merchant_*_inc_vat / merchant_hidden_* / merchant_non_taxable / merchant
+#     _hidden_non_taxable rows have their VAT status EXPLICITLY tagged — trust
+#     the persisted value.
+#   * merchant-derived rows with a materially-higher `original_price` (list
+#     grossed vs sale grossed) → the phantom-sale case: return `original_price`.
+#   * LEGACY rows (basis empty/None or the retired "merchant_unknown_tax"
+#     tag) — these were written before iter73d guaranteed inc-VAT. Assume
+#     the Saudi retail default (taxable) and gross by 1.15. If the row is
+#     genuinely non-taxable, the operator must set `is_taxable=False` in
+#     Zid and re-sync; the next write will emit `merchant_non_taxable` and
+#     THIS branch will no longer touch it.
+_INC_VAT_TAGS = {
+    "storefront_inc_vat",
+    "merchant_computed_inc_vat",
+    "merchant_assumed_inc_vat",
+    "merchant_hidden_from_storefront_inc_vat",
+    "merchant_non_taxable",             # explicitly ex-VAT: trust as-written
+    "merchant_hidden_non_taxable",      # explicitly ex-VAT: trust as-written
+}
+
+
 def _effective_own_price(mp):
     """Shopper-facing effective price for a my_products row (float, ≥0)."""
     if not mp:
@@ -6514,15 +6525,21 @@ def _effective_own_price(mp):
     if basis == "storefront_inc_vat":
         return sale_v if sale_v > 0 else price_v
 
-    # Merchant-derived rows: if `original_price` was persisted and is
-    # materially above `price`, the difference is a merchant-side "sale" the
-    # storefront never confirmed. The shopper pays `original_price`.
-    # `1.005` margin absorbs 2-dp rounding drift on the VAT gross-up.
+    # Merchant-derived rows: phantom-sale heal (iter73i).
     if orig_v > 0 and price_v > 0 and orig_v > price_v * 1.005:
         return orig_v
 
-    # Otherwise legacy shape: fall back to the effective price as-written.
-    return sale_v if sale_v > 0 else price_v
+    # iter73p — LEGACY basis heal. A row with no VAT tag at all is either
+    # pre-iter73d (ex-VAT from the Zid Merchant API) or a bare/imported row
+    # of unknown provenance. Saudi retail default: taxable — gross by 1.15.
+    # Anything with a known basis (whether inc-VAT or explicitly non-taxable)
+    # is trusted as-written and never touched here.
+    effective = sale_v if sale_v > 0 else price_v
+    if effective > 0 and basis not in _INC_VAT_TAGS:
+        return round(effective * (1 + KSA_VAT_RATE), 2)
+
+    # Known-basis fallback: effective as-written.
+    return effective
 
 
 async def _price_intel_dashboard_compute(db):
@@ -7580,6 +7597,69 @@ async def _demo_subcategory_counts(db):
         key = p.get("subcategory") or p.get("category") or ""
         counts[key] = counts.get(key, 0) + 1
     return counts
+
+
+# iter73p (Aug 3 2026) — diagnostic endpoint so operators can see EXACTLY
+# what the my_products / latest_snapshot / effective_own_price computation
+# produces for a specific SKU. Used to unblock the "still showing prices
+# without VAT" investigation without needing production DB shell access.
+# Read-only. super_admin only.
+@router.get("/admin/own-sku-diagnose")
+async def own_sku_diagnose(sku: str = Query(..., min_length=1),
+                           user=Depends(get_user)):
+    """Return the raw my_products row + latest own-store snapshot + the
+    value `_effective_own_price` computes, for the given SKU. Nothing
+    written, no side effects. Use to pinpoint why a specific SKU shows
+    the "wrong" price on the My Advantage tab."""
+    if (user or {}).get("role") != "super_admin" and not is_super_admin_email((user or {}).get("email", "")):
+        raise HTTPException(403, "super_admin only")
+
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1})
+    own_id = (own or {}).get("id")
+
+    mp = await db.my_products.find_one({"sku": sku}, {"_id": 0})
+    latest_snap = None
+    if own_id:
+        _snap_cur = db.product_snapshots.find(
+            {"sku": sku, "store_id": own_id},
+            {"_id": 0, "price": 1, "sale_price": 1, "original_price": 1,
+             "discount_pct": 1, "price_basis": 1, "confidence_score": 1,
+             "source_tier": 1, "crawled_at": 1, "in_stock": 1, "qty_available": 1}
+        ).sort("crawled_at", -1).limit(1)
+        _lst = await _snap_cur.to_list(1)
+        latest_snap = _lst[0] if _lst else None
+
+    eff = _effective_own_price(mp) if mp else None
+
+    # Explain the branch we hit
+    if not mp:
+        branch = "no_my_products_row"
+    else:
+        _basis = (mp.get("price_basis") or "")
+        _price = float(mp.get("price") or 0)
+        _sale = float(mp.get("sale_price") or 0)
+        _orig = float(mp.get("original_price") or 0)
+        if _basis == "storefront_inc_vat":
+            branch = "storefront_trust_as_written"
+        elif _orig > 0 and _price > 0 and _orig > _price * 1.005:
+            branch = "phantom_sale_heal_returns_original_price"
+        elif ((_sale if _sale > 0 else _price) > 0) and _basis not in _INC_VAT_TAGS:
+            branch = "iter73p_legacy_basis_gross_up_by_1.15"
+        else:
+            branch = "known_basis_trust_as_written"
+
+    return {
+        "sku": sku,
+        "own_store": own,
+        "my_products_row": mp,
+        "latest_own_snapshot": latest_snap,
+        "computed": {
+            "effective_own_price": eff,
+            "branch_taken": branch,
+            "vat_rate": KSA_VAT_RATE,
+            "inc_vat_basis_tags": sorted(_INC_VAT_TAGS),
+        },
+    }
 
 
 @router.get("/admin/demo-cleanup")

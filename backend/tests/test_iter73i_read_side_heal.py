@@ -85,15 +85,19 @@ def test_merchant_row_original_just_above_margin_heals():
 
 # ── legacy rows without original_price ─────────────────────────────────────
 def test_legacy_row_no_original_falls_back_to_effective():
-    """Pre-iter73d rows didn't persist `original_price`. No heal → return the
-    effective (sale OR price)."""
+    """Pre-iter73d rows didn't persist `original_price` or a basis tag.
+    iter73p (Aug 3 2026) now defensively grosses these by 1.15 (Saudi
+    retail default) since trusting them ex-VAT was the source of the
+    "still showing prices without VAT" client bug on production."""
     mp = {"price": 150.0, "sale_price": 120.0}     # no original_price, no basis
-    assert eop(mp) == 120.0
+    # iter73p — legacy no-basis row → grossed by 1.15
+    assert eop(mp) == round(120.0 * 1.15, 2) == 138.0
 
 
-def test_legacy_row_no_sale_falls_back_to_price():
+def test_legacy_row_no_sale_falls_back_to_price_grossed():
+    """iter73p — bare row grosses `price` by 1.15."""
     mp = {"price": 150.0}                          # bare row
-    assert eop(mp) == 150.0
+    assert eop(mp) == round(150.0 * 1.15, 2) == 172.5
 
 
 # ── iter73i hidden branch (write-side already list-anchored) ───────────────
