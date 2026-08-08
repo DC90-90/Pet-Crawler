@@ -6055,13 +6055,69 @@ async def _store_ranking_compute(db):
     own_agg = await _own_orders_aggregate(db, sealed_start_utc, sealed_end_utc)
     own_revenue = round(own_agg["revenue"], 2) if own_agg else None
 
-    # competitor revenue from the sales rollups (leaderboard's source)
-    # iter73 Phase 2 — same sealed-KSA window; passing `until` clamps today's
-    # partial rollup out so ranked revenue is stable across page visits.
-    sales_pairs = await _sales_pairs_from_rollups(db, sealed_start_utc, until=sealed_end_utc)
+    # competitor revenue from the sales rollups
+    #
+    # iter73o (Aug 3 2026) — CRITICAL alignment fix. Prior to this change, the
+    # ranking read the SEALED 30-day KSA window while the Store Profile page
+    # read a 90-day UNSEALED window and normalized to a 30-day rate via
+    # `total_rev × 30 / span_days`. For any store whose measurable sales
+    # happened in the past few (unsealed) days, the two surfaces disagreed by
+    # 5-10× — the exact client-reported symptom on Zarafa: 162.5 SAR on the
+    # ranking vs 1,218.75 SAR on the store profile.
+    #
+    # Fix: use the SAME window and SAME formula as the store profile so the
+    # two surfaces cannot disagree. Read the 90d unsealed rollup, then per-
+    # store normalize by that store's ACTUAL data span (max 1 day floor).
+    # Own store: if the Zid orders ledger is available (sealed 30d exact),
+    # normalize the ledger too so it's directly comparable to competitors on
+    # the same "monthly rate" axis instead of a raw sealed-30-day figure.
+    since_90d = now - timedelta(days=90)
+    _sales_pairs_90d = await _sales_pairs_from_rollups(db, since_90d, until=now)
+    _rev_by_store_90d = {}
+    for p in _sales_pairs_90d:
+        _rev_by_store_90d[p["store_id"]] = _rev_by_store_90d.get(p["store_id"], 0.0) + p["revenue"]
+
+    # Per-store observation span (same shape the Store Profile uses at L5285).
+    # Aggregation is cheap — one grouped query over the 90d snapshot slice.
+    span_by_store = {}
+    async for r in db.product_snapshots.aggregate([
+        {"$match": {"crawled_at": {"$gte": since_90d}}},
+        {"$group": {"_id": "$store_id",
+                    "first": {"$min": "$crawled_at"},
+                    "last": {"$max": "$crawled_at"}}}
+    ]):
+        _first = r.get("first"); _last = r.get("last")
+        if _first and _last:
+            _span_days = max(1, (_last - _first).days)
+        else:
+            _span_days = 1
+        span_by_store[r["_id"]] = _span_days
+
+    # Normalize each store's 90d revenue to a 30-day monthly rate — the same
+    # formula the store profile uses. This is the source that populates
+    # `revenue_by_store` used downstream in the row assembly.
     revenue_by_store = {}
-    for p in sales_pairs:
-        revenue_by_store[p["store_id"]] = revenue_by_store.get(p["store_id"], 0.0) + p["revenue"]
+    for sid, total_rev in _rev_by_store_90d.items():
+        _span = span_by_store.get(sid, 30)
+        revenue_by_store[sid] = round(total_rev * 30.0 / max(_span, 1), 2)
+
+    # For the own store, iter73k still prefers the ledger; align the ledger
+    # to the SAME monthly-rate axis so competitor and own rows are
+    # side-by-side comparable (both "SAR per 30 days" now, not one raw
+    # sealed-30d ledger sum vs everyone else's monthly extrapolation).
+    if own_revenue is not None and own_store_id:
+        _own_span = span_by_store.get(own_store_id, _RANKING_WINDOW_DAYS)
+        # The ledger sum is already over `_RANKING_WINDOW_DAYS` sealed days,
+        # so its natural rate is `own_revenue / _RANKING_WINDOW_DAYS × 30`.
+        # We do NOT re-window by `_own_span` for the ledger — the sealed
+        # window is authoritative for its own data.
+        own_revenue = round(own_revenue * 30.0 / max(_RANKING_WINDOW_DAYS, 1), 2)
+
+    # Legacy 30d rollup preserved for the Salla velocity pool below — its
+    # internal math is calibrated to `_RANKING_WINDOW_DAYS`, so widening this
+    # input would mean re-scaling the pool. Kept separate from the 90d
+    # revenue-per-store extrapolation above.
+    sales_pairs = await _sales_pairs_from_rollups(db, sealed_start_utc, until=sealed_end_utc)
 
     # overlap with the user's catalog (distinct matched my_skus per store)
     overlap = {}
