@@ -2827,8 +2827,19 @@ async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS
     return kept, set(sku_keys), len(excluded)
 
 
-def _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name, now=None):
-    """Latest row per store, labelled rather than filtered."""
+def _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name, now=None,
+                        own_mp_row=None):
+    """Latest row per store, labelled rather than filtered.
+
+    iter73l (Aug 3 2026) — the own-store row previously read `price` /
+    `original_price` directly off `product_snapshots`. Snapshots written by
+    pre-iter73i code still carry the phantom-sale × VAT value (client-
+    reported bug on SKU 8595602540877 on the product detail modal: 180.17
+    SAR instead of 237.02 SAR). Heal the own-store row here by preferring
+    `_effective_own_price` against the caller-supplied my_products document
+    — same rule the Price Intel / My Products / Alerts / Market Position
+    surfaces already use. Snapshots for competitor stores stay unchanged;
+    the heal only touches the ONE row this endpoint owns editorially."""
     now = now or datetime.now(timezone.utc)
     out = []
     for sid, latest in latest_per_store(snapshots).items():
@@ -2837,15 +2848,41 @@ def _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name, now=
             d = stores_meta.get(sid, {}).get("domain")
             if d:
                 url = f"https://{d}/search?keyword={latest.get('sku') or ''}"
+        is_own = stores_meta.get(sid, {}).get("is_own_store") is True
+        # iter73l — heal the own-store row's `price` / `original_price` /
+        # `discount_pct` from my_products (which iter73i's read-side helper
+        # keeps phantom-free). The snapshot's other fields (qty, in_stock,
+        # freshness, source_tier, confidence) stay as-observed — those are
+        # not affected by the phantom-sale pattern.
+        _price = latest.get("price")
+        _orig = latest.get("original_price")
+        _disc = latest.get("discount_pct")
+        if is_own and own_mp_row:
+            _healed = _effective_own_price(own_mp_row)
+            if _healed > 0:
+                _price = _healed
+                # After the heal, the shopper-facing price IS the list; the
+                # phantom-sale strikethrough / discount % must be dropped.
+                # If my_products still carries a genuine (storefront-
+                # confirmed) sale, `_effective_own_price` returns the sale
+                # AND `original_price` remains > price — preserve the
+                # discount then.
+                _orig_mp = float(own_mp_row.get("original_price") or 0)
+                if _orig_mp > _healed + 0.009:
+                    _orig = round(_orig_mp, 2)
+                    _disc = round((1 - _healed / _orig_mp) * 100)
+                else:
+                    _orig = _healed
+                    _disc = 0
         row = {
             "store_id": sid,
             "store_name": store_id_to_name.get(sid, sid),
-            "is_own_store": stores_meta.get(sid, {}).get("is_own_store") is True,
+            "is_own_store": is_own,
             "sku": latest.get("sku"),
             "match_source": "sku" if str(latest.get("sku")) in sku_keys else "matched",
-            "price": latest.get("price"),
-            "original_price": latest.get("original_price"),
-            "discount_pct": latest.get("discount_pct"),
+            "price": _price,
+            "original_price": _orig,
+            "discount_pct": _disc,
             "qty_available": latest.get("qty_available"),
             "in_stock": latest.get("in_stock"),
             "stock_signal": get_stock_signal(latest.get("qty_available", 0), in_stock=latest.get("in_stock")),
@@ -2874,7 +2911,15 @@ async def get_product(sku: str, user=Depends(get_user)):
     stores_meta = {s["id"]: s async for s in db.stores.find(
         {"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1, "is_own_store": 1})}
     names = {s["store_id"]: s.get("store_name", s["store_id"]) for s in snaps}
-    store_prices = _build_store_prices(snaps, sku_keys, stores_meta, names)
+    # iter73l — the own-store snapshot for this SKU may still carry the
+    # phantom Zid sale × VAT (pre-iter73i writers). Hand `_build_store_prices`
+    # the my_products row so it can render the healed price on the MY PRODUCT
+    # card — same rule Price Intel already applies.
+    own_mp = await db.my_products.find_one(
+        {"sku": sku},
+        {"_id": 0, "price": 1, "sale_price": 1, "original_price": 1, "price_basis": 1},
+    )
+    store_prices = _build_store_prices(snaps, sku_keys, stores_meta, names, own_mp_row=own_mp)
 
     prices = [sp["price"] for sp in store_prices if sp["price"]]
     product["store_prices"] = store_prices
@@ -2934,7 +2979,13 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
     store_ids = list(by_store_id.keys())
     stores_meta = {s["id"]: s async for s in db.stores.find({"id": {"$in": store_ids}}, {"_id": 0, "id": 1, "domain": 1, "is_own_store": 1})}
 
-    store_prices = _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name)
+    # iter73l — heal the own-store row on the /full endpoint too so the
+    # product detail modal never shows the phantom Zid sale × VAT.
+    own_mp = await db.my_products.find_one(
+        {"sku": sku},
+        {"_id": 0, "price": 1, "sale_price": 1, "original_price": 1, "price_basis": 1},
+    )
+    store_prices = _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name, own_mp_row=own_mp)
 
     # The chart keeps the caller's `days` window — a 180-day series would be
     # unreadable — but the seller TABLE is not bounded by it. A store whose only
@@ -5993,24 +6044,50 @@ async def _store_ranking_compute(db):
     # never fed into it — the leaderboard order stays on measured strength, so a
     # +/-52% estimate cannot reorder anyone. Recomputed on every crawl with the
     # rest of the ranking, so the band tightens automatically as coverage grows.
+    #
+    # iter73l (Aug 3 2026) — the catalog window used to be `since` (30 days),
+    # so a Salla store whose crawl went stale weeks ago dropped OUT of
+    # `_prods_by_store`, was skipped by the estimate loop, and rendered "Not
+    # measurable (Salla)" (client-reported: Lana Pets on the ranking). The
+    # catalog is a STRUCTURAL fact about the store — knowing it carried a set
+    # of SKUs 45 days ago does not fabricate any sales, because velocity
+    # (`_pools`) still comes only from the 30d sales_pairs. Split into two
+    # dicts so the velocity POOL stays 30d-tight (any wider would let a stale
+    # Zid store's units=0 rows drag the category mean down) while the SALLA
+    # store CATALOG spans 365d — enough to cover any store that has ever been
+    # crawled at least once in the past year.
+    _catalog_floor = now - timedelta(days=365)
     est_by_store = {}
     try:
         _cat_by_sku = {}
         async for p in db.products.find({}, {"_id": 0, "sku": 1, "category": 1}):
             _cat_by_sku[p.get("sku")] = p.get("category") or ""
-        _prods_by_store = {}
+        _prods_by_store_30d = {}          # velocity pool input — must stay tight
+        _prods_by_store_365d = {}         # Salla estimate catalog — widened
         async for c in db.sku_store_coverage.find(
-                {"last_priced_at": {"$gte": since}},
-                {"_id": 0, "sku": 1, "store_id": 1, "last_priced_price": 1}):
-            _prods_by_store.setdefault(c["store_id"], []).append({
-                "sku": c["sku"], "price": c.get("last_priced_price"),
-                "category": _cat_by_sku.get(c["sku"], "")})
+                {"last_priced_at": {"$gte": _catalog_floor}},
+                {"_id": 0, "sku": 1, "store_id": 1, "last_priced_price": 1, "last_priced_at": 1}):
+            _entry = {"sku": c["sku"], "price": c.get("last_priced_price"),
+                      "category": _cat_by_sku.get(c["sku"], "")}
+            _prods_by_store_365d.setdefault(c["store_id"], []).append(_entry)
+            # Coerce naive → UTC-aware for the Python-side 30d comparison;
+            # some older seed data (and test fixtures) stored naive timestamps.
+            _lpa = c.get("last_priced_at")
+            if _lpa is not None:
+                if _lpa.tzinfo is None:
+                    _lpa = _lpa.replace(tzinfo=timezone.utc)
+                if _lpa >= since:
+                    _prods_by_store_30d.setdefault(c["store_id"], []).append(_entry)
         _units_by = {(p["store_id"], p["sku"]): p["units"] for p in sales_pairs}
         _measurable = {sid for sid, s in stores_meta.items()
                        if (s.get("platform") or "").lower() == "zid"}
+        # iter73l — velocity pool input MUST stay 30d-tight (see the split
+        # note above). `_prods_by_store_30d` is scoped to the same window
+        # `_units_by` was built from, so a Zid store's units=0 rows only
+        # enter the pool when they correspond to actively-crawled products.
         _obs = [{"store_id": sid, "sku": pr["sku"], "category": pr["category"],
                  "units": _units_by.get((sid, pr["sku"]), 0)}      # 0 = real non-mover
-                for sid in _measurable for pr in _prods_by_store.get(sid, [])]
+                for sid in _measurable for pr in _prods_by_store_30d.get(sid, [])]
         # iter62 — the OWN store must not contribute to the velocity pool.
         # `_units_by` is built from the competitor sales rollups, which by
         # construction carry no rows for our own store, so every own product
@@ -6039,8 +6116,14 @@ async def _store_ranking_compute(db):
             # can diff gets a real number instead.
             if sid in approx_by_store:
                 continue
+            # iter73l — Salla estimate reads the WIDE (365d) catalog so
+            # stale-but-once-crawled stores like Lana Pets no longer fall
+            # through to "Not measurable". Velocity `_pools` is still 30d-
+            # tight, so this widening never fabricates a sales figure — it
+            # only ensures the estimate multiplies against the ACTUAL
+            # products the store carried, however long ago we saw them.
             est, band, cov, detail = salla_estimate_with_band(
-                _prods_by_store.get(sid) or [], _pools, _RANKING_WINDOW_DAYS)
+                _prods_by_store_365d.get(sid) or [], _pools, _RANKING_WINDOW_DAYS)
             if est > 0:
                 # ONE FIXED band for every store. Coverage (`cov`) is computed
                 # but deliberately NOT published here: a coverage-derived band
