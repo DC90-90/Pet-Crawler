@@ -5401,13 +5401,46 @@ async def store_profile(store_id: str, user=Depends(get_user)):
                                      "basis": "catalog"})
                 _seen_skus.add(sku)
 
-    # Category distribution
-    cat_count = {}
-    for l in latest:
-        p = await db.products.find_one({"sku": l["_id"]}, {"_id": 0, "category": 1})
-        if p:
-            cat_count[p["category"]] = cat_count.get(p["category"], 0) + 1
-    category_dist = [{"category": k, "count": v} for k, v in sorted(cat_count.items(), key=lambda x: x[1], reverse=True)]
+    # Category distribution — iter73r (Aug 8 2026)
+    #
+    # Client report (production): "Category Distribution is totally wrong, the
+    # Category Distribution should reflect the real and actual sold items, it
+    # should not display a fabricated numbers." Screenshot showed Zarafa with a
+    # 39% cat_food / 26% accessories / etc. pie — the CATALOG composition
+    # (unique SKUs per category), NOT the SALES composition. A store that
+    # STOCKS 39% cat food but SELLS 5% cat food renders the same pie either
+    # way, so the operator can't tell what categories actually drive sales.
+    #
+    # Fix: aggregate `sku_sales` (units_sold per SKU, MEASURED from
+    # `sku_sales_daily` rollup — same source as the KPI + trend chart) by
+    # category via a single bulk `products.find({sku: $in: [...]})` lookup.
+    # When there are no measured sales, return an empty list — the frontend
+    # renders an honest "No sales data" state instead of the fabricated
+    # catalog pie. Kept the `count` field name for backwards compatibility
+    # with the frontend chart (`dataKey="count"`); added `basis` so the FE
+    # can label the pie as "Sales by category (units sold)".
+    category_dist = []
+    if sku_sales:
+        _cat_by_sku = {}
+        _sold_skus = list(sku_sales.keys())
+        # Bulk lookup — one round-trip instead of one query per SKU.
+        async for p in db.products.find({"sku": {"$in": _sold_skus}},
+                                        {"_id": 0, "sku": 1, "category": 1}):
+            _cat = (p.get("category") or "").strip()
+            if _cat:
+                _cat_by_sku[p["sku"]] = _cat
+        cat_units = {}
+        for sku, units in sku_sales.items():
+            if units <= 0:
+                continue
+            _cat = _cat_by_sku.get(sku)
+            if not _cat:
+                continue
+            cat_units[_cat] = cat_units.get(_cat, 0) + int(units)
+        category_dist = [
+            {"category": k, "count": v, "basis": "units_sold"}
+            for k, v in sorted(cat_units.items(), key=lambda x: x[1], reverse=True)
+        ]
 
     # New arrivals last 7 days
     new_products = await db.products.find(

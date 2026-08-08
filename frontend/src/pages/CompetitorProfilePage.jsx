@@ -132,19 +132,30 @@ export default function CompetitorProfilePage() {
           </div>
         </div>
 
-        {/* Category Distribution Pie */}
-        <div className="glass-card rounded-md p-5">
-          <h3 className="text-sm font-semibold text-white mb-3">Category Distribution</h3>
+        {/* Category Distribution Pie — iter73r: units-sold-weighted, not catalog composition.
+            Backend now returns `category_distribution: [{category, count: units_sold, basis}]`.
+            Kept the `count` dataKey for chart compatibility. */}
+        <div className="glass-card rounded-md p-5" data-testid="category-distribution">
+          <h3 className="text-sm font-semibold text-white mb-1">Sales by Category</h3>
+          <p className="text-[10px] text-[#A1E4DB] opacity-70 mb-3 uppercase tracking-wider">By units sold · last 90 days</p>
           {category_distribution.length > 0 ? (
             <ResponsiveContainer width="100%" height={240}>
               <PieChart>
                 <Pie data={category_distribution} dataKey="count" nameKey="category" cx="50%" cy="50%" outerRadius={80} label={({ category, percent }) => `${category} ${(percent * 100).toFixed(0)}%`} labelLine={false}>
                   {category_distribution.map((cat) => <Cell key={cat.category} fill={PIE_COLORS[category_distribution.indexOf(cat) % PIE_COLORS.length]} />)}
                 </Pie>
-                <Tooltip contentStyle={{ background: "#104745", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#A1E4DB" }} />
+                <Tooltip
+                  formatter={(v, _n, p) => [`${v.toLocaleString()} units sold`, p.payload.category]}
+                  contentStyle={{ background: "#104745", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }}
+                  labelStyle={{ color: "#A1E4DB" }}
+                />
               </PieChart>
             </ResponsiveContainer>
-          ) : <p className="text-xs text-[#A1E4DB] py-8 text-center">{t("no_data")}</p>}
+          ) : (
+            <p className="text-xs text-[#A1E4DB] py-8 text-center" data-testid="category-distribution-empty">
+              No measured sales in the last 90 days — nothing to distribute by category yet.
+            </p>
+          )}
         </div>
       </div>
 

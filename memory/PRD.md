@@ -242,6 +242,20 @@ Workspace-only extra kept: tests/test_iter45_regression.py (passes; not in main)
 - Data-drift: test_competitor_count_union Beaphar case needs fresh 30d snapshots in DB
 - Preview DB has thin seed data (40 products, all zero-activity) — 2 iter73h live tests auto-skip; seed a handful of products with sales/brand data to fully exercise the market_share and search-by-brand assertions
 
+- **Aug 8 2026 — iter73r Store Profile: Category Distribution now reflects UNITS SOLD, not catalog composition (Aug 8 2026)**:
+  * **Client report** (production screenshot): Category Distribution pie on every store profile showed `cat_food 39% · accessories 26% · dog_food 10% · litter 10% · pet_food 6% · grooming 4% · toys 3% · healthcare 1% · fish_food 0%`. Client called it "fabricated numbers" — the pie showed the CATALOG composition (unique SKUs per category) rather than the SALES composition. A store that STOCKS 39% cat food but SELLS 5% cat food rendered the same pie either way, so the operator couldn't tell what categories actually drive sales.
+  * **Root cause**: `store_profile` at server.py L5404-5410 built `category_distribution` by iterating `latest` (one row per SKU, latest snapshot) and doing `+= 1` per category — a catalog-count pie labelled as "Category Distribution" (implying sales weight).
+  * **Fix (iter73r)** in `store_profile` (server.py L5432-5464):
+    1. Aggregate from `sku_sales` — the SAME `sku_sales_daily`-rollup-derived dict that powers the KPI card + trend chart. Guarantees the pie CANNOT disagree with the reported monthly revenue.
+    2. Single bulk `products.find({sku: $in: [...]})` lookup instead of the old per-SKU N+1 pattern.
+    3. Weight is UNITS SOLD (`cat_units[cat] += int(units)`) — no more +1 per catalog SKU.
+    4. When `sku_sales` is empty (Salla store with no sold-badge exposure), returns `[]` — the frontend renders an honest empty state, NOT the fabricated catalog pie. This is the concrete anti-fabrication contract.
+    5. Zero-unit rows and uncategorized SKUs are DROPPED (no "Unknown" bucket — same iter73h anti-fabrication principle).
+    6. Response entries carry `basis: "units_sold"` so a future audit + the FE label can be unambiguous.
+  * **Frontend** (`CompetitorProfilePage.jsx`): card title now reads "Sales by Category" with a "By units sold · last 90 days" subtitle. Tooltip shows `"N units sold"` on hover. Empty-state copy is honest: "No measured sales in the last 90 days — nothing to distribute by category yet." Chart `dataKey="count"` unchanged (backwards-compat).
+  * Tests: NEW `tests/test_iter73r_category_units_sold.py` (9 tests: marker, no per-latest iteration, sku_sales aggregation, bulk category lookup, basis tag, empty-when-no-sales, zero-unit drop, uncategorized drop, unit-weighted vs catalog-weighted divergence math). **47/47 tests pass overall** across iter73r + iter73q + iter73o + iter73f + iter73n.
+  * **Deploy note**: fixed in preview. After redeploy: every store profile's pie either shows a HONEST units-sold-weighted distribution (when the store has measured sales) or an honest empty state (when it doesn't). The 39% cat_food / 26% accessories catalog pie the client screenshotted will no longer appear.
+
 - **Aug 8 2026 — iter73q Store Profile: empty Revenue Trend chart + inflated Est. Monthly Revenue for large stores (Aug 8 2026)**:
   * **Client report** (production screenshot): (1) Ranking shows Zarafa at 162.5 SAR, but Store Profile shows 1,218.75 SAR — an exact 7.5× mismatch. (2) "Revenue Trend (90 Days)" chart on the Zarafa store profile shows "No data available" even though the KPI card above it has a positive Est. Monthly Revenue. Same issue for all large stores.
   * **Root cause A (Revenue Trend chart empty)**: `store_profile` (server.py L5259-5278) read fields `revenue` and `revenue_qty_drop` from `sku_sales_daily`, but the writer at `_recompute_store_metrics` (L3310-3318) emits `rev_sold` and `rev_qty`. Every `r.get("revenue")` returned None → `_rev_day` fell through to 0 → the daily/weekly buckets stayed empty → chart empty on EVERY store.
