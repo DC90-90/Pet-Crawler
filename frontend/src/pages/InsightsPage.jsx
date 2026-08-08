@@ -14,6 +14,7 @@ import DigestModal from "@/components/DigestModal";
 import { BarChart3, Bell, Eye } from "lucide-react";
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
+import { CardPeriod } from "@/components/CardPeriod";
 import SalesInsights from "@/components/SalesInsights";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
@@ -245,7 +246,8 @@ export default function InsightsPage() {
 
       {/* Revenue Leaderboard Chart */}
       <div className="glass-card rounded-md p-5" data-testid="revenue-leaderboard">
-        <h3 className="text-sm font-semibold text-white mb-4">{t("chart_leaderboard")}</h3>
+        <h3 className="text-sm font-semibold text-white mb-3">{t("chart_leaderboard")}</h3>
+        <CardPeriod window={days} testId="leaderboard-period" />
         {(() => {
           // Feb 2026 — split rows by revenue_status so Salla stores that can
           // never expose sold_count don't appear as visually-identical "0 bars"
@@ -297,6 +299,7 @@ export default function InsightsPage() {
         {/* Top Sellers */}
         <div className="glass-card rounded-md p-5">
           <h3 className="text-sm font-semibold text-white mb-3">{t("chart_top_sellers")}</h3>
+          <CardPeriod window={days} testId="top-sellers-period" />
           <div className="space-y-2 max-h-[300px] overflow-y-auto">
             {topSellers.slice(0, 10).map((s, i) => (
               <div key={s.sku} className="flex items-center gap-3 py-1.5 border-b border-white/5 last:border-0" data-testid={`top-seller-${i}`}>
@@ -318,6 +321,7 @@ export default function InsightsPage() {
         {/* Trending by Category */}
         <div className="glass-card rounded-md p-5">
           <h3 className="text-sm font-semibold text-white mb-3">{t("chart_trending")}</h3>
+          <CardPeriod window={days} testId="trending-period" />
           <Tabs defaultValue={trending[0]?.category || "cat_food"} className="w-full">
             <TabsList className="flex flex-wrap gap-1 bg-transparent h-auto p-0 mb-3">
               {trending.slice(0, 9).map((c) => (
@@ -351,6 +355,7 @@ export default function InsightsPage() {
         {/* Price Wars */}
         <div className="glass-card rounded-md p-5">
           <h3 className="text-sm font-semibold text-white mb-3">{t("chart_price_wars")}</h3>
+          <CardPeriod window="current" testId="price-wars-period" />
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
             {priceWars.map((w) => (
               <div key={w.sku} className="py-2 border-b border-white/5 last:border-0">
@@ -369,6 +374,7 @@ export default function InsightsPage() {
         {/* Restock Opportunities */}
         <div className="glass-card rounded-md p-5">
           <h3 className="text-sm font-semibold text-white mb-3">{t("chart_restock")}</h3>
+          <CardPeriod window="current" testId="restock-period" />
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
             {restock.map((r) => (
               <div key={r.sku} className="py-2 border-b border-white/5 last:border-0">
@@ -385,6 +391,7 @@ export default function InsightsPage() {
         {/* Product Gaps */}
         <div className="glass-card rounded-md p-5">
           <h3 className="text-sm font-semibold text-white mb-3">{t("chart_gaps")}</h3>
+          <CardPeriod window="current" testId="gaps-period" />
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
             {gaps.map((g) => (
               <div key={g.sku} className="flex items-center justify-between py-2 border-b border-white/5 last:border-0">

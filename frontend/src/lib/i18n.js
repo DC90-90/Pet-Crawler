@@ -64,6 +64,13 @@ const translations = {
     chart_price_wars: "Price Wars", chart_restock: "Restock Opportunities", chart_price_history: "Price History",
     chart_velocity: "Daily Velocity", chart_gaps: "Product Gaps",
     d7: "7D", d14: "14D", d30: "30D", d90: "90D",
+    // iter73j — per-card period label so operators always know the window
+    // a metric was measured over. `period_last_days` accepts a {n} placeholder;
+    // `period_custom_range` expects {from} and {to}; `period_current` is used
+    // on point-in-time cards (Freshness, Gaps, Price Wars, Restock).
+    period_last_days: "Last {n} days",
+    period_custom_range: "{from} → {to}",
+    period_current: "Current snapshot",
     stock_high: "HIGH", stock_medium: "MED", stock_low: "LOW", stock_oos: "OOS", stock_avail: "IN STOCK",
     search: "Search products...", all_categories: "All Categories", all_stores: "All Stores",
     no_data: "No data available", loading: "Loading...",
@@ -122,6 +129,10 @@ const translations = {
     chart_price_wars: "حروب الأسعار", chart_restock: "فرص إعادة التخزين", chart_price_history: "تاريخ الأسعار",
     chart_velocity: "السرعة اليومية", chart_gaps: "فجوات المنتجات",
     d7: "7 أيام", d14: "14 يوم", d30: "30 يوم", d90: "90 يوم",
+    // iter73j — تصنيف الفترة لكل بطاقة
+    period_last_days: "آخر {n} يوم",
+    period_custom_range: "{from} ← {to}",
+    period_current: "لحظة حالية",
     stock_high: "مرتفع", stock_medium: "متوسط", stock_low: "منخفض", stock_oos: "نفذ", stock_avail: "متوفر",
     search: "ابحث عن المنتجات...", all_categories: "جميع الفئات", all_stores: "جميع المتاجر",
     no_data: "لا توجد بيانات", loading: "جار التحميل...",

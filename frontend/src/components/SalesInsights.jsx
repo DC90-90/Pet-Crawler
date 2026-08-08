@@ -19,6 +19,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { SkuLine } from "@/components/SkuLine";
 import { MineBadge } from "@/components/MineBadge";
+import { CardPeriod } from "@/components/CardPeriod";
 
 const STOCK_TONE = {
   HIGH:   { bg: "rgba(16,185,129,0.12)",  border: "rgba(16,185,129,0.45)", color: "#10B981" },
@@ -104,6 +105,7 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
       {/* Top Brands table */}
       <div className="glass-card rounded-md p-5" data-testid="si-top-brands">
         <h3 className="text-sm font-semibold text-white mb-3">{t("si_top_brands")}</h3>
+        <CardPeriod window={days} dateFrom={dateFrom} dateTo={dateTo} testId="si-top-brands-period" />
         {topBrands.length === 0 ? (
           <p className="text-xs text-[#A1E4DB] opacity-70 py-3">{isLoading ? t("loading") : t("si_no_data")}</p>
         ) : (
@@ -143,8 +145,11 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
 
       {/* Per-product sales table with search + sort */}
       <div className="glass-card rounded-md p-5" data-testid="si-products-table">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <h3 className="text-sm font-semibold text-white">{t("sales_insights_title")}</h3>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
+          <div>
+            <h3 className="text-sm font-semibold text-white">{t("sales_insights_title")}</h3>
+            <CardPeriod window={days} dateFrom={dateFrom} dateTo={dateTo} testId="si-products-period" />
+          </div>
           <div className="flex gap-2 items-center" data-testid="si-controls">
             <Input
               type="text"

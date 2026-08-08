@@ -268,3 +268,4 @@ credentials.json
 .credentials
 state.json
 reports/
+frontend/node_modules/.cache/default-development/18.pack
