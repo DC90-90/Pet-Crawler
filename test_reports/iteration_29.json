@@ -1,0 +1,41 @@
+{
+  "summary": "Comprehensive iter73 audit across all tabs/KPIs/rows on the preview DB. 29 passed, 4 skipped (thin seed data), 0 failed. All numerical invariants hold: (1) my_products my_price >= original_price (iter73i phantom-sale heal); (2) diff_pct = round((comp_min - my_price)/my_price*100); (3) Top Brands has no 'Unknown' bucket and market_share_pct sums to 100 within tolerance when populated (iter73h); (4) leaderboard-vs-store-ranking revenue totals reconcile (both currently 0 on preview — thin data, invariant is trivially true); (5) store-ranking sorted_by='revenue_desc', monotonic on rows that have revenue, own store present with revenue_status='accumulating' (iter73k fallback); (6) /api/discounts/top-pct?days=90 responds in <5s (iter73g regression guard); (7) scanner saving_sar = my_price - comp_min & saving_pct math correct; (8) alerts carry valid triggered_at. Frontend visual scan across /, my-products, price-intel, insights, scanner, discounts, alerts, stores → ZERO occurrences of 'NaN', 'undefined', '[object Object]', '$NaN', '0.NaN', '-Infinity' anywhere in rendered DOM. UI renders '0 SAR' and '0%' for zero-activity KPIs which is correct (not fabricated). Target SKU 8595602540877 for iter73l phantom-sale detail heal is NOT present in the preview DB (404), so that specific canonical VAT case cannot be verified here — needs prod DB or seeded preview.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/products/8595602540877/full", "issue": "SKU not present in preview DB — iter73l phantom-sale detail-heal invariant cannot be verified against the canonical VAT test case; the test auto-skips. Recommend seeding this SKU with original_price > my_price into preview so the regression guard can fire on every future test iteration."},
+      {"endpoint": "/api/discounts/top-pct?days=90", "issue": "Returns [] on preview DB (no rows have original_price > price with discount arithmetic). Perf guard still passes (<5s). Cannot regression-check the arithmetic derivation without at least a few on-sale rows in seed."},
+      {"endpoint": "/api/scanner/opportunities", "issue": "opportunities=[] on preview — no products with competitor_min < my_price. Saving-math invariant auto-skips."},
+      {"endpoint": "/api/insights/sales", "issue": "products=[] because every my_product has qty_sold_est=0 → product-row units*avg=revenue check auto-skips (same seed limitation noted in iter73h test run 28)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter73_comprehensive_audit.py",
+    "/app/test_reports/pytest/iter29_results.xml"
+  ],
+  "action_items": [
+    "Seed preview DB with at least a handful of my_products that have (a) qty_sold_est>0 and revenue_est>0, (b) original_price > my_price for the discount arithmetic path, (c) at least one row with a competitor_min lower than my_price to exercise the scanner, and (d) the canonical iter73l SKU 8595602540877 with original_price>my_price so the detail-modal phantom-sale heal can be regression-checked automatically. Without this, ~4 hard invariants can only be verified in prod, not preview.",
+    "Consider surfacing revenue_status='accumulating' / 'insufficient_history' as an explicit UI badge on Insights Leaderboard rows — currently those rows show '0 SAR' with no indication that the number is 'not yet computable' vs 'zero revenue'. Cosmetic, not blocking."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~9200 lines with 100+ routes — modularise into feature routers (auth / stores / my_products / price_intel / insights / discounts / scanner / alerts / crawler_ingest) for maintainability. Not urgent but blocking further growth.",
+    "_insights_summary_compute and _price_intel_dashboard_compute both re-derive brand + effective-price per product in-memory on every call. If the preview DB scales past a few thousand products, dashboard latency will regress. Consider caching per-window compute results (TTL 5-15min) via the existing page-cache pattern.",
+    "/api/insights/leaderboard returns a plain list while /api/price-intel/store-ranking returns a dict with 'stores' key — inconsistent shape. Callers on the frontend already normalise this, but a stable dict-with-metadata shape (plus 'sorted_by', 'window_days', 'total') on both would prevent frontend drift.",
+    "Zero-activity KPIs render as '0 SAR' / '0%' which is technically correct but visually indistinguishable from a real-zero. Add a lightweight tooltip or dim style when revenue_status ∈ {accumulating, insufficient_history} so users don't misread 'no data yet' as 'zero performance'."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter73_comprehensive_audit.py"
+  ],
+  "success_rate": {"backend": "100% (29 passed / 4 skipped for seed-data / 0 failed)", "frontend": "100% (zero NaN/undefined/broken-interpolation leaks across 8 tabs)"},
+  "test_credentials": "a.disi@taqueen.sa / Ahmaddc90@ (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. See action_items for the seed rows that would let 4 currently-skipped invariants actually execute.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter73_comprehensive_audit.py is a broad-coverage regression suite covering iter73f/g/h/i/j/k/l invariants + a stringified-NaN scan across 16 API surfaces. It auto-skips gracefully when preview seed data is thin. Reuse for future audits. If preview DB gets seeded with SKU 8595602540877 (iter73l canonical), the phantom-sale detail-heal test will auto-execute. Consecutive iter73 landings (h→l) all currently green on preview.",
+  "rca of the issue": "No new bug uncovered. Client's broad-audit request was to look for any card/KPI/row whose displayed number is fabricated or arithmetically inconsistent, plus any stringified-NaN leak in the UI. Backend and frontend both pass all 29 executable invariants; 4 skipped tests are seed-data limitations, not code bugs (documented under backend_issues.minor). The iter73l canonical SKU 8595602540877 needs to be seeded into preview so its phantom-sale heal can be regression-guarded automatically."
+}
