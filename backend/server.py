@@ -6102,7 +6102,26 @@ async def _store_ranking_compute(db):
                              + _RANKING_WEIGHTS["freshness"] * fresh_score), 1)
         # revenue column — value where measurable, explicit status where not
         if is_own:
-            revenue, rev_status = own_revenue, ("ledger" if own_revenue is not None else "accumulating")
+            # iter73k (Aug 3 2026) — the client asked to display the own
+            # store's revenue "same as the other stores" on the Market
+            # Strength Ranking. Preference order:
+            #   1. Zid orders ledger (`_own_orders_aggregate`) — the EXACT
+            #      figure, when the OAuth-authenticated orders sync is live.
+            #   2. `sku_sales_daily` rollup — the SAME source every
+            #      competitor row uses. Populated from the own store's
+            #      snapshots (Zid Merchant API's cumulative sold-counter
+            #      diffed between crawls, plus qty depletion). No ±50%
+            #      estimate ever leaks in — this stays a measured figure
+            #      (basis: "computed" / "rollup"), so iter70's honesty
+            #      contract still holds.
+            #   3. None → "Accumulating" only when BOTH sources are empty.
+            _own_rollup = round(revenue_by_store.get(sid, 0.0), 2) if sid else 0.0
+            if own_revenue is not None:
+                revenue, rev_status = own_revenue, "ledger"
+            elif _own_rollup > 0:
+                revenue, rev_status = _own_rollup, "computed"
+            else:
+                revenue, rev_status = None, "accumulating"
         else:
             rev = round(revenue_by_store.get(sid, 0.0), 2)
             if rev > 0:

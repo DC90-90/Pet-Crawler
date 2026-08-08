@@ -288,7 +288,7 @@ async def _compute(db, *, own_revenue, sales_pairs):
     async def _own(_db, _since, _end=None):
         return None if own_revenue is None else {"revenue": own_revenue, "orders": 3}
 
-    async def _pairs(_db, _since, store_id=None):
+    async def _pairs(_db, _since, store_id=None, until=None):
         return sales_pairs
 
     async def _mp(_db):
