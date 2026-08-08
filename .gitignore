@@ -269,3 +269,5 @@ credentials.json
 state.json
 reports/
 frontend/node_modules/.cache/default-development/18.pack
+frontend/node_modules/.cache/default-development/24.pack
+frontend/node_modules/.cache/default-development/25.pack

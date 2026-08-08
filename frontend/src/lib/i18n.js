@@ -42,7 +42,7 @@ const translations = {
     app_name: "Daleel", app_name_ar: "دليل", subtitle: "Saudi Market Intelligence Platform",
     tagline: "Track prices, inventory, and competitors across all Saudi online stores in real-time.",
     tagline_short: "Saudi Market, Decoded",
-    nav_products: "My Products", nav_insights: "Insights", nav_scanner: "Price Scanner", nav_discounts: "Discounts", nav_alerts: "Alerts", nav_stores: "Stores", nav_import: "Import", nav_priceintel: "Price Intel", nav_login: "Login",
+    nav_products: "My Products", nav_insights: "Insights", nav_intel: "Price & Market Intel", nav_scanner: "Price Scanner", nav_discounts: "Discounts", nav_alerts: "Alerts", nav_stores: "Stores", nav_import: "Import", nav_priceintel: "Price Intel", nav_login: "Login",
     kpi_products: "Products Tracked", kpi_units_sold: "Units Sold (Est.)", kpi_revenue: "Revenue (Est.)", kpi_mkt_revenue: "Mkt. Revenue (Est.)", kpi_my_revenue: "My Revenue (Est.)", kpi_my_revenue_real: "My Revenue", kpi_orders: "orders", kpi_market_share: "Avg. Market Share", kpi_market_coverage: "Market Coverage",
     // iter26 KPI tooltips (workspace sync)
     kpi_info_label: "What is this?",
@@ -107,7 +107,7 @@ const translations = {
     app_name: "دليل", app_name_ar: "Daleel", subtitle: "منصة استخبارات السوق السعودي",
     tagline: "تتبع الأسعار والمخزون والمنافسين عبر جميع المتاجر الإلكترونية السعودية في الوقت الفعلي.",
     tagline_short: "السوق السعودي، مفكّك",
-    nav_products: "منتجاتي", nav_insights: "الرؤى", nav_scanner: "ماسح الأسعار", nav_discounts: "التخفيضات", nav_alerts: "التنبيهات", nav_stores: "المتاجر", nav_import: "استيراد", nav_priceintel: "استخبارات الأسعار", nav_login: "دخول",
+    nav_products: "منتجاتي", nav_insights: "الرؤى", nav_intel: "استخبارات الأسعار والسوق", nav_scanner: "ماسح الأسعار", nav_discounts: "التخفيضات", nav_alerts: "التنبيهات", nav_stores: "المتاجر", nav_import: "استيراد", nav_priceintel: "استخبارات الأسعار", nav_login: "دخول",
     kpi_products: "المنتجات المتتبعة", kpi_units_sold: "الوحدات المباعة (تقدير)", kpi_revenue: "الإيرادات (تقدير)", kpi_mkt_revenue: "إيرادات السوق (تقدير)", kpi_my_revenue: "إيراداتي (تقدير)", kpi_my_revenue_real: "إيراداتي", kpi_orders: "طلب", kpi_market_share: "متوسط حصة السوق", kpi_market_coverage: "تغطية بيانات السوق",
     // iter26 — تلميحات المؤشرات
     kpi_info_label: "ما هذا؟",

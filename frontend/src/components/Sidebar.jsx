@@ -1,13 +1,15 @@
 import { NavLink } from "react-router-dom";
 import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Target, Sun, Moon, ShieldCheck } from "lucide-react";
+import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck } from "lucide-react";
 import { useState, useEffect } from "react";
 
+// Feb 2026 — Insights + Price Intel merged into a single "Price & Market Intel"
+// entry. The item shows when the user has EITHER `insights` OR `price_intel`
+// in their allowed_pages (super_admin always sees it).
 const navItems = [
   { to: "/", pageKey: "my_products", icon: Package, labelKey: "nav_products", label: "Dashboard" },
-  { to: "/price-intel", pageKey: "price_intel", icon: Target, labelKey: "nav_priceintel", label: "Price Intel" },
-  { to: "/insights", pageKey: "insights", icon: BarChart3, labelKey: "nav_insights", label: "Insights" },
+  { to: "/insights", pageKeys: ["insights", "price_intel"], icon: BarChart3, labelKey: "nav_intel", label: "Price & Market Intel" },
   { to: "/scanner", pageKey: "scanner", icon: Zap, labelKey: "nav_scanner", label: "Scanner" },
   { to: "/discounts", pageKey: "discounts", icon: Percent, labelKey: "nav_discounts", label: "Discounts" },
   { to: "/alerts", pageKey: "alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },
@@ -66,7 +68,11 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 py-3 px-2 space-y-0.5">
         {navItems
-          .filter((item) => canAccessPage(user, item.pageKey))
+          .filter((item) => {
+            // Support either a single `pageKey` or a `pageKeys` array (any match).
+            if (item.pageKeys) return item.pageKeys.some((k) => canAccessPage(user, k));
+            return canAccessPage(user, item.pageKey);
+          })
           .map((item) => (
             <NavLink
               key={item.to}
