@@ -242,6 +242,16 @@ Workspace-only extra kept: tests/test_iter45_regression.py (passes; not in main)
 - Data-drift: test_competitor_count_union Beaphar case needs fresh 30d snapshots in DB
 - Preview DB has thin seed data (40 products, all zero-activity) — 2 iter73h live tests auto-skip; seed a handful of products with sales/brand data to fully exercise the market_share and search-by-brand assertions
 
+- **Aug 8 2026 — iter74 UI merge: `Price Intel` + `Insights` → unified `Price & Market Intel` tab (IntelPage.jsx)**:
+  * **Client request**: merge the two tabs, drop duplicate/low-value cards, prioritize valuable cards, ensure fast loading. Sidebar label pick: "Price & Market Intel"; KPI blend pick: My SKUs · Matched · Price Drops · Product Gaps · Avg. Confidence.
+  * **Fix**: NEW `/app/frontend/src/pages/IntelPage.jsx` (552 lines) — priority-ordered layout: KPI band → DataFreshnessBanner (rich, single source of truth) → Market Position card (unified: verdict + 4 tiles cheapest/below/above/most_expensive) → Market Strength Ranking + Store Performance side-by-side → Revenue Leaderboard → Confidence Distribution + Price Wars + Restock (3-across action row) → Top Sellers + Trending → Gaps → Operational tabs (Action / Advantages / Full / Unverified / Catalog Gaps) → Product Sales Insights table.
+  * **Data-fetch**: single `useQueries` fans out ALL 12 endpoints in parallel with React Query's 60s stale-while-revalidate cache. Only two "core" queries block initial paint; every other card renders as its own query resolves.
+  * **Wiring**: both `/insights` and `/price-intel` mount `IntelPage` (backward compat for existing bookmarks + preserves per-user allowed_pages: users with EITHER `insights` OR `price_intel` in allowed_pages reach the merged page). Sidebar collapses two entries into ONE ("Price & Market Intel"). Old `InsightsPage.jsx` and `PriceIntelPage.jsx` DELETED.
+  * **i18n**: `nav_intel` EN "Price & Market Intel" / AR "استخبارات الأسعار والسوق". Sidebar filter now supports either single `pageKey` (unchanged for other nav items) or `pageKeys` array (new — any-match grants access).
+  * **Deduped cards**: old Insights `market_position_summary` merged with PriceIntel `MarketPositionWidget`; two "Metrics as of" stamps collapsed to one; DataFreshnessBanner supersedes the inline freshness_breakdown card.
+  * **Testing**: iteration_30 report — 100% pass, 20+ acceptance criteria, 0 JS console errors, 0.51s load time, 0 NaN/undefined leaks. Both routes verified to mount `IntelPage`; sidebar shows single entry only; all 5 op-tabs render cleanly; date-range + custom range + digest modal wired correctly.
+
+
 ## Backlog
 - P0 server.py refactor into routes/ (user: do LAST)
 - P1 iter60 seller_set reconciliation (deferred from ZIP(17) sync)
