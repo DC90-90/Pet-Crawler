@@ -3768,11 +3768,16 @@ async def _compute_market_position_summary(db):
 async def _insights_leaderboard_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
-    # Get store name lookup
+    # Get store name lookup + platform-tag every store so we can route Salla
+    # rows through the SAME badge-diff cascade the Market Strength Ranking
+    # uses. Same code path → same numbers on both surfaces (iter73t contract).
     store_names = {}
+    store_platform = {}
     own_store_id = None
-    async for s in db.stores.find({}, {"_id": 0, "id": 1, "name": 1, "is_own_store": 1}):
+    async for s in db.stores.find({}, {"_id": 0, "id": 1, "name": 1,
+                                       "is_own_store": 1, "platform": 1}):
         store_names[s["id"]] = s["name"]
+        store_platform[s["id"]] = (s.get("platform") or "").lower()
         if s.get("is_own_store"):
             own_store_id = s["id"]
 
@@ -3807,6 +3812,50 @@ async def _insights_leaderboard_compute(db, days):
         acc[0] += p["units"]
         acc[1] += p["revenue"]
 
+    # iter73t (Aug 8 2026) — client-reported cross-card revenue drift.
+    # Hamtaro (Salla) rendered 134,483 SAR "MEASURED ~" on the Market
+    # Strength Ranking but 2,951,442 SAR on this Revenue Leaderboard for
+    # the same window (~22× gap). Root cause: this loop above summed
+    # `_sales_pairs_from_rollups` (Tier 1, `sku_sales_daily`) directly for
+    # every store — for Salla stores that pipeline INCLUDES capped-badge
+    # products (Salla badge stuck at "1000+" but still moving through
+    # bucket transitions), and its per-interval cap of 50 units × price
+    # produces spikes at every bucket flip. The Ranking's Tier 2.5 path
+    # (`salla_diff_series` + `salla_store_revenue_from_velocity`) EXCLUDES
+    # capped readings, skips resets, and uses a looser 5000-unit step cap.
+    # Two different code paths measuring the same phenomenon = the
+    # discrepancy the client screenshotted.
+    #
+    # Fix: for Salla stores, override `sales_by_store[sid]` with the SAME
+    # badge-diff cascade the Ranking uses. Zid stores unchanged — their
+    # Merchant API sold_count is authoritative and sku_sales_daily is the
+    # right source. Any Salla store whose badge diff isn't usable
+    # (baseline-only or all-capped) reads "sales_data_unavailable" — an
+    # honest empty state instead of a fabricated Tier 1 number.
+    salla_approx = await _salla_badge_revenue_by_store(db, since)
+    for sid in list(sales_by_store.keys()):
+        if store_platform.get(sid) == "salla":
+            agg = salla_approx.get(sid)
+            if agg and agg.get("usable"):
+                sales_by_store[sid] = [
+                    int(sum(p.get("units") or 0 for p in agg.get("_products") or [])),
+                    float(agg["revenue"]),
+                ]
+            else:
+                # Discard the misleading Tier 1 sum — Salla's Tier 1 is
+                # noise until the badge diff is usable.
+                sales_by_store[sid] = [0, 0.0]
+    # Salla stores with no rollup entries either: also blank out any Tier 1
+    # remnant if we somehow have coverage but no measurable diff.
+    for sid, plat in store_platform.items():
+        if plat == "salla" and sid not in sales_by_store:
+            agg = salla_approx.get(sid)
+            if agg and agg.get("usable"):
+                sales_by_store[sid] = [
+                    int(sum(p.get("units") or 0 for p in agg.get("_products") or [])),
+                    float(agg["revenue"]),
+                ]
+
     leaderboard = []
     for row in cov_rows:
         store_id = row["_id"] or ""
@@ -3819,8 +3868,14 @@ async def _insights_leaderboard_compute(db, days):
 
         # Classify revenue status so the UI can show an honest label for Salla
         # stores that never expose sold_count (Feb 2026 UX fix).
+        # iter73t — a Salla store now reads "measured_approx" when the badge
+        # diff was usable, matching the ranking's tier tag exactly.
+        _plat = store_platform.get(store_id, "")
         if total_rev > 0:
-            revenue_status = "computed"
+            if _plat == "salla":
+                revenue_status = "measured_approx"
+            else:
+                revenue_status = "computed"
         elif not has_sold_count_signal and not has_usable_qty_signal:
             # No raw signal exists — revenue cannot be computed now or ever
             # (typical for Salla `format=light` storefronts).
@@ -3843,6 +3898,62 @@ async def _insights_leaderboard_compute(db, days):
     # stores still appear in a stable order at the bottom.
     leaderboard.sort(key=lambda x: (-x["revenue_est"], -x["products"]))
     return leaderboard
+
+
+async def _salla_badge_revenue_by_store(db, since):
+    """iter73t — shared Salla badge-diff aggregation.
+
+    Reads product_snapshots for every store in the window that carries a
+    `sold_count_cumulative` reading, diffs consecutive USABLE (non-capped,
+    non-reset, ≤5000 step) readings via `salla_diff_series`, and returns
+    per-store aggregates from `salla_store_revenue_from_velocity`.
+
+    Same code that both `_store_ranking_compute` (Market Strength Ranking)
+    and `_insights_leaderboard_compute` (Revenue Leaderboard) call — the
+    only way to guarantee the two surfaces cannot disagree by
+    construction. Also mirrored inline in `store_profile` (iter73s Salla
+    branch) for parity there.
+
+    Returns: {store_id: agg} where `agg` is the dict returned by
+    `salla_store_revenue_from_velocity`, PLUS `_products` — the raw
+    per-sku rows so the caller can recover per-store units_sold if
+    needed. Best-effort: a failure here returns `{}` — never crashes.
+    """
+    per_store = {}
+    try:
+        _sold_series = {}
+        async for sn in db.product_snapshots.find(
+                {"crawled_at": {"$gte": since},
+                 "sold_count_cumulative": {"$exists": True}},
+                {"_id": 0, "store_id": 1, "sku": 1, "crawled_at": 1,
+                 "sold_count_cumulative": 1, "sold_count_capped": 1,
+                 "price": 1}).batch_size(2000):
+            _sold_series.setdefault((sn["store_id"], sn["sku"]), []).append({
+                "at": _aware(sn.get("crawled_at")),
+                "value": sn.get("sold_count_cumulative"),
+                "capped": bool(sn.get("sold_count_capped")),
+                "price": sn.get("price"),
+            })
+        _prods_by = {}
+        for (sid_, sku_), readings in _sold_series.items():
+            d = salla_diff_series(readings)
+            last_price = next((r["price"] for r in sorted(
+                (x for x in readings if x["at"]), key=lambda x: x["at"], reverse=True)
+                if isinstance(r["price"], (int, float)) and r["price"] > 0), None)
+            _prods_by.setdefault(sid_, []).append(
+                {"sku": sku_, "units": d["units"], "price": last_price,
+                 "status": d["status"]})
+        for sid_, prods in _prods_by.items():
+            agg = salla_store_revenue_from_velocity(prods)
+            if agg["usable"]:
+                # Keep the raw per-sku rows so `_insights_leaderboard_compute`
+                # can surface a total units_sold count alongside revenue.
+                agg["_products"] = prods
+                per_store[sid_] = agg
+    except Exception:
+        logger.exception("[Salla badge revenue] failed — surface unaffected")
+        return {}
+    return per_store
 
 async def _insights_top_sellers_compute(db, days, store_id):
     # iter34 — served from sku_sales_daily instead of an unprojected full-window
@@ -6325,41 +6436,10 @@ async def _store_ranking_compute(db):
         overlap.setdefault(m["competitor_store_id"], set()).add(m["my_sku"])
 
     # ── iter59: MEASURED-APPROX revenue from the Salla sold badge ─────────────
-    # Salla publishes a cumulative units-sold counter. Diffing it between crawls
-    # is a real observation, so these stores no longer need the estimate — but
-    # the badge is BUCKETED, so it gets its own tier rather than being passed
-    # off as exact. Best-effort: a failure here must never break the ranking.
-    approx_by_store = {}
-    try:
-        _sold_series = {}
-        async for sn in db.product_snapshots.find(
-                {"crawled_at": {"$gte": since},
-                 "sold_count_cumulative": {"$exists": True}},
-                {"_id": 0, "store_id": 1, "sku": 1, "crawled_at": 1,
-                 "sold_count_cumulative": 1, "sold_count_capped": 1,
-                 "price": 1}).batch_size(2000):
-            _sold_series.setdefault((sn["store_id"], sn["sku"]), []).append({
-                "at": _aware(sn.get("crawled_at")),
-                "value": sn.get("sold_count_cumulative"),
-                "capped": bool(sn.get("sold_count_capped")),
-                "price": sn.get("price"),
-            })
-        _per_store = {}
-        for (sid_, sku_), readings in _sold_series.items():
-            d = salla_diff_series(readings)
-            last_price = next((r["price"] for r in sorted(
-                (x for x in readings if x["at"]), key=lambda x: x["at"], reverse=True)
-                if isinstance(r["price"], (int, float)) and r["price"] > 0), None)
-            _per_store.setdefault(sid_, []).append(
-                {"sku": sku_, "units": d["units"], "price": last_price,
-                 "status": d["status"]})
-        for sid_, prods in _per_store.items():
-            agg = salla_store_revenue_from_velocity(prods)
-            if agg["usable"]:
-                approx_by_store[sid_] = agg
-    except Exception:
-        logger.exception("[Ranking] Salla sold-badge velocity failed — ranking unaffected")
-        approx_by_store = {}
+    # iter73t (Aug 8 2026) — extracted to `_salla_badge_revenue_by_store`
+    # so this surface and the Revenue Leaderboard share the SAME code path
+    # and can never disagree on any Salla store's measured figure.
+    approx_by_store = await _salla_badge_revenue_by_store(db, since)
 
     # ── iter56: estimated revenue for stores whose platform hides sold-counts ──
     # INFORMATIONAL ONLY. This is computed after `score` is already fixed and is

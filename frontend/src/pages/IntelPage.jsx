@@ -343,7 +343,13 @@ export default function IntelPage() {
         <h3 className="text-sm font-semibold text-white mb-3">{t("chart_leaderboard")}</h3>
         <CardPeriod window={days} testId="leaderboard-period" />
         {(() => {
-          const computed     = (leaderboard || []).filter((r) => r.revenue_status === "computed");
+          // iter73t (Aug 8 2026) — Salla stores now come back with
+          // `revenue_status: "measured_approx"` from the shared badge-diff
+          // helper, matching what the Market Strength Ranking reads for
+          // the same store. Include both `computed` (Zid exact) and
+          // `measured_approx` (Salla) on the chart — that's what makes
+          // this card equal the Ranking's numbers by construction.
+          const computed     = (leaderboard || []).filter((r) => r.revenue_status === "computed" || r.revenue_status === "measured_approx");
           const accumulating = (leaderboard || []).filter((r) => r.revenue_status === "insufficient_history");
           const unavailable  = (leaderboard || []).filter((r) => r.revenue_status === "sales_data_unavailable");
           return (
@@ -354,7 +360,11 @@ export default function IntelPage() {
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" horizontal={false} />
                     <XAxis type="number" tickFormatter={(v) => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v} tick={{ fontSize: 10, fill: "#A1E4DB" }} />
                     <YAxis type="category" dataKey="store" width={120} tick={{ fontSize: 11, fill: "#A1E4DB" }} />
-                    <Tooltip formatter={(v) => [`${v.toLocaleString()} SAR`, "Est. Revenue"]} contentStyle={{ background: "#104745", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#A1E4DB" }} itemStyle={{ color: "#1E988E" }} />
+                    <Tooltip formatter={(v, _n, p) => {
+                      const tag = p?.payload?.revenue_status === "measured_approx"
+                        ? " (measured ~ from Salla sold-count)" : "";
+                      return [`${v.toLocaleString()} SAR${tag}`, "Est. Revenue"];
+                    }} contentStyle={{ background: "#104745", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, fontSize: 12 }} labelStyle={{ color: "#A1E4DB" }} itemStyle={{ color: "#1E988E" }} />
                     <Bar dataKey="revenue_est" fill="#1E988E" radius={[0, 4, 4, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
