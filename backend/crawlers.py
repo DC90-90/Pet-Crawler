@@ -576,7 +576,31 @@ def _normalize_raw_product(raw, store_name):
     """Normalize a single raw product dict from any source into a standard form."""
     name_ar = raw.get("name", raw.get("title", ""))
 
-    sku_raw = raw.get("sku") or raw.get("mpn") or f"S-{store_name[:2].upper()}-{raw.get('id', uuid.uuid4().hex[:6])}"
+    # iter73u (Aug 8 2026) — client-reported: Zarafa's product "Hill's Science
+    # Plan Cat Dry Food with Chicken for Kittens / 3KG" (SKU 052742024363 on
+    # the storefront) was invisible on the product detail's "Stores Carrying"
+    # list, though Hamtaro (raw sku 52742024363 at root) matched fine. Root
+    # cause: Salla merchants who put the EAN into `skus[].sku` (variant
+    # level) leave the ROOT `sku`/`mpn` fields empty. This extractor read
+    # ONLY the root, so every such product got a synthetic `S-<store>-<id>`
+    # SKU and their snapshot's `barcode` field stayed empty (variant-level
+    # `sku` was never scanned as a barcode source either). With no barcode
+    # AND a bogus synthetic SKU, the matcher's Level-1 barcode step had
+    # nothing to intersect on and no product_matches row was ever created —
+    # `_seller_snapshots` then hid the competitor from the UI.
+    #
+    # Fix: (1) fall back to `skus[].sku` for the primary SKU field, and
+    # (2) treat a numeric `skus[].sku` as a barcode candidate (below).
+    variant_sku = ""
+    variants_scan = raw.get("skus")
+    if isinstance(variants_scan, list):
+        for _v in variants_scan:
+            if isinstance(_v, dict) and _v.get("sku"):
+                variant_sku = str(_v["sku"]).strip()
+                if variant_sku:
+                    break
+    sku_raw = (raw.get("sku") or raw.get("mpn") or variant_sku
+               or f"S-{store_name[:2].upper()}-{raw.get('id', uuid.uuid4().hex[:6])}")
 
     # Price extraction happens AFTER barcode/variant selection below (iter35):
     # when the barcode we key on comes from a skus[] variant, that variant's
@@ -658,6 +682,14 @@ def _normalize_raw_product(raw, store_name):
 
     # Barcode extraction (Feb 2026): Salla often puts valid EANs on variants
     # (raw.skus[].barcode/gtin/mpn), not on the product root. Iterate variants first.
+    #
+    # iter73u (Aug 8 2026) — also scan `skus[].sku`: many Salla merchants
+    # (Zarafa confirmed 8 Aug) use the variant's SKU field to hold the EAN
+    # itself (client stored "052742024363" as SKU). Without this, the
+    # snapshot's barcode field stays empty even when a valid GTIN is
+    # sitting one field away. `_EAN_RE.match` gates the value so a normal
+    # merchant SKU string like "HL-CAT-3KG" is never mistaken for a
+    # barcode.
     _EAN_RE = re.compile(r"^\d{8,14}$")
     barcode = ""
     from_variant = False
@@ -667,7 +699,7 @@ def _normalize_raw_product(raw, store_name):
         for v in variants:
             if not isinstance(v, dict):
                 continue
-            for key in ("barcode", "gtin", "mpn"):
+            for key in ("barcode", "gtin", "mpn", "sku"):
                 cand = str(v.get(key) or "").strip()
                 if _EAN_RE.match(cand):
                     barcode = cand
@@ -677,7 +709,7 @@ def _normalize_raw_product(raw, store_name):
             if barcode:
                 break
     if not barcode:
-        for key in ("gtin", "mpn", "barcode", "ean", "upc"):
+        for key in ("gtin", "mpn", "barcode", "ean", "upc", "sku"):
             cand = str(raw.get(key) or "").strip()
             if _EAN_RE.match(cand):
                 barcode = cand
@@ -1541,17 +1573,21 @@ def _salla_raw_barcode(raw):
     Mirrors _normalize_raw_product's candidate scan exactly (variants first,
     iter35 key order, then root) so "missing" here means "iter61 will persist
     nothing for this product".
+
+    iter73u (Aug 8 2026) — extended to also scan `sku` in both scopes,
+    matching the normalizer's new fallback so the supplement's skip logic
+    doesn't re-fetch products we already have a barcode for.
     """
     variants = raw.get("skus")
     if isinstance(variants, list):
         for v in variants:
             if not isinstance(v, dict):
                 continue
-            for key in ("barcode", "gtin", "mpn"):
+            for key in ("barcode", "gtin", "mpn", "sku"):
                 cand = str(v.get(key) or "").strip()
                 if _NUMERIC_BARCODE_RE.match(cand):
                     return cand
-    for key in ("gtin", "mpn", "barcode", "ean", "upc"):
+    for key in ("gtin", "mpn", "barcode", "ean", "upc", "sku"):
         cand = str(raw.get(key) or "").strip()
         if _NUMERIC_BARCODE_RE.match(cand):
             return cand

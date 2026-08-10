@@ -2753,6 +2753,11 @@ async def list_products(
     return {"products": products, "total": total}
 
 # ── iter60: the full seller set behind "Stores Carrying" ─────────────────────
+# iter73u — `_barcode_key_set` is used inside `_seller_snapshots` for the
+# direct-barcode / direct-SKU fallback. Imported at the top of this block
+# rather than at the historic import site 3000 lines below so the
+# dependency lives adjacent to its caller.
+from matcher import _barcode_key_set  # noqa: E402
 # The seller list used to be `product_snapshots WHERE sku == <sku> AND
 # crawled_at >= now-30d`. product_matches — the entire output of the matching
 # engine — was never read, so a competitor matched by barcode (or by any key
@@ -2775,6 +2780,19 @@ async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS
     re-checked by the pack guard.
 
     `product` supplies the hub name for the pack guard; pass None to skip it.
+
+    iter73u (Aug 8 2026) — client-reported: Zarafa carried SKU 052742024363
+    on its storefront but never appeared as a seller because no
+    `product_matches` row existed for it (variant-level SKU wasn't scanned
+    by the crawler, so `snap.barcode` was empty, so Level-1 barcode match
+    never fired). The `product_matches`-only lookup was one point of
+    failure between the client seeing a product on a competitor's site and
+    Daleel showing that store. Added a DIRECT-KEY fallback: any competitor
+    snapshot whose `sku` or `barcode` canonicalises to the same GTIN-14
+    key as `my_products.sku`/`my_products.barcode` is admitted, even
+    without a `product_matches` row. It is the SAFETY NET when the batch
+    matcher hasn't run since the last crawl (14-day window, 100K
+    aggregation cap, cron miss, etc.).
     """
     sku = str(sku)
     proj = {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}
@@ -2792,12 +2810,32 @@ async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS
     sku_keys = sorted({sku} | set(hub_skus))
     clauses = snapshot_or_clauses(sku_keys, alias_by_store)
 
+    # iter73u — direct-key fallback: canonicalise `my_products.sku` and
+    # `my_products.barcode` to their barcode key set, then also look up
+    # competitor snapshots whose `sku` OR `barcode` literally equals ANY
+    # key in the set. Bypasses `product_matches` entirely so a competitor
+    # that has never been matched (or was matched but the batch job hasn't
+    # run yet) still surfaces. Cheap: two indexed equality lookups.
+    _direct_key_clauses = []
+    try:
+        _my_bc_keys = _barcode_key_set(
+            barcodes=(product.get("barcode"),) if product else (),
+            skus=(sku,))
+        if _my_bc_keys:
+            _direct_key_clauses = [
+                {"sku": {"$in": sorted(_my_bc_keys)}},
+                {"barcode": {"$in": sorted(_my_bc_keys)}},
+            ]
+    except Exception:
+        logger.exception("[_seller_snapshots] direct-key fallback skipped for sku=%s", sku)
+
     since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
     query = {"crawled_at": {"$gte": since}}
-    if len(clauses) > 1:
-        query["$or"] = clauses
+    all_clauses = list(clauses) + _direct_key_clauses
+    if len(all_clauses) > 1:
+        query["$or"] = all_clauses
     else:
-        query.update(clauses[0])
+        query.update(all_clauses[0])
     # DESC + reverse: hitting `cap` must drop the OLDEST rows, never the newest.
     rows = await db.product_snapshots.find(query, {"_id": 0}).sort("crawled_at", -1).to_list(cap)
     rows.reverse()
@@ -5878,7 +5916,7 @@ async def trigger_digest(user=Depends(get_user)):
 
 # ── My Products Import & Price Intelligence ─────────────────
 from matcher import (match_my_product, run_matching_for_all, _is_valid_barcode,
-                     _pack_compatible, barcode_price_sane)
+                     _pack_compatible, barcode_price_sane, _barcode_key_set)
 
 # MatchActionIn moved to /app/backend/models/schemas.py (Feb 2026 refactor)
 
