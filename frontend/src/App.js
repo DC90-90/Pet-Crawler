@@ -26,6 +26,8 @@ const ScannerPage = lazy(() => import("@/pages/ScannerPage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
 const ImportPage = lazy(() => import("@/pages/ImportPage"));
 const UsersPage = lazy(() => import("@/pages/UsersPage"));
+// iter73v (Aug 8 2026) — admin-only coverage / recrawl / rematch console.
+const CoverageReportPage = lazy(() => import("@/pages/CoverageReportPage"));
 
 // Perf sprint Feb 2026 — frontend-side stale-while-revalidate cache.
 // 60s staleTime matches backend's TTL cache so refetches are correctly aligned.
@@ -160,6 +162,7 @@ function AppLayout() {
           <Route path="/stores" element={<ProtectedRoute pageKey="stores"><StoreRegistryPage /></ProtectedRoute>} />
           <Route path="/stores/:storeId" element={<ProtectedRoute pageKey="stores"><CompetitorProfilePage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute pageKey="settings"><SettingsPage /></ProtectedRoute>} />
+          <Route path="/settings/coverage" element={<ProtectedRoute pageKey="settings"><CoverageReportPage /></ProtectedRoute>} />
           <Route path="/import" element={<ProtectedRoute pageKey="import"><ImportPage /></ProtectedRoute>} />
           {/* Backward compat: `/price-intel` bookmarks land on the same merged page.
               Uses `price_intel` page key so users historically granted only that

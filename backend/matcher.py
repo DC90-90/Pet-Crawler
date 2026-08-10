@@ -427,15 +427,30 @@ async def match_my_product(db, my_product: dict, comp_snapshots: list = None, co
             c_sku = str(snap["sku"]).strip()
             if c_sku in blacklist:
                 continue
+            # iter73v (Aug 8 2026) — synthetic SKUs (crawler fallback
+            # `S-<store>-<hash>`) are internal identifiers, not real product
+            # identity. Never create a product_matches row on a synthetic
+            # competitor SKU. The variant arrays below still let the same
+            # snapshot be reached via barcode key equality when a real
+            # variant carries a valid GTIN — the fence only closes off the
+            # bogus-string identity path.
+            if c_sku.startswith("S-"):
+                continue
             c_prod = comp_products.get(c_sku, {})
             # iter61 — `snap.barcode` is the per-store observation. db.products
             # holds ONE row per SKU shared by every store (first writer wins),
             # so the snapshot is the only place a second store's barcode for the
             # same SKU string survives.
+            #
+            # iter73v — variant-aware: also feed ALL variant barcodes/skus so
+            # a product with 3 differently-barcoded variants matches on ANY of
+            # them, not only whichever the crawler picked as "primary".
             comp_barcode_candidates = _barcode_key_set(
-                barcodes=(snap.get("barcode"), c_prod.get("barcode"),
-                          c_prod.get("gtin"), c_prod.get("mpn")),
-                skus=(c_sku,))
+                barcodes=tuple(
+                    (snap.get("barcode"), c_prod.get("barcode"),
+                     c_prod.get("gtin"), c_prod.get("mpn"))
+                ) + tuple(snap.get("variant_barcodes") or ()),
+                skus=(c_sku,) + tuple(snap.get("variant_skus") or ()))
             common_barcodes = my_barcode_candidates & comp_barcode_candidates
             if not common_barcodes:
                 continue
@@ -635,6 +650,13 @@ async def _build_competitor_lookups(db, own_store_id):
             # persists it. Level 1 has no other source for a competitor's
             # barcode: db.products is shared across stores.
             "barcode": {"$first": "$barcode"},
+            # iter73v (Aug 8 2026) — variant arrays: `$first` on the sorted
+            # (desc) pipeline picks the freshest snapshot's arrays, so a
+            # product's ever-changing variant lineup always tracks the
+            # current shelf state. Empty when the crawler hasn't been
+            # re-run post-iter73v — matcher tolerates absence.
+            "variant_barcodes": {"$first": "$variant_barcodes"},
+            "variant_skus": {"$first": "$variant_skus"},
             "store_id": {"$first": "$store_id"},
             "store_name": {"$first": "$store_name"},
             "price": {"$first": "$price"},

@@ -627,9 +627,17 @@ def test_same_second_rerun_refuses_to_merge_two_backups():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed(db)
-        # pre-create a backup collection for the timestamp this run will use
-        ts = server.datetime.now(server.timezone.utc).strftime("%Y%m%d%H%M%S")
-        await db[f"store_cleanup_backup_{ts}_product_snapshots"].insert_one({"stale": True})
+        # Pre-create backup collections for both the current second AND the
+        # next second so a wall-clock tick between this compute and the one
+        # inside `server.store_cleanup` cannot make the pre-created backup
+        # miss the timestamp actually used. This test asserts the "backup
+        # already exists" abort — the actual value of ts is irrelevant, only
+        # that a collision exists.
+        now = server.datetime.now(server.timezone.utc)
+        ts_now = now.strftime("%Y%m%d%H%M%S")
+        ts_next = (now + server.timedelta(seconds=1)).strftime("%Y%m%d%H%M%S")
+        for ts in (ts_now, ts_next):
+            await db[f"store_cleanup_backup_{ts}_product_snapshots"].insert_one({"stale": True})
         orig, _ = _patch_recompute()
         try:
             await server.store_cleanup(dry_run=False, confirm_count=4, user=SUPER)
@@ -639,7 +647,8 @@ def test_same_second_rerun_refuses_to_merge_two_backups():
             assert "already exists" in e.detail["message"]
         finally:
             _unpatch(orig)
-            await db[f"store_cleanup_backup_{ts}_product_snapshots"].drop()
+            for ts in (ts_now, ts_next):
+                await db[f"store_cleanup_backup_{ts}_product_snapshots"].drop()
         assert await db.stores.count_documents({}) == 15
     asyncio.run(main())
 

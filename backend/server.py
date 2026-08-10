@@ -868,6 +868,158 @@ async def admin_update_pages(user_id: str, data: AdminUpdatePagesIn, _=Depends(r
     updated = await db.users.find_one({"_id": ObjectId(user_id)})
     return _serialize_user(updated)
 
+# ── iter73v: Coverage report + recrawl/rematch admin endpoints ──────────────
+# Client mandate: Daleel MUST show every tracked store that carries a product,
+# and we MUST be able to prove coverage per store. The three endpoints below
+# give operators: (1) a per-store audit of catalog / variant / SKU / barcode /
+# match coverage, (2) a way to trigger a fresh recrawl for a specific store,
+# and (3) a way to nuke + rebuild `product_matches` for a store when the
+# schema/logic changed.
+
+@router.get("/admin/coverage-report")
+async def admin_coverage_report(user=Depends(require_super_admin)):
+    """Per-store crawl / match coverage.
+
+    Fields per store:
+      * `products_crawled`      — distinct SKUs seen in `product_snapshots` in the last 14 days.
+      * `variants_captured`     — total variant entries across `variant_barcodes` arrays.
+      * `sku_coverage`          — % of crawled products whose primary `sku` is NOT synthetic (`S-*`).
+      * `barcode_coverage`      — % of crawled products with a non-empty `barcode` on latest snapshot.
+      * `synthetic_sku_rate`    — % of products still landing on the synthetic fallback (should trend to 0 after iter73u/v).
+      * `matched_products`      — distinct competitor SKUs that appear in a `product_matches` row.
+      * `unmatched_products`    — products in-window with no `product_matches` presence.
+      * `last_full_crawl`       — `stores.last_crawled_at`.
+    """
+    since = datetime.now(timezone.utc) - timedelta(days=14)
+    stores = await db.stores.find({}, {"_id": 0, "id": 1, "name": 1,
+                                       "platform": 1, "is_own_store": 1,
+                                       "last_crawled_at": 1}).to_list(200)
+    # Per-store aggregate over product_snapshots in the last 14 days.
+    per_store = {}
+    async for r in db.product_snapshots.aggregate([
+        {"$match": {"crawled_at": {"$gte": since}}},
+        {"$sort": {"crawled_at": -1}},
+        {"$group": {
+            "_id": {"store_id": "$store_id", "sku": "$sku"},
+            "sku": {"$first": "$sku"},
+            "barcode": {"$first": "$barcode"},
+            "variant_barcodes": {"$first": "$variant_barcodes"},
+            "store_id": {"$first": "$store_id"},
+        }},
+        {"$group": {
+            "_id": "$store_id",
+            "products_crawled": {"$sum": 1},
+            "variants_captured": {"$sum": {"$size": {"$ifNull": ["$variant_barcodes", []]}}},
+            "with_barcode": {"$sum": {"$cond": [{"$ne": ["$barcode", ""]}, 1, 0]}},
+            "synthetic_skus": {"$sum": {"$cond": [
+                {"$regexMatch": {"input": {"$ifNull": ["$sku", ""]}, "regex": "^S-"}},
+                1, 0]}},
+        }},
+    ], allowDiskUse=True):
+        per_store[r["_id"]] = r
+
+    # Matched vs unmatched — a competitor SKU is "matched" when it appears in
+    # any `product_matches` row (either side).
+    matched_by_store = {}
+    async for r in db.product_matches.aggregate([
+        {"$group": {"_id": {"store_id": "$competitor_store_id",
+                            "sku": "$competitor_sku"}}},
+        {"$group": {"_id": "$_id.store_id", "n": {"$sum": 1}}},
+    ]):
+        matched_by_store[r["_id"]] = r["n"]
+
+    rows = []
+    for s in stores:
+        sid = s["id"]
+        agg = per_store.get(sid, {})
+        products_crawled = int(agg.get("products_crawled", 0))
+        variants = int(agg.get("variants_captured", 0))
+        with_barcode = int(agg.get("with_barcode", 0))
+        synthetic = int(agg.get("synthetic_skus", 0))
+        matched = int(matched_by_store.get(sid, 0))
+        rows.append({
+            "store_id": sid,
+            "name": s.get("name"),
+            "platform": s.get("platform"),
+            "is_own_store": bool(s.get("is_own_store")),
+            "products_crawled": products_crawled,
+            "variants_captured": variants,
+            "sku_coverage_pct": round(100 * (products_crawled - synthetic) / max(products_crawled, 1), 1),
+            "barcode_coverage_pct": round(100 * with_barcode / max(products_crawled, 1), 1),
+            "synthetic_sku_rate_pct": round(100 * synthetic / max(products_crawled, 1), 1),
+            "matched_products": matched,
+            "unmatched_products": max(0, products_crawled - matched),
+            "last_full_crawl": s.get("last_crawled_at"),
+        })
+    rows.sort(key=lambda r: (-r["products_crawled"], r["name"] or ""))
+    return {"generated_at": datetime.now(timezone.utc).isoformat(),
+            "window_days": 14, "stores": rows}
+
+
+@router.post("/admin/recrawl-store/{store_id}")
+async def admin_recrawl_store(store_id: str, user=Depends(require_super_admin)):
+    """Trigger an immediate crawl for a specific store, bypassing schedule.
+
+    Kicks off in the background so the endpoint returns fast. Progress can be
+    read from the store's crawl_log via `/admin/crawl-status`. Resumable —
+    the crawler picks up wherever the last snapshot cursor left off.
+    """
+    store = await db.stores.find_one({"id": store_id}, {"_id": 0})
+    if not store:
+        raise HTTPException(404, "Store not found")
+
+    async def _run():
+        try:
+            await crawl_store_waterfall(db, store)
+        except Exception:
+            logger.exception("[Admin recrawl] failed for store %s", store_id)
+
+    asyncio.create_task(_run())
+    logger.info("[Admin] recrawl triggered for %s (%s) by %s",
+                store.get("name"), store_id, user.get("email"))
+    return {"ok": True, "store_id": store_id, "store_name": store.get("name"),
+            "status": "started"}
+
+
+class RematchIn(BaseModel):
+    store_id: Optional[str] = None      # None → all stores
+
+
+@router.post("/admin/rematch")
+async def admin_rematch(payload: RematchIn, user=Depends(require_super_admin)):
+    """Nuke + rebuild product_matches. Scoped when store_id is provided,
+    fleet-wide when it isn't.
+
+    Runs in the background so the client can poll `/admin/coverage-report`
+    afterwards. Fail-soft: a per-product exception must not stop the
+    remaining products from being re-matched (matcher already tolerates
+    this).
+    """
+    scope_desc = payload.store_id or "ALL"
+    logger.info("[Admin] rematch triggered for %s by %s", scope_desc,
+                user.get("email"))
+
+    async def _run():
+        try:
+            if payload.store_id:
+                deleted = await db.product_matches.delete_many(
+                    {"competitor_store_id": payload.store_id})
+                logger.info("[Admin rematch] purged %d rows for store %s",
+                            deleted.deleted_count, payload.store_id)
+            else:
+                deleted = await db.product_matches.delete_many({})
+                logger.info("[Admin rematch] purged %d rows fleet-wide",
+                            deleted.deleted_count)
+            await run_matching_for_all(db)
+        except Exception:
+            logger.exception("[Admin rematch] failed scope=%s", scope_desc)
+
+    asyncio.create_task(_run())
+    return {"ok": True, "scope": scope_desc, "status": "started"}
+
+
+
+
 
 @router.get("/admin/proxy-usage")
 async def admin_proxy_usage(user=Depends(get_user)):
@@ -2816,15 +2968,26 @@ async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS
     # key in the set. Bypasses `product_matches` entirely so a competitor
     # that has never been matched (or was matched but the batch job hasn't
     # run yet) still surfaces. Cheap: two indexed equality lookups.
+    #
+    # iter73v (Aug 8 2026) — extended to also query the `variant_barcodes`
+    # and `variant_skus` arrays so a product with N differently-barcoded
+    # variants is surfaced on ANY variant match, not only the primary. If
+    # `my_products.barcode` is `052742024363` and Zarafa's snapshot has
+    # that barcode inside `variant_barcodes` (but a different string in
+    # the primary `barcode`), Zarafa still appears — the whole point of
+    # the client's variant-first mandate.
     _direct_key_clauses = []
     try:
         _my_bc_keys = _barcode_key_set(
             barcodes=(product.get("barcode"),) if product else (),
             skus=(sku,))
         if _my_bc_keys:
+            _key_list = sorted(_my_bc_keys)
             _direct_key_clauses = [
-                {"sku": {"$in": sorted(_my_bc_keys)}},
-                {"barcode": {"$in": sorted(_my_bc_keys)}},
+                {"sku":              {"$in": _key_list}},
+                {"barcode":          {"$in": _key_list}},
+                {"variant_skus":     {"$in": _key_list}},
+                {"variant_barcodes": {"$in": _key_list}},
             ]
     except Exception:
         logger.exception("[_seller_snapshots] direct-key fallback skipped for sku=%s", sku)
@@ -5916,7 +6079,7 @@ async def trigger_digest(user=Depends(get_user)):
 
 # ── My Products Import & Price Intelligence ─────────────────
 from matcher import (match_my_product, run_matching_for_all, _is_valid_barcode,
-                     _pack_compatible, barcode_price_sane, _barcode_key_set)
+                     _pack_compatible, barcode_price_sane)
 
 # MatchActionIn moved to /app/backend/models/schemas.py (Feb 2026 refactor)
 

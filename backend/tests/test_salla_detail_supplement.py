@@ -110,8 +110,15 @@ def test_missing_detection_mirrors_the_normalizer():
     assert crawlers._salla_raw_barcode({"id": 2, "gtin": HILLS}) == HILLS
     assert crawlers._salla_raw_barcode(
         {"id": 3, "skus": [{"barcode": HILLS}]}) == HILLS
-    # JSON-LD style wrong number on the root sku field is NOT a barcode source
-    assert crawlers._salla_raw_barcode({"id": 4, "sku": "5274204208"}) == ""
+    # iter73u — a numeric root-level `sku` is a valid barcode candidate; Zarafa
+    # and other Salla merchants routinely store the EAN in the sku field
+    # (e.g. "052742024363"). The supplement's skip-check must mirror the
+    # normalizer's new fallback so we don't re-fetch products we already have
+    # a barcode for.
+    assert crawlers._salla_raw_barcode({"id": 4, "sku": "5274204208"}) == "5274204208"
+    # Non-numeric SKUs (merchant-internal strings) are still ignored — the
+    # _NUMERIC_BARCODE_RE gate keeps them out.
+    assert crawlers._salla_raw_barcode({"id": 5, "sku": "HL-CAT-3KG"}) == ""
 
 
 # ── the supplement pass itself ──────────────────────────────────────────────

@@ -186,17 +186,20 @@ def test_iter73u_seller_snapshots_direct_key_fallback_shape():
     suite once the crawler runs against seeded data."""
     body = (BACKEND / "server.py").read_text()
     a = body.index("async def _seller_snapshots(db, sku, product,")
-    b = body.index("    kept, excluded = [], set()", a)
+    b = body.index("    return kept, set(sku_keys), len(excluded)", a)
     seller = body[a:b]
     # Import must exist so _barcode_key_set is resolvable at call time.
     assert "_barcode_key_set" in body[:body.index("async def _seller_snapshots")], \
         "_barcode_key_set must be importable from matcher for the fallback"
     # Guard: iter73u marker present in the seller function.
     assert "iter73u" in seller
-    # New clauses computed from the client's own barcode + sku.
+    # New clauses computed from the client's own barcode + sku. The
+    # exact whitespace between `"sku":` and `{"$in":` can drift (Python
+    # formatters, iter73v alignment); accept either form.
+    import re as _re
     assert "_barcode_key_set(" in seller
-    assert '{"sku": {"$in":' in seller
-    assert '{"barcode": {"$in":' in seller
+    assert _re.search(r'\{"sku":\s*\{"\$in":', seller)
+    assert _re.search(r'\{"barcode":\s*\{"\$in":', seller)
     # Combined into the $or so pre-existing match-row lookups keep working.
     assert "_direct_key_clauses" in seller
     assert "list(clauses) + _direct_key_clauses" in seller
@@ -208,7 +211,7 @@ def test_iter73u_direct_key_fallback_is_defensive():
     match-row query path."""
     body = (BACKEND / "server.py").read_text()
     a = body.index("async def _seller_snapshots(db, sku, product,")
-    b = body.index("    kept, excluded = [], set()", a)
+    b = body.index("    return kept, set(sku_keys), len(excluded)", a)
     seller = body[a:b]
     assert "except Exception:" in seller and "direct-key fallback skipped" in seller
 

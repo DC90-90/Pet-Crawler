@@ -12,7 +12,7 @@ import asyncio
 import logging
 import itertools
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 # iter61 — one definition of barcode canonicalisation, shared with matcher.py.
 # Re-exported here so `crawlers.barcode_keys` keeps working.
@@ -498,6 +498,102 @@ async def _finalize_crawl_log(db, crawl_log, store_id):
     }})
 
 
+# ── iter73w soft-block guard ────────────────────────────────────────────────
+# A "soft block" is a server response that LOOKS like a success (HTTP 200 with
+# well-formed JSON) but carries no or drastically fewer products than the store
+# has historically returned — the classic Salla/Cloudflare signature is HTTP
+# 200 with `data: []`. Writing snapshots from a soft-blocked crawl pollutes
+# the DB with a false "we lost the catalog" event that downstream surfaces
+# (Stores Carrying, Discounts, Revenue) then treat as ground truth.
+#
+# Policy: compare the current crawl's product count to the MEDIAN of the last
+# SOFT_BLOCK_SAMPLE_SIZE successful crawls in the past SOFT_BLOCK_LOOKBACK_DAYS
+# days. If the current count is below SOFT_BLOCK_FLOOR_RATIO of that baseline
+# AND the baseline itself is above SOFT_BLOCK_MIN_BASELINE (so we never punish
+# a genuinely small catalog), refuse to persist and mark the crawl soft-blocked.
+# The previous valid snapshot cohort is preserved untouched (no delete, no
+# overwrite) — downstream reads keep serving the last known good state.
+SOFT_BLOCK_MIN_BASELINE = 50    # baseline must be ≥ this to trigger the guard
+SOFT_BLOCK_FLOOR_RATIO = 0.2    # current must be ≥ 20% of median baseline
+SOFT_BLOCK_LOOKBACK_DAYS = 30
+SOFT_BLOCK_SAMPLE_SIZE = 10     # median across last N successful crawls
+SOFT_BLOCK_MIN_SAMPLES = 3      # < 3 history samples → guard passes through
+
+
+async def _detect_soft_block(db, store, current_count, crawl_log):
+    """Return (is_soft_blocked: bool, reason: str). Always populates
+    crawl_log['soft_block'] with structured diagnostics.
+
+    A crawl is flagged soft-blocked when it produced far fewer products than
+    the store's own recent successful crawls — the signature of Salla (and
+    the fronting CDN/WAF) returning HTTP 200 with an empty or truncated
+    payload under rate-limiting. Stores without enough history (< 3 samples)
+    OR whose baseline itself is below SOFT_BLOCK_MIN_BASELINE are always
+    allowed through — the first crawl of a newly-onboarded store and small
+    catalogs must never be punished.
+
+    Fail-open: any detector error records the reason on the crawl_log and
+    returns (False, "") — a broken guard must not cost a working store its
+    snapshots.
+    """
+    diag = {"current_count": current_count, "samples": 0,
+            "baseline_median": 0, "decision": "unknown"}
+    crawl_log["soft_block"] = diag
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=SOFT_BLOCK_LOOKBACK_DAYS)
+        history = await db.crawl_logs.find(
+            {"store_id": store["id"],
+             "tier_used": {"$ne": None},
+             "products_found": {"$gt": 0},
+             "soft_blocked": {"$ne": True},
+             "completed_at": {"$gte": since.isoformat()}},
+            {"_id": 0, "products_found": 1}
+        ).sort("completed_at", -1).limit(SOFT_BLOCK_SAMPLE_SIZE).to_list(SOFT_BLOCK_SAMPLE_SIZE)
+        counts = sorted(int(h.get("products_found") or 0) for h in history)
+        diag["samples"] = len(counts)
+        if len(counts) < SOFT_BLOCK_MIN_SAMPLES:
+            diag["decision"] = "insufficient_history"
+            return False, ""
+        baseline = counts[len(counts) // 2]  # median
+        diag["baseline_median"] = baseline
+        if baseline < SOFT_BLOCK_MIN_BASELINE:
+            diag["decision"] = "baseline_below_min"
+            return False, ""
+        floor = int(baseline * SOFT_BLOCK_FLOOR_RATIO)
+        diag["floor"] = floor
+        if current_count < floor:
+            reason = (f"soft-block detected: current crawl produced {current_count} "
+                      f"products but median of last {len(counts)} crawls is {baseline} "
+                      f"(floor {floor} = {int(SOFT_BLOCK_FLOOR_RATIO * 100)}% of median). "
+                      f"Refusing to persist — previous snapshots preserved.")
+            diag["decision"] = "blocked"
+            diag["reason"] = reason
+            crawl_log["soft_blocked"] = True
+            logger.warning(f"[SoftBlock] {store.get('name')}: {reason}")
+            return True, reason
+        diag["decision"] = "passed"
+        return False, ""
+    except Exception as exc:
+        logger.warning(f"[SoftBlock] detector error for {store.get('name')}: "
+                       f"{type(exc).__name__}: {exc}")
+        diag["decision"] = "detector_error"
+        diag["error"] = f"{type(exc).__name__}: {str(exc)[:150]}"
+        return False, ""
+
+
+def _apply_soft_block(crawl_log, current_count, endpoint_tag, reason):
+    """Uniformly tag a soft-blocked crawl_log across tiers. Callers must skip
+    both `process_crawled_products` and any barcode supplement — the crawl
+    produced no persistable data, so the previous snapshot cohort stands."""
+    crawl_log["tier_used"] = None
+    crawl_log["http_status"] = 200
+    crawl_log["products_found"] = current_count
+    crawl_log["endpoint_used"] = f"{endpoint_tag} (soft-blocked)" if endpoint_tag else "soft-blocked"
+    crawl_log["error"] = reason
+    crawl_log["snapshots_created"] = 0
+    crawl_log["soft_blocked"] = True
+
+
 # ── Raw Product Normalizer ───────────────────────────────────
 def _absolutize_url(raw_url, store_domain):
     """Turn a raw URL value (full URL, path, or slug) into an absolute https URL on the store's domain."""
@@ -570,6 +666,12 @@ def _extract_sold_count(raw):
         except (ValueError, TypeError):
             continue
     return 0, False
+
+# Module-scoped: 8-14 digit numeric-only string ⇒ candidate barcode. Kept at
+# module scope so `_collect_variant_field_list` and any future extractor
+# helper share the exact same predicate (iter73v).
+_EAN_MATCH_RE = re.compile(r"^\d{8,14}$")
+
 
 
 def _normalize_raw_product(raw, store_name):
@@ -690,7 +792,11 @@ def _normalize_raw_product(raw, store_name):
     # sitting one field away. `_EAN_RE.match` gates the value so a normal
     # merchant SKU string like "HL-CAT-3KG" is never mistaken for a
     # barcode.
-    _EAN_RE = re.compile(r"^\d{8,14}$")
+    # `_EAN_RE` gates whether a numeric string can be treated as a barcode
+    # (variant `sku` field, root sku, root gtin/mpn/etc.). Kept module-scoped
+    # via the alias below so `_collect_variant_field_list` (helper defined
+    # further down) can use the same regex.
+    _EAN_RE = _EAN_MATCH_RE
     barcode = ""
     from_variant = False
     matched_variant = None       # iter35 — the variant the barcode came from
@@ -780,7 +886,55 @@ def _normalize_raw_product(raw, store_name):
         "in_stock": bool(in_stock),
         "img_url": img_url,
         "product_url": product_url,
+        # iter73v (Aug 8 2026) — variant-aware matching. Collect EVERY
+        # variant's SKU + barcode into two arrays. Matcher's Level-1
+        # barcode step and `_seller_snapshots`' direct-key fallback query
+        # against these arrays so a product with 3 variants each carrying
+        # a distinct barcode is matched on ANY of them — not just the one
+        # we happened to pick as primary. Empty strings dropped; identity
+        # de-duped; primary sku/barcode always included so downstream
+        # code that reads only `variant_barcodes` still sees the primary.
+        "variant_skus": _collect_variant_field_list(raw, ("sku",), fallback=sku_raw),
+        "variant_barcodes": _collect_variant_field_list(
+            raw, ("barcode", "gtin", "mpn", "sku", "ean", "upc"),
+            fallback=barcode, numeric_only=True),
     }
+
+
+def _collect_variant_field_list(raw, keys, *, fallback="", numeric_only=False):
+    """Collect every value on `raw.skus[].{keys}` and `raw.{keys}` roots.
+
+    iter73v — used to build the parent snapshot's `variant_skus` and
+    `variant_barcodes` arrays. The parent primary (the string that lives
+    in `snap.sku` / `snap.barcode`) is always prepended so the array is
+    strictly a superset. When `numeric_only=True`, values are filtered
+    to the EAN-shaped regex — so `variant_barcodes` never accepts a
+    "HL-CAT-3KG"-style SKU string, but `variant_skus` accepts anything.
+    """
+    seen = []
+    dedupe = set()
+
+    def _accept(val):
+        s = str(val or "").strip()
+        if not s or s in dedupe:
+            return
+        if numeric_only and not _EAN_MATCH_RE.match(s):
+            return
+        seen.append(s)
+        dedupe.add(s)
+
+    if fallback:
+        _accept(fallback)
+    variants = raw.get("skus")
+    if isinstance(variants, list):
+        for v in variants:
+            if not isinstance(v, dict):
+                continue
+            for k in keys:
+                _accept(v.get(k))
+    for k in keys:
+        _accept(raw.get(k))
+    return seen
 
 
 async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=95):
@@ -871,6 +1025,14 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "sold_count_cumulative": norm.get("sold_count_cumulative", 0),
             "sold_count_capped": norm.get("sold_count_capped", False),
             "product_url": product_url,
+            # iter73v (Aug 8 2026) — variant arrays persisted so the matcher's
+            # Level-1 barcode step + `_seller_snapshots` direct-key fallback
+            # can join on ANY variant key. Always non-empty (contains the
+            # primary sku/barcode) so downstream code that reads either
+            # array does not need a None guard.
+            "variant_skus": norm.get("variant_skus", [norm["sku"]]),
+            "variant_barcodes": norm.get("variant_barcodes",
+                                         [norm.get("barcode")] if norm.get("barcode") else []),
             "source_tier": tier,
             "confidence_score": confidence,
             "crawled_at": now,
@@ -1065,19 +1227,28 @@ async def crawl_salla_tier1(db, store):
 
     now = datetime.now(timezone.utc)
     if all_raw and winning_endpoint:
-        crawl_log["tier_used"] = 1
-        crawl_log["http_status"] = 200
-        crawl_log["endpoint_used"] = winning_endpoint["tag"]
-        crawl_log["products_found"] = len(all_raw)
-        await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
-        # iter64 — barcode detail supplement for Salla stores, BEFORE persistence
-        # (it mutates the raw items). No-op with a logged "skipped" entry when it
-        # cannot or should not run; nothing for non-Salla platforms.
-        await _maybe_salla_detail_supplement(db, store, all_raw, crawl_log)
-        new_count, snap_count = await process_crawled_products(db, store, all_raw, now)
-        crawl_log["products_new"] = new_count
-        crawl_log["products_updated"] = len(all_raw) - new_count
-        crawl_log["snapshots_created"] = snap_count
+        # iter73w — soft-block guard. If this crawl produced far fewer products
+        # than the store's recent baseline (typical Salla HTTP 200 + data:[]
+        # false success under Cloudflare/WAF rate-limits), refuse to persist:
+        # the previous snapshot cohort is preserved untouched. The supplement
+        # is also skipped since there are effectively no items to enrich.
+        soft_blocked, sb_reason = await _detect_soft_block(db, store, len(all_raw), crawl_log)
+        if soft_blocked:
+            _apply_soft_block(crawl_log, len(all_raw), winning_endpoint["tag"], sb_reason)
+        else:
+            crawl_log["tier_used"] = 1
+            crawl_log["http_status"] = 200
+            crawl_log["endpoint_used"] = winning_endpoint["tag"]
+            crawl_log["products_found"] = len(all_raw)
+            await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
+            # iter64 — barcode detail supplement for Salla stores, BEFORE persistence
+            # (it mutates the raw items). No-op with a logged "skipped" entry when it
+            # cannot or should not run; nothing for non-Salla platforms.
+            await _maybe_salla_detail_supplement(db, store, all_raw, crawl_log)
+            new_count, snap_count = await process_crawled_products(db, store, all_raw, now)
+            crawl_log["products_new"] = new_count
+            crawl_log["products_updated"] = len(all_raw) - new_count
+            crawl_log["snapshots_created"] = snap_count
     else:
         last_attempt = crawl_log["endpoints_tried"][-1] if crawl_log["endpoints_tried"] else {}
         crawl_log["http_status"] = last_attempt.get("status", 0)
@@ -1245,19 +1416,25 @@ async def crawl_tier2_xhr(db, store):
     crawl_log["duration_secs"] = round(time.time() - start_time, 1)
 
     if captured_products and len(captured_products) >= 1:
-        crawl_log["tier_used"] = 2
-        crawl_log["http_status"] = 200
-        crawl_log["products_found"] = len(captured_products)
-        # iter64 — supplement before persistence (mutates the raw items). This
-        # is the tier that succeeded on Zarafa 2026-07-31 19:09 with 3000
-        # products while the supplement's only host path (Tier 2.5) sat blocked.
-        await _maybe_salla_detail_supplement(db, store, captured_products, crawl_log)
-        new_c, snap_c = await process_crawled_products(db, store, captured_products, now, tier=2, confidence=88)
-        crawl_log["products_new"] = new_c
-        crawl_log["products_updated"] = len(captured_products) - new_c
-        crawl_log["snapshots_created"] = snap_c
-        if winning_pattern:
-            await db.stores.update_one({"id": store["id"]}, {"$set": {"working_xhr_pattern": winning_pattern}})
+        # iter73w — soft-block guard applies at every tier; Salla soft-blocks
+        # can appear as truncated XHR payloads too.
+        soft_blocked, sb_reason = await _detect_soft_block(db, store, len(captured_products), crawl_log)
+        if soft_blocked:
+            _apply_soft_block(crawl_log, len(captured_products), winning_pattern or "xhr", sb_reason)
+        else:
+            crawl_log["tier_used"] = 2
+            crawl_log["http_status"] = 200
+            crawl_log["products_found"] = len(captured_products)
+            # iter64 — supplement before persistence (mutates the raw items). This
+            # is the tier that succeeded on Zarafa 2026-07-31 19:09 with 3000
+            # products while the supplement's only host path (Tier 2.5) sat blocked.
+            await _maybe_salla_detail_supplement(db, store, captured_products, crawl_log)
+            new_c, snap_c = await process_crawled_products(db, store, captured_products, now, tier=2, confidence=88)
+            crawl_log["products_new"] = new_c
+            crawl_log["products_updated"] = len(captured_products) - new_c
+            crawl_log["snapshots_created"] = snap_c
+            if winning_pattern:
+                await db.stores.update_one({"id": store["id"]}, {"$set": {"working_xhr_pattern": winning_pattern}})
     else:
         count = len(captured_products) if captured_products else 0
         if not crawl_log["error"]:
@@ -1404,17 +1581,22 @@ async def crawl_tier3_html(db, store):
     crawl_log["duration_secs"] = round(time.time() - start_time, 1)
 
     if products_extracted and len(products_extracted) >= 3:
-        crawl_log["tier_used"] = 3
-        crawl_log["http_status"] = 200
-        crawl_log["products_found"] = len(products_extracted)
-        # iter64 — supplement before persistence. HTML-extracted items usually
-        # carry no Salla numeric id, in which case the wrapper's missing filter
-        # finds nothing fetchable and writes a "skipped" entry instead.
-        await _maybe_salla_detail_supplement(db, store, products_extracted, crawl_log)
-        new_c, snap_c = await process_crawled_products(db, store, products_extracted, now, tier=3, confidence=75)
-        crawl_log["products_new"] = new_c
-        crawl_log["products_updated"] = len(products_extracted) - new_c
-        crawl_log["snapshots_created"] = snap_c
+        # iter73w — soft-block guard applies at every tier.
+        soft_blocked, sb_reason = await _detect_soft_block(db, store, len(products_extracted), crawl_log)
+        if soft_blocked:
+            _apply_soft_block(crawl_log, len(products_extracted), "html", sb_reason)
+        else:
+            crawl_log["tier_used"] = 3
+            crawl_log["http_status"] = 200
+            crawl_log["products_found"] = len(products_extracted)
+            # iter64 — supplement before persistence. HTML-extracted items usually
+            # carry no Salla numeric id, in which case the wrapper's missing filter
+            # finds nothing fetchable and writes a "skipped" entry instead.
+            await _maybe_salla_detail_supplement(db, store, products_extracted, crawl_log)
+            new_c, snap_c = await process_crawled_products(db, store, products_extracted, now, tier=3, confidence=75)
+            crawl_log["products_new"] = new_c
+            crawl_log["products_updated"] = len(products_extracted) - new_c
+            crawl_log["snapshots_created"] = snap_c
     else:
         if not crawl_log["error"]:
             crawl_log["error"] = f"Tier 3 extracted {len(products_extracted)} products — all tiers exhausted"
@@ -1561,10 +1743,18 @@ async def _capture_salla_store_identifier(page, base):
 # has nothing to persist, and the matcher's Level 1 stays blind.
 #
 # The supplement re-fetches ONLY products whose listing yielded no barcode,
-# capped per crawl so remaining gaps fill over successive daily crawls, using
-# the SAME captured store-identifier header and the same httpx client the
-# category walk just used.
-SALLA_DETAIL_SUPPLEMENT_CAP = 300
+# using the SAME captured store-identifier header and the same httpx client
+# the category walk just used.
+#
+# iter73v (Aug 8 2026) — client mandate: "high-catalog stores like Zarafa
+# must be crawled completely, including all products and all variants".
+# The 300-product per-crawl cap that used to trickle-fill coverage over
+# ~14 crawls has been REMOVED. Every remaining product now gets a detail
+# supplement pass in the same crawl. Rate-limit backoff and existing
+# retry logic keep the outbound traffic Cloudflare-friendly. Set to a
+# very large sentinel rather than None so `min(cap, missing_total)` still
+# works and diagnostics remain readable.
+SALLA_DETAIL_SUPPLEMENT_CAP = 100000
 
 
 def _salla_raw_barcode(raw):
@@ -1764,7 +1954,7 @@ async def _salla_detail_barcode_supplement(client, captured, store_domain=None,
 # XHRs finds nothing, and plain curl of the HTML lacks it (JS-rendered). For
 # these products no API response carries the value; reading the rendered page
 # is the only remaining source.
-SALLA_DOM_BARCODE_CAP = 100
+SALLA_DOM_BARCODE_CAP = 100000       # iter73v — cap removed; DOM pass now covers every product still missing after the API-detail stage. Playwright throughput self-limits via existing per-page timeouts.
 
 # digit runs with hard boundaries — "12345678901" inside a longer number is not
 # a candidate
@@ -2165,17 +2355,22 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
     crawl_log["duration_secs"] = round(time.time() - start_time, 1)
 
     if captured:
-        crawl_log["tier_used"] = 2
-        crawl_log["http_status"] = 200
-        crawl_log["products_found"] = len(captured)
-        new_c, snap_c = await process_crawled_products(db, store, captured, now, tier=2, confidence=88)
-        crawl_log["products_new"] = new_c
-        crawl_log["products_updated"] = len(captured) - new_c
-        crawl_log["snapshots_created"] = snap_c
-        await db.stores.update_one({"id": store["id"]}, {"$set": {
-            "working_xhr_pattern": "salla_storefront_categories_direct",
-            "salla_store_identifier": store_identifier,
-        }})
+        # iter73w — soft-block guard: same policy as every other tier.
+        soft_blocked, sb_reason = await _detect_soft_block(db, store, len(captured), crawl_log)
+        if soft_blocked:
+            _apply_soft_block(crawl_log, len(captured), "salla_storefront_categories_direct", sb_reason)
+        else:
+            crawl_log["tier_used"] = 2
+            crawl_log["http_status"] = 200
+            crawl_log["products_found"] = len(captured)
+            new_c, snap_c = await process_crawled_products(db, store, captured, now, tier=2, confidence=88)
+            crawl_log["products_new"] = new_c
+            crawl_log["products_updated"] = len(captured) - new_c
+            crawl_log["snapshots_created"] = snap_c
+            await db.stores.update_one({"id": store["id"]}, {"$set": {
+                "working_xhr_pattern": "salla_storefront_categories_direct",
+                "salla_store_identifier": store_identifier,
+            }})
     else:
         if not crawl_log.get("error"):
             crawl_log["error"] = "Storefront-categories captured 0 products"

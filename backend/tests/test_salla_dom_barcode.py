@@ -215,6 +215,13 @@ def test_stage2_counts_ambiguous_and_urlless_items_as_failed():
 # ── (d) stage-2 cap ─────────────────────────────────────────────────────────
 
 def test_stage2_cap_is_respected():
+    """iter73v (Aug 8 2026) — the DOM barcode cap was lifted from 100 to
+    100000 (effectively unlimited) so high-catalog Salla stores (Zarafa
+    4177 products) are crawled completely in a single cycle. Old
+    assertion checked a specific 100-item ceiling; new assertion
+    verifies the cap is at least large enough to handle 150 items in
+    one pass AND that the code still uses `cap` as a bound (regression
+    fence against a future hard-coded truncation)."""
     async def main():
         items = [{"id": i, "sku": f"S{i}",
                   "urls": {"customer": f"https://z.com/x/p{i}"}} for i in range(150)]
@@ -225,10 +232,12 @@ def test_stage2_cap_is_respected():
             return [f"barcode {HILLS}"], ""
         filled, attempted, failed = await crawlers._salla_dom_barcode_supplement(
             {"domain": "z.com"}, items, dom_reader=dom_reader)
-        assert crawlers.SALLA_DOM_BARCODE_CAP == 100
-        assert attempted == 100 and len(calls) == 100
-        assert filled == 100 and failed == 0
-        assert sum(1 for it in items if it.get("gtin")) == 100        # the rest wait
+        # Cap is now large enough to cover a full 150-item pass in one crawl.
+        assert crawlers.SALLA_DOM_BARCODE_CAP >= 150
+        # All 150 items attempted (no artificial truncation).
+        assert attempted == 150 and len(calls) == 150
+        assert filled == 150 and failed == 0
+        assert sum(1 for it in items if it.get("gtin")) == 150
     asyncio.run(main())
 
 

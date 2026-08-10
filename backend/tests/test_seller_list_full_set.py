@@ -109,11 +109,20 @@ async def _seed(db):
         {"sku": "SINGLE-TIN", "name_en": "Butcher's Venison in Jelly 400g single tin",
          "name_ar": "بوتشرز"},
     ])
+    # price_basis="storefront_inc_vat" isolates this suite from iter73p's
+    # legacy-basis VAT gross-up (a bare row with no basis is treated as ex-VAT
+    # and grossed × 1.15). These fixture prices already reflect the shopper-
+    # facing figure; the suite's concern is the pack-size / seller-list logic,
+    # not VAT resolution.
     await db.my_products.insert_many([
-        {"sku": HILLS, "price": 170.0, "name_en": "Hills GI Biome Cat 1.5kg"},
-        {"sku": RC, "price": 129.0, "name_en": "Royal Canin Sensible 33 Cat 2kg"},
-        {"sku": FIVE, "price": 100.0, "name_en": "Test Product 400g"},
-        {"sku": CARTON, "price": 208.0, "name_en": "Butcher's Venison in Jelly 400g Pack of 24"},
+        {"sku": HILLS, "price": 170.0, "name_en": "Hills GI Biome Cat 1.5kg",
+         "price_basis": "storefront_inc_vat"},
+        {"sku": RC, "price": 129.0, "name_en": "Royal Canin Sensible 33 Cat 2kg",
+         "price_basis": "storefront_inc_vat"},
+        {"sku": FIVE, "price": 100.0, "name_en": "Test Product 400g",
+         "price_basis": "storefront_inc_vat"},
+        {"sku": CARTON, "price": 208.0, "name_en": "Butcher's Venison in Jelly 400g Pack of 24",
+         "price_basis": "storefront_inc_vat"},
     ])
 
     snaps = []
