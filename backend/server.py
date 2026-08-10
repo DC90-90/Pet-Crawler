@@ -1018,6 +1018,48 @@ async def admin_rematch(payload: RematchIn, user=Depends(require_super_admin)):
     return {"ok": True, "scope": scope_desc, "status": "started"}
 
 
+@router.post("/admin/ensure-snapshot-indexes")
+async def admin_ensure_snapshot_indexes(user=Depends(require_super_admin)):
+    """iter73x HOTFIX (Aug 10 2026) — build the indexes iter73v depended on.
+
+    Client-reported: product-detail panel loads for 5+ minutes on production.
+    Root cause: `_seller_snapshots` $or clause includes `barcode`,
+    `variant_skus` and `variant_barcodes` — none of which had backing indexes.
+    MongoDB cannot use index-union on an $or that has any unindexed branch
+    and falls back to a full COLLSCAN of `product_snapshots` (~300K rows on
+    production). Every product click triggers a 5-minute scan.
+
+    This endpoint runs `create_index` in the BACKGROUND (MongoDB builds
+    indexes without blocking reads by default) and returns immediately with
+    the build status per index. Re-running is idempotent — MongoDB is a
+    no-op if the index already exists.
+
+    Available WITHOUT a backend restart — the client can hit it right after
+    deploy to short-circuit the ordinary startup-only index creation.
+    """
+    results = {}
+    specs = [
+        ("barcode_crawled_at", [("barcode", 1), ("crawled_at", -1)]),
+        ("variant_skus_crawled_at", [("variant_skus", 1), ("crawled_at", -1)]),
+        ("variant_barcodes_crawled_at", [("variant_barcodes", 1), ("crawled_at", -1)]),
+    ]
+    for name, keys in specs:
+        try:
+            idx_name = await db.product_snapshots.create_index(keys, background=True)
+            results[name] = {"ok": True, "index": idx_name}
+        except Exception as exc:
+            logger.exception("[Admin ensure-indexes] failed for %s", name)
+            results[name] = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    logger.info("[Admin ensure-indexes] user=%s results=%s",
+                user.get("email"), results)
+    return {"ok": all(v.get("ok") for v in results.values()),
+            "indexes": results,
+            "note": "MongoDB builds indexes in the background; queries will "
+                    "start using them within seconds of build completion. "
+                    "Monitor db.product_snapshots.stats() to confirm."}
+
+
+
 
 
 
@@ -9949,6 +9991,18 @@ async def startup():
         # iter22 (Jul 2026) — matcher lookup fix: index-backed sort for
         # _build_competitor_lookups at production scale.
         await db.product_snapshots.create_index([("store_id", 1), ("sku", 1), ("crawled_at", -1)])
+        # iter73x (Aug 10 2026) — HOTFIX: iter73v added `barcode`, `variant_skus`
+        # and `variant_barcodes` to the `_seller_snapshots` $or clause. Without
+        # backing indexes MongoDB CANNOT use index-union on the $or and falls
+        # back to a full collection scan of `product_snapshots` on every
+        # product-detail click. In production (~300K snapshots, 6-month
+        # window) this produced a 5+ minute hang on the "My Products" panel.
+        # Multikey indexes on the arrays plus a scalar index on barcode all
+        # compound with (crawled_at, -1) so the outer `since` filter is
+        # satisfied inside the index scan.
+        await db.product_snapshots.create_index([("barcode", 1), ("crawled_at", -1)])
+        await db.product_snapshots.create_index([("variant_skus", 1), ("crawled_at", -1)])
+        await db.product_snapshots.create_index([("variant_barcodes", 1), ("crawled_at", -1)])
         await db.proxy_usage.create_index("crawled_at")
         await db.products.create_index("sku", unique=True)
         await db.products.create_index("category")

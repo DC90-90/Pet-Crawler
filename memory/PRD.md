@@ -42,6 +42,24 @@ Workspace-only extra kept: tests/test_iter45_regression.py (passes; not in main)
 - **Aug 1 2026 — iter72 (PR #51) My Stock Honesty**: byte-synced server.py + MyProductsPage.jsx + SalesInsights.jsx + i18n.js + tests/test_my_stock_honesty.py. "Not in my catalog" chip, catalog-gated stock signals, no hardcoded stock constants. Full suite 423 passed/70 failed/52 errors (same known families). Caches force-recomputed. No Save to GitHub.
 - **Aug 3 2026 — iter73a Zarafa Category Discovery Fix**: `_discover_salla_category_ids` in crawlers.py (+ subcategory walker) now also matches Zarafa's `/{locale}/-/c{id}` shape (was legacy `/categories/{id}` only, hit 0 cats on Zarafa → whole store dark). Live probe confirms 88 cats now discovered + Applaws Chicken (SKU 5060122491365) captured under cat 806316219. New test file: `tests/test_zarafa_category_discovery.py` (7 tests). Root-caused only, applies to ALL Salla stores using newer theme.
 
+- **Aug 10 2026 — iter73x HOTFIX: product-detail 5-minute hang (missing indexes for iter73v)**:
+  * **Client report** (production, urgent, screenshot): clicking any product on the "My Products" page opened the detail panel with "LOADING..." showing indefinitely. 5+ minutes wait, no data. `/api/products/{sku}/full?days=30` blocked.
+  * **Root cause**: iter73v (Aug 8) added three new predicates to the `_seller_snapshots` `$or` clause — `barcode`, `variant_skus`, `variant_barcodes` — to surface competitors whose variant carries the client's EAN without needing a `product_matches` row. **None of the three fields had backing indexes on `product_snapshots`.** MongoDB CANNOT use index-union on an `$or` where any branch is unindexed and falls back to a full collection scan. Production has ~300K snapshots (2,180 products × 12 stores × 6-month lookback), so every product click triggered a 5+ minute COLLSCAN.
+  * **Fix (iter73x)**:
+    1. Added three indexes at server.py startup routine (L9951-9964):
+       - `[("barcode", 1), ("crawled_at", -1)]`
+       - `[("variant_skus", 1), ("crawled_at", -1)]` (multikey)
+       - `[("variant_barcodes", 1), ("crawled_at", -1)]` (multikey)
+       Each compound with `crawled_at` so the outer `since` filter is satisfied inside the index scan.
+    2. NEW admin endpoint `POST /api/admin/ensure-snapshot-indexes` (super_admin-gated) triggers index creation immediately, without waiting for the next backend restart. Uses `background=True` so Atlas builds the indexes without blocking reads. Idempotent — safe to call from monitoring scripts.
+  * Tests: NEW `tests/test_iter73x_snapshot_indexes.py` (10 tests: iter73x marker, startup routine creates the 3 required indexes with correct shape, `_seller_snapshots` $or references match the index fields, admin endpoint registered + super_admin-gated + uses background=True, end-to-end verified 3 indexes created on the collection, idempotent re-runs, multikey semantics — a `$in` against an array element in `variant_skus` returns the parent doc). **10/10 pass.** Full regression on touched files: **198/198 pass.**
+  * Preview verified: preview backend restarted, hitting `POST /api/admin/ensure-snapshot-indexes` returned all 3 indexes created, `GET /api/products/{sku}/full` responds in 108ms (was expected to be O(collscan)).
+  * **Deploy runbook for production**:
+    1. Redeploy iter73x to production.
+    2. As super_admin, POST to `/api/admin/ensure-snapshot-indexes` — returns `{ok: true, indexes: {...}}` in seconds. MongoDB then builds the indexes in the background (typically 30s-2min for ~300K docs).
+    3. Wait ~2 min then click any product on "My Products". Detail panel should now render in < 1s.
+  * **Why the bug was invisible in preview**: preview seed data has ~40 products, all zero-activity. `product_snapshots` is essentially empty. No collscan cost = no hang. This is a class of bug that ONLY manifests at production scale — worth adding an EXPLAIN-plan guard to CI later.
+
 - **Aug 8 2026 — iter73w CI stabilization + Salla soft-block guard**:
   * **User mandate**: stabilize the production path BEFORE any new feature work. (1) Fix the 2 broken pytest tests so CI is fully green; (2) implement a crawler soft-block guard that refuses to persist snapshots on the "Salla HTTP 200 + `data: []`" false-success signature so the previous valid snapshot cohort is preserved instead of being overwritten by garbage.
   * **(1) Broken tests fixed**:
