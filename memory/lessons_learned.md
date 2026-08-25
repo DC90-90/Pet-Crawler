@@ -62,3 +62,20 @@ RULES:
    `db.dashboard_cache`, rebuilt only after a crawl or the 6h own-store sync.
    Any read-side fix needs POST /api/admin/refresh-caches after deploy or the
    client keeps seeing the old number.
+
+## An external dependency must never be a single point of total failure (iter74)
+The Webshare residential proxy subscription lapsed (402 Payment Required on all
+40 usernames). Because 6 call sites did
+`if store.get("use_proxy"): creds = get_proxy_credentials()` with NO health
+check and NO fallback, every tier of all 5 proxied Salla stores failed while the
+Zid stores were fine — and the UI blamed "Tier 3 extracted 0 products".
+
+RULES:
+1. When a crawl/fetch path depends on a paid third party, probe it once, cache
+   the verdict, and degrade (direct connection / reduced mode) instead of
+   failing. Record the degradation on the job log so it is auditable.
+2. "All tiers failed on exactly the stores that share ONE flag" is a
+   dependency outage, not a scraping regression. Diff the failing set against
+   config flags (here: PROXY_STORES) BEFORE touching extraction logic.
+3. Ship an admin health endpoint for every external dependency; the client can
+   then see "renew the subscription" instead of "crawler broken".

@@ -37,6 +37,7 @@ from crawlers import (
     merchant_index, resolve_own_price, KSA_VAT_RATE,
 )
 from store_registry import ensure_stores as registry_ensure_stores
+import crawlers  # iter74 — module handle for proxy health introspection
 from salla_sold_velocity import (
     diff_series as salla_diff_series,
     store_revenue_from_velocity as salla_store_revenue_from_velocity,
@@ -1137,6 +1138,32 @@ async def admin_ensure_snapshot_indexes(user=Depends(require_super_admin)):
             "note": "MongoDB builds indexes in the background; queries start "
                     "using them within seconds of build completion. Any entry "
                     "under `failed` needs manual attention."}
+
+
+@router.get("/admin/proxy-health")
+async def admin_proxy_health(force: bool = Query(True), user=Depends(require_super_admin)):
+    """iter74 — is the residential proxy usable right now?
+
+    Client-reported: every Salla store's CRAWL STATUS read "Failed — all tiers
+    failed" while Zid stores were fine. The failing set was exactly the
+    proxied stores: the Webshare subscription answers 402 Payment Required, so
+    every tier died inside the proxy connect. The crawler now falls back to a
+    DIRECT connection, and this endpoint makes the underlying proxy state
+    visible instead of leaving it buried in the logs.
+    """
+    ok, reason = await crawlers.proxy_health(force=bool(force))
+    return {
+        "proxy_ok": ok,
+        "reason": reason or None,
+        "exit_ip": crawlers._PROXY_HEALTH.get("exit_ip"),
+        "rotation_usernames": len(crawlers._PROXY_USERNAMES),
+        "host": crawlers._PROXY_HOST,
+        "fallback": "direct connection (crawls continue without the Saudi exit IP)",
+        "action_required": None if ok else (
+            "Renew / top up the Webshare residential subscription. Until then "
+            "proxied stores are crawled directly, which works today but can be "
+            "geo-blocked or rate-limited by some storefronts."),
+    }
 
 
 @router.post("/admin/refresh-caches")

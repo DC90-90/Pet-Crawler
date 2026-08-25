@@ -63,6 +63,66 @@ def playwright_proxy_config(user, pwd, host, port):
     return {"server": f"http://{host}:{port}", "username": user, "password": pwd}
 
 
+# ── iter74 — proxy health gate + DIRECT fallback ─────────────────────────────
+# Client-reported (production, urgent): every Salla store showed CRAWL STATUS
+# "Failed — Tier 3 extracted 0 products, all tiers failed", while every Zid
+# store showed Success. The failing set was EXACTLY `PROXY_STORES`: the Webshare
+# residential subscription answers `402 Payment Required` on all 40 rotation
+# usernames, so each tier died inside the proxy connect — never reaching the
+# store. A dead proxy subscription must NOT mean "no data": the pod can reach
+# these storefronts directly (verified: zarafaksa.com API returns 200), so the
+# crawler now probes the proxy once, caches the verdict, and crawls DIRECT when
+# the proxy is unusable — recording the fallback so ops can see it happened.
+PROXY_PROBE_URL = "https://api.ipify.org?format=json"
+PROXY_HEALTH_TTL_SECS = 900          # re-probe at most every 15 minutes
+_PROXY_HEALTH = {"ok": None, "checked_at": 0.0, "reason": "", "exit_ip": None}
+
+
+async def proxy_health(force=False):
+    """(ok, reason) for the residential proxy. Cached; never raises."""
+    now = time.time()
+    if not force and _PROXY_HEALTH["checked_at"] and \
+            now - _PROXY_HEALTH["checked_at"] < PROXY_HEALTH_TTL_SECS:
+        return _PROXY_HEALTH["ok"], _PROXY_HEALTH["reason"]
+    creds = get_proxy_credentials()
+    if not creds:
+        _PROXY_HEALTH.update(ok=False, checked_at=now, reason="not_configured")
+        return False, "not_configured"
+    u, p, h, port = creds
+    try:
+        async with httpx.AsyncClient(proxy=f"http://{u}:{p}@{h}:{port}",
+                                     timeout=15.0) as c:
+            r = await c.get(PROXY_PROBE_URL)
+        ok = r.status_code == 200
+        reason = "" if ok else f"http_{r.status_code}"
+        _PROXY_HEALTH.update(ok=ok, checked_at=now, reason=reason,
+                             exit_ip=(r.text[:60] if ok else None))
+    except Exception as exc:
+        reason = f"{type(exc).__name__}: {str(exc)[:80]}"
+        _PROXY_HEALTH.update(ok=False, checked_at=now, reason=reason, exit_ip=None)
+        ok = False
+    if not ok:
+        logger.error("[Proxy] UNUSABLE (%s) — proxied stores will crawl DIRECT. "
+                     "Top up / renew the Webshare subscription to restore "
+                     "Saudi-exit crawling.", _PROXY_HEALTH["reason"])
+    return _PROXY_HEALTH["ok"], _PROXY_HEALTH["reason"]
+
+
+async def resolve_proxy_for(store, crawl_log=None, tier=""):
+    """Proxy creds for this store, or None when it must go DIRECT."""
+    if not store.get("use_proxy"):
+        return None
+    ok, reason = await proxy_health()
+    if ok:
+        return get_proxy_credentials()
+    if isinstance(crawl_log, dict):
+        crawl_log["proxy_status"] = f"unusable: {reason}"
+        crawl_log.setdefault("proxy_fallback_tiers", []).append(str(tier))
+    logger.warning("[Proxy] store=%s tier=%s → DIRECT fallback (%s)",
+                   store.get("domain"), tier, reason)
+    return None
+
+
 async def record_proxy_usage(db, store, bytes_estimate):
     """Best-effort bandwidth tracking. Never raises."""
     try:
@@ -1206,13 +1266,12 @@ async def crawl_salla_tier1(db, store):
         },
     }
     proxy_url = None
-    if store.get("use_proxy"):
-        creds = get_proxy_credentials()
-        if creds:
-            u, p, h, port = creds
-            proxy_url = f"http://{u}:{p}@{h}:{port}"
-            httpx_kwargs["proxy"] = proxy_url
-            logger.info(f"[Proxy] store={store.get('domain')} tier=1 using proxy_user={u}")
+    creds = await resolve_proxy_for(store, crawl_log, "1")
+    if creds:
+        u, p, h, port = creds
+        proxy_url = f"http://{u}:{p}@{h}:{port}"
+        httpx_kwargs["proxy"] = proxy_url
+        logger.info(f"[Proxy] store={store.get('domain')} tier=1 using proxy_user={u}")
 
     try:
         async with httpx.AsyncClient(**httpx_kwargs) as http:
@@ -1323,12 +1382,11 @@ async def crawl_tier2_xhr(db, store):
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
             launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
-            if store.get("use_proxy"):
-                creds = get_proxy_credentials()
-                if creds:
-                    user, pwd, host, port = creds
-                    launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
-                    logger.info(f"[Proxy] store={store.get('domain')} tier=2 using proxy_user={user}")
+            creds = await resolve_proxy_for(store, crawl_log, "2")
+            if creds:
+                user, pwd, host, port = creds
+                launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
+                logger.info(f"[Proxy] store={store.get('domain')} tier=2 using proxy_user={user}")
             browser = await pw.chromium.launch(**launch_kwargs)
             ctx = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1544,12 +1602,11 @@ async def crawl_tier3_html(db, store):
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
             launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
-            if store.get("use_proxy"):
-                creds = get_proxy_credentials()
-                if creds:
-                    user, pwd, host, port = creds
-                    launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
-                    logger.info(f"[Proxy] store={store.get('domain')} tier=3 using proxy_user={user}")
+            creds = await resolve_proxy_for(store, crawl_log, "3")
+            if creds:
+                user, pwd, host, port = creds
+                launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
+                logger.info(f"[Proxy] store={store.get('domain')} tier=3 using proxy_user={user}")
             browser = await pw.chromium.launch(**launch_kwargs)
             ctx = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", locale="ar-SA")
             page = await ctx.new_page()
@@ -2064,11 +2121,10 @@ async def _salla_dom_barcode_supplement(store, items, cap=SALLA_DOM_BARCODE_CAP,
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
             launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
-            if store.get("use_proxy"):
-                creds = get_proxy_credentials()
-                if creds:
-                    user, pwd, host, port = creds
-                    launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
+            creds = await resolve_proxy_for(store, None, "dom_barcode")
+            if creds:
+                user, pwd, host, port = creds
+                launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
             browser = await pw.chromium.launch(**launch_kwargs)
             try:
                 ctx = await browser.new_context(
@@ -2164,11 +2220,10 @@ async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
             if sid:
                 headers["store-identifier"] = sid
             httpx_kwargs = {"timeout": 20.0, "headers": headers}
-            if store.get("use_proxy"):
-                creds = get_proxy_credentials()
-                if creds:
-                    u, p, h, port = creds
-                    httpx_kwargs["proxy"] = f"http://{u}:{p}@{h}:{port}"
+            creds = await resolve_proxy_for(store, crawl_log, "detail_supplement")
+            if creds:
+                u, p, h, port = creds
+                httpx_kwargs["proxy"] = f"http://{u}:{p}@{h}:{port}"
             client = httpx.AsyncClient(**httpx_kwargs)
         try:
             filled_details, _m, s1_failed, nbytes, by_status = \
@@ -2232,13 +2287,12 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
             launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
-            if store.get("use_proxy"):
-                creds = get_proxy_credentials()
-                if creds:
-                    user, pwd, host, port = creds
-                    launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
-                    proxy_user_for_httpx = (user, pwd, host, port)
-                    logger.info(f"[Proxy] store={store.get('domain')} tier=storefront_categories using proxy_user={user}")
+            creds = await resolve_proxy_for(store, crawl_log, "storefront_categories")
+            if creds:
+                user, pwd, host, port = creds
+                launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
+                proxy_user_for_httpx = (user, pwd, host, port)
+                logger.info(f"[Proxy] store={store.get('domain')} tier=storefront_categories using proxy_user={user}")
             browser = await pw.chromium.launch(**launch_kwargs)
             ctx = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
