@@ -277,14 +277,18 @@ def test_scanner_gap_over_300_drops_to_zero_for_the_cluster():
         now = server.datetime.now(server.timezone.utc)
         mine, prods, snaps = [], [], []
         for sku, ours, theirs, name in CLUSTER:
-            mine.append({"sku": sku, "name_en": name, "name_ar": "", "price": ours})
+            # iter77 — `ours` is the shelf (inc-VAT) price: tag the basis so the
+            # Scanner's VAT resolver takes it as-is instead of grossing it.
+            mine.append({"sku": sku, "name_en": name, "name_ar": "", "price": ours,
+                         "price_basis": "storefront_inc_vat"})
             prods.append({"id": f"p-{sku}", "sku": sku, "name_ar": "", "name_en": name})
             snaps += [_snap(sku, OWN, ours, now),
                       _snap(sku, "zarafa", theirs, now),      # the colliding tin
                       _snap(sku, "aleef", ours, now)]         # a real carton rival
         # a genuine deep discount that must survive
         rc_name = "Royal Canin Medium Adult 15kg"
-        mine.append({"sku": RC, "name_en": rc_name, "name_ar": "", "price": 466.0})
+        mine.append({"sku": RC, "name_en": rc_name, "name_ar": "", "price": 466.0,
+                     "price_basis": "storefront_inc_vat"})
         prods.append({"id": "p-rc", "sku": RC, "name_ar": "", "name_en": rc_name})
         snaps += [_snap(RC, OWN, 466.0, now), _snap(RC, "aleef", 118.0, now),
                   _snap(RC, "zarafa", 431.0, now)]
@@ -329,7 +333,8 @@ def test_scanner_skips_sku_when_every_competitor_is_unreliable():
         ])
         now = server.datetime.now(server.timezone.utc)
         sku, ours, theirs, name = CLUSTER[0]
-        await db.my_products.insert_one({"sku": sku, "name_en": name, "name_ar": "", "price": ours})
+        await db.my_products.insert_one({"sku": sku, "name_en": name, "name_ar": "",
+                                         "price": ours, "price_basis": "storefront_inc_vat"})
         await db.products.insert_one({"id": "p", "sku": sku, "name_ar": "", "name_en": name})
         await db.product_snapshots.insert_many([
             _snap(sku, OWN, ours, now),

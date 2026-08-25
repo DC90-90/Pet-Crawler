@@ -71,7 +71,12 @@ async def _seed(db):
     snaps, mine, prods = [], [], []
     for case in CASES:
         sku, ours, comps = case[0], case[1], _comps(case)
-        mine.append({"sku": sku, "price": ours, "sync_source": "zid_api"})
+        # iter77 — `ours` IS the shelf (inc-VAT) price in this fixture, and the
+        # Scanner now reads our price through the shared VAT resolver like every
+        # other page. Without the basis tag iter73p treats the row as legacy
+        # ex-VAT and grosses it by 1.15, which is not what this suite is about.
+        mine.append({"sku": sku, "price": ours, "sync_source": "zid_api",
+                     "price_basis": "storefront_inc_vat"})
         prods.append({"id": f"p-{sku}", "sku": sku, "name_ar": sku, "name_en": sku,
                       "category": "cat_food"})
         snaps.append({"id": f"s-{sku}-own", "sku": sku, "store_id": OWN,
@@ -164,13 +169,22 @@ def _ours(out, sku):
                  if o["sku"] == sku and o["store_id"] == OWN), None)
 
 
+def own_shelf_price(sku):
+    return next(c[1] for c in CASES if c[0] == sku)
+
+
 def test_market_low_is_the_lowest_competitor_not_our_own_price():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed(db)
         out = await _scan()
         lows = {}
-        for o in out["opportunities"]:
+        # iter77 — `opportunities` now holds ONE row per OUR product (it used to
+        # hold a row per SELLER, which is how a competitor's price ended up
+        # rendered as "MY PRICE"). The reported market low is therefore read from
+        # our row where we are overpriced, and from the competitor list — which
+        # carries the same `market_lowest` — everywhere else.
+        for o in out["opportunities"] + out["competitors_overpriced"]:
             lows.setdefault(o["sku"], o["market_lowest"])
         for case in CASES:
             sku, ours, low = case[0], case[1], case[2]
@@ -233,16 +247,90 @@ def test_overpriced_count_drops_to_exclude_self_comparisons():
         assert [o["sku"] for o in own_rows] == ["SIGNOR-GATTO"], own_rows
 
         # every reported low is a competitor price, on every row
-        for o in out["opportunities"]:
+        for o in out["opportunities"] + out["competitors_overpriced"]:
             case = next(c for c in CASES if c[0] == o["sku"])
             assert o["market_lowest"] == min(_comps(case)), o
 
-        # uplift is computed off the competitor low
+        # iter77 — uplift is the gap × WHAT WE SOLD in the window. This fixture
+        # seeds no sales at all, so the honest answer is 0: the old formula
+        # multiplied the gap by the NUMBER OF SELLERS, which is why a product
+        # with no demand still claimed money on the table.
         row = _ours(out, "SIGNOR-GATTO")
-        assert row["revenue_uplift"] == round((33.21 - 28.88) * 3, 2)
+        assert row["revenue_uplift"] == 0.0
+        assert row["units_sold"] == 0 and row["units_basis"] == "none"
 
         assert out["summary"]["total_overpriced"] == len(out["opportunities"])
         assert out["summary"]["overpriced_count"] == out["summary"]["total_overpriced"]
+    asyncio.run(main())
+
+
+def test_uplift_is_the_gap_times_our_own_units_sold():
+    """The new contract: money on the table = price gap × units WE moved."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        now = server.datetime.now(server.timezone.utc)
+        # a SEALED KSA day (today is excluded from the sales window by design)
+        await db.sku_sales_daily.delete_many({})
+        await db.sku_sales_daily.insert_one({
+            "store_id": OWN, "sku": "SIGNOR-GATTO",
+            "date": server._metric_day_str(now - server.timedelta(days=1)),
+            "units_sold": 7, "rev_sold": 232.47, "units_qty": 0, "rev_qty": 0.0,
+            "qty_drop": 0,
+        })
+        out = await _scan()
+        row = _ours(out, "SIGNOR-GATTO")
+        assert row["units_sold"] == 7 and row["units_basis"] == "rollup"
+        assert row["revenue_uplift"] == round((33.21 - 28.88) * 7, 2)
+        # and it is no longer counted as "zero sales + overpriced"
+        assert out["summary"]["zero_sales_overpriced"] == 0
+        await db.sku_sales_daily.delete_many({})
+    asyncio.run(main())
+
+
+def test_our_row_carries_every_seller_and_names_the_cheapest_and_dearest():
+    """What the client hit: the detail chart plotted `my_price` under each
+    competitor's name and only for sellers >=10% above the low, so the store
+    holding the market low was never drawn and the graph contradicted the
+    "market lowest" KPI on the same panel."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        out = await _scan()
+        row = _ours(out, "SIGNOR-GATTO")
+        sellers = row["sellers"]
+        # us + both competitors, cheapest first
+        assert [s["price"] for s in sellers] == [28.88, 33.21, 36.00]
+        assert [s["store_name"] for s in sellers] == ["Aleef", "Pets Houses", "Petsy"]
+        assert [s["is_own"] for s in sellers] == [False, True, False]
+        # the cheapest bar IS the market low the KPI shows
+        assert sellers[0]["price"] == row["market_lowest"]
+        assert sellers[0]["is_lowest"] and sellers[-1]["is_highest"]
+        assert row["lowest_store_name"] == "Aleef"
+        assert row["highest_store_name"] == "Petsy" and row["market_highest"] == 36.00
+        assert row["num_sellers"] == 3
+    asyncio.run(main())
+
+
+def test_opportunities_are_our_products_only_competitors_get_their_own_list():
+    """The identity bug: a row per SELLER meant a competitor's price was served
+    in a field called `my_price` and rendered as "YOUR PRICE"."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        await _seed(db)
+        out = await _scan()
+        assert out["opportunities"], "we are overpriced on Signor Gatto"
+        for o in out["opportunities"]:
+            assert o["store_id"] == OWN and o["store_name"] == "Pets Houses", o
+            assert o["my_price"] == own_shelf_price(o["sku"]), o
+        # competitors above the low are still reported — in their own list
+        names = {c["store_name"] for c in out["competitors_overpriced"]}
+        assert names and OWN not in names and "Pets Houses" not in names
+        for c in out["competitors_overpriced"]:
+            assert c["gap_pct"] >= 10 and c["price"] > c["market_lowest"], c
+        # and they are NOT in the headline counts
+        assert out["summary"]["total_overpriced"] == len(out["opportunities"])
+        assert out["summary"]["competitors_overpriced"] == len(out["competitors_overpriced"])
     asyncio.run(main())
 
 
@@ -274,12 +362,16 @@ def test_product_with_no_competitor_is_skipped_entirely():
 
 def test_competitor_only_low_is_used_when_we_are_the_expensive_one():
     """Sanity: raising our price above every competitor must produce a gap
-    measured against the cheapest COMPETITOR, not against ourselves."""
+    measured against the cheapest COMPETITOR, not against ourselves.
+
+    iter77 — our price now comes from the catalogue (my_products, VAT-resolved),
+    the same source My Products and Price Intel read, so the raise is applied
+    there rather than to our storefront snapshot."""
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         await _seed(db)
-        await db.product_snapshots.update_one(
-            {"id": "s-LINDO-400-own"}, {"$set": {"price": 60.0}})
+        await db.my_products.update_one(
+            {"sku": "LINDO-400"}, {"$set": {"price": 60.0}})
         out = await _scan()
         row = _ours(out, "LINDO-400")
         assert row["market_lowest"] == 28.00                  # not 60.0, not 24.35
@@ -293,6 +385,9 @@ if __name__ == "__main__":
     test_the_three_ex_vat_cases_now_report_the_inc_vat_low()
     test_signor_gatto_case_is_unchanged()
     test_overpriced_count_drops_to_exclude_self_comparisons()
+    test_uplift_is_the_gap_times_our_own_units_sold()
+    test_our_row_carries_every_seller_and_names_the_cheapest_and_dearest()
+    test_opportunities_are_our_products_only_competitors_get_their_own_list()
     test_product_with_no_competitor_is_skipped_entirely()
     test_competitor_only_low_is_used_when_we_are_the_expensive_one()
     print("PASS: iter50 scanner competitor-only market low")

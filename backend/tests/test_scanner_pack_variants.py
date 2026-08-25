@@ -139,7 +139,10 @@ def test_butchers_variant_is_excluded_from_the_market_low():
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one(
             {"sku": BUTCHERS, "name_en": "Butcher's Wet Cat Food Venison in Jelly 400g",
-             "name_ar": "", "price": 208.0})
+             # iter77 — the Scanner reads our price through the shared VAT
+             # resolver now; the tag says "this number is already the shelf
+             # price" so it is not grossed by 1.15.
+             "name_ar": "", "price": 208.0, "price_basis": "storefront_inc_vat"})
         await db.products.insert_one(
             {"id": "p1", "sku": BUTCHERS, "name_ar": "",
              "name_en": "Butcher's Wet Cat Food Venison in Jelly 400g"})
@@ -197,7 +200,8 @@ def test_genuine_single_store_discount_is_never_excluded():
         now = server.datetime.now(server.timezone.utc)
         old = now - server.timedelta(days=3)
         await db.my_products.insert_one(
-            {"sku": RC, "name_en": "Royal Canin Medium Adult 15kg", "name_ar": "", "price": 466.0})
+            {"sku": RC, "name_en": "Royal Canin Medium Adult 15kg", "name_ar": "",
+             "price": 466.0, "price_basis": "storefront_inc_vat"})
         await db.products.insert_one(
             {"id": "p2", "sku": RC, "name_ar": "", "name_en": "Royal Canin Medium Adult 15kg"})
         await db.product_snapshots.insert_many([
@@ -237,7 +241,8 @@ def test_wild_outlier_without_variant_evidence_is_kept_and_flagged():
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one(
-            {"sku": RC, "name_en": "Royal Canin Medium Adult 15kg", "name_ar": "", "price": 466.0})
+            {"sku": RC, "name_en": "Royal Canin Medium Adult 15kg", "name_ar": "",
+             "price": 466.0, "price_basis": "storefront_inc_vat"})
         await db.products.insert_one(
             {"id": "p3", "sku": RC, "name_ar": "", "name_en": "Royal Canin Medium Adult 15kg"})
         await db.product_snapshots.insert_many([
@@ -278,7 +283,8 @@ def test_moderate_spreads_are_untouched():
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one(
-            {"sku": RC, "name_en": "Royal Canin Medium Adult 15kg", "name_ar": "", "price": 466.0})
+            {"sku": RC, "name_en": "Royal Canin Medium Adult 15kg", "name_ar": "",
+             "price": 466.0, "price_basis": "storefront_inc_vat"})
         await db.products.insert_one(
             {"id": "p4", "sku": RC, "name_ar": "", "name_en": "Royal Canin Medium Adult 15kg"})
         await db.product_snapshots.insert_many([
@@ -305,7 +311,8 @@ def test_store_with_variants_still_competes_at_its_real_price():
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one(
-            {"sku": BUTCHERS, "name_en": "Butcher's 400g", "name_ar": "", "price": 208.0})
+            {"sku": BUTCHERS, "name_en": "Butcher's 400g", "name_ar": "",
+             "price": 208.0, "price_basis": "storefront_inc_vat"})
         await db.products.insert_one(
             {"id": "p5", "sku": BUTCHERS, "name_ar": "", "name_en": "Butcher's 400g"})
         await db.product_snapshots.insert_many([

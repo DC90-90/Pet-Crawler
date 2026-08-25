@@ -5487,15 +5487,22 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
         _units_by_pair[(_p["sku"], _p["store_id"])] = int(_p["units"] or 0)
 
     # Get own store id
-    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1})
     own_id = own_store["id"] if own_store else None
+    own_store_name = (own_store or {}).get("name") or "My store"
+
+    # iter77 — EXACT own units per SKU from the Zid orders ledger when it is
+    # available (same preference order iter73k established for revenue), so the
+    # uplift figure is "the gap × what I actually sold" rather than a proxy.
+    _own_orders = await _own_orders_aggregate(db, sealed_start_utc, sealed_end_utc)
+    _own_units_by_sku = (_own_orders or {}).get("by_sku") or {}
 
     # Get all SKUs we care about (own catalog) — prevents scanning 12k+ unrelated SKUs
     # iter51 — names come along so the pack-count guard below can compare OUR
     # descriptor against the shared catalogue one.
     _own_rows = await db.my_products.find(
         {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1,
-             "price": 1, "sale_price": 1,
+             "price": 1, "sale_price": 1, "quantity": 1, "in_stock": 1,
              # iter73z — same VAT basis the rest of the app resolves with, so
              # the sanity ratio below compares shelf price to shelf price.
              "original_price": 1, "price_basis": 1}).to_list(20000)
@@ -5505,8 +5512,12 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     # iter53 — our own price per SKU, for the shared-barcode sanity check
     own_price = {p["sku"]: (_effective_own_price(p) or None)
                  for p in _own_rows if p.get("sku")}
+    own_stock = {p["sku"]: (bool(p.get("in_stock")) or (p.get("quantity") or 0) > 0,
+                            int(p.get("quantity") or 0))
+                 for p in _own_rows if p.get("sku")}
     if not own_skus:
-        return {"opportunities": [], "well_positioned": [], "undercut": [],
+        return {"opportunities": [], "competitors_overpriced": [],
+                "well_positioned": [], "undercut": [],
                 "summary": {"total_overpriced": 0, "total_uplift": 0, "zero_sales_overpriced": 0}}
 
     # Aggregate latest snapshot per (sku, store_id) for our SKUs only.
@@ -5535,6 +5546,7 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     prod_map = {p["sku"]: p for p in products}
 
     opportunities = []
+    competitors_overpriced = []
     well_positioned = []
     undercut = []
     total_overpriced = 0
@@ -5592,7 +5604,14 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
 
         # iter52 — swap a store's pack-variant price for its real comparable.
         # The store still competes; only the unit-variant listing is dropped.
+        # iter77 — the corrected price is now kept PER STORE, not just as a flat
+        # list. The detail sheet shows every seller (who is cheapest, who is
+        # dearest, where we sit), and that list has to be built from the SAME
+        # corrected prices the market low comes from — otherwise the chart and
+        # the "market lowest" KPI disagree, which is exactly what the client hit:
+        # a 99 SAR market low next to a 172.52 bar.
         _corrected = []
+        _sellers = []
         for s in store_snaps:
             if not (s.get("price") or 0) > 0 or s["store_id"] == own_id:
                 continue
@@ -5604,6 +5623,11 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                     "reason": "suspected_pack_mismatch",
                 })
                 _corrected.append(v["effective"])
+                _sellers.append({"store_id": s["store_id"],
+                                 "store_name": s.get("store_name") or s["store_id"],
+                                 "price": v["effective"], "is_own": False,
+                                 "in_stock": bool(s.get("in_stock")),
+                                 "qty": s.get("qty_available") or 0})
                 continue
             # iter53 — shared-barcode price sanity. The Scanner buckets by the
             # SKU string, which for these products IS the manufacturer EAN, so
@@ -5620,6 +5644,11 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                 })
                 continue
             _corrected.append(s["price"])
+            _sellers.append({"store_id": s["store_id"],
+                             "store_name": s.get("store_name") or s["store_id"],
+                             "price": s["price"], "is_own": False,
+                             "in_stock": bool(s.get("in_stock")),
+                             "qty": s.get("qty_available") or 0})
         # iter53 — every competitor price can now be excluded, unlike iter52
         # where variants were substituted rather than removed. With nothing
         # trustworthy left there is no market low, so the SKU is skipped rather
@@ -5640,52 +5669,107 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                                      "kept": True, "reason": "low_price_no_variant_evidence"})
         min_price = min(comp_prices)
         avg_price = statistics.mean(comp_prices)
-        for s in store_snaps:
-            if s.get("price", 0) <= 0:
-                continue
-            gap_pct = round((s["price"] - min_price) / min_price * 100, 1) if min_price > 0 else 0
+        max_price = max(comp_prices)
+        _low_seller = min(_sellers, key=lambda r: r["price"])
+        _high_seller = max(_sellers, key=lambda r: r["price"])
+        p = prod_map.get(sku, {})
+        _market_units = _units_by_sku.get(sku, 0)
+
+        # ── OUR row ──────────────────────────────────────────────────────
+        # iter77 — one row per OUR product, not one per seller. The endpoint used
+        # to emit a row for EVERY store carrying the SKU and put that store's
+        # price in a field called `my_price`, which the page renders as "MY
+        # PRICE" / "YOUR PRICE". So a competitor's 172.52 was shown as the
+        # client's own price, and the headline "overpriced products" and
+        # "potential uplift" KPIs were counting competitors' overpricing.
+        # Competitor rows now live in `competitors_overpriced`, clearly labelled.
+        my_p = own_price.get(sku)
+        _my_in_stock, _my_qty = own_stock.get(sku, (False, 0))
+        sellers = sorted(
+            _sellers + ([{"store_id": own_id, "store_name": own_store_name,
+                          "price": my_p, "is_own": True,
+                          "in_stock": _my_in_stock, "qty": _my_qty}]
+                        if (my_p or 0) > 0 else []),
+            key=lambda r: r["price"])
+        for _r in sellers:
+            _r["is_lowest"] = _r["price"] == sellers[0]["price"]
+            _r["is_highest"] = _r["price"] == sellers[-1]["price"]
+
+        if (my_p or 0) > 0:
+            gap_pct = round((my_p - min_price) / min_price * 100, 1) if min_price > 0 else 0
             if gap_pct < 10:
-                # Low-gap: well-positioned tracking
-                gap_avg = abs(s["price"] - avg_price) / avg_price * 100 if avg_price > 0 else 0
+                # Low-gap: well-positioned / undercutting tracking (our store)
+                gap_avg = abs(my_p - avg_price) / avg_price * 100 if avg_price > 0 else 0
                 if gap_avg <= 5:
-                    p = prod_map.get(sku, {})
-                    well_positioned.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_price, 2), "store_name": s["store_name"]})
-                # `<=` not `==`: min_price is now the COMPETITOR low, so our own
+                    well_positioned.append({"sku": sku, "name_ar": p.get("name_ar", ""),
+                                            "price": my_p, "market_avg": round(avg_price, 2),
+                                            "store_name": own_store_name})
+                # `<=` not `==`: min_price is the COMPETITOR low, so our own
                 # store undercutting the market sits strictly below it and would
                 # otherwise drop out of this list entirely.
-                if s["price"] <= min_price and s["price"] < avg_price * 0.95:
-                    p = prod_map.get(sku, {})
-                    undercut.append({"sku": sku, "name_ar": p.get("name_ar", ""), "price": s["price"], "market_avg": round(avg_price, 2), "store_name": s["store_name"]})
+                if my_p <= min_price and my_p < avg_price * 0.95:
+                    undercut.append({"sku": sku, "name_ar": p.get("name_ar", ""),
+                                     "price": my_p, "market_avg": round(avg_price, 2),
+                                     "store_name": own_store_name})
+            else:
+                # iter77 — uplift is the gap × WHAT WE SOLD in the window, from
+                # the Zid orders ledger where it exists and the sealed sales
+                # rollups otherwise. It used to be gap × number of sellers, which
+                # is why a product with one unit of demand claimed 588 SAR.
+                _ledger_units = int((_own_units_by_sku.get(sku) or {}).get("units") or 0)
+                _rollup_units = _units_by_pair.get((sku, own_id), 0) if own_id else 0
+                _units_row = _ledger_units or _rollup_units
+                _units_basis = ("orders" if _ledger_units else
+                                "rollup" if _rollup_units else "none")
+                uplift = round((my_p - min_price) * _units_row, 2)
+                badge = ("overpriced_risk" if gap_pct >= 25 else
+                         "quick_win" if uplift >= 500 and _my_qty > 0 else "overpriced")
+                # iter77 — this KPI is labelled "ZERO SALES + OVERPRICED" on the
+                # page. It used to count gap >= 25% regardless of sales because
+                # no units signal existed; it does now, so the count means what
+                # the label says.
+                if _units_row == 0:
+                    zero_sales_overpriced += 1
+                total_overpriced += 1
+                total_uplift += uplift
+                opportunities.append({
+                    "sku": sku, "name_ar": p.get("name_ar", sku), "name_en": p.get("name_en", ""),
+                    "category": p.get("category", ""), "image_url": p.get("image_url", ""),
+                    "store_name": own_store_name, "store_id": own_id,
+                    "my_price": my_p,
+                    "market_lowest": min_price,
+                    "lowest_store_name": _low_seller["store_name"],
+                    "lowest_store_id": _low_seller["store_id"],
+                    "market_highest": max_price,
+                    "highest_store_name": _high_seller["store_name"],
+                    "market_avg": round(avg_price, 2),
+                    "gap_pct": gap_pct, "units_sold": _units_row,
+                    "units_basis": _units_basis, "market_sold": _market_units,
+                    "revenue_uplift": uplift, "badge": badge,
+                    "num_sellers": len(sellers), "sellers": sellers[:20],
+                    "in_stock": _my_in_stock, "qty": _my_qty,
+                })
+
+        # ── competitor rows, kept in their own clearly-labelled list ─────
+        for _r in _sellers:
+            _cg = round((_r["price"] - min_price) / min_price * 100, 1) if min_price > 0 else 0
+            if _cg < 10:
                 continue
-            uplift = round((s["price"] - min_price) * len(store_snaps), 2)
-            p = prod_map.get(sku, {})
-            # iter73 — real 14D (or requested-window) sales from the sealed
-            # sales rollups, no more hardcoded 0. The badge logic below still
-            # keys on `qty_available` for `quick_win` (immediate stock-in-hand
-            # signal) and on `gap_pct` for `overpriced_risk`; adding a units
-            # signal to `zero_sales_overpriced` would silently redefine an
-            # existing KPI, so that count stays gap-only until product signs
-            # off on a wider rule.
-            _units_row = _units_by_pair.get((sku, s["store_id"]), 0)
-            _market_units = _units_by_sku.get(sku, 0)
-            badge = "overpriced_risk" if gap_pct >= 25 else "quick_win" if uplift >= 500 and s.get("qty_available", 0) > 0 else "overpriced"
-            if badge == "overpriced_risk":
-                zero_sales_overpriced += 1
-            total_overpriced += 1
-            total_uplift += uplift
-            opportunities.append({
-                "sku": sku, "name_ar": p.get("name_ar", sku), "name_en": p.get("name_en", ""), "category": p.get("category", ""),
-                "image_url": p.get("image_url", ""), "store_name": s["store_name"], "store_id": s["store_id"],
-                "my_price": s["price"], "market_lowest": min_price, "market_avg": round(avg_price, 2),
-                "gap_pct": gap_pct, "units_sold": _units_row, "market_sold": _market_units,
-                "revenue_uplift": uplift, "badge": badge, "num_sellers": len(store_snaps),
-                "in_stock": s.get("in_stock", False), "qty": s.get("qty_available", 0),
+            competitors_overpriced.append({
+                "sku": sku, "name_ar": p.get("name_ar", sku), "name_en": p.get("name_en", ""),
+                "store_name": _r["store_name"], "store_id": _r["store_id"],
+                "price": _r["price"], "market_lowest": min_price,
+                "lowest_store_name": _low_seller["store_name"],
+                "gap_pct": _cg, "units_sold": _units_by_pair.get((sku, _r["store_id"]), 0),
+                "my_price": my_p,
             })
 
-    opportunities.sort(key=lambda x: x["revenue_uplift"], reverse=True)
+    opportunities.sort(key=lambda x: (x["revenue_uplift"], x["gap_pct"]), reverse=True)
+    competitors_overpriced.sort(key=lambda x: x["gap_pct"], reverse=True)
     _sealed_health = await ledger.sealed_days_in_window(db, days)
     return {
         "opportunities": opportunities[:200],
+        "competitors_overpriced": competitors_overpriced[:100],
         "well_positioned": well_positioned[:50],
         "undercut": undercut[:50],
         "summary": {
@@ -5694,6 +5778,10 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
             "zero_sales_overpriced": zero_sales_overpriced,
             "overpriced_count": total_overpriced,
             "total_uplift_sar": round(total_uplift, 2),
+            # iter77 — competitors priced above the market low. Kept out of the
+            # headline counts (which are about OUR store) and rendered in their
+            # own section.
+            "competitors_overpriced": len(competitors_overpriced),
             # iter51 — SKUs withheld because our pack count disagrees with the
             # catalogue's. Reported rather than silently dropped.
             "pack_mismatch_skipped": len(pack_mismatch_skipped),

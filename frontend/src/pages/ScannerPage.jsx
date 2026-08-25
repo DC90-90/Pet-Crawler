@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
-import { Zap, RefreshCw, TrendingDown, AlertTriangle, Shield, Trophy } from "lucide-react";
+import { Zap, RefreshCw, TrendingDown, AlertTriangle, Shield, Trophy, ChevronDown, ChevronRight, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -24,6 +24,7 @@ export default function ScannerPage() {
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(14);
   const [selectedOpp, setSelectedOpp] = useState(null);
+  const [showComps, setShowComps] = useState(false);
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -37,14 +38,16 @@ export default function ScannerPage() {
 
   if (loading || !data) return <div className="p-6 text-sm text-[#A1E4DB]">{t("loading")}</div>;
   const { summary, opportunities, well_positioned, undercut } = data;
+  const competitorsOverpriced = data.competitors_overpriced || [];
+  const compTotal = summary.competitors_overpriced ?? competitorsOverpriced.length;
 
-  // Build price distribution for selected opportunity
-  const buildPriceDist = () => {
-    if (!selectedOpp) return [];
-    // Find all store prices for this SKU from opportunities
-    const related = opportunities.filter((o) => o.sku === selectedOpp.sku);
-    return related.map((r) => ({ store: r.store_name, price: r.my_price }));
-  };
+  // iter77 — every comparable seller for the selected product, straight from the
+  // endpoint. This used to filter the opportunities list and plot `my_price`
+  // under each competitor's name, so the cheapest seller (the one that DEFINES
+  // "market lowest") was never drawn and the chart contradicted the KPI.
+  const sellerRows = selectedOpp?.sellers || [];
+  const barFill = (s) =>
+    s.is_own ? "#FF3B30" : s.is_lowest ? "#16A34A" : s.is_highest ? "#F59E0B" : "#002DF5";
 
   return (
     <div className="p-6 space-y-5" data-testid="scanner-page">
@@ -74,30 +77,31 @@ export default function ScannerPage() {
         <div className="kpi-card border-s-4 border-s-red-500">
           <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Overpriced Products (10%+)</p>
           <p className="text-2xl font-bold text-white mt-1">{summary.overpriced_count}</p>
-          <p className="text-[10px] text-[#A1E4DB] mt-0.5">products priced above market</p>
+          <p className="text-[10px] text-[#A1E4DB] mt-0.5">my products above the market low</p>
         </div>
         <div className="kpi-card border-s-4 border-s-green-500">
           <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Potential Revenue Uplift</p>
           <p className="text-2xl font-bold text-green-600 mt-1">{summary.total_uplift_sar.toLocaleString()} ﷼</p>
-          <p className="text-[10px] text-[#A1E4DB] mt-0.5">if you matched market prices</p>
+          <p className="text-[10px] text-[#A1E4DB] mt-0.5">price gap × units I sold in {days}d</p>
         </div>
         <div className="kpi-card border-s-4 border-s-yellow-500">
           <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Zero Sales + Overpriced</p>
           <p className="text-2xl font-bold text-yellow-600 mt-1">{summary.zero_sales_overpriced}</p>
-          <p className="text-[10px] text-[#A1E4DB] mt-0.5">immediate action recommended</p>
+          <p className="text-[10px] text-[#A1E4DB] mt-0.5">overpriced with no sales in {days}d</p>
         </div>
       </div>
 
       {/* Opportunities Table */}
       <div className="glass-card rounded-md overflow-hidden">
         <div className="px-4 py-3 border-b border-white/10 bg-[#0A2728]/80/5">
-          <h3 className="text-sm font-semibold text-white">Overpriced Products — Sorted by Revenue Uplift</h3>
+          <h3 className="text-sm font-semibold text-white">My Overpriced Products — Sorted by Revenue Uplift</h3>
+          <p className="text-[10px] text-[#A1E4DB] mt-0.5">My shelf price vs the cheapest competitor carrying the same product</p>
         </div>
         <Table className="dense-table">
           <TableHeader>
             <TableRow className="bg-[#0A2728]/80/5">
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Product</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Store</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Cheapest Seller</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">My Price</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Market Low</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Gap %</TableHead>
@@ -115,7 +119,7 @@ export default function ScannerPage() {
               return (
                 <TableRow key={`${o.sku}-${o.store_id}-${i}`} className="cursor-pointer hover:bg-[#0A2728]/80/5" onClick={() => setSelectedOpp(o)} data-testid={`opp-row-${i}`}>
                   <TableCell><div><p className="text-xs font-medium text-white inline-flex items-center gap-1.5"><MineBadge sku={o.sku} />{o.name_ar}</p><SkuLine sku={o.sku} barcode={o.barcode} /></div></TableCell>
-                  <TableCell><span className="text-xs">{o.store_name}</span></TableCell>
+                  <TableCell><span className="text-xs" data-testid={`opp-lowest-store-${i}`}>{o.lowest_store_name || "—"}</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-red-500">{o.my_price} ﷼</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-green-600">{o.market_lowest} ﷼</span></TableCell>
                   <TableCell><span className="text-xs font-bold text-red-500">+{o.gap_pct}%</span></TableCell>
@@ -127,6 +131,51 @@ export default function ScannerPage() {
             })}
           </TableBody>
         </Table>
+      </div>
+
+      {/* Competitors priced above market — kept separate from MY opportunities */}
+      <div className="glass-card rounded-md overflow-hidden" data-testid="competitors-overpriced-card">
+        <button
+          onClick={() => setShowComps((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 border-b border-white/10 text-start transition-colors hover:bg-white/5"
+          data-testid="competitors-overpriced-toggle">
+          <div className="flex items-center gap-1.5">
+            {showComps ? <ChevronDown className="w-4 h-4 text-[#A1E4DB]" /> : <ChevronRight className="w-4 h-4 text-[#A1E4DB]" />}
+            <Users className="w-4 h-4 text-[#A1E4DB]" />
+            <h3 className="text-sm font-semibold text-white">Competitors Priced Above Market ({compTotal})</h3>
+          </div>
+          <span className="text-[10px] text-[#A1E4DB]">
+            {compTotal > competitorsOverpriced.length ? `showing top ${competitorsOverpriced.length} · ` : ""}not counted in my KPIs
+          </span>
+        </button>
+        {showComps && (
+          <Table className="dense-table">
+            <TableHeader>
+              <TableRow className="bg-[#0A2728]/80/5">
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Product</TableHead>
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Store</TableHead>
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Their Price</TableHead>
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Market Low</TableHead>
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">My Price</TableHead>
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Gap %</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {competitorsOverpriced.length === 0 ? (
+                <TableRow><TableCell colSpan={6} className="text-center py-8 text-xs text-[#A1E4DB]">{t("no_data")}</TableCell></TableRow>
+              ) : competitorsOverpriced.map((c, i) => (
+                <TableRow key={`comp-${c.sku}-${c.store_id}-${i}`} data-testid={`comp-row-${i}`}>
+                  <TableCell><div><p className="text-xs font-medium text-white">{c.name_ar}</p><SkuLine sku={c.sku} /></div></TableCell>
+                  <TableCell><span className="text-xs">{c.store_name}</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-amber-500">{c.price} ﷼</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-green-600">{c.market_lowest} ﷼</span><span className="text-[10px] text-[#A1E4DB] ms-1">{c.lowest_store_name}</span></TableCell>
+                  <TableCell><span className="text-xs">{c.my_price != null ? `${c.my_price} ﷼` : "—"}</span></TableCell>
+                  <TableCell><span className="text-xs font-bold text-amber-500">+{c.gap_pct}%</span></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </div>
 
       {/* Well Positioned + Undercut */}
@@ -167,27 +216,50 @@ export default function ScannerPage() {
             <div className="p-5 space-y-5">
               <div className="flex gap-2"><Badge variant="outline" className="text-[10px] font-mono">{selectedOpp.sku}</Badge><Badge variant="secondary" className="text-[10px]">{selectedOpp.category}</Badge></div>
               <div className="grid grid-cols-2 gap-3">
-                <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#A1E4DB]">Your Price</p><p className="text-lg font-bold text-red-500">{selectedOpp.my_price} ﷼</p></div>
-                <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#A1E4DB]">Market Lowest</p><p className="text-lg font-bold text-green-600">{selectedOpp.market_lowest} ﷼</p></div>
+                <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#A1E4DB]">Your Price</p><p className="text-lg font-bold text-red-500" data-testid="opp-detail-my-price">{selectedOpp.my_price} ﷼</p><p className="text-[9px] text-[#A1E4DB] mt-0.5">{selectedOpp.store_name}</p></div>
+                <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#A1E4DB]">Market Lowest</p><p className="text-lg font-bold text-green-600" data-testid="opp-detail-lowest">{selectedOpp.market_lowest} ﷼</p><p className="text-[9px] text-green-500/80 mt-0.5" data-testid="opp-detail-lowest-store">{selectedOpp.lowest_store_name || "—"}</p></div>
+                <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#A1E4DB]">Highest Competitor</p><p className="text-lg font-bold text-amber-500" data-testid="opp-detail-highest">{selectedOpp.market_highest} ﷼</p><p className="text-[9px] text-amber-500/80 mt-0.5" data-testid="opp-detail-highest-store">{selectedOpp.highest_store_name || "—"}</p></div>
+                <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#A1E4DB]">Market Average</p><p className="text-lg font-bold text-[#1E988E]" data-testid="opp-detail-avg">{selectedOpp.market_avg} ﷼</p><p className="text-[9px] text-[#A1E4DB] mt-0.5">{selectedOpp.num_sellers} sellers</p></div>
               </div>
               <div className="bg-[#0A2728]/80/5 rounded-md p-3 space-y-2 text-xs">
-                <p>Lower to <span className="font-bold text-green-600">{selectedOpp.market_lowest} ﷼</span> to become the cheapest seller</p>
+                <p>Lower to <span className="font-bold text-green-600">{selectedOpp.market_lowest} ﷼</span> to beat <span className="font-semibold text-white">{selectedOpp.lowest_store_name}</span> and become the cheapest seller</p>
                 <p>Lower to <span className="font-bold text-[#1E988E]">{selectedOpp.market_avg} ﷼</span> to match market average</p>
-                <p>Estimated uplift: <span className="font-bold text-green-600">{selectedOpp.revenue_uplift.toLocaleString()} ﷼</span> per period</p>
+                <p>Estimated uplift: <span className="font-bold text-green-600" dir="ltr">{selectedOpp.revenue_uplift.toLocaleString()} ﷼</span></p>
+                <p className="text-[10px] text-[#A1E4DB]" dir="ltr">{selectedOpp.gap_pct}% gap × {selectedOpp.units_sold} unit(s) you sold in {days}d</p>
               </div>
+              {/* All sellers — who is cheapest, who is dearest, where we sit */}
+              {sellerRows.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-semibold mb-2">All Sellers ({selectedOpp.num_sellers}{selectedOpp.num_sellers > sellerRows.length ? ` — showing ${sellerRows.length}` : ""})</h4>
+                  <div className="rounded-md border border-white/10 divide-y divide-white/5" data-testid="opp-seller-list">
+                    {sellerRows.map((s, si) => (
+                      <div key={`${s.store_id}-${si}`} className={`flex items-center justify-between px-3 py-2 ${s.is_own ? "bg-red-500/10" : ""}`} data-testid={`opp-seller-row-${si}`}>
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-xs text-white truncate">{s.store_name}</span>
+                          {s.is_own && <Badge variant="outline" className="text-[9px] border-red-400/30 text-red-400">You</Badge>}
+                          {s.is_lowest && <Badge variant="outline" className="text-[9px] border-green-500/30 text-green-500">Lowest</Badge>}
+                          {s.is_highest && <Badge variant="outline" className="text-[9px] border-amber-400/30 text-amber-400">Highest</Badge>}
+                          {!s.in_stock && <Badge variant="outline" className="text-[9px] border-white/20 text-[#A1E4DB]">Out of stock</Badge>}
+                        </div>
+                        <span className={`text-xs font-semibold ${s.is_own ? "text-red-400" : s.is_lowest ? "text-green-500" : "text-white"}`} dir="ltr">{s.price} ﷼</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {/* Price Distribution */}
-              {buildPriceDist().length > 0 && (
+              {sellerRows.length > 0 && (
                 <div>
                   <h4 className="text-xs font-semibold mb-2">Price Distribution — All Sellers</h4>
                   <ResponsiveContainer width="100%" height={140}>
-                    <BarChart data={buildPriceDist()}>
+                    <BarChart data={sellerRows}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                      <XAxis dataKey="store" tick={{ fontSize: 9, fill: "#A1E4DB" }} />
+                      <XAxis dataKey="store_name" tick={{ fontSize: 9, fill: "#A1E4DB" }} />
                       <YAxis tick={{ fontSize: 9, fill: "#A1E4DB" }} />
                       <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v) => [`${v} ﷼`, "Price"]} />
                       <Bar dataKey="price" radius={[2, 2, 0, 0]}>
-                        {buildPriceDist().map((entry) => (
-                          <Cell key={entry.store} fill={entry.store === selectedOpp.store_name ? "#FF3B30" : "#002DF5"} />
+                        {sellerRows.map((s, si) => (
+                          <Cell key={`${s.store_id}-${si}`} fill={barFill(s)} />
                         ))}
                       </Bar>
                     </BarChart>
