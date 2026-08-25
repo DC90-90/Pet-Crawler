@@ -44,3 +44,21 @@ RULES:
    `.catch(console.error)` renders as an eternal "Loading…" to the client.
 5. Ship a diagnostic endpoint with the fix (`/api/admin/perf-probe`): EXPLAIN
    plans + stage timings from production beat any local guess.
+
+## A projection can silently change a PRICE (Aug 10 2026, iter73z)
+`_effective_own_price` grosses a my_products row by 1.15 when `price_basis` is
+absent (legacy ex-VAT assumption). Two read paths projected `price_basis` away,
+so already-inc-VAT rows were grossed a SECOND time: client's storefront 563.50
+rendered as 648.02 on My Products while the detail panel (which projected the
+field) showed 563.50. Same helper, same DB row, two different prices.
+
+RULES:
+1. If a helper's OUTPUT depends on a field, every caller's projection must
+   include that field. Add a source-level fence test (find the projection,
+   check the enclosing function for the helper call) — comments do not hold.
+2. Cross-surface disagreement on the SAME value is the tell: diff the read
+   paths' projections before touching any pricing rule.
+3. `/api/my-products` + Insights + Price-Intel are served from
+   `db.dashboard_cache`, rebuilt only after a crawl or the 6h own-store sync.
+   Any read-side fix needs POST /api/admin/refresh-caches after deploy or the
+   client keeps seeing the old number.

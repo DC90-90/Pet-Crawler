@@ -1139,6 +1139,34 @@ async def admin_ensure_snapshot_indexes(user=Depends(require_super_admin)):
                     "under `failed` needs manual attention."}
 
 
+@router.post("/admin/refresh-caches")
+async def admin_refresh_caches(user=Depends(require_super_admin)):
+    """iter73z — force-rebuild every precomputed cache, now.
+
+    `/api/my-products`, Insights and Price-Intel are served from
+    `db.dashboard_cache`, which is only rebuilt after a crawl or the 6-hourly
+    own-store sync. That means a read-side pricing FIX can be deployed and the
+    page keeps showing the old (wrong) number for hours. This endpoint makes
+    the rebuild an explicit, immediate operation.
+    """
+    out = {}
+    cache_clear()
+    try:
+        out["dashboard_cache"] = "recomputed" if await maybe_recompute_dashboard_cache(
+            db, force=True) else "skipped"
+    except Exception as exc:
+        out["dashboard_cache"] = f"failed: {type(exc).__name__}: {str(exc)[:160]}"
+        logger.exception("[Admin refresh-caches] dashboard cache failed")
+    try:
+        out["page_caches"] = "recomputed" if await maybe_recompute_page_caches(
+            db, force=True) else "skipped"
+    except Exception as exc:
+        out["page_caches"] = f"failed: {type(exc).__name__}: {str(exc)[:160]}"
+        logger.exception("[Admin refresh-caches] page caches failed")
+    logger.info("[Admin refresh-caches] user=%s %s", user.get("email"), out)
+    return {"ok": not any(str(v).startswith("failed") for v in out.values()), **out}
+
+
 def _plan_summary(explain_doc):
     """Compact, human-readable digest of a Mongo explain document."""
     stages, found = [], {"totalDocsExamined": None, "totalKeysExamined": None,
@@ -2507,6 +2535,13 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
         {},
         {"_id": 0, "sku": 1, "barcode": 1, "name_ar": 1, "name_en": 1, "product_url": 1,
          "price": 1, "sale_price": 1, "quantity": 1, "in_stock": 1, "last_synced_at": 1,
+         # iter73z — `original_price` + `price_basis` are NOT optional here:
+         # `_effective_own_price` reads the basis tag to decide whether a row is
+         # already inc-VAT. Projecting them away made every row look LEGACY
+         # (basis "") so the iter73p heal grossed storefront-truth prices by
+         # 1.15 a SECOND time — client-reported: 563.50 SAR on the storefront
+         # rendered as 648.02 SAR on this page.
+         "original_price": 1, "price_basis": 1,
          "present_on_store": 1, "last_seen_on_store": 1, "discovered_via": 1},
     ).to_list(20000)
     my_url_by_sku = {p["sku"]: p.get("product_url") for p in my_products_docs if p.get("product_url")}
@@ -4212,7 +4247,12 @@ async def _compute_market_position_summary(db):
     market_position_summary = None
     if own_store_id:
         # Read my_products directly (own prices don't live in product_snapshots)
-        my_prods = await db.my_products.find({}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1, "last_synced_at": 1}).to_list(length=None)
+        # iter73z — `original_price` + `price_basis` must be projected wherever
+        # `_effective_own_price` is called, or the heal mistakes an inc-VAT row
+        # for a legacy ex-VAT one and grosses it by 1.15 again.
+        my_prods = await db.my_products.find({}, {"_id": 0, "sku": 1, "price": 1, "sale_price": 1,
+                                                 "original_price": 1, "price_basis": 1,
+                                                 "last_synced_at": 1}).to_list(length=None)
         my_skus = [p["sku"] for p in my_prods]
         my_price_lookup = {p["sku"]: p for p in my_prods}
         if my_skus:
@@ -5407,12 +5447,15 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     # descriptor against the shared catalogue one.
     _own_rows = await db.my_products.find(
         {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1,
-             "price": 1, "sale_price": 1}).to_list(20000)
+             "price": 1, "sale_price": 1,
+             # iter73z — same VAT basis the rest of the app resolves with, so
+             # the sanity ratio below compares shelf price to shelf price.
+             "original_price": 1, "price_basis": 1}).to_list(20000)
     own_skus = set(p["sku"] for p in _own_rows if p.get("sku"))
     own_name = {p["sku"]: f"{p.get('name_ar') or ''} {p.get('name_en') or ''}"
                 for p in _own_rows if p.get("sku")}
     # iter53 — our own price per SKU, for the shared-barcode sanity check
-    own_price = {p["sku"]: (p.get("sale_price") or p.get("price"))
+    own_price = {p["sku"]: (_effective_own_price(p) or None)
                  for p in _own_rows if p.get("sku")}
     if not own_skus:
         return {"opportunities": [], "well_positioned": [], "undercut": [],
