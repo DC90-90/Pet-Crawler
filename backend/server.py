@@ -38,6 +38,8 @@ from crawlers import (
 )
 from store_registry import ensure_stores as registry_ensure_stores
 import crawlers  # iter74 — module handle for proxy health introspection
+import fetch_policy  # iter75 — per-host pacing diagnostics
+import store_registry  # iter75 — PROXY_ENABLED introspection
 from salla_sold_velocity import (
     diff_series as salla_diff_series,
     store_revenue_from_velocity as salla_store_revenue_from_velocity,
@@ -1153,13 +1155,18 @@ async def admin_proxy_health(force: bool = Query(True), user=Depends(require_sup
     """
     ok, reason = await crawlers.proxy_health(force=bool(force))
     return {
+        "proxy_enabled": store_registry.PROXY_ENABLED,
         "proxy_ok": ok,
         "reason": reason or None,
         "exit_ip": crawlers._PROXY_HEALTH.get("exit_ip"),
         "rotation_usernames": len(crawlers._PROXY_USERNAMES),
         "host": crawlers._PROXY_HOST,
         "fallback": "direct connection (crawls continue without the Saudi exit IP)",
-        "action_required": None if ok else (
+        # iter75 — the crawler no longer depends on any paid proxy. What matters
+        # now is how each storefront is treating our own IP, so expose it.
+        "tls_impersonation_available": fetch_policy.impersonation_available(),
+        "fetch_hosts": fetch_policy.host_diagnostics(),
+        "action_required": None if (ok or not store_registry.PROXY_ENABLED) else (
             "Renew / top up the Webshare residential subscription. Until then "
             "proxied stores are crawled directly, which works today but can be "
             "geo-blocked or rate-limited by some storefronts."),
@@ -1489,6 +1496,12 @@ async def create_store(data: StoreIn, user=Depends(get_user)):
     if platform not in ("salla", "zid", "shopify", "woocommerce", "custom"):
         platform = "custom"
     now = datetime.now(timezone.utc).isoformat()
+    # iter76 — *.example.com is RFC 2606 reserved: a test fixture, never a real
+    # storefront. The API-contract regression suite posts one on every run and
+    # the rows then sat on the client's Stores page looking like tracked
+    # competitors. Refuse at the boundary (400 — the suite already accepts it).
+    if data.domain.lower().rstrip(".").endswith("example.com"):
+        raise HTTPException(400, "Reserved test domain (*.example.com) cannot be tracked")
     doc = {
         "id": str(uuid.uuid4()), "name": data.name, "domain": data.domain,
         "platform": platform, "base_url": data.base_url or f"https://{data.domain}",
@@ -4183,11 +4196,15 @@ async def _sales_pairs_from_rollups(db, since, store_id=None, until=None):
                 "units_qty": 1, "rev_qty": 1, "qty_drop": 1}).batch_size(2000)
     async for r in cursor:
         a = acc.setdefault((r["store_id"], r["sku"]), [0, 0.0, 0, 0.0, 0])
-        a[0] += r["units_sold"]
-        a[1] += r["rev_sold"]
-        a[2] += r["units_qty"]
-        a[3] += r["rev_qty"]
-        a[4] += r["qty_drop"]
+        # iter76 — defensive reads. Partial rollup rows exist in the wild (an
+        # early test run wrote {store_id, sku, date} shells into the working
+        # database), and one shell used to raise KeyError inside this loop,
+        # 500-ing the Market Strength Ranking and three 90-day Insights cards.
+        a[0] += r.get("units_sold") or 0
+        a[1] += r.get("rev_sold") or 0.0
+        a[2] += r.get("units_qty") or 0
+        a[3] += r.get("rev_qty") or 0.0
+        a[4] += r.get("qty_drop") or 0
     # Estimator Method-1 preference per pair: counter units win when any
     # positive counter step existed in the window; else filtered qty depletion.
     return [{"store_id": k[0], "sku": k[1],
@@ -4604,12 +4621,16 @@ async def _insights_trending_compute(db, days):
     for p in products:
         # iter36 — trending tabs split on the food subcategory when one was
         # confidently assigned; unclassified products stay under the parent.
-        cat = p.get("subcategory") or p["category"]
+        # iter75 — `p["category"]` raised KeyError and killed the whole
+        # trending recompute the moment a product arrived without one (the
+        # own-store sync auto-discovers catalogue rows that carry no category).
+        # One unclassified product must not blank the Insights page.
+        cat = p.get("subcategory") or p.get("category") or "uncategorized"
         sales = sku_sales.get(p["sku"], 0)
         cat_data.setdefault(cat, {"total_sales": 0, "products": []})
         cat_data[cat]["total_sales"] += sales
         if sales > 0:
-            cat_data[cat]["products"].append({"sku": p["sku"], "name_ar": p["name_ar"], "name_en": p["name_en"], "units_sold": sales})
+            cat_data[cat]["products"].append({"sku": p["sku"], "name_ar": p.get("name_ar") or "", "name_en": p.get("name_en") or "", "units_sold": sales})
 
     trending = []
     for cat, data in cat_data.items():
@@ -5717,8 +5738,10 @@ async def list_alerts(user=Depends(get_user)):
         if a.get("product_sku"):
             p = await db.products.find_one({"sku": a["product_sku"]}, {"_id": 0, "name_ar": 1, "name_en": 1})
             if p:
-                a["product_name_ar"] = p["name_ar"]
-                a["product_name_en"] = p["name_en"]
+                # iter75 — auto-discovered catalogue rows may lack a name in one
+                # language; a missing key must not 500 the whole alerts list.
+                a["product_name_ar"] = p.get("name_ar") or ""
+                a["product_name_en"] = p.get("name_en") or ""
     return alerts
 
 @router.post("/alerts")
@@ -6370,7 +6393,7 @@ async def export_csv(days: int = Query(30), user=Depends(get_user)):
     for p in data["products"]:
         # iter72 — export MY stock (db.my_products truth); blank when unknown,
         # never the market-aggregate signal under a "Stock Signal" header.
-        writer.writerow([p["sku"], p["name_ar"], p["name_en"], p["category"], p.get("price", ""), p.get("min_price", ""), p.get("max_price", ""), p.get("qty_sold_est", ""), p.get("revenue_est", ""), p.get("num_sellers", ""), p.get("my_stock_signal") or "", p.get("confidence_score", "")])
+        writer.writerow([p["sku"], p.get("name_ar") or "", p.get("name_en") or "", p.get("category") or "", p.get("price", ""), p.get("min_price", ""), p.get("max_price", ""), p.get("qty_sold_est", ""), p.get("revenue_est", ""), p.get("num_sellers", ""), p.get("my_stock_signal") or "", p.get("confidence_score", "")])
     output.seek(0)
     return StreamingResponse(io.BytesIO(output.getvalue().encode("utf-8-sig")), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=daleel_pets_export.csv"})
 
@@ -9201,15 +9224,15 @@ async def subcategory_preview(samples: int = Query(20, ge=1, le=100), user=Depen
         # use the stored assignment when present (post-backfill), else classify live
         sub = p.get("subcategory") if "subcategory" in p else classify_food_subcategory(
             p.get("category"), name)
-        key = sub or p["category"]
+        key = sub or p.get("category") or "uncategorized"
         if sub:
             dist[sub] += 1
             if not is_demo:
                 real_dist[sub] += 1
         else:
-            generic[p["category"]] += 1
+            generic[p.get("category") or "uncategorized"] += 1
             if not is_demo:
-                real_generic[p["category"]] += 1
+                real_generic[p.get("category") or "uncategorized"] += 1
         if len(sample_map[key]) < samples:
             sample_map[key].append({"sku": p.get("sku"), "name": p.get("name_ar") or p.get("name_en"),
                                     "assigned": key, "demo": is_demo})

@@ -1,0 +1,32 @@
+{
+  "summary": "Iter76 stability review. Ran 14 backend pytest tests (all pass) + full frontend smoke via Playwright as super_admin. Store ranking, 90-day insights (leaderboard/top-sellers/trending/summary), proxy-health, /api/stores hygiene, POST /api/stores rejection of *.example.com, and my-products all verified. Frontend: My Products renders 2233 products with matching my_price on row and detail panel (no double-VAT), Product Detail panel opens with seller list + price history, Market Strength Ranking shows all 4 stores with revenue/tier labels ('Accumulating' / 'Not measurable (Salla)'), Insights + Discounts + Stores pages render with no NaN/undefined/[object Object].",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Product Detail dialog", "issues": ["Console warning: Radix DialogContent missing Description/aria-describedby (a11y warning, non-blocking)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter76_review.py",
+    "/app/test_reports/pytest/iter76_review.xml"
+  ],
+  "action_items": [
+    "Optional a11y polish: add aria-describedby or DialogDescription to the product detail Radix DialogContent to silence console warning."
+  ],
+  "critical_code_review_comments": [
+    "server.py is very large (>10k lines) — consider splitting into modules (routers, services, sales rollups, ranking) for maintainability.",
+    "_sales_pairs_from_rollups fix is correct (defensive .get). Consider adding a schema-level default at write-time on sku_sales_daily so downstream consumers never need per-field .get fallbacks.",
+    "store_registry.ensure_stores now deletes *.example.com on every boot — good, but ensure any FK/related snapshot cleanup runs (leftover snapshots referencing deleted store_ids could bloat DB).",
+    "fetch_policy._penalise using getattr(resp, 'headers', None) or {} is a good hardening; consider adding a unit test that passes a bare exception-like object to lock in the invariant."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter76_review.py"],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100% on covered flows"},
+  "test_credentials": "super_admin a.disi@taqueen.sa / Ahmaddc90@ (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "None. POST /api/stores acceptance test creates a store and immediately deletes it in the same test.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend test file: /app/backend/tests/test_iter76_review.py — uses one login (module-scoped fixture) to avoid the login rate limiter. Requires REACT_APP_BACKEND_URL env var. Notes verified live: /api/stores has exactly 11 stores, no *.example.com; /api/admin/proxy-health returns proxy_enabled=false + tls_impersonation_available=true; ranking endpoint sorted revenue_desc; all 90d insights endpoints return 200.",
+  "rca of the issue": "N/A — this iteration was a stability verification; no regressions found. The iter76 fixes (defensive .get in _sales_pairs_from_rollups, example.com hygiene, POST /api/stores 400 validation, proxy-free crawler) are all live and behaving as described in the review request."
+}

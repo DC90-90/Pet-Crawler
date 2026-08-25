@@ -21,6 +21,8 @@ from core.utils import _BARCODE_LEAD_RE, barcode_keys, canonical_barcode  # noqa
 # iter67 — the append-only daily ledger (Phase 1: written alongside the
 # rollups from every persistence path; nothing reads it yet).
 import ledger
+from fetch_policy import (polite_get, host_saturated, SUPPLEMENT_ABORT_AFTER,  # noqa: F401
+                          host_diagnostics)
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
 logger = logging.getLogger(__name__)
@@ -551,7 +553,12 @@ async def _finalize_crawl_log(db, crawl_log, store_id):
     await db.stores.update_one({"id": store_id}, {"$set": {
         "last_crawled_at": crawl_log["completed_at"],
         "last_crawl_tier": crawl_log["tier_used"],
-        "last_crawl_status": "success" if crawl_log["tier_used"] else "failed",
+        # iter75 — `tier_used == 0` means the AUTHENTICATED merchant API won
+        # (own store, best possible source). `if crawl_log["tier_used"]` treated
+        # that 0 as falsy, so "Pets Houses" was reported FAILED on the Stores
+        # page after every successful 2233-product sync from api.zid.sa —
+        # exactly the failure the client reported. Only None is a failure.
+        "last_crawl_status": "success" if crawl_log["tier_used"] is not None else "failed",
         "last_crawl_error": crawl_log["error"],
         "last_crawl_products": crawl_log["products_found"],
         "last_crawl_endpoint": crawl_log.get("endpoint_used"),
@@ -1135,7 +1142,15 @@ async def _try_single_endpoint(http, ep, crawl_log):
     """Try a single JSON endpoint. Returns (items_list, endpoint_dict) or ([], None)."""
     attempt = {"endpoint": ep["tag"], "status": None, "products": 0, "error": None}
     try:
-        resp = await http.get(ep["url"], params=ep.get("params"))
+        # iter75 — paced + backed-off + UA-rotated (see fetch_policy). Without
+        # a residential proxy a single IP gets rate-limited fast; a bare
+        # client.get() here is what turned Salla 429s into "tier failed".
+        resp = await polite_get(http, ep["url"], params=ep.get("params"))
+        if resp is None:
+            attempt["status"] = 0
+            attempt["error"] = "No response after retries"
+            crawl_log["endpoints_tried"].append(attempt)
+            return [], None
         attempt["status"] = resp.status_code
         if resp.status_code != 200:
             attempt["error"] = f"HTTP {resp.status_code}"
@@ -1200,8 +1215,8 @@ async def _paginate_endpoint(http, ep, initial_items):
                 fetch_url = next_url
                 if needs_en_prefix and "/en/api/" not in next_url and "/api/" in next_url:
                     fetch_url = next_url.replace("/api/", "/en/api/", 1)
-                r = await http.get(fetch_url)
-                if r.status_code != 200:
+                r = await polite_get(http, fetch_url)
+                if r is None or r.status_code != 200:
                     break
                 body = r.json()
                 more = body.get("data", body.get("products", body.get("results", [])))
@@ -1223,8 +1238,8 @@ async def _paginate_endpoint(http, ep, initial_items):
             params = dict(ep.get("params", {}))
             params["page"] = page
             try:
-                r = await http.get(ep["url"], params=params)
-                if r.status_code != 200:
+                r = await polite_get(http, ep["url"], params=params)
+                if r is None or r.status_code != 200:
                     break
                 body = r.json()
                 more = body.get("data", body.get("products", body.get("results", [])))
@@ -1970,6 +1985,12 @@ async def _salla_detail_barcode_supplement(client, captured, store_domain=None,
     filled = failed = 0
     bytes_consumed = 0
     failed_by_status = {}
+    # iter75 — circuit breaker. Some stores answer 404 for EVERY product on this
+    # route (Caty) and others 429 the whole pass (CutePets: 277 throttles in one
+    # crawl). Firing one request per product regardless burned 20+ minutes and
+    # recovered nothing, so a run of consecutive failures now stops the stage
+    # and records why instead of grinding to the end of the catalogue.
+    consecutive_failures = 0
     for it in todo:
         pid = it.get("id")
         urls = []
@@ -1979,15 +2000,23 @@ async def _salla_detail_barcode_supplement(client, captured, store_domain=None,
             urls.append(f"https://api.salla.dev/store/v1/products/{pid}/details")
         last_status = None
         detail = None
+        saturated_host = None
         for url in urls:
             try:
-                r = await client.get(url)
+                # attempts=2: a per-product 429 means the whole route is
+                # throttled, not that this product needs another go.
+                r = await polite_get(client, url, attempts=2)
+                if r is None:
+                    last_status = "exception"
+                    continue
                 bytes_consumed += len(r.content or b"")
                 last_status = r.status_code
                 if r.status_code == 200:
                     body = r.json()
                     detail = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
                     break
+                if host_saturated(url):
+                    saturated_host = url
                 logger.info(f"[DetailSupplement] product={pid} http_status={r.status_code} url={url}")
             except Exception as e:
                 last_status = "exception"
@@ -1996,7 +2025,24 @@ async def _salla_detail_barcode_supplement(client, captured, store_domain=None,
             failed += 1
             key = last_status if last_status is not None else "exception"
             failed_by_status[key] = failed_by_status.get(key, 0) + 1
+            consecutive_failures += 1
+            if saturated_host:
+                failed_by_status["aborted_host_saturated"] = consecutive_failures
+                logger.warning(
+                    "[DetailSupplement] %s: aborting stage 1 — host is rate-limiting "
+                    "us to the maximum backoff (%s). Kept the barcodes we already "
+                    "have instead of burning the crawl window.",
+                    store_domain, saturated_host)
+                break
+            if consecutive_failures >= SUPPLEMENT_ABORT_AFTER:
+                failed_by_status["aborted_after_consecutive"] = consecutive_failures
+                logger.warning(
+                    "[DetailSupplement] %s: aborting stage 1 after %d consecutive "
+                    "failures (last status %s) — this route is not serving this store",
+                    store_domain, consecutive_failures, key)
+                break
             continue
+        consecutive_failures = 0
         barcode = _stage1_extract_barcode(detail, listed_price=_price_amount(it.get("price")))
         if barcode:
             it["gtin"] = barcode
@@ -2093,6 +2139,7 @@ async def _salla_dom_barcode_supplement(store, items, cap=SALLA_DOM_BARCODE_CAP,
     if not todo:
         return 0, 0, 0
     filled = failed = 0
+    dom_consecutive_failures = [0]      # list so the inner closure can mutate it
 
     async def _fill(read, page):
         nonlocal filled, failed
@@ -2100,6 +2147,13 @@ async def _salla_dom_barcode_supplement(store, items, cap=SALLA_DOM_BARCODE_CAP,
             url = _salla_item_page_url(it, store.get("domain"))
             if not url:
                 failed += 1
+                dom_consecutive_failures[0] += 1
+                if dom_consecutive_failures[0] >= SUPPLEMENT_ABORT_AFTER:
+                    logger.warning(
+                        "[DomBarcode] %s: aborting DOM pass — %d consecutive "
+                        "items carry no product URL",
+                        store.get("domain"), dom_consecutive_failures[0])
+                    return
                 continue
             try:
                 preferred, body = await read(page, url)
@@ -2107,11 +2161,22 @@ async def _salla_dom_barcode_supplement(store, items, cap=SALLA_DOM_BARCODE_CAP,
                 if barcode:
                     it["gtin"] = barcode
                     filled += 1
+                    dom_consecutive_failures[0] = 0
                 else:
                     failed += 1
+                    dom_consecutive_failures[0] += 1
             except Exception as e:
                 failed += 1
+                dom_consecutive_failures[0] += 1
                 logger.info(f"[DomBarcode] product={it.get('id')} failed: {str(e)[:80]}")
+            # iter75 — same circuit breaker as stage 1: a long run of misses
+            # means the page shape changed or the store is refusing us, and
+            # every extra Playwright navigation costs ~3s for nothing.
+            if dom_consecutive_failures[0] >= SUPPLEMENT_ABORT_AFTER:
+                logger.warning(
+                    "[DomBarcode] %s: aborting DOM pass after %d consecutive misses",
+                    store.get("domain"), dom_consecutive_failures[0])
+                return
 
     if dom_reader is not None:
         await _fill(dom_reader, None)
@@ -2259,6 +2324,86 @@ async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
         _skip(f"exception:{str(e)[:80]}")
 
 
+class _CheapPathIsEnough(Exception):
+    """Control-flow marker: HTML + categories API already gave us everything."""
+
+
+_SALLA_STORE_ID_PATTERNS = (
+    r'"store"\s*:\s*\{\s*"id"\s*:\s*(\d{5,})',
+    r'"store_id"\s*:\s*"?(\d{5,})',
+    r'store-identifier["\'\s:=]+(\d{5,})',
+    r'storeId["\'\s:=]+(\d{5,})',
+)
+
+
+async def _salla_store_identifier_from_html(domain):
+    """Read the Salla store id straight out of the storefront HTML.
+
+    iter75 — Hamtaro exposes `"store":{"id":1278867981,...}`, a shape none of the
+    Playwright DOM patterns matched, so identifier capture returned None and the
+    crawl fell back to Tier 2 and harvested **10 products out of ~2500**. One
+    regex over the HTML fixes that and is ~60s cheaper than a browser launch.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
+            resp = await polite_get(client, f"https://{domain}/")
+        if resp is None or resp.status_code != 200:
+            return None
+        html = resp.text or ""
+    except Exception as exc:
+        logger.info("[StorefrontCategories] %s: HTML store-id probe failed: %s",
+                    domain, str(exc)[:90])
+        return None
+    for pat in _SALLA_STORE_ID_PATTERNS:
+        m = re.search(pat, html, re.I)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _flatten_salla_categories(nodes, out=None, depth=0):
+    """Every numeric category id in a Salla category tree, parents included."""
+    out = out if out is not None else []
+    if depth > 6 or not isinstance(nodes, list):
+        return out
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        cid = node.get("id_") or node.get("id")
+        if isinstance(cid, int) or (isinstance(cid, str) and str(cid).isdigit()):
+            out.append(str(cid))
+        _flatten_salla_categories(
+            node.get("sub_categories") or node.get("children") or [], out, depth + 1)
+    return out
+
+
+async def _salla_categories_from_api(store_identifier, domain=None):
+    """The store's FULL category tree from the storefront API.
+
+    iter75 — scraping the rendered menu only sees what the theme draws (Hamtaro:
+    2 categories, and a 60-page hover walk to find more). This one request
+    returns every nested node (Hamtaro: 99), and category coverage is what
+    decides how much of a catalogue a crawl can even reach.
+    """
+    headers = {"Accept": "application/json",
+               "store-identifier": str(store_identifier)}
+    if domain:
+        headers["Referer"] = f"https://{domain}/"
+    try:
+        async with httpx.AsyncClient(timeout=25.0, headers=headers) as client:
+            resp = await polite_get(client, "https://api.salla.dev/store/v1/categories",
+                                    params={"limit": 100})
+        if resp is None or resp.status_code != 200:
+            return []
+        body = resp.json()
+    except Exception as exc:
+        logger.info("[StorefrontCategories] categories API failed: %s", str(exc)[:90])
+        return []
+    data = body.get("data") if isinstance(body, dict) else body
+    return list(dict.fromkeys(
+        _flatten_salla_categories(data if isinstance(data, list) else [])))
+
+
 async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=200, max_pages_per_cat=200):
     """
     Direct-API crawler for Salla stores that disabled their public /api/v1/products endpoint.
@@ -2282,8 +2427,22 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
     cat_ids = []
     proxy_user_for_httpx = None
 
+    # Phase 0 — iter75 cheap path: store id from the storefront HTML plus the
+    # FULL category tree from the storefront API. No browser needed, and far
+    # more complete than scraping a rendered menu.
+    store_identifier = await _salla_store_identifier_from_html(store["domain"])
+    if store_identifier:
+        cat_ids = await _salla_categories_from_api(store_identifier, store["domain"])
+        logger.info("[StorefrontCategories] %s: HTML+API → store_identifier=%s categories=%d",
+                    store["name"], store_identifier, len(cat_ids))
+        crawl_log["endpoints_tried"].append({
+            "endpoint": "categories_api", "status": 200, "products": 0,
+            "error": f"store-id={store_identifier} categories={len(cat_ids)}"})
+
     # Phase 1 — Playwright: capture store-identifier + discover all categories (incl. nested)
     try:
+        if store_identifier and len(cat_ids) >= 3:
+            raise _CheapPathIsEnough
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
             launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
@@ -2299,7 +2458,7 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
                 locale="ar-SA",
             )
             page = await ctx.new_page()
-            store_identifier = await _capture_salla_store_identifier(page, base)
+            store_identifier = await _capture_salla_store_identifier(page, base) or store_identifier
             top_cat_ids = await _discover_salla_category_ids(page, base)
             logger.info(f"[StorefrontCategories] {store['name']}: store_identifier={store_identifier}, top categories={len(top_cat_ids)}")
             crawl_log["endpoints_tried"].append({"endpoint": "homepage", "status": 200, "products": 0, "error": f"store-id={store_identifier} top_cats={len(top_cat_ids)}"})
@@ -2326,9 +2485,15 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
                     sub_ids.update(new_sub)
                 except Exception:
                     pass
-            cat_ids = list(sub_ids)[:max_categories]
+            # iter75 — merge, never replace: the categories API tree (phase 0)
+            # and the rendered-menu walk see different slices of a store.
+            cat_ids = list(dict.fromkeys(list(cat_ids) + list(sub_ids)))[:max_categories]
             crawl_log["endpoints_tried"].append({"endpoint": "subcategory_discovery", "status": 200, "products": 0, "error": f"total_categories_discovered={len(cat_ids)}"})
             await browser.close()
+    except _CheapPathIsEnough:
+        logger.info("[StorefrontCategories] %s: browser skipped — HTML+API already "
+                    "resolved store_identifier and %d categories",
+                    store["name"], len(cat_ids))
     except ImportError:
         crawl_log["error"] = "Playwright not installed"
     except Exception as e:
@@ -2368,7 +2533,10 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
             cat_count = 0
             for page_num in range(max_pages_per_cat):
                 try:
-                    r = await client.get(url)
+                    r = await polite_get(client, url)
+                    if r is None:
+                        crawl_log["endpoints_tried"].append({"endpoint": f"cat={cid} p={page_num+1}", "status": 0, "products": 0, "error": "No response after retries"})
+                        break
                     bytes_consumed += len(r.content or b"")
                     if r.status_code != 200:
                         crawl_log["endpoints_tried"].append({"endpoint": f"cat={cid} p={page_num+1}", "status": r.status_code, "products": 0, "error": r.text[:100]})

@@ -35,8 +35,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_salla_dom")
+os.environ["DB_NAME"] = "test_salla_dom"
+import pytest  # noqa: E402
 import crawlers  # noqa: E402
+import fetch_policy  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fetch_policy_sandbox(monkeypatch):
+    """iter76 — keep these hermetic: shrink the real backoff ceiling and switch
+    off the curl_cffi impersonation fallback, which would otherwise fire a
+    genuine outbound request at the storefront on any retry-worthy status."""
+    monkeypatch.setattr(fetch_policy, "MAX_DELAY", 1.0)
+    monkeypatch.setattr(fetch_policy, "_curl_requests", None)
+    fetch_policy.reset_hosts()
+    yield
+    fetch_policy.reset_hosts()
 
 HILLS = "052742059518"          # valid UPC-A (12, check digit ok)
 RC = "3182550702263"            # valid EAN-13
@@ -66,7 +80,9 @@ class _RouteClient:
         self.domain_status = domain_status
         self.calls = []
 
-    async def get(self, url):
+    # iter75 — production requests now flow through fetch_policy.polite_get,
+    # which passes params/headers like httpx does. The fake must accept them.
+    async def get(self, url, params=None, headers=None):
         self.calls.append(url)
         parts = url.rstrip("/").split("/")
         pid = parts[-2] if parts[-1] == "details" else parts[-1]
@@ -116,7 +132,11 @@ def test_stage1_falls_back_to_salla_dev_when_the_store_domain_4xxs():
         client, listing, store_domain="zarafaksa.com", store_identifier="745123999"))
     assert filled == 1 and failed == 0 and by == {}
     assert listing[0]["gtin"] == HILLS
+    # iter75/76 — 403 is a retry-worthy status, so polite_get gives the store
+    # domain its two allotted attempts (attempts=2) before the walk moves on to
+    # the salla.dev fallback host. The ORDER is what this pins.
     assert client.calls == [
+        "https://zarafaksa.com/en/api/v1/products/7/details",
         "https://zarafaksa.com/en/api/v1/products/7/details",
         "https://api.salla.dev/store/v1/products/7/details",
     ]
@@ -254,8 +274,11 @@ class _DB:
 
 def test_entry_carries_filled_details_filled_dom_and_dom_failure_counters():
     async def main():
-        # 60 products: stage 1 fills 20 (details carry gtin), 410s the other 40;
-        # stage 2 (stubbed) fills 25 of those and fails 15.
+        # 60 products: stage 1 fills 20 (details carry gtin), 404s the other 40 —
+        # but iter75's circuit breaker stops stage 1 after 30 CONSECUTIVE
+        # failures (Caty answers 404 for every product on this route, which used
+        # to cost 625 pointless requests per crawl). Stage 2 (stubbed) still
+        # sees all 40 still-missing items and fills 25.
         items = [{"id": i, "sku": f"SL-{i}", "price": {"amount": 10.0},
                   "urls": {"customer": f"https://zarafaksa.com/x/p{i}"}}
                  for i in range(60)]
@@ -284,7 +307,9 @@ def test_entry_carries_filled_details_filled_dom_and_dom_failure_counters():
         assert e["status"] == "ran"
         assert e["products"] == 45                        # 20 details + 25 dom
         for frag in ("missing=60", "filled=45", "filled_details=20", "filled_dom=25",
-                     "failed=40", "failed_404=40", "dom_attempted=40", "dom_failed=15"):
+                     "failed=30", "failed_404=30",
+                     "failed_aborted_after_consecutive=30",
+                     "dom_attempted=40", "dom_failed=15"):
             assert frag in e["error"], (frag, e["error"])
     asyncio.run(main())
 

@@ -16,7 +16,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_price_capture")
+# iter75 — HARD override, not setdefault: when this module runs in the same
+# pytest session as any module that imports `server` (which calls
+# load_dotenv and sets DB_NAME), setdefault silently no-ops and the
+# delete_many({}) resets below wipe the REAL working database.
+os.environ["DB_NAME"] = "test_price_capture"
 from crawlers import _normalize_raw_product, _price_amount, process_crawled_products  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 

@@ -23,7 +23,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_salla_sold")
+# iter75 — HARD override, not setdefault: when this module runs in the same
+# pytest session as any module that imports `server` (which calls
+# load_dotenv and sets DB_NAME), setdefault silently no-ops and the
+# delete_many({}) resets below wipe the REAL working database.
+os.environ["DB_NAME"] = "test_salla_sold"
 import crawlers  # noqa: E402
 import salla_sold_velocity as V  # noqa: E402
 import server  # noqa: E402
@@ -173,6 +177,11 @@ async def _seed_tiers(db):
         {"id": "sal_none", "name": "Caty", "domain": "caty-store.com", "platform": "salla"},
     ])
     now = server.datetime.now(server.timezone.utc)
+    # iter76 — the ranking's Salla velocity POOL reads the SEALED KSA window
+    # (`ledger.sealed_ksa_window`), which excludes TODAY by design, so a rollup
+    # row dated today is invisible to it and every pool comes out at zero
+    # velocity (estimate 0 -> revenue_tier "none"). Seed the last SEALED day.
+    sealed_day = server._metric_day_str(now - server.timedelta(days=1))
     prods, cov, snaps, sales = [], [], [], []
     for i in range(40):
         sku = f"K-{i}"
@@ -181,7 +190,7 @@ async def _seed_tiers(db):
             cov.append({"_id": f"{sku}|{sid}", "sku": sku, "store_id": sid,
                         "last_priced_price": price, "last_priced_at": now,
                         "last_in_stock": True, "last_seen_any_at": now})
-        sales.append({"store_id": "zid1", "sku": sku, "date": server._metric_day_str(now),
+        sales.append({"store_id": "zid1", "sku": sku, "date": sealed_day,
                       "units_sold": 2, "rev_sold": 200.0, "units_qty": 0,
                       "rev_qty": 0.0, "qty_drop": 0})
         # the badge store: two readings per product -> a real diff of 5 units

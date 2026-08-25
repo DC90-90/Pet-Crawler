@@ -28,8 +28,25 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_salla_supp_tiers")
+os.environ["DB_NAME"] = "test_salla_supp_tiers"
+import pytest  # noqa: E402
 import crawlers  # noqa: E402
+import fetch_policy  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fetch_policy_sandbox(monkeypatch):
+    """iter76 — requests now flow through fetch_policy.polite_get.
+
+    Two things must be neutralised for these to stay hermetic unit tests:
+    the real backoff ceiling (8s per retry) and the curl_cffi impersonation
+    fallback, which would fire a genuine outbound request at the storefront.
+    """
+    monkeypatch.setattr(fetch_policy, "MAX_DELAY", 1.0)
+    monkeypatch.setattr(fetch_policy, "_curl_requests", None)
+    fetch_policy.reset_hosts()
+    yield
+    fetch_policy.reset_hosts()
 
 HILLS = "052742059518"
 SALLA_STORE = {"id": "zarafa", "name": "Zarafa", "domain": "zarafaksa.com",
@@ -55,6 +72,7 @@ class _Resp:
         self.status_code = status
         self._body = body or {}
         self.content = b"x" * 50
+        self.headers = {}                 # httpx-shaped: polite_get reads Retry-After
 
     def json(self):
         return self._body
@@ -67,7 +85,9 @@ class _FakeClient:
         self.calls = []
         self.closed = False
 
-    async def get(self, url):
+    # iter75 — production requests now flow through fetch_policy.polite_get,
+    # which passes params/headers like httpx does. The fake must accept them.
+    async def get(self, url, params=None, headers=None):
         self.calls.append(url)
         if self.status != 200:
             return _Resp(status=self.status)
@@ -265,9 +285,14 @@ def test_403_responses_are_counted_per_status_code_in_the_summary():
             crawlers._salla_dom_barcode_supplement = orig_dom
         e = _supp_entries(log)[0]
         assert e["status"] == "ran" and e["products"] == 0
-        assert "failed_403=60" in e["error"], e["error"]
-        assert "filled=0" in e["error"] and "failed=60" in e["error"]
-        # iter65 — stage 2 was attempted on what stage 1 could not fill
+        # the per-status bucket is what makes a defended route diagnosable
+        assert "failed_403=" in e["error"], e["error"]
+        assert "filled=0" in e["error"], e["error"]
+        # iter75 — the stage no longer grinds through all 60 products: a host
+        # that 403s every request pushes us to the maximum backoff and the
+        # stage stops there, recording WHY. (Pre-iter75 this read failed=60.)
+        assert "failed_aborted_host_saturated=" in e["error"], e["error"]
+        # iter65 — stage 2 was still attempted on what stage 1 could not fill
         assert "dom_attempted=60" in e["error"] and "dom_failed=60" in e["error"]
     asyncio.run(main())
 

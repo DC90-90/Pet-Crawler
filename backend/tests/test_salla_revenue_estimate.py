@@ -20,7 +20,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_salla_rev")
+# iter75 — HARD override, not setdefault: when this module runs in the same
+# pytest session as any module that imports `server` (which calls
+# load_dotenv and sets DB_NAME), setdefault silently no-ops and the
+# delete_many({}) resets below wipe the REAL working database.
+os.environ["DB_NAME"] = "test_salla_rev"
 import salla_revenue_estimate as E  # noqa: E402
 import server  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
@@ -323,6 +327,10 @@ async def _seed_ranking(db):
         {"id": "sal3", "name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla"},
     ])
     now = server.datetime.now(server.timezone.utc)
+    # iter76 — the ranking's Salla velocity POOL reads the SEALED KSA window
+    # (`ledger.sealed_ksa_window`), which excludes TODAY by design, so a rollup
+    # row dated today is invisible to it and every estimate comes out 0.
+    sealed_day = server._metric_day_str(now - server.timedelta(days=1))
     prods, cov, sales = [], [], []
     for i in range(60):
         sku = f"SKU-{i}"
@@ -332,7 +340,7 @@ async def _seed_ranking(db):
                         "last_priced_price": 100.0, "last_priced_at": now,
                         "last_in_stock": True, "last_seen_any_at": now})
         for sid in ("zid1", "zid2"):
-            sales.append({"store_id": sid, "sku": sku, "date": server._metric_day_str(now),
+            sales.append({"store_id": sid, "sku": sku, "date": sealed_day,
                           "units_sold": 3, "rev_sold": 300.0,
                           "units_qty": 0, "rev_qty": 0.0, "qty_drop": 0})
     # sal2 carries products NO Zid store sells -> 0% coverage -> widest band

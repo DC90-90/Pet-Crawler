@@ -25,7 +25,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_pi_live")
+# iter75 — HARD override, not setdefault: when this module runs in the same
+# pytest session as any module that imports `server` (which calls
+# load_dotenv and sets DB_NAME), setdefault silently no-ops and the
+# delete_many({}) resets below wipe the REAL working database.
+os.environ["DB_NAME"] = "test_pi_live"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -66,13 +70,17 @@ async def _seed(db):
     ])
     # my_products carries the resolve_own_price output (inc-VAT, iter54)
     await db.my_products.insert_many([
+        # iter76 — price_basis is REQUIRED on a fixture that already carries an
+        # inc-VAT price: iter73p treats a basis-less row as legacy ex-VAT and
+        # grosses it by 1.15 (170 -> 195.5), which has nothing to do with what
+        # this suite tests (live vs match-time-frozen prices).
         {"sku": "HILLS", "price": 170.0, "sale_price": None, "quantity": 5,
          "name_ar": "هيلز", "name_en": "Hills GI Biome", "barcode": "052742059518",
-         "is_own_store": True, "store_id": OWN,
+         "is_own_store": True, "store_id": OWN, "price_basis": "storefront_inc_vat",
          "last_synced_at": (NOW - timedelta(hours=2)).isoformat()},
         {"sku": "RC", "price": 129.0, "sale_price": None, "quantity": 3,
          "name_ar": "رويال", "name_en": "RC Sensible", "barcode": "3182550702263",
-         "is_own_store": True, "store_id": OWN,
+         "is_own_store": True, "store_id": OWN, "price_basis": "storefront_inc_vat",
          "last_synced_at": (NOW - timedelta(hours=2)).isoformat()},
     ])
     await db.products.insert_many([

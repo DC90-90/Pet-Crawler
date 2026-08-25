@@ -140,7 +140,9 @@ class _FakeClient:
         self.by_id = by_id
         self.calls = []
 
-    async def get(self, url):
+    # iter75 — production requests now flow through fetch_policy.polite_get,
+    # which passes params/headers like httpx does. The fake must accept them.
+    async def get(self, url, params=None, headers=None):
         self.calls.append(url)
         parts = url.rstrip("/").split("/")
         pid = parts[-2] if parts[-1] == "details" else parts[-1]

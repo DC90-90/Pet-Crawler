@@ -16,7 +16,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_subcategories")
+# iter75 — HARD override, not setdefault: when this module runs in the same
+# pytest session as any module that imports `server` (which calls
+# load_dotenv and sets DB_NAME), setdefault silently no-ops and the
+# delete_many({}) resets below wipe the REAL working database.
+os.environ["DB_NAME"] = "test_subcategories"
 from crawlers import (  # noqa: E402
     classify_food_subcategory, classify_food_subcategory_hybrid,
     extract_store_category_names, guess_category,
@@ -297,7 +301,11 @@ def test_crawler_and_backfill_and_trending_integration():
     async def main():
         db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
         for c in ("products", "product_snapshots", "sku_sales_daily",
-                  "metric_daily_rollups", "sku_store_coverage"):
+                  "metric_daily_rollups", "sku_store_coverage",
+                  # iter75 — the classifier version marker lives here; leaving it
+                  # behind made `backfill_food_subcategories` return 0 on every
+                  # run after the first (it is version-gated by design).
+                  "metric_rollup_meta"):
             await db[c].delete_many({})
         store = {"id": "s1", "name": "TestStore", "domain": "t.example"}
         now = datetime.now(timezone.utc)

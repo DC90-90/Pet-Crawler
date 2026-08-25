@@ -79,3 +79,42 @@ RULES:
    config flags (here: PROXY_STORES) BEFORE touching extraction logic.
 3. Ship an admin health endpoint for every external dependency; the client can
    then see "renew the subscription" instead of "crawler broken".
+
+## Falsy zero reported success as failure (iter75)
+`sync_own_store_prices` encodes the authenticated Zid merchant API as
+`tier_used = 0` (better than tier 1). `_finalize_crawl_log` wrote
+`"success" if crawl_log["tier_used"] else "failed"`, so every successful
+2233-product own-store sync showed FAILED on the Stores page. Use
+`is not None` for any field where 0 is a legitimate value (tiers, prices,
+counts, discounts).
+
+## Removing a proxy exposes the rate limits it was hiding (iter75)
+With Webshare gone, all crawl traffic leaves one IP. The barcode supplement had
+no pacing or backoff, so one crawl logged 277 × HTTP 429 — wasted minutes AND
+missing barcodes, which is degraded MATCH quality, not just slowness.
+Everything storefront-bound now goes through `fetch_policy.polite_get`
+(per-host adaptive pacing, Retry-After backoff, UA rotation, curl_cffi TLS
+impersonation as last resort). Also: a route that fails for EVERY product
+(Caty answers 404 on the details endpoint) needs a consecutive-failure circuit
+breaker — an uncapped per-product loop spent 625 requests to learn nothing.
+
+## Zid splits its API across two credentials (iter75)
+`/v1/products/` works with the store Access-Token. `/v1/managers/store/orders`
+returns 401 for every header permutation of that token — it needs a partner-app
+OAuth access token in `Authorization: Bearer` PLUS the store token in
+`X-Manager-Token`. Probe endpoint-by-endpoint before assuming a token is dead.
+
+## The test suite was wiping the working database (iter75)
+29 test files did `os.environ.setdefault("DB_NAME", "test_x")` and then
+`delete_many({})` on shared collections. `setdefault` is a NO-OP once any
+sibling test module has imported `server` (server calls `load_dotenv`, which
+sets DB_NAME), so a normal suite run deleted the real data — observed:
+product_snapshots 1,565 → 2 rows and an emptied `stores` collection.
+
+RULES:
+1. A test that resets shared collections must HARD-assign its database name
+   (`os.environ["DB_NAME"] = "test_x"`), never setdefault.
+2. If preview data vanishes, suspect the test suite before the app.
+3. Never leave a background crawl running while editing backend files — hot
+   reload restarts the process and silently kills the crawl (cost me three
+   Hamtaro runs).

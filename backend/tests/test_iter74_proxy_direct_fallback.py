@@ -166,12 +166,14 @@ def test_no_tier_resolves_proxy_credentials_behind_the_old_guard():
 
 
 def test_every_proxied_store_in_the_registry_is_covered_by_the_fallback():
-    """The failing set the client saw == PROXY_STORES; all of them are Salla
-    stores crawled through the tier waterfall the fallback now guards."""
-    assert store_registry.PROXY_STORES, "registry must still declare proxied stores"
+    """The failing set the client saw == the proxy-capable stores; all of them
+    are Salla stores crawled through the tier waterfall the fallback guards.
+    (iter75 turned the proxy OFF by default, so the live set is empty and the
+    capability list is what we assert against.)"""
+    assert store_registry.PROXY_CAPABLE_STORES, "capability list must survive"
     for dom in ("zarafaksa.com", "cutepets.com.sa", "hamtaro.sa",
                 "lanapets.com", "caty-store.com"):
-        assert dom in store_registry.PROXY_STORES
+        assert dom in store_registry.PROXY_CAPABLE_STORES
 
 
 def test_proxy_health_endpoint_registered_and_gated():

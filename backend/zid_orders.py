@@ -234,6 +234,18 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
     if not token or not store_id:
         return {"status": "missing_token", "upserted": 0, "pages": 0}
 
+    # iter75 — Zid splits its API across TWO credentials, and the orders route
+    # is on the other side of the split from the catalogue route:
+    #   * `/v1/products/`             → the store's Access-Token works (verified,
+    #                                   200 with 2233 products).
+    #   * `/v1/managers/store/orders` → requires a PARTNER-APP OAuth access token
+    #                                   in `Authorization: Bearer` *alongside*
+    #                                   the store token in `X-Manager-Token`.
+    # Probed all five header permutations with the store token alone: every one
+    # answers 401 "Unauthenticated". So the missing piece is a credential, not
+    # code — and the moment `ZID_OAUTH_TOKEN` is present we send the dual-header
+    # form Zid documents, with no further changes needed.
+    oauth_token = (os.environ.get("ZID_OAUTH_TOKEN") or "").strip()
     headers = {
         "Access-Token": token,
         "Store-Id": store_id,
@@ -241,6 +253,9 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
         "Accept-Language": "en",
         "Accept": "application/json",
     }
+    if oauth_token:
+        headers["Authorization"] = f"Bearer {oauth_token}"
+        headers["X-Manager-Token"] = token
     refresh_floor = datetime.now(timezone.utc) - timedelta(days=INCREMENTAL_REFRESH_DAYS)
     upserted, skipped, pages = 0, 0, 0
     oldest_seen = None
@@ -254,8 +269,18 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
                     headers=headers,
                 )
                 if resp.status_code in (401, 403):
-                    logger.error(f"[Orders] auth rejected status={resp.status_code}")
-                    return {"status": "auth_failed", "upserted": upserted, "pages": pages}
+                    logger.error(
+                        "[Orders] auth rejected status=%s oauth_token_present=%s. "
+                        "Zid's orders route needs a PARTNER-APP OAuth access "
+                        "token (Authorization: Bearer) alongside the store token "
+                        "(X-Manager-Token) — set ZID_OAUTH_TOKEN in the "
+                        "environment. The catalogue route is unaffected.",
+                        resp.status_code, bool(oauth_token))
+                    return {"status": "auth_failed", "upserted": upserted,
+                            "pages": pages,
+                            "needs": None if oauth_token else "ZID_OAUTH_TOKEN",
+                            "hint": "Zid Partner dashboard → your app → OAuth "
+                                    "access token for store " + str(store_id)}
                 resp.raise_for_status()
                 payload = resp.json()
                 rows = payload.get("orders") or payload.get("results") or payload.get("data") or []

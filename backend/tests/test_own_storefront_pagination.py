@@ -21,7 +21,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_sf_pagination")
+# iter75 — HARD override, not setdefault: when this module runs in the same
+# pytest session as any module that imports `server` (which calls
+# load_dotenv and sets DB_NAME), setdefault silently no-ops and the
+# delete_many({}) resets below wipe the REAL working database.
+os.environ["DB_NAME"] = "test_sf_pagination"
 import crawlers  # noqa: E402
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -42,6 +46,7 @@ class _Resp:
     def __init__(self, body, status=200):
         self._body = body
         self.status_code = status
+        self.headers = {}                 # httpx-shaped: polite_get reads Retry-After
 
     def json(self):
         return self._body
@@ -62,7 +67,10 @@ class _FakeHttp:
             self.pages.append([_product(j) for j in range(i, min(i + size, total))])
             i += size
 
-    async def get(self, url, params=None, timeout=None):
+    # iter76 — the shared paginator goes through fetch_policy.polite_get, which
+    # sends browser-shaped headers. Without this kwarg every page raised a
+    # TypeError inside polite_get and the walk stopped after page 1.
+    async def get(self, url, params=None, headers=None, timeout=None):
         page = int((params or {}).get("page", 1))
         self.pages_requested.append(page)
         items = self.pages[page - 1] if 1 <= page <= len(self.pages) else []

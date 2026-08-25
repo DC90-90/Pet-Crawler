@@ -20,15 +20,25 @@ Store dict fields:
 """
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
 logger = logging.getLogger("store_registry")
 
-# Stores that route Tier 1/2/3 traffic through the Saudi residential proxy
-# (Webshare). Bandwidth is finite (50 GB/month) so we explicitly opt-in per
-# domain rather than proxy everything.
-PROXY_STORES = {"cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa", "lanapets.com", "zarafaksa.com", "caty-store.com"}
+# ── iter75 — the paid residential proxy is OFF by default ────────────────────
+# The Webshare subscription lapsed (402 on every rotation username) and took
+# ALL five proxied Salla stores down with it while the Zid stores kept working.
+# The client's decision: stop depending on it. Crawling is now direct, politely
+# paced and backed off (see fetch_policy.py), with TLS impersonation as the
+# fallback for fingerprint blocks. The proxy is opt-in — set PROXY_ENABLED=true
+# in the environment if a working subscription is ever attached again, and these
+# domains resume routing through it. A lapsed subscription can no longer sit on
+# the critical path.
+PROXY_CAPABLE_STORES = {"cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa",
+                        "lanapets.com", "zarafaksa.com", "caty-store.com"}
+PROXY_ENABLED = os.getenv("PROXY_ENABLED", "false").strip().lower() in ("1", "true", "yes", "on")
+PROXY_STORES = PROXY_CAPABLE_STORES if PROXY_ENABLED else set()
 
 # iter48 — pruned to the 11 tracked stores. `ensure_stores()` re-creates every
 # entry here on each boot, so anything listed would come back after
@@ -124,6 +134,13 @@ async def ensure_stores(db):
             {"domain": domain, "use_proxy": {"$ne": True}},
             {"$set": {"use_proxy": True}},
         )
+    # iter75 — anything not currently proxy-eligible is flipped OFF, not just
+    # defaulted. With PROXY_ENABLED unset this clears the flag on every store
+    # that used to route through Webshare.
+    await db.stores.update_many(
+        {"domain": {"$nin": list(PROXY_STORES)}, "use_proxy": True},
+        {"$set": {"use_proxy": False}},
+    )
     # Defensive: every other store explicitly off
     await db.stores.update_many(
         {"domain": {"$nin": list(PROXY_STORES)}, "use_proxy": {"$exists": False}},
@@ -136,6 +153,20 @@ async def ensure_stores(db):
         {"domain": "caty-store.com"},
         {"$set": {"is_active": True}},
     )
+
+    # ── iter76 data hygiene ──────────────────────────────────────────────────
+    # The API-contract regression suite creates stores on *.example.com (RFC
+    # 2606 reserved — never a real storefront): "TEST_Regression_Store" on
+    # test-regression.example.com and "Test Store" on test.example.com. They sat
+    # on the client's Stores page looking like tracked competitors, and being
+    # is_active they also entered the crawl schedule. Remove them on every boot
+    # so no environment needs manual DB surgery; `create_store` now refuses the
+    # reserved domain outright, so nothing recreates them.
+    hygiene = await db.stores.delete_many(
+        {"domain": {"$regex": r"(^|\.)example\.com$"}})
+    if hygiene.deleted_count:
+        logger.info("[Stores] Removed %d reserved-domain (*.example.com) test store(s)",
+                    hygiene.deleted_count)
 
     # Mark pets-houses.com as own store (safety net for pre-registry DBs)
     await db.stores.update_one(
