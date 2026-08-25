@@ -1018,6 +1018,80 @@ async def admin_rematch(payload: RematchIn, user=Depends(require_super_admin)):
     return {"ok": True, "scope": scope_desc, "status": "started"}
 
 
+# ── iter73y — ONE authoritative index registry ──────────────────────────────
+# Before iter73y most of these were created inside `seed_database()`, which
+# early-returns the moment a live database has stores in it. Production
+# therefore never created them: `product_matches` had NO index at all, so the
+# product-detail panel ran three COLLSCANs of it on every click. The rest sat
+# in a single try/except in startup(), where the FIRST failure (a duplicate key
+# on a unique index, an interrupted build) silently skipped every index after
+# it — which is how the iter73x hotfix could be deployed and still not exist.
+#
+# Each spec is now applied independently and reported by name.
+INDEX_SPECS = [
+    ("product_snapshots", [("crawled_at", -1)], {}),
+    ("product_snapshots", [("sku", 1), ("crawled_at", -1)], {}),
+    ("product_snapshots", [("store_id", 1), ("crawled_at", -1)], {}),
+    # The workhorse behind the seller panel's per-pair reads (iter73y).
+    ("product_snapshots", [("store_id", 1), ("sku", 1), ("crawled_at", -1)], {}),
+    ("product_snapshots", [("crawled_at", -1), ("store_id", 1)], {}),
+    ("product_snapshots", [("crawled_at", -1), ("sku", 1)], {}),
+    ("product_snapshots", [("crawled_at", -1), ("confidence_score", 1)], {}),
+    ("product_snapshots", [("discount_pct", -1), ("crawled_at", -1)], {}),
+    ("product_snapshots", [("product_id", 1)], {}),
+    # iter73x — direct-key / variant lookups behind "Stores Carrying".
+    ("product_snapshots", [("barcode", 1), ("crawled_at", -1)], {}),
+    ("product_snapshots", [("variant_skus", 1), ("crawled_at", -1)], {}),
+    ("product_snapshots", [("variant_barcodes", 1), ("crawled_at", -1)], {}),
+    # iter73y — product_matches was UNINDEXED on production.
+    ("product_matches", [("my_sku", 1), ("competitor_sku", 1),
+                         ("competitor_store_id", 1)], {}),
+    ("product_matches", [("competitor_sku", 1), ("competitor_store_id", 1)], {}),
+    ("match_blacklist", [("my_sku", 1), ("competitor_sku", 1)], {}),
+    ("my_products", [("sku", 1)], {"unique": True}),
+    ("my_products", [("barcode", 1)], {}),
+    ("products", [("sku", 1)], {"unique": True}),
+    ("products", [("category", 1)], {}),
+    ("proxy_usage", [("crawled_at", 1)], {}),
+    ("own_store_orders", [("order_id", 1)], {"unique": True}),
+    ("own_store_orders", [("created_at", -1)], {}),
+    ("dashboard_cache", [("key", 1)], {"unique": True}),
+    ("metric_daily_rollups", [("date", 1)], {}),
+    ("metric_daily_rollups", [("store_id", 1)], {}),
+    ("sku_store_coverage", [("last_seen_at", 1)], {}),
+    ("sku_store_coverage", [("store_id", 1)], {}),
+    ("sku_store_coverage", [("sku", 1)], {}),
+    ("sku_store_coverage", [("last_priced_at", 1)], {}),
+    ("sku_store_coverage", [("last_sold_pos_at", 1)], {}),
+    ("sku_store_coverage", [("last_usable_qty_at", 1)], {}),
+    ("sku_sales_daily", [("date", 1)], {}),
+    ("sku_sales_daily", [("store_id", 1), ("date", 1)], {}),
+    ("users", [("email", 1)], {"unique": True}),
+    ("stores", [("domain", 1)], {"unique": True}),
+]
+
+
+async def ensure_all_indexes(db):
+    """Create every index in INDEX_SPECS, one independent attempt each.
+
+    `background=True` keeps Atlas serving reads while a large index builds.
+    Returns {label: {ok, index|error}} so both startup logs and the admin
+    endpoint can report exactly which indexes exist.
+    """
+    results = {}
+    for coll, keys, opts in INDEX_SPECS:
+        label = coll + ":" + "+".join(
+            f"{k}{'' if d == 1 else '-'}" for k, d in keys)
+        try:
+            idx_name = await db[coll].create_index(keys, background=True, **opts)
+            results[label] = {"ok": True, "index": idx_name}
+        except Exception as exc:
+            results[label] = {"ok": False,
+                              "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+            logger.warning("[indexes] %s failed: %s", label, exc)
+    return results
+
+
 @router.post("/admin/ensure-snapshot-indexes")
 async def admin_ensure_snapshot_indexes(user=Depends(require_super_admin)):
     """iter73x HOTFIX (Aug 10 2026) — build the indexes iter73v depended on.
@@ -1036,27 +1110,115 @@ async def admin_ensure_snapshot_indexes(user=Depends(require_super_admin)):
 
     Available WITHOUT a backend restart — the client can hit it right after
     deploy to short-circuit the ordinary startup-only index creation.
+
+    iter73y — widened to the WHOLE index registry (INDEX_SPECS), because
+    `product_matches` and several snapshot indexes were only ever created
+    inside `seed_database()`, which never runs on a live database. The
+    response now also lists what MongoDB actually has, so "did the index
+    build?" is answerable from production in one HTTP call.
     """
-    results = {}
-    specs = [
-        ("barcode_crawled_at", [("barcode", 1), ("crawled_at", -1)]),
-        ("variant_skus_crawled_at", [("variant_skus", 1), ("crawled_at", -1)]),
-        ("variant_barcodes_crawled_at", [("variant_barcodes", 1), ("crawled_at", -1)]),
-    ]
-    for name, keys in specs:
+    results = await ensure_all_indexes(db)
+    existing = {}
+    for coll in sorted({c for c, _k, _o in INDEX_SPECS}):
         try:
-            idx_name = await db.product_snapshots.create_index(keys, background=True)
-            results[name] = {"ok": True, "index": idx_name}
+            info = await db[coll].index_information()
+            existing[coll] = sorted(info.keys())
         except Exception as exc:
-            logger.exception("[Admin ensure-indexes] failed for %s", name)
-            results[name] = {"ok": False, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
-    logger.info("[Admin ensure-indexes] user=%s results=%s",
-                user.get("email"), results)
-    return {"ok": all(v.get("ok") for v in results.values()),
+            existing[coll] = [f"error: {type(exc).__name__}"]
+    failed = {k: v for k, v in results.items() if not v.get("ok")}
+    logger.info("[Admin ensure-indexes] user=%s ok=%d failed=%d %s",
+                user.get("email"), len(results) - len(failed), len(failed),
+                failed or "")
+    return {"ok": not failed,
+            "created_or_verified": len(results) - len(failed),
+            "failed": failed,
             "indexes": results,
-            "note": "MongoDB builds indexes in the background; queries will "
-                    "start using them within seconds of build completion. "
-                    "Monitor db.product_snapshots.stats() to confirm."}
+            "existing_indexes": existing,
+            "note": "MongoDB builds indexes in the background; queries start "
+                    "using them within seconds of build completion. Any entry "
+                    "under `failed` needs manual attention."}
+
+
+def _plan_summary(explain_doc):
+    """Compact, human-readable digest of a Mongo explain document."""
+    stages, found = [], {"totalDocsExamined": None, "totalKeysExamined": None,
+                         "executionTimeMillis": None}
+
+    def walk(node):
+        if isinstance(node, dict):
+            if isinstance(node.get("stage"), str):
+                stages.append(node["stage"])
+            for k in found:
+                if k in node and found[k] is None:
+                    found[k] = node[k]
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(explain_doc)
+    return {"stages": stages[:10],
+            "docs_examined": found["totalDocsExamined"],
+            "keys_examined": found["totalKeysExamined"],
+            "millis": found["executionTimeMillis"],
+            "collscan": "COLLSCAN" in stages}
+
+
+@router.get("/admin/perf-probe")
+async def admin_perf_probe(sku: str = Query(...), user=Depends(require_super_admin)):
+    """iter73y — answer "why is the product panel slow?" from PRODUCTION.
+
+    Times every stage of the product-detail read path, reports which indexes
+    the live database actually has, and runs an EXPLAIN on each key-class
+    lookup so a COLLSCAN can be seen rather than guessed at. Read-only.
+    """
+    import time as _time
+    out = {"sku": sku, "timings_ms": {}, "counts": {}, "indexes": {}, "plans": {}}
+
+    t0 = _time.perf_counter()
+    product = await db.products.find_one({"sku": sku}, {"_id": 0})
+    out["timings_ms"]["products_find_one"] = round((_time.perf_counter() - t0) * 1000, 1)
+    out["counts"]["product_found"] = bool(product)
+
+    for coll in ("product_snapshots", "product_matches", "products", "my_products"):
+        try:
+            out["indexes"][coll] = sorted((await db[coll].index_information()).keys())
+            out["counts"][coll] = await db[coll].estimated_document_count()
+        except Exception as exc:
+            out["indexes"][coll] = [f"error: {type(exc).__name__}: {str(exc)[:120]}"]
+
+    if not product:
+        return out
+
+    t0 = _time.perf_counter()
+    snaps, sku_keys, guard_excluded = await _seller_snapshots(db, sku, product, series_days=30)
+    out["timings_ms"]["seller_snapshots"] = round((_time.perf_counter() - t0) * 1000, 1)
+    out["counts"]["snapshot_rows"] = len(snaps)
+    out["counts"]["stores"] = len({s.get("store_id") for s in snaps})
+    out["counts"]["guard_excluded"] = guard_excluded
+
+    try:
+        keys = sorted(set(_barcode_key_set(barcodes=(product.get("barcode"),),
+                                           skus=(sku,))) | {str(sku)})
+        since = datetime.now(timezone.utc) - timedelta(days=SELLER_LOOKBACK_DAYS)
+        for field in ("sku", "barcode", "variant_skus", "variant_barcodes"):
+            res = await db.command({
+                "explain": {
+                    "aggregate": "product_snapshots",
+                    "pipeline": [
+                        {"$match": {field: {"$in": keys},
+                                    "crawled_at": {"$gte": since}}},
+                        {"$group": {"_id": {"s": "$store_id", "k": "$sku"}}},
+                    ],
+                    "cursor": {},
+                },
+                "verbosity": "executionStats",
+            })
+            out["plans"][field] = _plan_summary(res)
+    except Exception as exc:
+        out["plans"]["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return out
 
 
 
@@ -1359,22 +1521,38 @@ async def data_freshness(user=Depends(get_user)):
     """
     now = datetime.now(timezone.utc)
 
-    # Per-store latest snapshot (one Mongo aggregation)
-    pipeline = [
-        {"$group": {
-            "_id": "$store_id",
-            "store_name": {"$first": "$store_name"},
-            "latest": {"$max": "$crawled_at"},
-            "snapshot_count": {"$sum": 1},
-        }},
-    ]
-    rows = await db.product_snapshots.aggregate(pipeline).to_list(200)
-    latest_by_store = {r["_id"]: r for r in rows}
-
     # Resolve store names + own_store flag from db.stores (authoritative)
     stores_meta = []
     async for s in db.stores.find({"is_active": True}, {"_id": 0, "id": 1, "name": 1, "is_own_store": 1}):
         stores_meta.append(s)
+
+    # iter73y — per-store INDEXED reads instead of a `$group` over the whole
+    # product_snapshots collection. That aggregation had no `$match`, so every
+    # cache miss (60s TTL) scanned every snapshot in the database — on
+    # production the "Checking data freshness…" spinner that never resolved,
+    # and it competed for the same database the product panel was waiting on.
+    # Each read below rides the (store_id, crawled_at) index.
+    async def _store_freshness(sid):
+        latest = []
+        cnt = 0
+        try:
+            latest = await db.product_snapshots.find(
+                {"store_id": sid}, {"_id": 0, "store_name": 1, "crawled_at": 1},
+            ).sort("crawled_at", -1).limit(1).max_time_ms(
+                SELLER_QUERY_MAX_MS).to_list(1)
+            cnt = await db.product_snapshots.count_documents(
+                {"store_id": sid}, maxTimeMS=SELLER_QUERY_MAX_MS)
+        except Exception:
+            logger.warning("[data-freshness] store=%s read skipped", sid,
+                           exc_info=True)
+        return sid, {
+            "store_name": latest[0].get("store_name") if latest else None,
+            "latest": latest[0].get("crawled_at") if latest else None,
+            "snapshot_count": cnt,
+        }
+
+    latest_by_store = dict(await asyncio.gather(
+        *[_store_freshness(s["id"]) for s in stores_meta])) if stores_meta else {}
 
     stores_out = []
     competitor_latests = []
@@ -2963,8 +3141,77 @@ from matcher import _barcode_key_set  # noqa: E402
 # _seller_snapshots widens what is FETCHED. What is TRUSTED is unchanged: rows
 # admitted via product_matches are re-checked against the iter51/52 pack guard
 # before they are shown.
+# ── iter73y — bounded, planner-independent snapshot reads ───────────────────
+# Every number below is a HARD ceiling on the work one product-detail click can
+# ask of MongoDB. The previous design had no ceiling at all: it merged every key
+# class into one `$or`, sorted it, and pulled up to 8000 FULL snapshot documents.
+SELLER_PAIR_CAP = 200            # distinct (store_id, sku) pairs read per product
+SELLER_ROWS_PER_PAIR = 240       # snapshot rows read per pair inside the window
+SELLER_QUERY_MAX_MS = 8000       # server-side deadline: no query can hang the app
+_SELLER_FETCH_FANOUT = 20        # concurrent pair reads (keeps the pool healthy)
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+# Only the fields the seller table / chart / velocity actually read. Snapshots
+# also carry `variants`, `variant_skus`, `variant_barcodes`, raw payload
+# fragments — fetching thousands of those was megabytes of BSON decoded on the
+# event loop, which stalled every other request in the process.
+_SELLER_SNAP_FIELDS = {
+    "_id": 0, "store_id": 1, "store_name": 1, "sku": 1, "barcode": 1,
+    "price": 1, "original_price": 1, "discount_pct": 1, "qty_available": 1,
+    "in_stock": 1, "source_tier": 1, "confidence_score": 1, "product_url": 1,
+    "crawled_at": 1,
+}
+
+
+async def _discover_snapshot_pairs(db, clause, since):
+    """{(store_id, sku)} for one indexed key clause — grouped, never fat docs.
+
+    Asked per key class so each read is served by its OWN index. Fails soft:
+    a discovery error costs at most the sellers that class would have added,
+    never the whole panel.
+    """
+    try:
+        cur = db.product_snapshots.aggregate([
+            {"$match": {**clause, "crawled_at": {"$gte": since}}},
+            {"$group": {"_id": {"s": "$store_id", "k": "$sku"}}},
+            {"$limit": SELLER_PAIR_CAP},
+        ], maxTimeMS=SELLER_QUERY_MAX_MS)
+        return {(d["_id"].get("s"), str(d["_id"].get("k"))) async for d in cur
+                if isinstance(d.get("_id"), dict) and d["_id"].get("s")}
+    except Exception:
+        logger.warning("[_discover_snapshot_pairs] clause skipped: %s", clause,
+                       exc_info=True)
+        return set()
+
+
+async def _pair_snapshot_rows(db, store_id, psku, series_since, lookback_since):
+    """Rows for one (store, sku): the chart window, else the single latest row.
+
+    Both reads ride the (store_id, sku, crawled_at) index with an explicit
+    `limit`, so the index supplies the sort and the work is bounded whatever
+    the collection grows to.
+    """
+    base = {"store_id": store_id, "sku": psku}
+    try:
+        rows = await db.product_snapshots.find(
+            {**base, "crawled_at": {"$gte": series_since}}, _SELLER_SNAP_FIELDS,
+        ).sort("crawled_at", -1).limit(SELLER_ROWS_PER_PAIR).max_time_ms(
+            SELLER_QUERY_MAX_MS).to_list(SELLER_ROWS_PER_PAIR)
+        if rows:
+            return rows
+        # Nothing inside the chart window — the seller is STALE, not gone. One
+        # row is all the table needs to render "price as of <date>".
+        return await db.product_snapshots.find(
+            {**base, "crawled_at": {"$gte": lookback_since}}, _SELLER_SNAP_FIELDS,
+        ).sort("crawled_at", -1).limit(1).max_time_ms(
+            SELLER_QUERY_MAX_MS).to_list(1)
+    except Exception:
+        logger.warning("[_pair_snapshot_rows] store=%s sku=%s skipped",
+                       store_id, psku, exc_info=True)
+        return []
+
+
 async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS,
-                            cap=SELLER_SNAPSHOT_CAP):
+                            cap=SELLER_SNAPSHOT_CAP, series_days=30):
     """(snapshots oldest→newest, sku_keys, guard_excluded_pairs).
 
     `sku_keys` are the SKU strings that resolve to this product WITHOUT going
@@ -2992,13 +3239,16 @@ async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS
     proj = {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1}
     # Hub-and-spoke: our SKU is the anchor. Read both directions so the panel
     # shows the whole seller set regardless of which side it was opened on.
-    direct = await db.product_matches.find({"my_sku": sku}, proj).to_list(2000)
-    reverse = await db.product_matches.find({"competitor_sku": sku}, proj).to_list(2000)
+    direct = await db.product_matches.find({"my_sku": sku}, proj).max_time_ms(
+        SELLER_QUERY_MAX_MS).to_list(2000)
+    reverse = await db.product_matches.find({"competitor_sku": sku}, proj).max_time_ms(
+        SELLER_QUERY_MAX_MS).to_list(2000)
     hub_skus = hub_skus_from_matches(reverse, sku)
     siblings = []
     if hub_skus:
         siblings = await db.product_matches.find(
-            {"my_sku": {"$in": hub_skus}}, proj).to_list(4000)
+            {"my_sku": {"$in": hub_skus}}, proj).max_time_ms(
+            SELLER_QUERY_MAX_MS).to_list(4000)
     alias_by_store = alias_map_from_matches(direct + reverse + siblings, sku)
 
     sku_keys = sorted({sku} | set(hub_skus))
@@ -3019,6 +3269,7 @@ async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS
     # the primary `barcode`), Zarafa still appears — the whole point of
     # the client's variant-first mandate.
     _direct_key_clauses = []
+    _key_list = []
     try:
         _my_bc_keys = _barcode_key_set(
             barcodes=(product.get("barcode"),) if product else (),
@@ -3034,16 +3285,59 @@ async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS
     except Exception:
         logger.exception("[_seller_snapshots] direct-key fallback skipped for sku=%s", sku)
 
-    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-    query = {"crawled_at": {"$gte": since}}
-    all_clauses = list(clauses) + _direct_key_clauses
-    if len(all_clauses) > 1:
-        query["$or"] = all_clauses
-    else:
-        query.update(all_clauses[0])
-    # DESC + reverse: hitting `cap` must drop the OLDEST rows, never the newest.
-    rows = await db.product_snapshots.find(query, {"_id": 0}).sort("crawled_at", -1).to_list(cap)
-    rows.reverse()
+    now_utc = datetime.now(timezone.utc)
+    since = now_utc - timedelta(days=lookback_days)
+    series_since = now_utc - timedelta(days=max(int(series_days or 30), 1))
+
+    # ── iter73y — DISCOVERY, then BOUNDED FETCH ─────────────────────────────
+    # This used to be ONE `find()` with every key class merged into a single
+    # `$or`, sorted by crawled_at, pulling up to `cap` FULL snapshot documents.
+    # An `$or` is only as fast as its worst branch: the moment one branch is
+    # unindexed — or the planner declines index-union because a branch is
+    # multikey (`variant_skus` / `variant_barcodes`) — MongoDB collapses the
+    # whole query into a COLLSCAN of product_snapshots. On production (~300K
+    # snapshots carrying fat variant arrays) that is the 5-minute
+    # product-detail hang the client reported twice, and because the scan
+    # pinned the database it dragged every other tab down with it.
+    #
+    # Now: each key class is asked SEPARATELY (its own index, no union) and
+    # returns only DISTINCT (store_id, sku) pairs — a few dozen tiny docs.
+    # Then one bounded, index-backed read per pair on
+    # (store_id, sku, crawled_at). Same admission rules and the same rows the
+    # panel renders, but the cost is proportional to the sellers of ONE
+    # product instead of the size of the collection.
+    pairs = set()
+    sku_class_keys = set(_key_list)
+    for _c in clauses:                       # from snapshot_or_clauses()
+        _sid = _c.get("store_id")
+        _sk = _c.get("sku")
+        _vals = _sk.get("$in", []) if isinstance(_sk, dict) else [_sk]
+        if _sid:
+            pairs.update((_sid, str(v)) for v in _vals)   # store-scoped aliases
+        else:
+            sku_class_keys.update(str(v) for v in _vals)
+
+    _discovery = [_discover_snapshot_pairs(
+        db, {"sku": {"$in": sorted(sku_class_keys)}}, since)]
+    # [1:] — the `sku` clause is already folded into sku_class_keys above.
+    _discovery += [_discover_snapshot_pairs(db, c, since)
+                   for c in _direct_key_clauses[1:]]
+    for _found in await asyncio.gather(*_discovery):
+        pairs |= _found
+
+    ordered_pairs = sorted(p for p in pairs if p[0] and p[1])[:SELLER_PAIR_CAP]
+    rows = []
+    for _i in range(0, len(ordered_pairs), _SELLER_FETCH_FANOUT):
+        _batch = ordered_pairs[_i:_i + _SELLER_FETCH_FANOUT]
+        for _sub in await asyncio.gather(*[
+            _pair_snapshot_rows(db, _sid, _psku, series_since, since)
+            for _sid, _psku in _batch
+        ]):
+            rows.extend(_sub)
+    # oldest → newest; hitting `cap` must drop the OLDEST rows, never the newest.
+    rows.sort(key=lambda r: _as_aware(r.get("crawled_at")) or _EPOCH)
+    if len(rows) > cap:
+        rows = rows[-cap:]
 
     # Names live in db.products (snapshots carry none), so the guard needs a
     # lookup for every SKU admitted through a match.
@@ -3208,7 +3502,7 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
     # linked to it, over a 180-day lookback. The old query (`sku == sku` inside
     # a 30-day window) hid matched sellers outright; they are now fetched and
     # LABELLED instead of dropped.
-    snapshots = await _seller_snapshots(db, sku, product)
+    snapshots = await _seller_snapshots(db, sku, product, series_days=days)
     snapshots, sku_keys, guard_excluded = snapshots
 
     # Group by store_id
@@ -9979,52 +10273,19 @@ async def startup():
     await seed_super_admin()
     await ensure_stores()
     # Idempotent indexes (safe to run on every startup; no-op if already present)
+    # iter73y — one registry, one independent attempt per index. Previously a
+    # single failure anywhere in this block skipped every index after it, which
+    # is how production ran the iter73x hotfix WITHOUT the indexes it ships.
     try:
         await ledger.ensure_ledger_indexes(db)     # iter67 — daily ledger (Phase 1)
-        await db.product_snapshots.create_index("crawled_at")
-        await db.product_snapshots.create_index([("sku", 1), ("crawled_at", -1)])
-        await db.product_snapshots.create_index([("store_id", 1), ("crawled_at", -1)])
-        # Perf sprint Feb 2026 — leading-by-date for time-range aggregations
-        await db.product_snapshots.create_index([("crawled_at", -1), ("store_id", 1)])
-        await db.product_snapshots.create_index([("crawled_at", -1), ("sku", 1)])
-        await db.product_snapshots.create_index([("crawled_at", -1), ("confidence_score", 1)])
-        # iter22 (Jul 2026) — matcher lookup fix: index-backed sort for
-        # _build_competitor_lookups at production scale.
-        await db.product_snapshots.create_index([("store_id", 1), ("sku", 1), ("crawled_at", -1)])
-        # iter73x (Aug 10 2026) — HOTFIX: iter73v added `barcode`, `variant_skus`
-        # and `variant_barcodes` to the `_seller_snapshots` $or clause. Without
-        # backing indexes MongoDB CANNOT use index-union on the $or and falls
-        # back to a full collection scan of `product_snapshots` on every
-        # product-detail click. In production (~300K snapshots, 6-month
-        # window) this produced a 5+ minute hang on the "My Products" panel.
-        # Multikey indexes on the arrays plus a scalar index on barcode all
-        # compound with (crawled_at, -1) so the outer `since` filter is
-        # satisfied inside the index scan.
-        await db.product_snapshots.create_index([("barcode", 1), ("crawled_at", -1)])
-        await db.product_snapshots.create_index([("variant_skus", 1), ("crawled_at", -1)])
-        await db.product_snapshots.create_index([("variant_barcodes", 1), ("crawled_at", -1)])
-        await db.proxy_usage.create_index("crawled_at")
-        await db.products.create_index("sku", unique=True)
-        await db.products.create_index("category")
-        # Real orders ledger (Feb 2026 My Revenue rework)
-        await db.own_store_orders.create_index("order_id", unique=True)
-        await db.own_store_orders.create_index([("created_at", -1)])
-        # Dashboard cache (iter25) — one doc per standard window, keyed uniquely.
-        await db.dashboard_cache.create_index("key", unique=True)
-        # iter30 — write-time metric rollups. Tiny collections read on the summary
-        # path instead of scanning product_snapshots.
-        await db.metric_daily_rollups.create_index("date")
-        await db.metric_daily_rollups.create_index("store_id")
-        await db.sku_store_coverage.create_index("last_seen_at")
-        await db.sku_store_coverage.create_index("store_id")
-        await db.sku_store_coverage.create_index("sku")
-        # iter33 — gaps / price-wars filter on the latest price>0 crawl
-        await db.sku_store_coverage.create_index("last_priced_at")
-        # iter34 — daily sales facts (leaderboard / top-sellers / trending)
-        await db.sku_sales_daily.create_index("date")
-        await db.sku_sales_daily.create_index([("store_id", 1), ("date", 1)])
-        await db.sku_store_coverage.create_index("last_sold_pos_at")
-        await db.sku_store_coverage.create_index("last_usable_qty_at")
+    except Exception as e:
+        logger.warning(f"Ledger index creation skipped: {e}")
+    try:
+        _idx_results = await ensure_all_indexes(db)
+        _idx_failed = {k: v for k, v in _idx_results.items() if not v.get("ok")}
+        logger.info("[Startup] indexes ensured: %d ok, %d failed %s",
+                    len(_idx_results) - len(_idx_failed), len(_idx_failed),
+                    _idx_failed or "")
     except Exception as e:
         logger.warning(f"Index creation skipped: {e}")
     # Safety net (Feb 2026): ensure pets-houses.com is always flagged as the user's own store.

@@ -36,20 +36,39 @@ export default function ProductDetailPanel({ sku, onClose }) {
   const [history, setHistory] = useState({});
   const [velocity, setVelocity] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
   const seasonal = useSeasonalEvents();
 
+  // iter73y — the request used to have NO timeout and a bare
+  // `.catch(console.error)`, so any backend stall left the panel on
+  // "Loading…" forever with nothing the user could do. Now it fails visibly
+  // and can be retried.
   useEffect(() => {
-    if (!sku) { setProduct(null); return; }
+    if (!sku) { setProduct(null); setError(null); return; }
+    let alive = true;
     setLoading(true);
-    api.get(`/products/${encodeURIComponent(sku)}/full?days=30`)
+    setError(null);
+    api.get(`/products/${encodeURIComponent(sku)}/full?days=30`, { timeout: 45000 })
       .then(({ data }) => {
+        if (!alive) return;
         setProduct(data);
         setHistory(data.history || {});
         setVelocity(data.velocity || null);
       })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [sku]);
+      .catch((err) => {
+        if (!alive) return;
+        console.error(err);
+        setProduct(null);
+        setError(
+          err?.code === "ECONNABORTED"
+            ? t("detail_timeout")
+            : err?.response?.data?.detail || t("detail_failed")
+        );
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [sku, attempt]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build price history chart data
   const buildHistoryData = () => {
@@ -79,7 +98,19 @@ export default function ProductDetailPanel({ sku, onClose }) {
         </SheetHeader>
 
         {loading ? (
-          <div className="p-5 text-sm text-[#A1E4DB]">{t("loading")}</div>
+          <div className="p-5 text-sm text-[#A1E4DB]" data-testid="product-detail-loading">{t("loading")}</div>
+        ) : error ? (
+          <div className="p-5 space-y-3" data-testid="product-detail-error">
+            <p className="text-sm text-red-300">{error}</p>
+            <Button
+              size="sm"
+              variant="outline"
+              data-testid="product-detail-retry-btn"
+              onClick={() => setAttempt((n) => n + 1)}
+            >
+              {t("retry")}
+            </Button>
+          </div>
         ) : product ? (
           <div className="p-5 space-y-5">
             {/* Product Header */}

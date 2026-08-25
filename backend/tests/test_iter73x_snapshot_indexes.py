@@ -54,16 +54,22 @@ def test_iter73x_marker_present_in_source():
 
 def test_startup_creates_all_three_required_indexes():
     """The startup routine must add exactly the three indexes iter73v's
-    _seller_snapshots $or clause needs. Regression fence: a future refactor
-    that drops any of them silently reintroduces the 5-minute hang."""
+    _seller_snapshots lookups need. Regression fence: a future refactor
+    that drops any of them silently reintroduces the 5-minute hang.
+
+    iter73y — the literal `create_index` calls moved out of startup() into the
+    INDEX_SPECS registry (each spec applied in its OWN try/except so one
+    failure can no longer skip every index after it, which is how production
+    ran the iter73x deploy without the indexes). The fence now checks the
+    registry AND that startup still applies it."""
     src = Path(server.__file__).read_text()
     startup_block = src.split("async def startup(", 1)[1].split("\nasync def ", 1)[0]
+    assert "ensure_all_indexes(db)" in startup_block, \
+        "startup must apply the index registry"
+    specs = {tuple(keys) for _coll, keys, _opts in server.INDEX_SPECS}
     for field, direction in _REQUIRED_INDEXES:
-        pattern = re.compile(
-            rf'create_index\(\s*\[\("{field}",\s*{direction}\),\s*\("crawled_at",\s*-1\)\]'
-        )
-        assert pattern.search(startup_block), \
-            f"startup must create compound index ({field}, {direction}) + (crawled_at, -1)"
+        assert ((field, direction), ("crawled_at", -1)) in specs, \
+            f"INDEX_SPECS must carry compound index ({field}, {direction}) + (crawled_at, -1)"
 
 
 def test_seller_snapshots_or_clause_matches_created_indexes():
@@ -98,12 +104,15 @@ def test_admin_endpoint_is_super_admin_gated():
 
 def test_admin_endpoint_creates_indexes_in_background():
     """background=True on Atlas is essential — index builds on ~300K rows
-    take minutes to complete and MUST NOT block reads."""
+    take minutes to complete and MUST NOT block reads. iter73y moved the
+    create_index call into `ensure_all_indexes`, which the endpoint calls."""
     src = Path(server.__file__).read_text()
     endpoint = src.split(
         'admin/ensure-snapshot-indexes', 1
     )[1].split("\n@router", 1)[0]
-    assert "background=True" in endpoint, \
+    assert "ensure_all_indexes" in endpoint
+    helper = src.split("async def ensure_all_indexes(", 1)[1].split("\n@router", 1)[0]
+    assert "background=True" in helper, \
         "background=True prevents index build from blocking reads"
 
 
@@ -122,11 +131,11 @@ def test_admin_endpoint_end_to_end():
             user={"id": "t", "email": "t@t", "role": "super_admin"}
         )
         assert body["ok"] is True, body
-        assert set(body["indexes"].keys()) == {
-            "barcode_crawled_at",
-            "variant_skus_crawled_at",
-            "variant_barcodes_crawled_at",
-        }
+        # iter73y — the endpoint now ensures the WHOLE registry; the three
+        # iter73x snapshot indexes must be among the reported entries.
+        assert {"product_snapshots:barcode+crawled_at-",
+                "product_snapshots:variant_skus+crawled_at-",
+                "product_snapshots:variant_barcodes+crawled_at-"} <= set(body["indexes"])
         for name, entry in body["indexes"].items():
             assert entry["ok"], f"{name} failed: {entry.get('error')}"
     asyncio.run(main())

@@ -202,7 +202,11 @@ def test_iter73u_seller_snapshots_direct_key_fallback_shape():
     assert _re.search(r'\{"barcode":\s*\{"\$in":', seller)
     # Combined into the $or so pre-existing match-row lookups keep working.
     assert "_direct_key_clauses" in seller
-    assert "list(clauses) + _direct_key_clauses" in seller
+    # iter73y — the mega-`$or` was replaced by one indexed lookup PER key
+    # class (a single unindexed/multikey branch used to collapse the whole
+    # query into a COLLSCAN). Both sources are still consulted.
+    assert "_discover_snapshot_pairs(db, c, since)" in seller
+    assert "for _c in clauses:" in seller
 
 
 def test_iter73u_direct_key_fallback_is_defensive():

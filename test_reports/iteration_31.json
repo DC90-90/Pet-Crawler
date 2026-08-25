@@ -1,0 +1,24 @@
+{
+  "summary": "iter73y verification: bounded seller-snapshot query, perf-probe, freshness, index registry, and ProductDetailPanel error/retry — all PASS. 13/13 pytest cases (perf-probe + 403 + idempotent index ensure + /full seller_count==3 + non-/full seller_count==3 + freshness fast + 7 regression endpoints) all green in ~4.4s. Frontend Playwright: clicking a product on My Products opens data-testid='product-detail-panel', loading state clears (never stuck), switching products repopulates, aborting **/products/*/full* shows data-testid='product-detail-error' + data-testid='product-detail-retry-btn', and unblocking then clicking Retry loads the panel successfully with no error remaining. No COLLSCAN detected on any of the 4 key classes (sku/barcode/variant_skus/variant_barcodes). product_matches has indexes present (previously unindexed in prod).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter73y_e2e.py",
+    "/app/test_reports/pytest/iter73y_e2e.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is very large; consider splitting into modules (perf/indexes/products/freshness) in a future refactor — not blocking for iter73y.",
+    "MyProducts route lives at '/' rather than '/my-products'; sidebar navigation is fine but a deep link to /my-products 404s silently (blank content, no user feedback). Consider redirect or route alias."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter73y_e2e.py (new)"
+  ],
+  "success_rate": {"backend": "100% (13/13)", "frontend": "100% (all iter73y scenarios pass)"},
+  "test_credentials": "super_admin a.disi@taqueen.sa / Ahmaddc90@ ; created test user test_iter73y_normal@example.com / NormalUser#123 (role=user, allowed_pages=[my_products])",
+  "seed_data_creation": "Ran tools_iter73y_e2e_probe.py to seed SKU IT73Y-PROBE-052742024363 (60 snapshots x 3 stores: exact-SKU / primary-barcode / variant_barcodes only). Cleaned up with `python3 tools_iter73y_e2e_probe.py clean` after tests (cleaned snapshots=60 products=1).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter73y fix verified end-to-end on the preview DB. All 4 key-class EXPLAIN plans from /api/admin/perf-probe report collscan==false. /api/data-freshness returns quickly (<3s) even though preview has almost no crawl data — buckets 'no_data' are expected there. Frontend ProductDetailPanel now has a robust error+retry path (data-testid='product-detail-error', data-testid='product-detail-retry-btn') and correctly re-fetches on Retry. When re-testing, always seed via /app/backend/tools_iter73y_e2e_probe.py and clean at the end.",
+  "rca of the issue": "Previous fix (iter73x) only added indexes; production still hung because _seller_snapshots issued a giant $or across 4 key classes combined with a sort that forced Mongo to walk up to 8000 fat product_snapshots docs. iter73y (a) discovers (store_id,sku) pairs per-key-class using tiny indexed aggregations, then (b) does one bounded index-backed read per pair with maxTimeMS=8000 and a lean projection; (c) rebuilds every index (including previously-unindexed product_matches) via INDEX_SPECS; (d) data-freshness switched from a whole-collection $group to per-store indexed reads; (e) frontend gains 45s timeout + explicit error state + Retry so the panel can never sit on 'Loading...' forever. Verified in this iteration."
+}
