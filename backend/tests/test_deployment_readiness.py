@@ -243,6 +243,17 @@ class TestRateLimiting:
         assert results[5] == 429, f"Request 6 should be 429 (rate limited), got {results[5]}"
         print(f"✓ Rate limiting working on register: 5 requests allowed, 6th returned 429")
 
+        # iter80 hygiene — this test registers 5 REAL users per run; 175 of them
+        # had accumulated in db.users. Remove the accounts it just created.
+        try:
+            from pymongo import MongoClient
+            from _auth import live_db_name, live_mongo_url
+            gone = MongoClient(live_mongo_url())[live_db_name()].users.delete_many(
+                {"email": {"$regex": r"^ratelimit_reg_"}})
+            print(f"✓ cleaned up {gone.deleted_count} throwaway ratelimit_reg_* account(s)")
+        except Exception as e:                                  # never fail the assertion above
+            print(f"! cleanup skipped: {e}")
+
 
 class TestDeployFiles:
     """Test that all required deployment files exist"""

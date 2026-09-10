@@ -153,17 +153,42 @@ def test_my_products_kpis_have_matched_and_coverage(my_products_90d):
     print(f"[kpis] matched={kpis['matched_products']} coverage={kpis['market_coverage_pct']}% avg_share={kpis.get('avg_market_share')}")
 
 
-def test_my_products_avg_market_share_computed_over_matched_only(my_products_90d):
-    """avg_market_share should equal Σmy_units(matched) / Σmarket_units(matched) × 100."""
-    products = my_products_90d["products"]
-    kpis = my_products_90d["kpis"]
-    matched = [p for p in products if p.get("has_market_data")]
-    my_sum = sum((p.get("my_units_sold") or 0) for p in matched)
-    market_sum = sum((p.get("qty_sold_est") or 0) for p in matched)
+def test_my_products_avg_market_share_computed_over_matched_only(client):
+    """avg_market_share == Σ my_units_sold ÷ Σ qty_sold_est over exactly the rows
+    the KPI counts (`has_market_share`), across the FULL catalogue.
+
+    iter18 filtered on `has_market_data` — a field iter19 REMOVED (and iter19
+    now asserts its absence), so `matched` was always empty and the expectation
+    silently collapsed to 0. It also recomputed from ONE 500-row page while the
+    KPI spans every row (2,257 today).
+    """
+    first = client.get(f"{BASE_URL}/api/my-products",
+                       params={"days": 90, "limit": 500, "offset": 0}, timeout=90).json()
+    kpis = first["kpis"]
+    total = first.get("total") or 0
+    rows = list(first.get("products") or [])
+    offset = len(rows)
+    while offset < total:
+        page = client.get(f"{BASE_URL}/api/my-products",
+                          params={"days": 90, "limit": 500, "offset": offset},
+                          timeout=90).json().get("products") or []
+        if not page:
+            break
+        rows.extend(page)
+        offset += len(page)
+    assert len(rows) == total, f"paged {len(rows)} of {total} rows"
+
+    share_rows = [r for r in rows if r.get("has_market_share")]
+    assert len(share_rows) == kpis["share_sample_size"], (
+        f"share_sample_size={kpis['share_sample_size']} but {len(share_rows)} rows "
+        f"carry has_market_share=true")
+    my_sum = sum((r.get("my_units_sold") or 0) for r in share_rows)
+    market_sum = sum((r.get("qty_sold_est") or 0) for r in share_rows)
     expected = round((my_sum / market_sum) * 100, 1) if market_sum > 0 else 0
-    actual = kpis.get("avg_market_share", 0)
-    # Allow small rounding tolerance
-    assert abs(actual - expected) <= 0.5, f"avg_market_share={actual} vs computed-from-matched={expected}"
+    print(f"[avg share] my={my_sum} market={market_sum} → {expected}% "
+          f"(kpi {kpis['avg_market_share']}) over {len(share_rows)} rows")
+    assert abs(kpis["avg_market_share"] - expected) <= 0.5, (
+        f"avg_market_share={kpis['avg_market_share']} vs computed-from-share-rows={expected}")
 
 
 def test_my_products_null_share_roughly_matches_no_competitors(my_products_90d):

@@ -147,3 +147,28 @@ RULES:
 3. Never leave a background crawl running while editing backend files — hot
    reload restarts the process and silently kills the crawl (cost me three
    Hamtaro runs).
+
+## iter81 — "the pod never became ready" is almost always the startup handler
+A production rollout timed out (`deployment failed to become ready`) while
+preview was perfectly healthy. The cause was structural, not a bug in any
+feature: **everything the app needed at boot was AWAITED inside
+`@app.on_event("startup")`**, so uvicorn did not serve until Atlas had answered
+seeds + ~35 index ensures + a 2,231-doc re-tag, and any exception there made
+starlette exit the process ("Application startup failed. Exiting.").
+Kubernetes cannot tell those two apart — both are "readiness never passed".
+
+Rules taken from it:
+1. A startup handler may only SCHEDULE work (`asyncio.create_task`). Never await
+   seeding, index building, cache warm-up or a network call in it.
+2. Every boot phase gets its own try/except. A degraded boot must leave a
+   serving API, never a crash loop.
+3. Wait for the database with a bounded RETRY at boot. A cold Atlas connection
+   (SRV + TLS) routinely exceeds a 5s serverSelectionTimeout, and the first
+   query has no retry of its own.
+4. Publish boot progress on the health endpoint (`boot.status/phase/errors`).
+   Without pod-log access it is the only way to answer "where did it stop?".
+5. Keep heavy downloads (playwright install ~400MB) and catalogue-wide
+   recomputes OUT of the first minute — a CPU/disk spike inside the readiness
+   window can evict a fresh pod and fail the whole rollout.
+6. Preview NEVER reproduces this: local Mongo answers in microseconds and the
+   image is warm. Reason about the cold-start path instead of testing for it.

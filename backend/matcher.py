@@ -696,6 +696,21 @@ async def run_matching_for_all(db, progress_callback=None):
                 f"falling back to all {len(legacy)} my_products. Re-tag the catalog to silence this warning."
             )
         my_products = legacy
+    else:
+        # iter80 anti-silent-failure guard. The tag query used to be trusted
+        # whenever it returned ANYTHING: a legacy import had written the
+        # placeholder "own-store-id" into 2,231 of 2,303 products, so every run
+        # matched 68 products, reported match_status=ok, and left the rest of the
+        # catalogue with no competitors at all. A partially tagged catalogue is a
+        # data fault, not a smaller catalogue — say so, and match all of it.
+        catalogue = await db.my_products.count_documents({})
+        if catalogue and len(my_products) < catalogue * 0.9:
+            logger.error(
+                "[Matching] Own-store tag covers only %d of %d my_products — "
+                "matching the FULL catalogue instead. Fix the tagging (store_registry "
+                "re-tags on boot); a partial run leaves products with no competitors.",
+                len(my_products), catalogue)
+            my_products = await db.my_products.find({}, {"_id": 0}).to_list(5000)
     total = len(my_products)
     stats = {"total": total, "matched": 0, "unmatched": 0, "total_matches": 0}
 

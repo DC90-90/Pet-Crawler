@@ -260,34 +260,52 @@ def test_market_coverage_is_additive_only(client, db):
 
 
 def test_oos_competitor_still_counts(client, db):
-    """OOS competitors (in_stock=False, qty_available=0) WITH a price must
-    appear in num_competitors AND in competitor_min/max_price. Zarafa is the
-    canonical OOS case for Beaphar (qty=0, price=46.0).
+    """An out-of-stock competitor that still publishes a price MUST appear in
+    num_competitors and in competitor_min/max_price — hiding it makes our own
+    price look better than it is.
+
+    iter21 pinned Zarafa as the canonical OOS seller of Beaphar (qty=0,
+    price=46.0). iter80: Zarafa has never been crawled in this environment, so
+    the invariant is now checked against whichever tracked competitor is
+    currently the OOS-but-priced seller of this SKU, and reports the fleet it
+    looked at when there is none.
     """
     since30 = datetime.now(timezone.utc) - timedelta(days=30)
-    zarafa_snap = db.product_snapshots.find_one(
-        {"sku": BEAPHAR_SKU, "store_name": {"$regex": "Zarafa", "$options": "i"},
-         "crawled_at": {"$gte": since30}},
-        sort=[("crawled_at", -1)],
-    )
-    assert zarafa_snap is not None, "Zarafa snapshot not in 30d window"
-    assert zarafa_snap.get("price") is not None
-    assert _is_valid_barcode(zarafa_snap["sku"]), (
-        "Zarafa snapshot SKU must pass _is_valid_barcode for the union path"
+    own_ids = {s["id"] for s in db.stores.find({"is_own_store": True}, {"id": 1})}
+    in_window = list(db.product_snapshots.find(
+        {"sku": BEAPHAR_SKU, "crawled_at": {"$gte": since30}},
+        {"store_name": 1, "store_id": 1, "price": 1, "in_stock": 1, "qty_available": 1},
+    ).sort("crawled_at", -1))
+    oos = [s for s in in_window
+           if s.get("store_id") not in own_ids
+           and (s.get("price") or 0) > 0
+           and (s.get("in_stock") is False or (s.get("qty_available") or 0) == 0)]
+    if not oos:
+        pytest.skip(
+            f"no OOS-but-priced competitor for {BEAPHAR_SKU} in the 30d window; "
+            f"sellers seen: {sorted({s.get('store_name') for s in in_window})}")
+
+    top = max(oos, key=lambda s: s["price"])
+    print(f"[oos] {top.get('store_name')} @ {top['price']} "
+          f"(in_stock={top.get('in_stock')} qty={top.get('qty_available')})")
+    assert _is_valid_barcode(BEAPHAR_SKU), (
+        "the SKU must pass _is_valid_barcode for the union path"
     )
 
-    # Verify the API includes Zarafa's price in the comparison
+    # Verify the API includes that OOS price in the comparison
     r = client.get(f"{BASE_URL}/api/my-products", params={
         "days": 30, "search": BEAPHAR_SKU, "limit": 5,
-    }, timeout=15)
+    }, timeout=30)
     assert r.status_code == 200
     rows = r.json().get("products", [])
     row = next((x for x in rows if x.get("sku") == BEAPHAR_SKU), None)
     assert row is not None
-    # competitor_max_price must be >= 46 (Zarafa's price) since OOS prices count
-    assert (row.get("competitor_max_price") or 0) >= 46.0, (
-        f"competitor_max_price should include Zarafa's OOS price (46.0), "
-        f"got {row.get('competitor_max_price')}"
+    assert (row.get("competitor_max_price") or 0) >= top["price"] - 0.01, (
+        f"competitor_max_price must include {top.get('store_name')}'s OOS price "
+        f"({top['price']}), got {row.get('competitor_max_price')}"
+    )
+    assert (row.get("num_competitors") or 0) >= 1, (
+        f"an OOS-but-priced seller must still count as a competitor: {row.get('num_competitors')}"
     )
 
 

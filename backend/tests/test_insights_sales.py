@@ -121,12 +121,27 @@ class TestInsightsSalesBehavior:
 
 # ── Cross-check with /api/my-products ─────────────────────────
 class TestCrossCheck:
-    def test_total_units_match_my_products(self, auth_session):
-        rs = auth_session.get(f"{API}/insights/sales?days=30&sort=revenue_desc", timeout=60).json()
-        rm = auth_session.get(f"{API}/my-products?days=30&limit=500", timeout=60).json()
-        # The aggregated total_units_sold should match between both endpoints
-        assert rs["kpis"]["total_units_sold"] == rm["kpis"]["total_units_sold"], \
-            f"Mismatch: insights/sales={rs['kpis']['total_units_sold']} vs my-products={rm['kpis']['total_units_sold']}"
+    def test_my_catalogue_is_a_subset_of_the_tracked_market(self, auth_session):
+        """`/insights/sales` spans EVERY tracked product (mine AND products only
+        competitors sell — 4,998 rows here); `/my-products` spans MY catalogue
+        (2,257). iter21 asserted the two unit totals were EQUAL, which only held
+        while the two populations happened to coincide; the invariant that
+        actually matters is containment — the market can never be smaller than
+        my slice of it, and neither side may collapse to zero.
+        """
+        rs = auth_session.get(f"{API}/insights/sales?days=30&sort=revenue_desc", timeout=120).json()
+        rm = auth_session.get(f"{API}/my-products?days=30&limit=1", timeout=120).json()
+        market, mine = rs["kpis"], rm["kpis"]
+        print(f"[cross-check] market: {market['product_count']} products / "
+              f"{market['total_units_sold']} units — mine: {rm['total']} products / "
+              f"{mine['total_units_sold']} units")
+        assert rm["total"] > 0 and market["product_count"] > 0
+        assert market["product_count"] >= rm["total"], (
+            f"tracked market ({market['product_count']}) smaller than my catalogue ({rm['total']})")
+        assert market["total_units_sold"] >= mine["total_units_sold"] > 0, (
+            f"market units {market['total_units_sold']} < my units {mine['total_units_sold']}")
+        assert market["total_revenue"] >= mine["market_revenue"] > 0, (
+            f"market revenue {market['total_revenue']} < my slice {mine['market_revenue']}")
 
 
 # ── Regression on existing endpoints ─────────────────────────

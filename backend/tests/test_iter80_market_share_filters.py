@@ -309,8 +309,22 @@ def test_missing_and_group_csvs_carry_the_method(H):
         rows = _csv(H, section)
         assert "Calculation method" in rows[0], f"{section} CSV has no method column"
         assert "Confidence" in rows[0]
+        assert "Unavailable reason" in rows[0], f"{section} CSV has no unavailable-reason column"
         if len(rows) > 1:
             assert dict(zip(rows[0], rows[1]))["Calculation method"]
+
+
+def test_group_csv_states_why_a_row_is_withheld(H):
+    """A brand/category with no measurable product must say so in the CSV, not
+    just carry confidence=unavailable."""
+    rows = _csv(H, "brands")
+    head = rows[0]
+    withheld = [dict(zip(head, r)) for r in rows[1:]
+                if dict(zip(head, r)).get("Products with measurable sales") in ("0", "")]
+    if not withheld:
+        pytest.skip("every brand has at least one measurable product in this window")
+    assert withheld[0]["Unavailable reason"], (
+        f"withheld brand row with no reason: {withheld[0].get('Brand')}")
 
 
 def test_csv_honours_the_filters(H):

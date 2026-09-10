@@ -77,16 +77,34 @@ class TestDataFreshness:
             f"Own store bucket expected 'today', got {own['bucket']} (age_days={own.get('age_days')})"
         )
 
-    def test_competitors_stale(self, headers):
+    def test_competitor_freshness_buckets_match_their_own_age(self, headers):
+        """Each store's bucket must agree with its own age_days, per the
+        thresholds in server.py `_bucket`: <24h today, <7d this_week,
+        <30d this_month, else stale; never crawled → no_data with age None.
+
+        iter16 asserted "at least 1 competitor must be stale", which encoded the
+        Feb-2026 crawl outage — it now FAILS on a healthy fleet. The invariant
+        that actually catches a bug is the classification itself.
+        """
         r = requests.get(f"{BASE_URL}/api/data-freshness", headers=headers, timeout=20)
         data = r.json()
         competitors = [s for s in data["stores"] if not s.get("is_own_store")]
         assert len(competitors) > 0, "Expected competitor stores"
-        # Per spec: competitor crawls last ran 36-70d ago => 'stale'
-        stale_count = sum(1 for s in competitors if s["bucket"] == "stale")
-        assert stale_count >= 1, (
-            f"Expected >=1 stale competitor; got buckets={[s['bucket'] for s in competitors]}"
-        )
+        for s in competitors:
+            age, bucket = s.get("age_days"), s["bucket"]
+            if bucket == "no_data":
+                assert age is None, f"{s['store_name']}: no_data must carry age_days=None, got {age}"
+                continue
+            assert age is not None, f"{s['store_name']}: bucket={bucket} with no age_days"
+            expected = ("today" if age < 1 else "this_week" if age < 7
+                        else "this_month" if age < 30 else "stale")
+            assert bucket == expected, (
+                f"{s['store_name']}: age_days={age} should bucket as {expected}, got {bucket}")
+        buckets = [(s["store_name"], s["bucket"], s.get("age_days")) for s in competitors]
+        print(f"[freshness] {buckets}")
+        never_crawled = [b[0] for b in buckets if b[1] == "no_data"]
+        if never_crawled:
+            print(f"[freshness] NEVER CRAWLED in this environment: {never_crawled}")
 
 
 # -------------------- /api/my-products search fix --------------------

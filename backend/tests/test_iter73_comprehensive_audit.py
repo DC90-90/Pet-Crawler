@@ -182,8 +182,21 @@ def test_insights_sales_products_row_math(client):
     assert not bad, f"row math off: {bad[:5]}"
 
 
-# ---------- 6. Leaderboard vs Ranking cross-consistency (iter73f) ----------
+# ---------- 6. Leaderboard vs Ranking cross-consistency (iter73f, re-axed iter80) ----------
 def test_leaderboard_vs_ranking_consistency(client):
+    """The two surfaces report DIFFERENT axes on purpose since iter73o:
+    `/insights/leaderboard?days=90` is a raw 90-day TOTAL, while
+    `/price-intel/store-ranking` is a normalised MONTHLY RATE (revenue_30d).
+    iter73f asserted their totals agreed within 5%, which stopped being true the
+    moment the ranking started normalising (and the gap widens further because
+    the ranking also surfaces ±50% Salla ESTIMATES that the leaderboard
+    deliberately withholds).
+
+    What must still hold — and is what a real per-store math bug would break:
+      1. every store measured on BOTH surfaces shares ONE normalisation factor
+         (same window, same span), and
+      2. no store shows revenue on one surface and nothing on the other.
+    """
     lb = _json(client, "/api/insights/leaderboard", days=90)
     rk = _json(client, "/api/price-intel/store-ranking")
     lb_rows = lb if isinstance(lb, list) else (lb.get("stores") or lb.get("leaderboard") or [])
@@ -191,11 +204,33 @@ def test_leaderboard_vs_ranking_consistency(client):
     assert isinstance(lb_rows, list) and isinstance(rk_rows, list)
     if not lb_rows or not rk_rows:
         pytest.skip("empty leaderboard/ranking in preview")
-    lb_total = sum((r.get("revenue") or r.get("revenue_est") or 0) for r in lb_rows)
-    rk_total = sum((r.get("revenue") or r.get("revenue_est") or r.get("revenue_30d") or 0) for r in rk_rows)
-    if lb_total and rk_total:
-        diff = abs(lb_total - rk_total) / max(lb_total, rk_total)
-        assert diff <= 0.05, f"iter73f: leaderboard total={lb_total} vs ranking total={rk_total} diff={diff:.2%}"
+    rk_by_id = {r.get("store_id"): r for r in rk_rows}
+
+    factors, contradictions = {}, []
+    for row in lb_rows:
+        peer = rk_by_id.get(row.get("store_id"))
+        if not peer:
+            continue
+        lb_val = row.get("revenue_est") or row.get("revenue") or 0
+        rk_val = peer.get("revenue_30d") or peer.get("revenue_rank_value") or 0
+        name = row.get("store") or peer.get("name")
+        if lb_val > 0 and rk_val > 0:
+            factors[name] = rk_val / lb_val
+        elif lb_val > 0 and peer.get("revenue_status") == "computed":
+            contradictions.append({"store": name, "leaderboard": lb_val,
+                                   "ranking": rk_val, "ranking_status": peer.get("revenue_status")})
+    print(f"[axes] normalisation factors: { {k: round(v, 3) for k, v in factors.items()} }")
+    assert not contradictions, (
+        f"a store reports revenue on the leaderboard but nothing on the ranking "
+        f"while claiming 'computed': {contradictions}")
+    if len(factors) >= 2:
+        lo, hi = min(factors.values()), max(factors.values())
+        assert hi - lo <= 0.05 * hi, (
+            f"stores measured on both surfaces must share ONE 30d/span "
+            f"normalisation factor; got {factors}")
+        assert lo >= 30 / 90 - 0.01, (
+            f"a monthly rate below (90-day total × 30/90) means the ranking is "
+            f"normalising by a span longer than its own window: {factors}")
 
 
 # ---------- 7. Store ranking — sorted_by revenue_desc, monotonic, OWN row present ----------

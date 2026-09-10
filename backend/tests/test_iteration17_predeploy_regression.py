@@ -60,10 +60,18 @@ class TestBundle1KpiSplit:
             f"market_revenue ({k['market_revenue']}) < my_revenue ({k['my_revenue']})"
         )
 
-        # Order-of-magnitude sanity vs spec (~28401 / ~8157 / ~30802)
-        assert 15000 < k["market_revenue"] < 60000, k["market_revenue"]
-        assert 4000 < k["my_revenue"] < 20000, k["my_revenue"]
-        assert 15000 < k["total_revenue"] < 60000, k["total_revenue"]
+        # Order-of-magnitude sanity. iter17 pinned the Feb-2026 window
+        # (~28,401 market / ~8,157 mine / ~30,802 legacy); the numbers have since
+        # moved with the crawl fleet (119,217 / 62,771 / 119,749 today), so the
+        # magic ranges are gone. What must hold is the RELATIONSHIP between the
+        # three figures — the split card is meaningless if these drift apart.
+        assert k["total_revenue"] > 0
+        assert abs(k["total_revenue"] - k["market_revenue"]) <= k["market_revenue"] * 0.25, (
+            f"legacy total_revenue ({k['total_revenue']}) has drifted from "
+            f"market_revenue ({k['market_revenue']}) by more than 25%")
+        assert k["my_revenue"] <= k["market_revenue"], "my slice cannot exceed the market"
+        print(f"[kpi split] market={k['market_revenue']} mine={k['my_revenue']} "
+              f"legacy_total={k['total_revenue']}")
 
         # Other KPIs sanity
         assert "avg_market_share" in k
@@ -77,43 +85,66 @@ class TestBundle1KpiSplit:
 
 # ---------- Bundle 2: Hobba deactivation ----------
 class TestBundle2Hobba:
-    def test_stores_lists_hobba_inactive(self, headers):
-        r = requests.get(
-            f"{BASE_URL}/api/stores",
-            headers={"Authorization": headers["Authorization"]},
-            timeout=20,
-        )
+    """iter17 pinned Hobba as DEACTIVATED (it was 404ing at the time) and
+    asserted it was absent from /api/data-freshness. Hobba has since been
+    repaired and reactivated — it crawls daily and returned 1,888 products today
+    — so both assertions now fail on a HEALTHY fleet. The durable invariant is
+    that the two surfaces AGREE about which stores are active, whatever that set
+    happens to be, and that reserved test stores never appear on either.
+    """
+
+    def test_freshness_lists_exactly_the_active_real_stores(self, headers):
+        auth = {"Authorization": headers["Authorization"]}
+        r = requests.get(f"{BASE_URL}/api/stores", headers=auth, timeout=20)
         assert r.status_code == 200, r.text
         stores = r.json()
         if isinstance(stores, dict):
             stores = stores.get("stores", stores.get("data", []))
-        assert isinstance(stores, list)
-        hobba = [s for s in stores if "hobba" in (s.get("name") or s.get("name_en") or "").lower()]
+        assert isinstance(stores, list) and stores
+
+        def _name(s):
+            return (s.get("name") or s.get("name_en") or "").strip()
+
+        def _is_test(name, domain=""):
+            n, d = name.lower(), (domain or "").lower()
+            return n.startswith(("test_", "test ")) or d.endswith("example.com")
+
+        active = {_name(s) for s in stores
+                  if s.get("is_active") and not _is_test(_name(s), s.get("domain"))}
+        inactive = {_name(s) for s in stores
+                    if not s.get("is_active") and not _is_test(_name(s), s.get("domain"))}
+        reserved = {_name(s) for s in stores if _is_test(_name(s), s.get("domain"))}
+        assert not reserved, (
+            f"reserved test stores are on the client's Stores page: {reserved} "
+            f"(iter76/iter80 hygiene — create_store AND /crawler/ingest refuse "
+            f"*.example.com, and boot deletes them)")
+
+        f = requests.get(f"{BASE_URL}/api/data-freshness", headers=auth, timeout=20)
+        assert f.status_code == 200, f.text
+        listed = {(s.get("store_name") or "").strip() for s in f.json().get("stores", [])}
+        print(f"[stores] active={sorted(active)} inactive={sorted(inactive)}")
+        assert active == listed, (
+            f"data-freshness must list exactly the active stores; "
+            f"missing={sorted(active - listed)} extra={sorted(listed - active)}")
+        assert not (inactive & listed), (
+            f"deactivated stores must not appear in data-freshness: {sorted(inactive & listed)}")
+
+    def test_hobba_state_is_reported_consistently(self, headers):
+        auth = {"Authorization": headers["Authorization"]}
+        r = requests.get(f"{BASE_URL}/api/stores", headers=auth, timeout=20)
+        stores = r.json()
+        if isinstance(stores, dict):
+            stores = stores.get("stores", stores.get("data", []))
+        hobba = [s for s in stores
+                 if "hobba" in (s.get("name") or s.get("name_en") or "").lower()]
         assert len(hobba) >= 1, f"Hobba not found in /api/stores; names={[s.get('name') for s in stores]}"
-        assert hobba[0].get("is_active") is False, f"Hobba is_active expected False; got {hobba[0]}"
-
-    def test_data_freshness_excludes_hobba(self, headers):
-        r = requests.get(
-            f"{BASE_URL}/api/data-freshness",
-            headers={"Authorization": headers["Authorization"]},
-            timeout=20,
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()
-        stores = data.get("stores", [])
-        names = [(s.get("store_name") or "").lower() for s in stores]
-        assert not any("hobba" in n for n in names), f"Hobba should be filtered out; got {names}"
-
-        competitor_stores = [s for s in stores if not s.get("is_own_store")]
-        # Spec: 10 real active competitor stores (DB may also contain TEST_/Test placeholder stores)
-        real_competitors = [
-            s for s in competitor_stores
-            if not (s.get("store_name") or "").lower().startswith(("test_", "test "))
-        ]
-        assert len(real_competitors) == 10, (
-            f"Expected 10 real active competitor stores, got {len(real_competitors)}: "
-            f"{[s.get('store_name') for s in real_competitors]}"
-        )
+        h = hobba[0]
+        assert isinstance(h.get("is_active"), bool), f"Hobba is_active not boolean: {h.get('is_active')}"
+        print(f"[hobba] is_active={h['is_active']} last_crawl_status={h.get('last_crawl_status')} "
+              f"products={h.get('last_crawl_products')}")
+        if h["is_active"]:
+            # an active store must be on the crawl schedule, not orphaned
+            assert h.get("crawl_frequency_hrs"), "active Hobba has no crawl frequency"
 
 
 # ---------- Bundle 3: SKU/barcode search (already covered in iteration16) ----------

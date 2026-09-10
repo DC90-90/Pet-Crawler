@@ -117,12 +117,40 @@ client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTim
 db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
-CRAWLER_TOKEN = "zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO"
+CRAWLER_TOKEN = os.environ.get("CRAWLER_TOKEN", "")   # iter80 — was hardcoded in this file;
+# empty means the ingest endpoint refuses every call with a 500 (see crawler_ingest),
+# which is the safe failure: a missing key must never take the whole API down.
+
+# ── one-time migrations ─────────────────────────────────────
+# iter80 — a destructive statement must not sit in the startup path of every
+# deploy. Both legacy cleanups below (the pre-v4 name-match purge and the legacy
+# admin removal) are recorded in `db.migrations` once applied, so a future boot
+# skips them entirely instead of re-running a delete against live data.
+async def _migration_applied(key: str) -> bool:
+    try:
+        return await db.migrations.find_one({"_id": key}) is not None
+    except Exception:
+        return False
+
+
+async def _mark_migration(key: str, info: dict = None):
+    try:
+        await db.migrations.update_one(
+            {"_id": key},
+            {"$set": {"applied_at": datetime.now(timezone.utc).isoformat(), **(info or {})}},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning("Could not record migration %s: %s", key, exc)
+
 
 # ── RBAC Constants ──────────────────────────────────────────
-# Super admin is hardcoded — cannot be deleted, demoted, or have password changed by anyone else.
-SUPER_ADMIN_EMAIL = "a.disi@taqueen.sa"
-SUPER_ADMIN_PASSWORD = "Ahmaddc90@"
+# iter81 — the super admin identity comes from the ENVIRONMENT (it used to be
+# written into this file, which the deployment gate refuses). The account is
+# still immutable inside the app: it cannot be deleted, demoted, or have its
+# pages revoked, and only it can change its own password.
+SUPER_ADMIN_EMAIL = os.environ.get("SUPER_ADMIN_EMAIL", "")
+SUPER_ADMIN_PASSWORD = os.environ.get("SUPER_ADMIN_PASSWORD", "")
 LEGACY_ADMIN_EMAIL = "admin@daleelpets.com"  # to be deleted on startup
 
 VALID_ROLES = ["super_admin", "admin", "user"]
@@ -133,16 +161,14 @@ ALL_PAGES = [
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# iter81 — boot progress, readable through /api/health. The boot sequence runs
+# in the background (see startup()), so "did the deploy finish booting, and
+# where did it stop?" must be answerable without pod-log access.
+BOOT_STATE = {"status": "pending", "phase": None, "errors": []}
+
 app = FastAPI(title="Daleel API")
 router = APIRouter(prefix="/api")
 
-@router.get("/debug/token")
-async def debug_token():
-    return {
-        "crawler_token_length": len(CRAWLER_TOKEN),
-        "first_5_chars": CRAWLER_TOKEN[:5],
-        "source": "hardcoded",
-    }
 scheduler = AsyncIOScheduler()
 crawl_paused = False
 
@@ -219,6 +245,8 @@ def require_super_admin(user=Depends(get_user)):
 
 
 def is_super_admin_email(email: str) -> bool:
+    if not SUPER_ADMIN_EMAIL:
+        return False
     return (email or "").strip().lower() == SUPER_ADMIN_EMAIL.lower()
 
 # ── Health Endpoint ──────────────────────────────────────────
@@ -281,6 +309,10 @@ async def health_check():
         "playwright_available": pw_available,
         "last_successful_crawl": last_crawl,
         "uptime_seconds": uptime_secs,
+        # iter81 — boot runs in the background now, so its progress has to be
+        # readable from outside: this is how a failed production rollout is
+        # diagnosed with one curl instead of guessing from the pod logs.
+        "boot": dict(BOOT_STATE),
     }
 
 @router.get("/health/detailed")
@@ -1136,6 +1168,111 @@ async def zid_orders_sync(full: bool = Query(False, description="Walk every page
     return res
 
 
+class BackfillIn(BaseModel):
+    store_ids: Optional[List[str]] = None       # explicit ids
+    names: Optional[List[str]] = None           # or names, e.g. ["Zarafa", "Petsy"]
+    rematch: bool = True                        # re-match after the crawls land
+
+
+@router.post("/admin/backfill")
+async def admin_backfill(payload: BackfillIn, user=Depends(require_super_admin)):
+    """Immediate full re-crawl of named stores, then a rematch — in the BACKGROUND.
+
+    `POST /stores/{id}/crawl` runs the waterfall inline, and a large Salla store
+    (Zarafa: 4,177 products, uncapped barcode+DOM supplement) takes far longer
+    than the ingress will hold a connection open; the client disconnects and the
+    crawl dies before persistence, which is why those stores stayed stale. This
+    queues them one after another instead and records progress in
+    `backfill_runs`, so the operator polls instead of holding a socket.
+
+    The rematch here is ADDITIVE (`run_matching_for_all`) — it never purges
+    first, unlike POST /admin/rematch. Purging fleet-wide before a stale store
+    is re-crawled would DELETE the rows it can no longer rebuild (a store
+    outside matcher.MATCH_WINDOW_DAYS contributes no candidates).
+    """
+    query = {}
+    if payload.store_ids:
+        query["id"] = {"$in": payload.store_ids}
+    elif payload.names:
+        query["$or"] = [{"name": {"$regex": f"^{re.escape(n)}$", "$options": "i"}}
+                        for n in payload.names]
+    else:
+        raise HTTPException(400, "Provide store_ids or names")
+    stores = await db.stores.find(query, {"_id": 0}).to_list(50)
+    if not stores:
+        raise HTTPException(404, "No matching stores")
+
+    run_id = str(uuid.uuid4())
+    run = {
+        "id": run_id,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "started_by": user.get("email"),
+        "status": "running",
+        "rematch_requested": payload.rematch,
+        "stores": [{"store_id": s["id"], "name": s["name"], "status": "queued"} for s in stores],
+    }
+    await db.backfill_runs.insert_one(dict(run))
+
+    async def _run():
+        for s in stores:
+            await db.backfill_runs.update_one(
+                {"id": run_id, "stores.store_id": s["id"]},
+                {"$set": {"stores.$.status": "crawling",
+                          "stores.$.started_at": datetime.now(timezone.utc).isoformat()}})
+            try:
+                res = await crawl_store_waterfall(db, s)
+                await db.backfill_runs.update_one(
+                    {"id": run_id, "stores.store_id": s["id"]},
+                    {"$set": {
+                        "stores.$.status": "done" if res.get("products_found") else "empty",
+                        "stores.$.tier_used": res.get("tier_used"),
+                        "stores.$.products_found": res.get("products_found", 0),
+                        "stores.$.snapshots_created": res.get("snapshots_created", 0),
+                        "stores.$.duration_secs": res.get("duration_secs", 0),
+                        "stores.$.error": res.get("error"),
+                        "stores.$.finished_at": datetime.now(timezone.utc).isoformat(),
+                    }})
+                logger.info("[Backfill] %s: tier=%s found=%s snapshots=%s in %ss",
+                            s["name"], res.get("tier_used"), res.get("products_found"),
+                            res.get("snapshots_created"), res.get("duration_secs"))
+            except Exception as exc:
+                logger.exception("[Backfill] %s failed", s["name"])
+                await db.backfill_runs.update_one(
+                    {"id": run_id, "stores.store_id": s["id"]},
+                    {"$set": {"stores.$.status": "failed", "stores.$.error": str(exc)[:300],
+                              "stores.$.finished_at": datetime.now(timezone.utc).isoformat()}})
+        cache_clear()
+        if payload.rematch:
+            await db.backfill_runs.update_one({"id": run_id}, {"$set": {"status": "rematching"}})
+            try:
+                summary = await run_matching_for_all(db)
+                await db.backfill_runs.update_one(
+                    {"id": run_id}, {"$set": {"rematch": summary}})
+            except Exception as exc:
+                logger.exception("[Backfill] rematch failed")
+                await db.backfill_runs.update_one(
+                    {"id": run_id}, {"$set": {"rematch_error": str(exc)[:300]}})
+        await db.backfill_runs.update_one(
+            {"id": run_id}, {"$set": {"status": "finished",
+                                      "finished_at": datetime.now(timezone.utc).isoformat()}})
+        logger.info("[Backfill] run %s finished", run_id)
+
+    asyncio.create_task(_run())
+    return {"ok": True, "run_id": run_id, "status": "started",
+            "stores": [s["name"] for s in stores],
+            "poll": "/api/admin/backfill/status"}
+
+
+@router.get("/admin/backfill/status")
+async def admin_backfill_status(run_id: Optional[str] = Query(None),
+                                _=Depends(require_super_admin)):
+    q = {"id": run_id} if run_id else {}
+    run = await db.backfill_runs.find_one(q, {"_id": 0}, sort=[("started_at", -1)])
+    if not run:
+        return {"run": None, "message": "no backfill has been run yet"}
+    return {"run": run}
+
+
 class RematchIn(BaseModel):
     store_id: Optional[str] = None      # None → all stores
 
@@ -1485,10 +1622,14 @@ async def admin_proxy_usage(user=Depends(get_user)):
 async def seed_super_admin():
     """Idempotent super admin seed.
 
-    - Always force-updates `a.disi@taqueen.sa` to the hardcoded password (so the
-      password can never be drifted by anyone).
+    - Always force-updates the SUPER_ADMIN_EMAIL account to the password in the
+      environment (so the password can never be drifted by anyone).
     - Removes the legacy `admin@daleelpets.com` account if it exists.
     """
+    if not SUPER_ADMIN_EMAIL or not SUPER_ADMIN_PASSWORD:
+        logger.error("[RBAC] SUPER_ADMIN_EMAIL / SUPER_ADMIN_PASSWORD are not set "
+                     "in the environment — super admin NOT seeded")
+        return
     now = datetime.now(timezone.utc)
     existing = await db.users.find_one({"email": SUPER_ADMIN_EMAIL.lower()})
     payload = {
@@ -1509,11 +1650,16 @@ async def seed_super_admin():
         )
         logger.info(f"[RBAC] Refreshed super admin {SUPER_ADMIN_EMAIL}")
 
-    # Remove legacy admin account per user instruction
-    legacy = await db.users.find_one({"email": LEGACY_ADMIN_EMAIL.lower()})
-    if legacy:
-        await db.users.delete_one({"_id": legacy["_id"]})
-        logger.info(f"[RBAC] Removed legacy admin {LEGACY_ADMIN_EMAIL}")
+    # Remove the legacy admin account (one-time, per the client's instruction).
+    # iter80 — gated behind a migration marker so a destructive statement can
+    # never sit in the startup path of every future deploy.
+    if not await _migration_applied("legacy_admin_removed"):
+        legacy = await db.users.find_one({"email": LEGACY_ADMIN_EMAIL.lower()})
+        if legacy:
+            await db.users.delete_one({"_id": legacy["_id"]})
+            logger.info(f"[RBAC] Removed legacy admin {LEGACY_ADMIN_EMAIL}")
+        await _mark_migration("legacy_admin_removed",
+                              {"found": bool(legacy), "email": LEGACY_ADMIN_EMAIL})
 
 # ── Crawlers imported from crawlers.py ───────────────────────
 # crawl_store_waterfall, process_crawled_products, extract_brand,
@@ -9738,6 +9884,14 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
     # predates all drift.
     _ledger_obs = []
 
+    # iter80 data hygiene — *.example.com is RFC 2606 reserved and can never be
+    # a real storefront. `create_store` already refuses it, but this endpoint
+    # auto-registers unknown domains, which is how "Test Store" kept coming back
+    # onto the client's Stores page (and into the crawl schedule) after every
+    # API-contract regression run. Refuse it here too, at the only other door.
+    if payload.domain.lower().rstrip(".").endswith("example.com"):
+        raise HTTPException(400, "Reserved test domain (*.example.com) cannot be ingested")
+
     try:
         # Upsert by domain (unique index). Handles both:
         #  - Brand-new store: insert full record
@@ -11138,7 +11292,7 @@ async def market_share_export(days: int = Query(30),
                     "Products in my catalog", "Products with measurable sales",
                     "Missing products", "Missing opportunity value (SAR)",
                     "Trend units %", "Trend revenue %", "Confidence", "Coverage",
-                    "Calculation method"])
+                    "Unavailable reason", "Calculation method"])
         for r in rows:
             w.writerow([r.get(label), r.get("units"), r.get("revenue"), r.get("revenue_share_pct"),
                         r.get("my_units"), r.get("my_revenue"), r.get("my_revenue_share_pct"),
@@ -11147,6 +11301,9 @@ async def market_share_export(days: int = Query(30),
                         (r.get("trend") or {}).get("units_pct"),
                         (r.get("trend") or {}).get("revenue_pct"),
                         r.get("confidence"), r.get("coverage"),
+                        ("" if r.get("measured_products") else
+                         f"none of the {r.get('products')} product(s) in this {label} has "
+                         f"measurable sales in this window — share withheld"),
                         (f"market share % = this row's measured revenue ÷ Σ measured revenue of "
                          f"every {label} row; my share % = my measured revenue ÷ this row's "
                          f"measured revenue; {r.get('coverage')}")])
@@ -11201,11 +11358,71 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def _wait_for_mongo(attempts: int = 20, delay: float = 3.0) -> bool:
+    """Ping MongoDB until it answers (bounded).
+
+    iter81 — on Kubernetes the pod's first Atlas round-trip includes DNS SRV
+    resolution and a TLS handshake, which regularly exceeds the client's
+    5s serverSelectionTimeoutMS. The boot sequence used to issue its first
+    query with no retry, so a slow-to-connect Atlas raised inside the startup
+    handler and starlette aborted with "Application startup failed. Exiting."
+    — a crash loop that presents as "deployment failed to become ready".
+    """
+    for i in range(1, attempts + 1):
+        try:
+            await client.admin.command("ping")
+            if i > 1:
+                logger.info("[Boot] MongoDB reachable after %d attempt(s)", i)
+            return True
+        except Exception as exc:
+            logger.warning("[Boot] MongoDB not reachable yet (%d/%d): %s", i, attempts, exc)
+            await asyncio.sleep(delay)
+    logger.error("[Boot] MongoDB still unreachable after %d attempts — boot tasks "
+                 "skipped. The API stays up and /api/health reports degraded.", attempts)
+    return False
+
+
 @app.on_event("startup")
 async def startup():
-    await seed_database()
-    await seed_super_admin()
-    await ensure_stores()
+    """Bind first, boot second.
+
+    iter81 — every phase below used to be AWAITED here, so uvicorn did not
+    start serving until Atlas had answered the seeds, ~35 index ensures, the
+    catalogue re-tag and the cache warm-up; and any exception in them exited
+    the process. Both modes look identical to Kubernetes — the readiness probe
+    never passes and the rollout times out (production deploy, Sep 10 2026).
+    The boot sequence now runs as a background task with per-phase fail-soft,
+    so /api/health answers within milliseconds of process start.
+    """
+    asyncio.create_task(_boot())
+
+
+async def _boot():
+    BOOT_STATE.update({"status": "running", "phase": "waiting_for_mongo", "errors": []})
+    try:
+        await _boot_sequence()
+        BOOT_STATE["status"] = "done" if BOOT_STATE["phase"] != "waiting_for_mongo" else "mongo_unreachable"
+    except Exception as exc:
+        BOOT_STATE["status"] = "aborted"
+        BOOT_STATE["errors"].append(f"{type(exc).__name__}: {str(exc)[:200]}")
+        logger.exception("[Boot] sequence aborted — the API stays up; use "
+                         "POST /api/admin/ensure-snapshot-indexes and "
+                         "POST /api/admin/refresh-caches to finish by hand")
+
+
+async def _boot_sequence():
+    if not await _wait_for_mongo():
+        return
+    for label, phase in (("seed_database", seed_database),
+                         ("seed_super_admin", seed_super_admin),
+                         ("ensure_stores", ensure_stores)):
+        BOOT_STATE["phase"] = label
+        try:
+            await phase()
+        except Exception as exc:
+            BOOT_STATE["errors"].append(f"{label}: {type(exc).__name__}: {str(exc)[:200]}")
+            logger.exception("[Boot] %s failed — continuing", label)
+    BOOT_STATE["phase"] = "indexes"
     # Idempotent indexes (safe to run on every startup; no-op if already present)
     # iter73y — one registry, one independent attempt per index. Previously a
     # single failure anywhere in this block skipped every index after it, which
@@ -11234,25 +11451,36 @@ async def startup():
                 logger.info("Auto-set is_own_store=True on pets-houses.com (no own store was flagged)")
     except Exception as e:
         logger.warning(f"Own-store flag check skipped: {e}")
-    # One-time purge of legacy name-based matches (Feb 2026: matcher v4 dropped name matching).
-    # Idempotent — after the first run nothing matches the predicate.
-    try:
-        purged = await db.product_matches.delete_many({
-            "manually_confirmed": {"$ne": True},
-            "$or": [
-                {"match_method": {"$regex": "^name_"}},
-                {"confidence": {"$lt": 95}},
-            ],
-        })
-        if purged.deleted_count:
-            logger.info(f"Purged {purged.deleted_count} legacy name-based matches at startup")
-    except Exception as e:
-        logger.warning(f"Legacy match cleanup skipped: {e}")
+    # One-time purge of legacy name-based matches (Feb 2026: matcher v4 dropped
+    # name matching). iter80 — recorded in db.migrations once applied so this
+    # delete is not re-issued on every boot. The current matcher only emits
+    # confidence 95/99/100, so it was a no-op; the marker makes that structural.
+    if not await _migration_applied("legacy_name_matches_purged_v4"):
+        try:
+            purged = await db.product_matches.delete_many({
+                "manually_confirmed": {"$ne": True},
+                "$or": [
+                    {"match_method": {"$regex": "^name_"}},
+                    {"confidence": {"$lt": 95}},
+                ],
+            })
+            if purged.deleted_count:
+                logger.info(f"Purged {purged.deleted_count} legacy name-based matches at startup")
+            await _mark_migration("legacy_name_matches_purged_v4",
+                                  {"deleted": purged.deleted_count})
+        except Exception as e:
+            logger.warning(f"Legacy match cleanup skipped: {e}")
     # Register crawl jobs for all active stores using the daily cron schedule
-    stores = await db.stores.find({"is_active": True}, {"_id": 0}).to_list(100)
-    for s in stores:
-        register_crawl_job(s["id"], s["name"], s.get("domain", ""))
-    logger.info(f"[Scheduler] Daily crawl schedule loaded — {len(stores)} stores, 04:00–04:55 KSA window.")
+    BOOT_STATE["phase"] = "scheduler"
+    stores = []
+    try:
+        stores = await db.stores.find({"is_active": True}, {"_id": 0}).to_list(100)
+        for s in stores:
+            register_crawl_job(s["id"], s["name"], s.get("domain", ""))
+        logger.info(f"[Scheduler] Daily crawl schedule loaded — {len(stores)} stores, 04:00–04:55 KSA window.")
+    except Exception:
+        logger.exception("[Boot] crawl-job registration failed — the scheduler still "
+                         "starts; re-register by restarting once Mongo is healthy")
     if not scheduler.running:
         scheduler.start()
     scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0, id="weekly_digest", replace_existing=True)
@@ -11296,6 +11524,14 @@ async def startup():
     # request after a deploy/restart is fast instead of paying the live-compute
     # cost. Fire-and-forget: never blocks startup, failures fall back to live.
     async def _warm_dashboard_cache():
+        # iter81 — hold off until the pod has passed its readiness probe. The
+        # warm-up walks the whole catalogue across four windows, and that
+        # memory/CPU spike used to land in the first seconds of a fresh
+        # container. Requests served before it lands fall back to live compute.
+        try:
+            await asyncio.sleep(float(os.environ.get("CACHE_WARM_DELAY_SECS", "30")))
+        except ValueError:
+            await asyncio.sleep(30)
         # iter36 — one-time food-subcategory backfill for pre-existing products
         # (new/recrawled products are classified in process_crawled_products).
         # Runs BEFORE the page-cache warm-up so trending caches see subcategories.
@@ -11340,6 +11576,42 @@ async def startup():
     import subprocess
     import sys
     def _aggressive_playwright_self_heal():
+        # iter81 — WAIT before spending CPU, network and ephemeral disk on a
+        # browser download. On Kubernetes this spike used to land inside the
+        # readiness window of a fresh pod, and an OOM-killed/evicted pod fails
+        # the whole rollout. It also skips the download entirely when a headless
+        # launch already works, which is the normal case on a warm image.
+        try:
+            delay = float(os.environ.get("PLAYWRIGHT_SELFHEAL_DELAY_SECS", "60"))
+        except ValueError:
+            delay = 60.0
+        if delay > 0:
+            time.sleep(delay)
+
+        def _smoke(tag: str) -> bool:
+            """Launch headless Chromium against about:blank. Exercises BOTH the
+            chromium and chrome-headless-shell binaries (they are separate in
+            Playwright >= 1.49, which is why a path probe is not enough)."""
+            try:
+                from playwright.sync_api import sync_playwright
+                with sync_playwright() as pw:
+                    logger.info("[Playwright] %s: chromium.executable_path=%r",
+                                tag, pw.chromium.executable_path)
+                    browser = pw.chromium.launch(
+                        headless=True,
+                        args=["--no-sandbox", "--disable-dev-shm-usage"],
+                    )
+                    page = browser.new_page()
+                    page.goto("about:blank", timeout=10000)
+                    page.title()
+                    browser.close()
+                logger.info("[Playwright] smoke test %s PASSED", tag)
+                return True
+            except Exception as smoke_err:
+                logger.warning("[Playwright] smoke test %s failed: %s: %s",
+                               tag, smoke_err.__class__.__name__, smoke_err)
+                return False
+
         # 1. Writability probe on PLAYWRIGHT_BROWSERS_PATH
         browsers_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
         install_env = os.environ.copy()
@@ -11363,8 +11635,13 @@ async def startup():
                 os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
                 browsers_path = ""
 
+        # 2. Nothing to do when a headless launch already works.
+        if _smoke("pre-install"):
+            logger.info("[Playwright] browsers already usable — install skipped")
+            return
+
         effective_path = install_env.get("PLAYWRIGHT_BROWSERS_PATH", "<default ~/.cache/ms-playwright>")
-        # 2. ALWAYS install chromium + chromium-headless-shell
+        # 3. Install chromium + chromium-headless-shell (idempotent)
         cmd = [sys.executable, "-m", "playwright", "install", "chromium", "chromium-headless-shell"]
         logger.info(f"[Playwright] Aggressive install starting (browsers_path={effective_path!r}); cmd={' '.join(cmd)}")
         try:
@@ -11384,31 +11661,8 @@ async def startup():
             logger.error(f"[Playwright] Install raised exception: {e.__class__.__name__}: {e}")
             return
 
-        # 3. Smoke test: actually launch headless Chromium and navigate to about:blank.
-        # This exercises BOTH chromium and chromium-headless-shell binaries.
-        try:
-            from playwright.sync_api import sync_playwright
-            logger.info("[Playwright] Smoke test: launching headless Chromium against about:blank...")
-            with sync_playwright() as pw:
-                exe = pw.chromium.executable_path
-                logger.info(f"[Playwright] chromium.executable_path resolves to: {exe!r}")
-                browser = pw.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox", "--disable-dev-shm-usage"],
-                )
-                page = browser.new_page()
-                page.goto("about:blank", timeout=10000)
-                title = page.title()
-                browser.close()
-                logger.info(
-                    f"[Playwright] Smoke test PASSED — headless Chromium launched, "
-                    f"navigated to about:blank, title={title!r}. Tier-3 crawls should now work."
-                )
-        except Exception as smoke_err:
-            logger.error(
-                f"[Playwright] Smoke test FAILED: {smoke_err.__class__.__name__}: {smoke_err}"
-            )
-            # Last-resort diagnostic: dump what's actually on disk so we can see why
+        # 4. Prove it works now; dump what is on disk when it still does not.
+        if not _smoke("post-install"):
             try:
                 root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache" / "ms-playwright")))
                 if root.exists():

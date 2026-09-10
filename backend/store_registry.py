@@ -174,6 +174,34 @@ async def ensure_stores(db):
         {"$set": {"is_own_store": True}},
     )
 
+    # ── iter80 catalogue re-tag ──────────────────────────────────────────────
+    # `run_matching_for_all` selects the catalogue with
+    # {"is_own_store": True, "store_id": <own store id>}. An old import wrote the
+    # PLACEHOLDER string "own-store-id" into my_products.store_id, so 2,231 of
+    # 2,303 products fell outside that query: every rematch reported "ok" while
+    # silently matching only 68 products, and any newly crawled competitor could
+    # never gain matches for the other 97% of the catalogue (CutePets carried 384
+    # of our barcodes and had ZERO match rows). Nothing writes the placeholder
+    # any more — both live writers resolve the real id — so this heals the data
+    # once, on boot, in every environment.
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    if own:
+        retag = await db.my_products.update_many(
+            {"$or": [{"store_id": {"$in": [None, "", "own-store-id"]}},
+                     {"store_id": {"$exists": False}}]},
+            {"$set": {"store_id": own["id"], "is_own_store": True}},
+        )
+        if retag.modified_count:
+            logger.warning(
+                "[Catalogue] Re-tagged %d my_products onto the real own-store id "
+                "(%s) — they were invisible to the matcher",
+                retag.modified_count, own["id"])
+        untagged = await db.my_products.count_documents({"is_own_store": {"$ne": True}})
+        if untagged:
+            await db.my_products.update_many(
+                {"is_own_store": {"$ne": True}, "store_id": own["id"]},
+                {"$set": {"is_own_store": True}})
+
     # Fix Cute Pets domain (cutepets.com → cutepets.com.sa) if old entry exists
     old_cute = await db.stores.find_one({"domain": "cutepets.com"})
     new_cute = await db.stores.find_one({"domain": "cutepets.com.sa"})

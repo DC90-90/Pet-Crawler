@@ -62,11 +62,18 @@ def test_startup_creates_all_three_required_indexes():
     INDEX_SPECS registry (each spec applied in its OWN try/except so one
     failure can no longer skip every index after it, which is how production
     ran the iter73x deploy without the indexes). The fence now checks the
-    registry AND that startup still applies it."""
+    registry AND that startup still applies it.
+
+    iter81 — the boot work moved out of the startup HANDLER into the background
+    `_boot_sequence()` (awaiting it blocked the readiness probe and any
+    exception exited the process, which failed the production rollout), so the
+    fence follows it there and additionally pins that startup schedules it."""
     src = Path(server.__file__).read_text()
-    startup_block = src.split("async def startup(", 1)[1].split("\nasync def ", 1)[0]
+    handler = src.split("async def startup(", 1)[1].split("\nasync def ", 1)[0]
+    assert "_boot()" in handler, "startup must schedule the background boot sequence"
+    startup_block = src.split("async def _boot_sequence(", 1)[1].split("\nasync def ", 1)[0]
     assert "ensure_all_indexes(db)" in startup_block, \
-        "startup must apply the index registry"
+        "the boot sequence must apply the index registry"
     specs = {tuple(keys) for _coll, keys, _opts in server.INDEX_SPECS}
     for field, direction in _REQUIRED_INDEXES:
         assert ((field, direction), ("crawled_at", -1)) in specs, \

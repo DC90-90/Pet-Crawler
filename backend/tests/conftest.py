@@ -6,6 +6,10 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
+# backend/ too, so a suite can import the module it is testing (matcher, market_share, …)
+_BACKEND = _HERE.parent
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
 
 # Several modules read REACT_APP_BACKEND_URL at import time (some with a stale
 # hardcoded fallback). Resolve it from frontend/.env before collection starts.

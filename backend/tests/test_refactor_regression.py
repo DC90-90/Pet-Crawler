@@ -178,8 +178,11 @@ class TestPydanticModelsRegression:
             "platform": "salla",
             "products": []
         })
-        # Accept 200 (success) or 404 (store not found) - both mean body was parsed
-        assert response.status_code in [200, 404], f"Unexpected status: {response.status_code}"
+        # Accept 200 (success), 404 (store not found) or 400 (iter80: the
+        # *.example.com reserved domain is refused at the ingest door so
+        # "Test Store" can no longer reappear on the client's Stores page).
+        # All three mean the IngestPayload body was parsed.
+        assert response.status_code in [200, 400, 404], f"Unexpected status: {response.status_code}"
         print(f"✓ POST /api/crawler/ingest: IngestPayload model works (status={response.status_code})")
 
 

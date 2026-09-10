@@ -92,26 +92,64 @@ class TestTopBrandsIter73h:
             assert abs(expected - k["avg_revenue_per_product"]) < 1.0, \
                 f"avg_revenue_per_product={k['avg_revenue_per_product']} vs total/count={expected}"
 
-    def test_product_brand_reconciles_with_top_brands(self, insights_payload):
-        # Spec: every product row's brand must be '' OR a key present in top_brands.
-        # A product with a brand tag but zero units+zero revenue is dropped from
-        # top_brands by the dead-row filter — that's expected and permitted here
-        # (the product itself has no activity so it cannot inflate anything).
-        brand_keys = {(b.get("brand") or "").strip() for b in insights_payload["top_brands"]}
-        offenders = []
-        for p in insights_payload["products"][:500]:  # sample
+    def test_top_brands_buckets_reconcile_with_their_products(self, insights_payload):
+        """The anti-fabrication contract, in the direction that can actually be
+        checked: for every brand bucket returned, its units/revenue must equal
+        the sum over the product rows carrying that brand.
+
+        iter73h asserted the OPPOSITE direction (every product's brand must
+        appear in `top_brands`). The endpoint returns the TOP 20 brands while
+        the catalogue carries hundreds, so a product in brand #40 is legitimately
+        absent — the old assertion could only pass while the catalogue happened
+        to have ≤20 brands.
+        """
+        buckets = insights_payload["top_brands"]
+        if not buckets:
+            pytest.skip("no brand buckets in this window")
+        by_brand = {}
+        for p in insights_payload["products"]:
             b = (p.get("brand") or "").strip()
-            if b == "":
+            if not b:
                 continue
-            if b in brand_keys:
+            acc = by_brand.setdefault(b, {"units": 0, "revenue": 0.0})
+            acc["units"] += p.get("qty_sold_est") or 0
+            acc["revenue"] += p.get("revenue_est") or 0.0
+        offenders = []
+        for bucket in buckets:
+            name = (bucket.get("brand") or "").strip()
+            assert name and name != "Unknown", f"bucket with no brand: {bucket}"
+            rows = by_brand.get(name)
+            if rows is None:
+                offenders.append({"brand": name, "reason": "bucket has no product rows"})
                 continue
-            units = p.get("qty_sold_est", 0) or 0
-            revenue = p.get("revenue_est", 0.0) or 0.0
-            if units == 0 and revenue == 0:
-                continue  # legitimately dropped by dead-row filter
-            offenders.append({"sku": p.get("sku"), "brand": b,
-                              "units": units, "revenue": revenue})
-        assert not offenders, f"Products with brand not in top_brands buckets: {offenders[:5]} (+{len(offenders)-5} more)" if len(offenders) > 5 else f"Offenders: {offenders}"
+            if bucket["units_sold"] != rows["units"]:
+                offenders.append({"brand": name, "bucket_units": bucket["units_sold"],
+                                  "product_units": rows["units"]})
+            elif abs((bucket["revenue_est"] or 0) - rows["revenue"]) > max(1.0, rows["revenue"] * 0.01):
+                offenders.append({"brand": name, "bucket_rev": bucket["revenue_est"],
+                                  "product_rev": round(rows["revenue"], 2)})
+        assert not offenders, f"brand buckets disagree with their product rows: {offenders[:5]}"
+
+    def test_every_branded_product_is_reachable_by_brand_search(self, auth_headers, insights_payload):
+        """The replacement for the old top-20 reconcile: a product whose brand
+        falls outside the top 20 must still be findable by that brand."""
+        buckets = {(b.get("brand") or "").strip() for b in insights_payload["top_brands"]}
+        outside = next(
+            (p for p in insights_payload["products"]
+             if (p.get("brand") or "").strip()
+             and (p.get("brand") or "").strip() not in buckets
+             and ((p.get("qty_sold_est") or 0) > 0 or (p.get("revenue_est") or 0) > 0)),
+            None)
+        if not outside:
+            pytest.skip("every active branded product is already inside the top-20 buckets")
+        brand = outside["brand"].strip()
+        r = requests.get(f"{BASE_URL}/api/insights/sales", headers=auth_headers,
+                         params={"days": 30, "search": brand}, timeout=120)
+        assert r.status_code == 200, r.text[:300]
+        skus = {p["sku"] for p in r.json()["products"]}
+        assert outside["sku"] in skus, (
+            f"{outside['sku']} (brand {brand}) is outside the top-20 buckets AND "
+            f"unreachable by brand search — that product is invisible")
 
     def test_canonical_brand_merge_arabic_english(self, insights_payload):
         # Guarantee no two rows differ only by case/whitespace

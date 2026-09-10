@@ -134,7 +134,19 @@ def test_store_profile_revenue_status_and_consistency(headers):
         kpis = prof.get("kpis") or {}
         assert "revenue_status" in kpis, f"revenue_status missing in kpis for {sid}: keys={list(kpis.keys())}"
         rs = kpis["revenue_status"]
-        assert rs in ("computed", "sales_data_unavailable", "insufficient_history"), rs
+        # iter73s widened this vocabulary on purpose: Salla stores now route
+        # through the Tier 2.5 badge-diff ("measured_approx") and Tier 3 category
+        # velocity ("estimated") cascade instead of reporting a sparse Tier 1
+        # number. iter73f only knew the three pre-cascade values.
+        assert rs in ("computed", "measured_approx", "estimated", "accumulating",
+                      "not_measurable", "sales_data_unavailable",
+                      "insufficient_history"), rs
+        if rs == "estimated":
+            # anti-fabrication contract — an estimate must ship its band
+            assert kpis.get("revenue_band_pct"), f"{sid}: estimated with no band"
+            assert kpis.get("revenue_range_low") is not None and \
+                   kpis.get("revenue_range_high") is not None, \
+                   f"{sid}: estimated with no range"
         assert "est_monthly_revenue" in kpis, "est_monthly_revenue missing"
         prof_rev = kpis["est_monthly_revenue"] or 0
         tested += 1
