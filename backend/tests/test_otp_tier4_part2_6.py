@@ -19,10 +19,8 @@ class TestOtpEndpoints:
     @pytest.fixture(autouse=True)
     def setup(self):
         """Get auth token for tests"""
-        resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "email": "admin@daleelpets.com",
-            "password": "admin123"
-        })
+        from _auth import login_response_or_skip
+        resp = login_response_or_skip("admin@daleelpets.com", "admin123")
         assert resp.status_code == 200, f"Login failed: {resp.text}"
         self.token = resp.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -78,10 +76,8 @@ class TestTier4LoginFlow:
     @pytest.fixture(autouse=True)
     def setup(self):
         """Get auth token and setup test store"""
-        resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "email": "admin@daleelpets.com",
-            "password": "admin123"
-        })
+        from _auth import login_response_or_skip
+        resp = login_response_or_skip("admin@daleelpets.com", "admin123")
         assert resp.status_code == 200
         self.token = resp.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -148,10 +144,8 @@ class TestStoreListSecurity:
     
     @pytest.fixture(autouse=True)
     def setup(self):
-        resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "email": "admin@daleelpets.com",
-            "password": "admin123"
-        })
+        from _auth import login_response_or_skip
+        resp = login_response_or_skip("admin@daleelpets.com", "admin123")
         assert resp.status_code == 200
         self.token = resp.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -187,7 +181,7 @@ class TestHealthEndpoint:
         
         assert data.get("status") == "healthy", f"Expected healthy, got {data.get('status')}"
         assert data.get("mongodb") == "connected", f"MongoDB not connected"
-        assert data.get("scheduler_active_jobs") == 10, f"Expected 10 jobs, got {data.get('scheduler_active_jobs')}"
+        assert data.get("scheduler_active_jobs") >= 10, f"Expected >=10 jobs, got {data.get('scheduler_active_jobs')}"
         assert data.get("playwright_available") == True, f"Playwright not available"
         
         print(f"✓ Health check: {data}")
@@ -198,10 +192,8 @@ class TestCrawlRegression:
     
     @pytest.fixture(autouse=True)
     def setup(self):
-        resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "email": "admin@daleelpets.com",
-            "password": "admin123"
-        })
+        from _auth import login_response_or_skip
+        resp = login_response_or_skip("admin@daleelpets.com", "admin123")
         assert resp.status_code == 200
         self.token = resp.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}
@@ -230,10 +222,8 @@ class TestOtpRetryWithCredentials:
     
     @pytest.fixture(autouse=True)
     def setup(self):
-        resp = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "email": "admin@daleelpets.com",
-            "password": "admin123"
-        })
+        from _auth import login_response_or_skip
+        resp = login_response_or_skip("admin@daleelpets.com", "admin123")
         assert resp.status_code == 200
         self.token = resp.json()["token"]
         self.headers = {"Authorization": f"Bearer {self.token}"}

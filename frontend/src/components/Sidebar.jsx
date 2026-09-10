@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck } from "lucide-react";
+import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart } from "lucide-react";
 import { useState, useEffect } from "react";
 
 // Feb 2026 — Insights + Price Intel merged into a single "Price & Market Intel"
@@ -10,6 +10,7 @@ import { useState, useEffect } from "react";
 const navItems = [
   { to: "/", pageKey: "my_products", icon: Package, labelKey: "nav_products", label: "Dashboard" },
   { to: "/insights", pageKeys: ["insights", "price_intel"], icon: BarChart3, labelKey: "nav_intel", label: "Price & Market Intel" },
+  { to: "/market-share", pageKey: "market_share", icon: PieChart, labelKey: "nav_market_share", label: "Market Share" },
   { to: "/scanner", pageKey: "scanner", icon: Zap, labelKey: "nav_scanner", label: "Scanner" },
   { to: "/discounts", pageKey: "discounts", icon: Percent, labelKey: "nav_discounts", label: "Discounts" },
   { to: "/alerts", pageKey: "alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },

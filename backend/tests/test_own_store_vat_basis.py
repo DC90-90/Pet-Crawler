@@ -28,6 +28,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_vat_basis"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_vat_basis"
 import server  # noqa: E402
 import crawlers  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
@@ -151,7 +154,7 @@ def test_is_taxable_is_a_tristate():
 # ── Step 2: the sync ─────────────────────────────────────────────────────────
 def test_sync_applies_two_tier_basis():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _prep(db)
         server.db = db
         orig = _stub()
@@ -211,7 +214,7 @@ def test_sync_survives_storefront_outage_via_taxable_fallback():
     """A storefront outage no longer means storing ex-VAT: taxable products are
     computed inc-VAT, and the untaxable/unknown ones stay flat and tagged."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _prep(db)
         server.db = db
         orig = _stub(sf=[], sf_ok=False)
@@ -235,7 +238,7 @@ def test_sync_survives_storefront_outage_via_taxable_fallback():
 # ── Step 3: the backfill ─────────────────────────────────────────────────────
 def test_backfill_reports_bases_and_applies_them():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _prep(db)
         server.db = db
         orig = _stub()
@@ -280,7 +283,7 @@ def test_backfill_flags_stale_rows_and_never_prices_them():
     """Rows in NEITHER live source are left untouched and reported by age and
     sync_source, so pruning can be considered instead of VAT-inflating them."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _prep(db)
         await db.my_products.insert_many([
             {"sku": "GHOST-1", "barcode": "B-G1", "price": 11.0, "sync_source": "crawler_ingest",
@@ -308,7 +311,7 @@ def test_backfill_flags_stale_rows_and_never_prices_them():
 
 def test_backfill_refuses_on_storefront_failure_and_requires_super_admin():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _prep(db)
         server.db = db
         orig = _stub(sf=[], sf_ok=False)

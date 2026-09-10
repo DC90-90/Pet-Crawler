@@ -35,6 +35,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_seller_set"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_seller_set"
 import server  # noqa: E402
 import seller_set  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -183,7 +186,7 @@ def _store_names(product):
 
 def test_hills_shows_zarafa_as_a_seller():
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         before = await _before(db, HILLS)
         assert before == {OWN}                             # 1 seller: only us
         out = await _full(HILLS)
@@ -198,7 +201,7 @@ def test_hills_shows_zarafa_as_a_seller():
 
 def test_royal_canin_sensible_shows_zarafa_as_a_seller():
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         assert ZARAFA not in await _before(db, RC)
         out = await _full(RC)
         assert "Zarafa" in _store_names(out)
@@ -211,7 +214,7 @@ def test_royal_canin_sensible_shows_zarafa_as_a_seller():
 
 def test_product_matched_by_five_stores_shows_all_five():
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         before = await _before(db, FIVE)
         assert len(before) == 2, before                    # us + the one exact-SKU store
         out = await _full(FIVE)
@@ -224,7 +227,7 @@ def test_cheapest_of_n_counts_the_same_sellers_the_table_lists():
     """Requirement 4 — the badge and the table must not disagree. The stale
     Hobba row is inside both or outside both, never one of each."""
     async def main():
-        await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _full(FIVE)
         mp = out["market_position"]
         assert mp is not None
@@ -238,7 +241,7 @@ def test_cheapest_of_n_counts_the_same_sellers_the_table_lists():
 
 def test_stale_seller_is_labelled_not_dropped():
     async def main():
-        await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _full(FIVE)
         hobba = next(sp for sp in out["store_prices"] if sp["store_name"] == "Hobba")
         assert hobba["is_stale"] is True
@@ -251,7 +254,7 @@ def test_stale_seller_is_labelled_not_dropped():
 
 def test_out_of_stock_seller_is_labelled_not_dropped():
     async def main():
-        await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _full(FIVE)
         hobba = next(sp for sp in out["store_prices"] if sp["store_name"] == "Hobba")
         assert hobba["stock_status"] == "OOS"
@@ -264,7 +267,7 @@ def test_out_of_stock_seller_is_labelled_not_dropped():
 
 def test_stale_qty_is_excluded_from_total_volume_but_the_seller_remains():
     async def main():
-        await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _full(FIVE)
         assert out["total_volume"] == 40                   # 4 live stores x 10
         assert out["seller_count"] == 5
@@ -274,7 +277,7 @@ def test_stale_qty_is_excluded_from_total_volume_but_the_seller_remains():
 def test_history_chart_stays_inside_the_requested_window():
     """The seller table is not bounded by `days`; the chart still is."""
     async def main():
-        await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _full(FIVE, days=30)
         assert "Hobba" in _store_names(out)                # in the table
         assert "Hobba" not in out["history"]               # no 40-day-old line
@@ -285,7 +288,7 @@ def test_history_chart_stays_inside_the_requested_window():
 
 def test_wrong_pack_size_match_is_still_excluded():
     async def main():
-        await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _full(CARTON)
         assert "Zarafa" not in _store_names(out), out["store_prices"]
         assert out["seller_summary"]["excluded_wrong_match"] == 1
@@ -298,7 +301,7 @@ def test_exact_sku_rows_are_never_re_filtered():
     the identical SKU is the endpoint's pre-existing behaviour and must survive
     regardless of what its name says."""
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         await db.product_snapshots.insert_one(
             _snap(CARTON, "comp-b", "Petsy", 12.0, idx=9))
         out = await _full(CARTON)
@@ -310,7 +313,7 @@ def test_the_two_seller_list_endpoints_agree():
     """/products/{sku} and /products/{sku}/full must not disagree about who
     carries the product — they are the same table rendered from two payloads."""
     async def main():
-        await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         for sku in (HILLS, RC, FIVE, CARTON):
             short = await server.get_product(sku, user=USER)
             full = await _full(sku)

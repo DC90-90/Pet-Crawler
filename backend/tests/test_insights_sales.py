@@ -12,15 +12,9 @@ ADMIN_PASSWORD = "Ahmaddc90@"
 
 @pytest.fixture(scope="module")
 def auth_session():
-    s = requests.Session()
-    r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=30)
-    assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
-    data = r.json()
-    token = data.get("token") or data.get("access_token")
-    if token:
-        s.headers.update({"Authorization": f"Bearer {token}"})
-    # cookie 'daleel_token' is set automatically by requests session
-    return s
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import auth_session as shared_auth_session
+    return shared_auth_session(ADMIN_EMAIL, ADMIN_PASSWORD)
 
 
 # ── New endpoint shape tests ──────────────────────────────────

@@ -1,5 +1,34 @@
 # Lessons Learned — Daleel workspace
 
+## The test suite lies when it runs together (Sep 10 2026, iter80)
+Four independent landmines all had the same signature: **passes in isolation,
+fails or fabricates a result in the full run.** Together they accounted for 62
+setup errors, ~15 phantom "product bugs", and four sessions of re-diagnosis.
+
+1. **Rate limiter.** `/api/auth/login` is 5/min per IP. 25 modules × their own
+   login fixture = 429 during setup. FIX: `tests/_auth.py` — one cached login
+   per (base_url, email) per run, on disk too, 429-aware retry, and FAILED
+   logins cached so bad credentials cannot burn the budget. Never relax the
+   production limiter to make tests pass.
+2. **`os.environ["DB_NAME"]` read at CALL time.** Every module hard-assigns its
+   own DB_NAME at import (iter75), so a call-time read resolves to whichever
+   module imported LAST. Snapshot it: `_TEST_DB = "<name>"` next to the
+   assignment. `os.environ.setdefault("DB_NAME", …)` is a NO-OP in a suite —
+   never use it.
+3. **Live-API suites that also read Mongo directly.** They need the REAL
+   database, and `load_dotenv()` does NOT override an existing env var — so
+   they queried an empty sibling test DB and "proved" the Beaphar SKU had 0
+   competitors and the matcher had lost 60% of its rows. Use
+   `_auth.live_db_name()` / `live_mongo_url()` (parses backend/.env directly).
+   A subprocess inherits `os.environ` too — pass an explicit `env=`.
+4. **Event loops.** `asyncio.get_event_loop()` raises once a neighbouring
+   module closed the default loop, and motor captures the CURRENT loop when the
+   client is CONSTRUCTED. Own a module-level loop and re-assert it in `_db()`.
+
+RULE: before believing a test that reports a data-shaped failure, print which
+DATABASE the fixture is pointing at. Compare failure FAMILIES between full runs,
+and re-run any spiking module in isolation before calling it a regression.
+
 ## NEVER parallel-edit the same file (Aug 1 2026 incident)
 Six search_replace edits to server.py were issued in ONE parallel batch (iter67 sync).
 Each edit read-modify-writes the whole file → racing writes clobbered edit #2

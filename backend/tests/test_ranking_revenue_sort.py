@@ -36,6 +36,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_rank_revenue"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_rank_revenue"
 import server  # noqa: E402
 
 _rev = server._ranking_revenue_value
@@ -314,7 +317,7 @@ def _by_name(out):
 
 def test_endpoint_sorts_by_revenue_and_reports_the_basis():
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _compute(db, own_revenue=None, sales_pairs=[
             {"store_id": "petsy", "sku": "petsy-SKU-0", "units": 3900, "revenue": 507_000.0},
         ])
@@ -345,7 +348,7 @@ def test_own_store_gets_no_estimate_while_its_ledger_is_empty():
     the no-figure group ("Accumulating"), NEVER the category-velocity estimate.
     """
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _compute(db, own_revenue=None, sales_pairs=[
             {"store_id": "petsy", "sku": "petsy-SKU-0", "units": 100, "revenue": 13_000.0},
         ])
@@ -366,7 +369,7 @@ def test_own_store_gets_no_estimate_while_its_ledger_is_empty():
 def test_own_store_uses_the_real_ledger_once_it_syncs():
     """The ledger is the only own-store revenue source, and it works."""
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _compute(db, own_revenue=88_000.0, sales_pairs=[])
         own = _by_name(out)["Pets houses"]
         assert own["revenue_30d"] == 88_000.0
@@ -389,7 +392,7 @@ def test_own_store_products_do_not_poison_the_velocity_pool():
     removal of the own-store estimate — the own store contributes nothing to
     the pools AND receives nothing from them."""
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _compute(db, own_revenue=None, sales_pairs=[
             {"store_id": "petsy", "sku": "petsy-SKU-0", "units": 100, "revenue": 13_000.0},
         ])
@@ -404,7 +407,7 @@ def test_own_store_products_do_not_poison_the_velocity_pool():
 
 def test_endpoint_counts_how_much_of_the_order_rests_on_estimates():
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         out = await _compute(db, own_revenue=None, sales_pairs=[
             {"store_id": "petsy", "sku": "petsy-SKU-0", "units": 100, "revenue": 13_000.0},
         ])

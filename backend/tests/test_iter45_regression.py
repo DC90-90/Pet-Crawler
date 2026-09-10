@@ -19,18 +19,9 @@ SUPER_PASS = "Ahmaddc90@"
 
 @pytest.fixture(scope="session")
 def super_token():
-    """Log in ONCE per session; on 429, wait 60s and retry once."""
-    url = f"{BASE_URL}/api/auth/login"
-    payload = {"email": SUPER_EMAIL, "password": SUPER_PASS}
-    r = requests.post(url, json=payload, timeout=30)
-    if r.status_code == 429:
-        time.sleep(60)
-        r = requests.post(url, json=payload, timeout=30)
-    assert r.status_code == 200, f"login failed: {r.status_code} {r.text[:300]}"
-    data = r.json()
-    tok = data.get("access_token") or data.get("token")
-    assert tok, f"no token in login response: {data}"
-    return tok
+    """Shared cached token — login is rate limited to 5/min (see tests/_auth.py)."""
+    from _auth import login_token
+    return login_token(SUPER_EMAIL, SUPER_PASS)
 
 
 @pytest.fixture(scope="session")

@@ -22,6 +22,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_store_ranking"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_store_ranking"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -96,7 +99,7 @@ async def _seed(db):
 
 def test_store_ranking_end_to_end():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         server.db = db
         out = await server._store_ranking_compute(db)
@@ -224,7 +227,7 @@ def test_market_position_summary_extraction_unchanged():
     """The iter38 extraction of _compute_market_position_summary must feed the
     summary compute the exact same object (structure + values)."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         server.db = db
         mp = await server._compute_market_position_summary(db)

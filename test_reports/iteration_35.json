@@ -1,0 +1,39 @@
+{
+  "summary": "iter79 (Market Share tab + Zid OAuth structural) plus iter80 (KPI-recomputing filters + CSV Calculation method column + Stores-carrying / Sales-data-available split + Methodology sentence) fully verified end-to-end. Backend: 90/90 tests pass across test_iter79_market_share.py (28), test_iter79_zid_oauth.py (25), test_iter80_market_share_filters.py (25), test_iter80_shared_test_auth.py (12). Frontend: all 7 Market Share tabs render for the super admin with zero console errors, in both the sealed-days-only default (withheld/Unavailable + ms-no-sales-banner shown, never rendered as 0) and include-today (populated) states. RBAC blocks the normal user (sidebar hidden + /market-share -> /no-access). Zid OAuth surfaces respond correctly on structural paths (401 without auth, 302 graceful on missing/invalid callback code, connected panel on /settings with Connect button).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter79_market_share.py",
+    "/app/backend/tests/test_iter79_zid_oauth.py",
+    "/app/backend/tests/test_iter80_market_share_filters.py",
+    "/app/backend/tests/test_iter80_shared_test_auth.py",
+    "/app/test_reports/pytest/iter80_results.xml"
+  ],
+  "verification_details": {
+    "backend_pytest": "90/90 passed in 7.92s using the shared cached-token _auth helper (no 429 storm).",
+    "market_share_tabs_load": "market-share-page renders; all 7 ms-tab-* buttons present (overview, my-products, breakdown, missing, brands, categories, methodology); 0 console errors switching through them.",
+    "sealed_default_state": "Default 'Sealed days only' toggle -> ms-no-sales-banner shown, KPI revenue-share/unit-share/market-revenue/my-revenue all render 'Unavailable' with UNAVAILABLE source chips; catalog=2,303, with-competitor=941, contested=0, sole=0. Tracked-stores list shows 11 stores each with 'X day(s) observed' and an UNAVAILABLE chip. No 0/NaN leakage.",
+    "include_today_state_matches_expected_numbers": "After clicking ms-include-today (30D): my revenue share 18.5%, my unit share 19.5%, tracked market revenue 142,296.35 SAR, my measured revenue 26,265.11 SAR, catalog 2,303, with-competitor 941, contested 762, sole 1,541 — matches the client's expected numbers.",
+    "date_range_refetch": "ms-range-7 click re-fetches: overview switches to window 2026-09-03 -> 2026-09-10 with 7D-specific KPIs (revenue share 19.7%, unit share 25.3%, tracked market rev 100,515.93). Confirms client rule 5 window applies to every tab.",
+    "filter_recomputes_kpis_client_rule_9": "'Contested only' filter on Overview reduces ms-kpi-catalog from 2,303 -> 762 and ms-overview-filtered note appears. Switching to My Products with same filter -> ms-my-products-count reads '762 product(s)' — matches the Overview KPI exactly (cross-tab arithmetic identity).",
+    "my_products_18_columns_and_split": "First row of My Products has exactly 18 <td> cells (matches colSpan 18). ms-stores-carrying-0='5 (4 rivals + me)' and ms-sales-data-available-0='3 of 5' — the two columns are separate (client rule 8). Rows with no measurable seller render 'Unavailable', never 0.",
+    "product_breakdown_every_seller_and_own_store": "Clicking ms-product-row-0 on breakdown opens the product sheet listing 5 sellers with price/stock/units/revenue/source; own store (Pets Houses) is present and labeled 'Mine'; sellers without sales signal (Hamtaro, CutePets) show 'Unavailable' explicitly (client rules 5, 7).",
+    "missing_products_tab": "Rows render with 'opportunity' vocabulary + ms-export button visible (client rule 6).",
+    "brands_and_categories_tabs": "ms-brand-row-0 and ms-category-card-0 both render.",
+    "methodology_wording_client_rule_12": "ms-methodology-tracked-market starts with 'Market share is based on tracked measured data inside Daleel, not the total Saudi market.' The salla_category_velocity_estimate is called out under 'What we deliberately do NOT use'. Source hierarchy Actual / Measured (approx.) / Measured zero / Unavailable is listed. No NaN.",
+    "csv_export_client_rule_10": "GET /api/market-share/export?section=my_products header contains 'Calculation method', 'Confidence', 'Unavailable reason', 'My units source', 'Stores carrying it (competitors)', 'Sales data available (sellers)'. section=nonsense -> HTTP 400.",
+    "rbac_client_rule_11": "Normal user (test_iter73y_normal@example.com, allowed_pages=['my_products']) sees only 'My Products' in the sidebar (no 'Market Share' item). Direct nav to /market-share redirects to /no-access with an 'Access Restricted' page — never rendered.",
+    "zid_oauth_structural": "GET /api/admin/zid/oauth/status (super admin) returns configured=true, connected=false, status='not_connected', action_required with the exact 'Register the callback URL...' message. Unauth: 401. POST /api/admin/zid/oauth/start unauth: 401. POST /api/admin/zid/oauth/disconnect unauth: 401. GET /api/zid/oauth/callback with missing code -> 302 redirect (graceful, no 500). Same with a bad state.",
+    "settings_zid_panel": "/settings renders the Zid orders panel (data-testid contains 'zid') with a visible 'Connect' button and no crash.",
+    "no_bad_tokens_desktop_and_mobile": "Scanned every tab body for 'NaN', 'undefined', '[object Object]', '$NaN' — none found in either the sealed or the include-today state, on both desktop 1920x1080 and mobile 390x844.",
+    "regression": "/ (My Products), /price-intel, /scanner, /discounts, /insights, /settings all render with 0 console errors after the market_share + page-cache refactor."
+  },
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "a.disi@taqueen.sa / Ahmaddc90@ (super_admin); test_iter73y_normal@example.com / NormalUser#123 (allowed_pages=['my_products'])",
+  "seed_data_creation": "None. Used existing preview data (crawl days 2026-08-08, 2026-08-25, 2026-09-10, rollups today).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter79 + iter80 are fully green. Backend: 90 tests in test_iter79_*/test_iter80_* pass via the shared _auth.py cached-token helper (do NOT relax the login rate limiter). Frontend Market Share flows verified: sealed-default withholds all sales figures + shows ms-no-sales-banner; ms-include-today unlocks populated numbers matching client expectations (18.5% / 19.5% / 142,296 SAR / 762 contested / 1541 sole / 2303 catalog / 941 with-competitor at 30D). Cross-tab arithmetic identity confirmed (Contested-only filter -> Overview catalog KPI 762 == My Products count 762). RBAC and Zid OAuth structural paths all correct. No open action items."
+}

@@ -35,10 +35,9 @@ BAD_TOKENS = ("NaN", "undefined", "null [", "[object Object]", "-Infinity", "$Na
 
 @pytest.fixture(scope="session")
 def token():
-    r = requests.post(f"{BASE_URL}/api/auth/login",
-                      json={"email": EMAIL, "password": PASSWORD}, timeout=30)
-    assert r.status_code == 200, r.text
-    return r.json()["token"]
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import login_token
+    return login_token(EMAIL, PASSWORD)
 
 
 @pytest.fixture(scope="session")

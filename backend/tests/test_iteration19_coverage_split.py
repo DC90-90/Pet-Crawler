@@ -26,7 +26,8 @@ load_dotenv("/app/backend/.env")
 
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
+from _auth import live_db_name   # backend/.env, not the polluted env var
+DB_NAME = live_db_name()
 
 EMAIL = "a.disi@taqueen.sa"
 PASSWORD = "Ahmaddc90@"
@@ -35,14 +36,9 @@ PASSWORD = "Ahmaddc90@"
 # ---- fixtures ----------------------------------------------------------------
 @pytest.fixture(scope="module")
 def session():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    r = s.post(f"{BASE_URL}/api/auth/login", json={"email": EMAIL, "password": PASSWORD}, timeout=30)
-    assert r.status_code == 200, f"login failed: {r.status_code} {r.text[:200]}"
-    token = r.json().get("access_token") or r.json().get("token")
-    assert token, "no token in login response"
-    s.headers.update({"Authorization": f"Bearer {token}"})
-    return s
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import auth_session
+    return auth_session(EMAIL, PASSWORD)
 
 
 @pytest.fixture(scope="module")

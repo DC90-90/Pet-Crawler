@@ -17,6 +17,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_demo_cleanup"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_demo_cleanup"
 import server  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -90,7 +93,7 @@ def _stub_recomputes(calls):
 
 def test_dry_run_reports_without_writing():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         server.db = db
         rep = await server.demo_cleanup(dry_run=True, user=SUPER)
@@ -131,7 +134,7 @@ def test_dry_run_reports_without_writing():
 
 def test_guard_blocks_real_sku_and_ceiling():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         server.db = db
         # (a) detector drift onto a real-crawl-shaped SKU → real run refused
@@ -183,7 +186,7 @@ def test_guard_blocks_real_sku_and_ceiling():
 
 def test_real_run_backs_up_cascades_and_recomputes():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         server.db = db
         calls = []

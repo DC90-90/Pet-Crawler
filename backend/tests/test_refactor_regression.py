@@ -29,20 +29,13 @@ _session = None
 _token = None
 
 def get_auth_session():
-    """Get authenticated session (cached to avoid rate limiting)"""
+    """Authenticated session on the suite-wide cached token (tests/_auth.py)."""
     global _session, _token
     if _session is None or _token is None:
+        from _auth import login_token
+        _token = login_token(ADMIN_EMAIL, ADMIN_PASSWORD)
         _session = requests.Session()
-        time.sleep(0.5)
-        login_resp = _session.post(f"{BASE_URL}/api/auth/login", json={
-            "email": ADMIN_EMAIL,
-            "password": ADMIN_PASSWORD
-        })
-        if login_resp.status_code == 200:
-            _token = login_resp.json().get("token")
-            _session.headers.update({"Authorization": f"Bearer {_token}"})
-        else:
-            print(f"Login failed: {login_resp.status_code} - {login_resp.text}")
+        _session.headers.update({"Authorization": f"Bearer {_token}"})
     return _session, _token
 
 
@@ -115,10 +108,8 @@ class TestPydanticModelsRegression:
     
     def test_auth_login_parses_body(self):
         """POST /api/auth/login parses AuthIn model correctly"""
-        response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "email": ADMIN_EMAIL,
-            "password": ADMIN_PASSWORD
-        })
+        from _auth import login_response
+        response = login_response(ADMIN_EMAIL, ADMIN_PASSWORD)
         assert response.status_code == 200
         data = response.json()
         assert "token" in data

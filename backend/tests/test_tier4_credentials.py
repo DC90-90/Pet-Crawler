@@ -11,14 +11,9 @@ BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
 @pytest.fixture(scope="module")
 def auth_token():
-    """Get authentication token for admin user"""
-    response = requests.post(f"{BASE_URL}/api/auth/login", json={
-        "email": "admin@daleelpets.com",
-        "password": "admin123"
-    })
-    if response.status_code == 200:
-        return response.json().get("token")
-    pytest.skip("Authentication failed - skipping authenticated tests")
+    """Cached token for the legacy admin account (tests/_auth.py); skips if absent."""
+    from _auth import login_token_or_skip
+    return login_token_or_skip("admin@daleelpets.com", "admin123")
 
 @pytest.fixture(scope="module")
 def auth_headers(auth_token):
@@ -324,11 +319,10 @@ class TestLoginStillWorks:
     
     def test_login_success(self):
         """POST /api/auth/login works with valid credentials"""
-        response = requests.post(f"{BASE_URL}/api/auth/login", json={
-            "email": "admin@daleelpets.com",
-            "password": "admin123"
-        })
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+        from _auth import login_response
+        response = login_response("admin@daleelpets.com", "admin123")
+        if response.status_code != 200:
+            pytest.skip(f"legacy admin account absent ({response.status_code})")
         data = response.json()
         
         assert "token" in data, "Missing token in response"

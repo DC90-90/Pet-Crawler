@@ -31,6 +31,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_price_drops_zero"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_price_drops_zero"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -91,7 +94,7 @@ def test_zero_drops_returns_exactly_zero_not_a_random_number():
     100k, and it could never return 0 at all — so equality with 0 on every run
     is proof the fabrication is gone, not luck."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db, drops_rows=[])            # no rollups: true count is 0
         server.db = db
         with _stubbed_coverage_helpers():
@@ -103,7 +106,7 @@ def test_zero_drops_returns_exactly_zero_not_a_random_number():
 
 def test_a_real_count_passes_through_unchanged():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db, drops_rows=[
             _rollup("store-a", 2, 3), _rollup("store-a", 5, 4),
             _rollup("store-b", 1, 5),

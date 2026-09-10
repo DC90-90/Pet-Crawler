@@ -34,6 +34,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_discounts_ep"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_discounts_ep"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -163,7 +166,7 @@ def _pair_rows(now):
 # ── 1. all four return 200 with real data ───────────────────────────────────
 def test_all_four_endpoints_return_data():
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         now = await _seed(real)
         plans = [
             (_is_pair_group, _pair_rows(now)),
@@ -197,7 +200,7 @@ def test_all_four_endpoints_return_data():
 # ── 2. the client's columns, on a known discounted product ──────────────────
 def test_known_product_columns_are_correct():
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         now = await _seed(real)
         server.db = _DB(real, [(_is_pair_group, _pair_rows(now))])
         rows = await server.top_discounts_pct.__wrapped__(
@@ -220,7 +223,7 @@ def test_known_product_columns_are_correct():
 # ── 3. discount history start date == first snapshot where price dropped ────
 def test_history_start_matches_first_discounted_snapshot():
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         now = await _seed(real)
         server.db = _DB(real, [(_is_pair_group, _pair_rows(now))])
         rows = await server.top_discounts_pct.__wrapped__(
@@ -246,7 +249,7 @@ def test_history_start_matches_first_discounted_snapshot():
 def test_history_run_stops_at_the_price_returning_to_full():
     """A discount that ENDED must not be reported as ongoing."""
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         now = await _seed(real)
         # newest Zid snapshot back at full price -> the run is over
         await real.product_snapshots.insert_one({
@@ -266,7 +269,7 @@ def test_history_run_stops_at_the_price_returning_to_full():
 # ── 4. sold-qty: measured for Zid, "not measurable" for Salla ───────────────
 def test_sold_during_discount_is_measured_for_zid_and_null_for_salla():
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         now = await _seed(real)
         server.db = _DB(real, [(_is_pair_group, _pair_rows(now))])
         rows = await server.top_discounts_pct.__wrapped__(
@@ -291,7 +294,7 @@ def test_sold_during_discount_is_measured_for_zid_and_null_for_salla():
 # ── 5. aggression returns products-on-discount and average depth ────────────
 def test_aggression_reports_product_count_and_depth_without_n_plus_one():
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(real)
         calls = {"n": 0}
 
@@ -333,7 +336,7 @@ def test_aggression_reports_product_count_and_depth_without_n_plus_one():
 def test_malformed_rows_no_longer_take_the_endpoint_down():
     """$first omits an absent field, so one bad row used to 500 the endpoint."""
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         now = await _seed(real)
         broken = [
             {"sku": SKU_Z, "store_id": ZID, "store_name": "Aleef", "price": 349.5,
@@ -362,7 +365,7 @@ def test_malformed_rows_no_longer_take_the_endpoint_down():
 
 def test_window_is_bounded_and_category_filter_applies():
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         now = await _seed(real)
         server.db = _DB(real, [(_is_pair_group, _pair_rows(now))])
         # a caller asking for 3650 days is clamped to the 90-day bound

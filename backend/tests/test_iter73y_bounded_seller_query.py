@@ -39,6 +39,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_iter73y_bounded"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_iter73y_bounded"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -201,7 +204,7 @@ async def _seed(db):
 
 def _run(coro_fn):
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         server.db = db
         await _seed(db)
         return await coro_fn(db)

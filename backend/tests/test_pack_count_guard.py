@@ -29,6 +29,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_pack_guard"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_pack_guard"
 import matcher as M  # noqa: E402
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -272,7 +275,7 @@ def test_scanner_drops_the_three_live_skus_when_catalogue_holds_the_single_name(
     """The fixable world: db.products carries the competitor's single-piece
     name, so the mismatch is visible and all three SKUs are withheld."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         # Butcher's carton name has no descriptor either, so model it as the
         # catalogue holding the single name while OUR name says 24 Pieces
         await _seed_scanner(db, lambda sku, carton: carton.replace("24 Pieces*", "")
@@ -300,15 +303,21 @@ def test_scanner_drops_the_three_live_skus_when_catalogue_holds_the_single_name(
 def test_scanner_unaffected_when_pack_counts_agree():
     """Same pack count on both sides -> the Scanner behaves exactly as before."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_scanner(db, lambda sku, carton: carton)   # catalogue == our name
         out = await _scan()
         assert out["summary"]["pack_mismatch_skipped"] == 0
         # Beso and Kit Cat state "24 Pieces*" on BOTH sides, so iter53's shared-
-        # barcode check finds pack_qty_agrees and keeps them despite the >6x gap
-        assert {o["sku"] for o in out["opportunities"]} == {"8015912514257", "8858772603095"}
+        # barcode check finds pack_qty_agrees and keeps their >6x lows. iter78
+        # then removes them from the OTHER side: each low sits >5x below the
+        # cluster our price and the second seller form, which is precisely the
+        # collision the client reported as a +445% gap. Level with what is left,
+        # we are not overpriced on either SKU.
+        assert {o["sku"] for o in out["opportunities"]} == set()
+        excluded = {f["sku"] for f in out["summary"]["low_outliers_excluded_sample"]}
+        assert {"8015912514257", "8858772603095"} <= excluded
         # Butcher's states no pack count anywhere, so nothing corroborates its
-        # 25x gap and iter53 drops it
+        # 25x gap and iter53 drops it before iter78 ever sees it
         assert {f["sku"] for f in out["summary"]["barcode_unreliable_sample"]} \
             == {"5011792007325"}
     asyncio.run(main())

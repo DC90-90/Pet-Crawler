@@ -4,6 +4,8 @@ Runs against the external preview URL through REACT_APP_BACKEND_URL.
 """
 import os
 import time
+from pathlib import Path
+
 import pytest
 import requests
 
@@ -19,15 +21,9 @@ PROBE_SKU = "IT73Y-PROBE-052742024363"
 # ---------- Fixtures ----------
 @pytest.fixture(scope="session")
 def super_token():
-    r = requests.post(
-        f"{BASE_URL}/api/auth/login",
-        json={"email": SUPER_EMAIL, "password": SUPER_PASSWORD},
-        timeout=20,
-    )
-    assert r.status_code == 200, f"super login failed: {r.status_code} {r.text}"
-    tok = r.json().get("token") or r.json().get("access_token")
-    assert tok, f"no token in {r.json()}"
-    return tok
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import login_token
+    return login_token(SUPER_EMAIL, SUPER_PASSWORD)
 
 
 @pytest.fixture(scope="session")
@@ -53,15 +49,11 @@ def normal_user_headers(super_headers):
         },
         timeout=20,
     )
-    # Login
-    r = requests.post(
-        f"{BASE_URL}/api/auth/login",
-        json={"email": email, "password": password},
-        timeout=20,
-    )
-    if r.status_code != 200:
-        # Try reset password path
-        pytest.skip(f"could not login normal user: {r.status_code} {r.text}")
+    # Login (shared cached response — login is rate limited to 5/min)
+    from _auth import login_response
+    r = login_response(email, password)
+    if r is None or r.status_code != 200:
+        pytest.skip(f"could not login normal user: {getattr(r, 'status_code', 'no-response')}")
     tok = r.json().get("token") or r.json().get("access_token")
     return {"Authorization": f"Bearer {tok}"}
 
@@ -70,9 +62,17 @@ def normal_user_headers(super_headers):
 def seeded_probe():
     """Seed data via probe script, cleanup after all tests."""
     import subprocess
+    # The probe must write to the LIVE database the API reads — a sibling test
+    # module may have left DB_NAME pointing at its own throwaway database, and
+    # a subprocess inherits os.environ.
+    env = dict(os.environ)
+    env.pop("DB_NAME", None)
+    for line in Path("/app/backend/.env").read_text().splitlines():
+        if line.startswith("DB_NAME="):
+            env["DB_NAME"] = line.split("=", 1)[1].strip().strip('"').strip("'")
     p = subprocess.run(
         ["python3", "tools_iter73y_e2e_probe.py"],
-        cwd="/app/backend",
+        cwd="/app/backend", env=env,
         capture_output=True, text=True, timeout=120,
     )
     print("SEED STDOUT:", p.stdout[-2000:])
@@ -81,7 +81,7 @@ def seeded_probe():
     yield PROBE_SKU
     c = subprocess.run(
         ["python3", "tools_iter73y_e2e_probe.py", "clean"],
-        cwd="/app/backend",
+        cwd="/app/backend", env=env,
         capture_output=True, text=True, timeout=60,
     )
     print("CLEAN:", c.stdout[-500:], c.stderr[-500:])

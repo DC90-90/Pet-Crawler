@@ -28,6 +28,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_pagecache"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_pagecache"
 import server  # noqa: E402
 from starlette.responses import Response  # noqa: E402
 from fastapi.encoders import jsonable_encoder  # noqa: E402
@@ -52,7 +55,7 @@ def _norm(body):
 
 
 async def _fresh_db():
-    db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+    db = AsyncIOMotorClient(MONGO)[_TEST_DB]
     server.db = db
     # iter70 — isolation guard (reconciled from the workspace copy): the cached
     # endpoints read the sales rollups, and rows left behind by OTHER suites on

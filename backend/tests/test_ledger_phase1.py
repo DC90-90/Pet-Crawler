@@ -30,6 +30,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_ledger_p1"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_ledger_p1"
 import ledger  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -41,7 +44,7 @@ DAY = "2026-08-01"
 
 
 def _db():
-    return AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+    return AsyncIOMotorClient(MONGO)[_TEST_DB]
 
 
 async def _reset(db):

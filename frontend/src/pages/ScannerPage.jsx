@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
-import { Zap, RefreshCw, TrendingDown, AlertTriangle, Shield, Trophy, ChevronDown, ChevronRight, Users } from "lucide-react";
+import { Zap, RefreshCw, TrendingDown, AlertTriangle, Shield, Trophy, ChevronDown, ChevronRight, Users, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -18,6 +18,18 @@ const BADGE_CFG = {
   overpriced: { label: "Overpriced", icon: TrendingDown, cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
 };
 
+// iter78 — plain-language reason for a price the pack guard removed
+const explainExclusion = (x) => {
+  const r = x.reason || "";
+  let m = r.match(/^slug_weight_([\d.]+)g_vs_ours_([\d.]+)g$/);
+  if (m) return `Seller lists ${m[1]}g — ours is ${m[2]}g`;
+  m = r.match(/^slug_pack_qty_(\d+)_vs_ours_(\d+)$/);
+  if (m) return `Seller lists a ${m[1]}-pack — ours is ${m[2]}`;
+  if (x.cluster_median) return `${x.ratio}× below the ${x.cluster_median} ﷼ the other sellers agree on`;
+  return r || "—";
+};
+
+
 export default function ScannerPage() {
   const { t } = useI18n();
   const [data, setData] = useState(null);
@@ -25,6 +37,7 @@ export default function ScannerPage() {
   const [days, setDays] = useState(14);
   const [selectedOpp, setSelectedOpp] = useState(null);
   const [showComps, setShowComps] = useState(false);
+  const [showExcluded, setShowExcluded] = useState(false);
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -40,6 +53,12 @@ export default function ScannerPage() {
   const { summary, opportunities, well_positioned, undercut } = data;
   const competitorsOverpriced = data.competitors_overpriced || [];
   const compTotal = summary.competitors_overpriced ?? competitorsOverpriced.length;
+  // iter78 — the pack guard reports every price it took out of the market low
+  const excludedRows = [
+    ...(summary.slug_pack_mismatch_sample || []),
+    ...(summary.low_outliers_excluded_sample || []),
+  ];
+  const excludedTotal = (summary.slug_pack_mismatch || 0) + (summary.low_outliers_excluded || 0);
 
   // iter77 — every comparable seller for the selected product, straight from the
   // endpoint. This used to filter the opportunities list and plot `my_price`
@@ -171,6 +190,46 @@ export default function ScannerPage() {
                   <TableCell><span className="text-sm font-semibold text-green-600">{c.market_lowest} ﷼</span><span className="text-[10px] text-[#A1E4DB] ms-1">{c.lowest_store_name}</span></TableCell>
                   <TableCell><span className="text-xs">{c.my_price != null ? `${c.my_price} ﷼` : "—"}</span></TableCell>
                   <TableCell><span className="text-xs font-bold text-amber-500">+{c.gap_pct}%</span></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </div>
+
+      {/* iter78 — nothing is dropped silently: what the pack guard removed from
+          the market low, and why */}
+      <div className="glass-card rounded-md overflow-hidden" data-testid="excluded-prices-card">
+        <button
+          onClick={() => setShowExcluded((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 border-b border-white/10 text-start transition-colors hover:bg-white/5"
+          data-testid="excluded-prices-toggle">
+          <div className="flex items-center gap-1.5">
+            {showExcluded ? <ChevronDown className="w-4 h-4 text-[#A1E4DB]" /> : <ChevronRight className="w-4 h-4 text-[#A1E4DB]" />}
+            <Filter className="w-4 h-4 text-[#A1E4DB]" />
+            <h3 className="text-sm font-semibold text-white">Excluded From Market Low ({excludedTotal})</h3>
+          </div>
+          <span className="text-[10px] text-[#A1E4DB]">different pack size, or far below every other seller</span>
+        </button>
+        {showExcluded && (
+          <Table className="dense-table">
+            <TableHeader>
+              <TableRow className="bg-[#0A2728]/80/5">
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">SKU</TableHead>
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Store</TableHead>
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Excluded Price</TableHead>
+                <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Why</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {excludedRows.length === 0 ? (
+                <TableRow><TableCell colSpan={4} className="text-center py-8 text-xs text-[#A1E4DB]">{t("no_data")}</TableCell></TableRow>
+              ) : excludedRows.map((x, i) => (
+                <TableRow key={`ex-${x.sku}-${x.store_name}-${i}`} data-testid={`excluded-row-${i}`}>
+                  <TableCell><SkuLine sku={x.sku} /></TableCell>
+                  <TableCell><span className="text-xs">{x.store_name}</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-[#A1E4DB]" dir="ltr">{x.excluded_price ?? x.price} ﷼</span></TableCell>
+                  <TableCell><span className="text-xs text-[#A1E4DB]">{explainExclusion(x)}</span></TableCell>
                 </TableRow>
               ))}
             </TableBody>

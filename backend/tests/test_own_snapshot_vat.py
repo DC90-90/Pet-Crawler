@@ -25,6 +25,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_snap_vat"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_snap_vat"
 import crawlers  # noqa: E402
 import server  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
@@ -40,7 +43,7 @@ HILLS = "052742059518"
 def test_snapshot_writer_uses_the_resolved_inc_vat_price():
     """The own-sync must write the SAME number into my_products and the snapshot."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("stores", "my_products", "products", "product_snapshots"):
             await db[c].delete_many({})
         store = {"id": OWN, "name": "Pets Houses", "domain": "pets-houses.com",
@@ -86,7 +89,7 @@ def test_snapshot_writer_uses_the_resolved_inc_vat_price():
 def test_snapshot_writer_grosses_up_when_only_the_merchant_has_it():
     """Storefront-unmatched + is_taxable -> merchant x 1.15, tagged."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("stores", "my_products", "products", "product_snapshots"):
             await db[c].delete_many({})
         store = {"id": OWN, "name": "Pets Houses", "domain": "pets-houses.com",
@@ -189,7 +192,7 @@ def _unpatch(o):
 
 def test_dry_run_projects_and_writes_nothing():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_backfill(db)
         rep = await server.own_snapshot_vat_backfill_get(dry_run=True, sample=10, user=SUPER)
 
@@ -231,7 +234,7 @@ def test_dry_run_projects_and_writes_nothing():
 
 def test_get_is_dry_run_only_and_super_admin_only():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_backfill(db)
         try:
             await server.own_snapshot_vat_backfill_get(dry_run=False, user=SUPER)
@@ -249,7 +252,7 @@ def test_get_is_dry_run_only_and_super_admin_only():
 
 def test_confirm_count_must_match():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_backfill(db)
         for bad in (None, 0, 3, 5, 4):
             try:
@@ -264,7 +267,7 @@ def test_confirm_count_must_match():
 
 def test_real_run_backs_up_first_and_leaves_competitors_alone():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_backfill(db)
         orig, calls = _patch_recompute()
         try:
@@ -317,7 +320,7 @@ def test_detail_panel_and_market_position_read_inc_vat_after_backfill():
     the underlying SNAPSHOT so history + downstream aggregations agree.
     """
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_backfill(db)
         await db.products.delete_many({})
         await db.products.insert_one({"id": "p", "sku": HILLS, "name_ar": "",
@@ -355,7 +358,7 @@ def test_detail_panel_and_market_position_read_inc_vat_after_backfill():
 def test_backup_is_batched():
     """The 63k-row single-shot timeout lesson: the copy must be chunked."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_backfill(db)
         now = server.datetime.now(server.timezone.utc)
         await db.product_snapshots.insert_many([
@@ -380,7 +383,7 @@ def test_backup_is_batched():
 def test_backup_batching_still_chunks_a_large_affected_set():
     """Many AFFECTED SKUs (not history) must still move in bounded batches."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_backfill(db)
         now = server.datetime.now(server.timezone.utc)
         mine = [{"sku": f"BULK-{i}", "price": 115.0, "price_basis": "merchant_computed_inc_vat"}
@@ -414,7 +417,7 @@ def test_own_store_appears_exactly_once_in_the_seller_list():
     prices — inflating total_sellers and letting the cheaper (ex-VAT) duplicate
     win the "cheapest" label."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("stores", "my_products", "products", "product_snapshots"):
             await db[c].delete_many({})
         await db.stores.insert_many([
@@ -450,7 +453,7 @@ def test_dedupe_prefers_the_inc_vat_my_products_price():
     """If the snapshot is still stale, the my_products value must win — and the
     stale one must not survive as a second seller."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("stores", "my_products", "products", "product_snapshots"):
             await db[c].delete_many({})
         await db.stores.insert_many([

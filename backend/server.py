@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from bson import ObjectId
 from pymongo.errors import BulkWriteError
-from starlette.responses import StreamingResponse, JSONResponse
+from starlette.responses import StreamingResponse, JSONResponse, RedirectResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
@@ -53,6 +53,8 @@ from salla_revenue_estimate import (
     FIXED_BAND_PCT as SALLA_FIXED_BAND_PCT,
 )
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
+import zid_oauth  # iter79 — Zid partner-app OAuth (unlocks the Orders API)
+import market_share  # iter79 — Market Share aggregation
 from cryptography.fernet import Fernet, InvalidToken
 
 # ── Refactored modules (Feb 2026) ───────────────────────────
@@ -125,7 +127,7 @@ LEGACY_ADMIN_EMAIL = "admin@daleelpets.com"  # to be deleted on startup
 
 VALID_ROLES = ["super_admin", "admin", "user"]
 ALL_PAGES = [
-    "my_products", "price_intel", "insights", "scanner",
+    "my_products", "price_intel", "insights", "scanner", "market_share",
     "discounts", "alerts", "stores", "import", "settings",
 ]
 logging.basicConfig(level=logging.INFO)
@@ -976,12 +978,162 @@ async def admin_recrawl_store(store_id: str, user=Depends(require_super_admin)):
             await crawl_store_waterfall(db, store)
         except Exception:
             logger.exception("[Admin recrawl] failed for store %s", store_id)
+            return
+        # iter79 — a manual recrawl must do the SAME post-crawl work the
+        # scheduled job does, or the fresh snapshots never reach the rollups
+        # (sku_sales_daily stays empty and every sales figure reads
+        # "unavailable" even though two crawls now exist).
+        cache_clear()
+        try:
+            await _recompute_store_metrics(db, store_id)
+        except Exception:
+            logger.exception("[Metrics] per-store rebuild failed after manual recrawl of %s", store_id)
+        await maybe_recompute_dashboard_cache(db)
+        await maybe_recompute_page_caches(db)
 
     asyncio.create_task(_run())
     logger.info("[Admin] recrawl triggered for %s (%s) by %s",
                 store.get("name"), store_id, user.get("email"))
     return {"ok": True, "store_id": store_id, "store_name": store.get("name"),
             "status": "started"}
+
+
+# ── iter78: PRICE HISTORY ARCHIVE (Emergent object storage) ──────────────────
+# The client asked to "keep the history entirely for each store and for each
+# product". MongoDB is the working set; object storage keeps an immutable copy of
+# every crawl night so the record survives a prune, a bad migration or a re-crawl
+# that overwrites a snapshot. `archive_files` is the index — the storage API has
+# no listing we should depend on, no delete and no presigned URLs, so downloads
+# are proxied here behind the same super-admin check.
+@router.get("/admin/archive/status")
+async def admin_archive_status(user=Depends(require_super_admin)):
+    return await archive.archive_status(db)
+
+
+@router.get("/admin/archive/files")
+async def admin_archive_files(date: str = Query(..., description="KSA date, YYYY-MM-DD"),
+                              user=Depends(require_super_admin)):
+    files = await db.archive_files.find(
+        {"date": date, "is_deleted": False}, {"_id": 0}).sort("kind", 1).to_list(1000)
+    return {"date": date, "files": files, "count": len(files)}
+
+
+@router.get("/admin/archive/download")
+async def admin_archive_download(path: str = Query(...),
+                                 user=Depends(require_super_admin)):
+    rec = await db.archive_files.find_one({"path": path, "is_deleted": False}, {"_id": 0})
+    if not rec:
+        raise HTTPException(404, "Archived file not found")
+    try:
+        data, ctype = await asyncio.to_thread(archive.get_object, path)
+    except Exception as e:
+        logger.exception("[Archive] download failed for %s", path)
+        raise HTTPException(502, f"Storage read failed: {e}")
+    name = path.split("/")[-1]
+    # A store_id filename is stable in storage but useless on someone's laptop —
+    # name the download after the store and the night it covers.
+    if rec.get("store_name"):
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", rec["store_name"]).strip("-") or "store"
+        name = f"{slug}.{name.split('.', 1)[-1]}"
+    return Response(content=data, media_type=rec.get("content_type") or ctype,
+                    headers={"Content-Disposition": f'attachment; filename="{rec["date"]}_{name}"'})
+
+
+@router.post("/admin/archive/run")
+async def admin_archive_run(background: BackgroundTasks,
+                            date: str = Query(None, description="KSA date; defaults to yesterday"),
+                            force: bool = Query(False, description="Re-write a day that is already archived"),
+                            user=Depends(require_super_admin)):
+    day = date or archive.previous_ksa_day()
+    if not archive._emergent_key():
+        raise HTTPException(400, "EMERGENT_LLM_KEY is not configured — archive storage unavailable")
+
+    async def _run():
+        try:
+            res = await archive.archive_day(db, day, force=force)
+            logger.info("[Archive] manual run %s -> %s", day, res)
+        except Exception:
+            logger.exception("[Archive] manual run failed for %s", day)
+
+    background.add_task(_run)
+    logger.info("[Archive] run triggered for %s (force=%s) by %s",
+                day, force, user.get("email"))
+    return {"ok": True, "date": day, "force": force, "status": "started"}
+
+
+async def scheduled_archive():
+    """Daily: archive the KSA day that just closed."""
+    day = archive.previous_ksa_day()
+    try:
+        res = await archive.archive_day(db, day)
+        logger.info("[Archive] nightly %s -> %s", day, res)
+    except Exception:
+        logger.exception("[Archive] nightly run failed for %s", day)
+
+
+# ── Zid Orders Connection (partner-app OAuth) ───────────────
+# Zid's orders route needs TWO credentials from the SAME installation:
+#   Authorization: Bearer <authorization>   +   X-Manager-Token: <access_token>
+# The store Access-Token we hold is only the second one, which is why the
+# catalogue works and orders answered 401 for months (iter75). The pair can
+# only be issued after the store owner authorises our partner app, so these
+# endpoints drive that flow. Own-store units/revenue — the denominator every
+# market-share figure rests on — are EXACT once this is connected.
+@router.get("/admin/zid/oauth/status")
+async def zid_oauth_status(_=Depends(require_super_admin)):
+    return await zid_oauth.status(db)
+
+
+@router.post("/admin/zid/oauth/start")
+async def zid_oauth_start(request: Request,
+                          origin: str = Query(None, description="Public origin the browser is on"),
+                          _=Depends(require_super_admin)):
+    """Returns the URL the store owner must open to authorise the app.
+
+    `origin` comes from the browser because behind the ingress the request's
+    own base_url can be an internal cluster hostname — and Zid compares the
+    redirect URI byte-for-byte with the one registered in the dashboard.
+    """
+    base = origin if (origin or "").startswith("https://") else str(request.base_url)
+    res = await zid_oauth.start_authorization(db, base_url=base)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("message") or res.get("reason"))
+    return res
+
+
+@router.get("/zid/oauth/callback")
+async def zid_oauth_callback(request: Request, code: str = Query(None),
+                             state: str = Query(None), error: str = Query(None)):
+    """PUBLIC by necessity — Zid redirects the merchant's BROWSER here, with no
+    Authorization header. Protected instead by the one-time `state` we minted."""
+    fwd_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    frontend = f"https://{fwd_host}" if fwd_host else str(request.base_url).rstrip("/")
+    if error:
+        return RedirectResponse(f"{frontend}/settings?zid=denied", status_code=302)
+    if not code:
+        return RedirectResponse(f"{frontend}/settings?zid=missing_code", status_code=302)
+    res = await zid_oauth.complete_authorization(db, code, state,
+                                                 base_url=str(request.base_url))
+    if not res.get("ok"):
+        return RedirectResponse(
+            f"{frontend}/settings?zid=failed&reason={res.get('reason', 'unknown')}",
+            status_code=302)
+    return RedirectResponse(f"{frontend}/settings?zid=connected", status_code=302)
+
+
+@router.post("/admin/zid/oauth/disconnect")
+async def zid_oauth_disconnect(_=Depends(require_super_admin)):
+    return await zid_oauth.disconnect(db)
+
+
+@router.post("/admin/zid/orders/sync")
+async def zid_orders_sync(full: bool = Query(False, description="Walk every page, not just the recent window"),
+                          user=Depends(require_super_admin)):
+    """Pull the Zid orders ledger now. Returns the sync verdict as-is so a
+    missing/expired authorisation is reported, never masked."""
+    res = await sync_own_store_orders(db, full_backfill=full)
+    logger.info("[Orders] manual sync by %s -> %s", user.get("email"), res.get("status"))
+    return res
 
 
 class RematchIn(BaseModel):
@@ -3205,6 +3357,8 @@ async def list_products(
 # rather than at the historic import site 3000 lines below so the
 # dependency lives adjacent to its caller.
 from matcher import _barcode_key_set  # noqa: E402
+import pack_guard  # noqa: E402
+import archive  # noqa: E402
 # The seller list used to be `product_snapshots WHERE sku == <sku> AND
 # crawled_at >= now-30d`. product_matches — the entire output of the matching
 # engine — was never read, so a competitor matched by barcode (or by any key
@@ -5533,6 +5687,10 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
             "price": {"$first": "$price"},
             "qty_available": {"$first": "$qty_available"},
             "in_stock": {"$first": "$in_stock"},
+            # iter78 — the seller's OWN descriptor. product_snapshots carries no
+            # product name, but the storefront slug states the pack size, which
+            # is what the pack guard needs to tell a 3.5g single from our 15g.
+            "product_url": {"$first": "$product_url"},
             "crawled_at": {"$first": "$crawled_at"},
         }},
     ]
@@ -5566,6 +5724,8 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
     pack_mismatch_skipped = []
     variant_flags = []
     outlier_kept = []
+    slug_pack_flags = []
+    outlier_excluded = []
     barcode_unreliable = []
     for sku, store_snaps in by_sku.items():
         if len(store_snaps) < 2:
@@ -5627,7 +5787,8 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                                  "store_name": s.get("store_name") or s["store_id"],
                                  "price": v["effective"], "is_own": False,
                                  "in_stock": bool(s.get("in_stock")),
-                                 "qty": s.get("qty_available") or 0})
+                                 "qty": s.get("qty_available") or 0,
+                                 "product_url": s.get("product_url")})
                 continue
             # iter53 — shared-barcode price sanity. The Scanner buckets by the
             # SKU string, which for these products IS the manufacturer EAN, so
@@ -5648,14 +5809,72 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
                              "store_name": s.get("store_name") or s["store_id"],
                              "price": s["price"], "is_own": False,
                              "in_stock": bool(s.get("in_stock")),
-                             "qty": s.get("qty_available") or 0})
+                             "qty": s.get("qty_available") or 0,
+                             "product_url": s.get("product_url")})
         # iter53 — every competitor price can now be excluded, unlike iter52
         # where variants were substituted rather than removed. With nothing
         # trustworthy left there is no market low, so the SKU is skipped rather
         # than falling back to the prices we just rejected.
         if not _corrected:
             continue
-        comp_prices = _corrected
+
+        # ── iter78 PACK SIZE GUARD, stage 1: the seller's OWN descriptor ──────
+        # product_snapshots has no product name, but the storefront slug states
+        # the pack size. Two stores were selling the 3.5g Kit Cat single against
+        # our 15g stick pack and setting the market low with it
+        # (…/Sticks-Atlantic-Salmon-3-5-g-…, …/‑3-5-جرام-kit-cat-sticks-…).
+        # EXPLICIT evidence only: a slug that says nothing is left alone, unlike
+        # _pack_compatible which reads silence as "single unit".
+        _my_weight = pack_guard.stated_weight_grams(own_name.get(sku, ""))
+        _kept = []
+        for r in _sellers:
+            _slug = pack_guard.slug_descriptor(r.get("product_url"))
+            _rej, _why = pack_guard.slug_pack_reject(
+                own_name.get(sku, ""), _my_weight, _slug)
+            if _rej:
+                slug_pack_flags.append({
+                    "sku": sku, "store_name": r["store_name"],
+                    "excluded_price": r["price"], "reason": _why,
+                    "slug": _slug[:120],
+                })
+                continue
+            _kept.append(r)
+        _sellers = _kept
+        if not _sellers:
+            continue
+
+        # ── iter78 PACK SIZE GUARD, stage 2: the corroborated cluster ─────────
+        # A price >=3x below the cluster that corroborates it (our price + the
+        # other sellers, >=2 of them) is a pack collision, not a sale. This is
+        # the band that produced the client's +445%: their 45g toothpaste at
+        # 23.45 with one store agreeing at 23.00 and a third listing 4.30 —
+        # 5.4x, under barcode_price_sane's 6x pairwise cut, so it used to become
+        # "the market low". Nothing vanishes silently: every exclusion is
+        # returned in the summary with its reason.
+        _out = pack_guard.cluster_outliers(
+            [(r["store_id"], r["price"]) for r in _sellers],
+            own_price=own_price.get(sku))
+        if _out:
+            # …unless that store USED to price near the market and then cut:
+            # that is a clearance, which is exactly the competitor move worth
+            # seeing. (Royal Canin 466 -> 118 at Aleef, iter52.)
+            _hist = await db.product_snapshots.find(
+                {"sku": sku, "store_id": {"$in": list(_out)},
+                 "crawled_at": {"$gte": since}},
+                {"_id": 0, "store_id": 1, "price": 1}).to_list(1000)
+            for _k in pack_guard.discount_escapes(
+                    _out, [(h["store_id"], h.get("price")) for h in _hist]):
+                _out.pop(_k, None)
+        if _out:
+            for r in _sellers:
+                if r["store_id"] in _out:
+                    outlier_excluded.append({"sku": sku, "store_name": r["store_name"],
+                                             "reason": "below_corroborated_cluster",
+                                             **_out[r["store_id"]]})
+            _sellers = [r for r in _sellers if r["store_id"] not in _out]
+            if not _sellers:
+                continue
+        comp_prices = [r["price"] for r in _sellers]
 
         # A price that is still a wild outlier, with NO variant evidence behind
         # it, is KEPT — that is the genuine-deep-discount case. It is surfaced
@@ -5792,6 +6011,14 @@ async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
             "suspected_pack_mismatch_sample": variant_flags[:20],
             "low_outliers_kept": len(outlier_kept),
             "low_outliers_kept_sample": outlier_kept[:20],
+            # iter78 — PACK SIZE GUARD. Prices removed from the market low
+            # because the seller's own URL slug states a different pack size or
+            # weight, and prices removed for sitting >=3x below the cluster that
+            # corroborates them. Reported, never silently dropped.
+            "slug_pack_mismatch": len(slug_pack_flags),
+            "slug_pack_mismatch_sample": slug_pack_flags[:20],
+            "low_outliers_excluded": len(outlier_excluded),
+            "low_outliers_excluded_sample": outlier_excluded[:20],
             # iter53 — competitor prices dropped because a shared EAN paired two
             # different pack sizes (>=6x apart, nothing corroborating sameness)
             "barcode_unreliable": len(barcode_unreliable),
@@ -10407,6 +10634,530 @@ async def store_ranking_preview(user=Depends(get_user)):
     return out
 
 
+# ── Market Share (iter79) ───────────────────────────────────────────────────
+# Every number on this tab is either an ACTUAL observation, a MEASURED-APPROX
+# diff, or explicitly withheld with a reason — see market_share.py's docstring
+# for the source hierarchy. The ±50% Salla velocity estimate is deliberately
+# not used: a ±50% numerator over a partial denominator is not a share.
+async def _market_share_compute(db, days, include_today=False):
+    own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
+    own_id = own["id"] if own else None
+    # Sales read the SEALED KSA window (Ledger Phase 2) so the figures are
+    # stable across page visits inside the same KSA day. `include_today` opts
+    # into the still-accumulating day — surfaced in the UI as a partial window,
+    # never as the default, because those numbers can still move.
+    if include_today:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=days)
+    else:
+        start, end = ledger.sealed_ksa_window(days)
+    orders = await _own_orders_aggregate(db, start, end)
+    return await market_share.build_dataset(
+        db, days, own_id,
+        own_price_fn=_effective_own_price,
+        brand_fn=extract_brand_smart,
+        category_fn=guess_category,
+        orders_by_sku=(orders or {}).get("by_sku") or {},
+        min_confidence=MIN_AGGREGATION_CONFIDENCE,
+        window_start=start, window_end=end, sealed=not include_today,
+    )
+
+
+# In-process memo for the partial-day variant. The page cache is only refreshed
+# on post-crawl hooks (max age 24h), which is right for a sealed window and
+# wrong for one that includes today — so this variant is computed live and held
+# for a minute so a tab switch does not re-run the aggregation.
+_MS_LIVE_TTL = 120
+_MS_LIVE_CACHE = {}
+
+
+async def _market_share_dataset(db, days, include_today=False):
+    if not include_today:
+        return await _serve_page_cache(db, "market-share/dataset", days,
+                                       lambda: _market_share_compute(db, days),
+                                       days in _INSIGHTS_STD)
+    hit = _MS_LIVE_CACHE.get(days)
+    now = time.time()
+    if hit and now - hit[0] < _MS_LIVE_TTL:
+        return hit[1], {"source": "live_including_today", "computed_at": None,
+                        "age_seconds": round(now - hit[0], 1), "stale": False}
+    body = await _market_share_compute(db, days, include_today=True)
+    _MS_LIVE_CACHE[days] = (now, body)
+    return body, {"source": "live_including_today", "computed_at": None,
+                  "age_seconds": 0.0, "stale": False}
+
+
+_MS_QUALITY_ORDER = {"unavailable": 0, "low": 1, "medium": 2, "high": 3}
+
+
+def _ms_filter(rows, *, search=None, category=None, brand=None, store_id=None,
+               catalog=None, min_confidence=None, quality=None, contested=None):
+    out = rows
+    if search:
+        q = search.strip().lower()
+        out = [r for r in out if q in (r.get("name_en") or "").lower()
+               or q in (r.get("name_ar") or "").lower()
+               or q in (r.get("sku") or "").lower()
+               or q in (r.get("barcode") or "").lower()
+               or q in (r.get("brand") or "").lower()]
+    if category:
+        out = [r for r in out if (r.get("category") or "") == category]
+    if brand:
+        out = [r for r in out if (r.get("brand") or "") == brand]
+    if store_id:
+        out = [r for r in out if any(s.get("store_id") == store_id for s in r.get("sellers", []))]
+    if catalog == "mine":
+        out = [r for r in out if r.get("in_catalog")]
+    elif catalog == "not_mine":
+        out = [r for r in out if not r.get("in_catalog")]
+    if min_confidence:
+        out = [r for r in out if min(
+            [s.get("match_strength") or 0 for s in r.get("sellers", []) if not s.get("is_own")] or [100]
+        ) >= min_confidence]
+    if quality:
+        floor = _MS_QUALITY_ORDER.get(quality, 0)
+        out = [r for r in out
+               if _MS_QUALITY_ORDER.get(r.get("confidence") or "unavailable", 0) >= floor]
+    if contested:
+        out = [r for r in out if r.get("contested")]
+    return out
+
+
+_MS_SORTS = {
+    "revenue_share_desc": lambda r: -(r.get("revenue_share_pct") or -1),
+    "revenue_share_asc": lambda r: (r.get("revenue_share_pct") if r.get("revenue_share_pct") is not None else 1e9),
+    "market_revenue_desc": lambda r: -(r.get("market_revenue") or 0),
+    "my_revenue_desc": lambda r: -(r.get("my_revenue") or 0),
+    "units_desc": lambda r: -(r.get("market_units") or 0),
+    "opportunity_desc": lambda r: -(r.get("opportunity_score") or 0),
+    "competitors_desc": lambda r: -(r.get("competitor_count") or 0),
+    "name_asc": lambda r: (r.get("name") or "").lower(),
+}
+
+
+@router.get("/market-share/overview")
+async def market_share_overview(days: int = Query(30),
+                                include_today: bool = Query(False, description="Include the still-accumulating KSA day"),
+                                search: Optional[str] = Query(None),
+                                category: Optional[str] = Query(None),
+                                brand: Optional[str] = Query(None),
+                                store_id: Optional[str] = Query(None),
+                                catalog: Optional[str] = Query(None, description="mine|not_mine|all"),
+                                min_confidence: Optional[int] = Query(None, ge=0, le=100),
+                                quality: Optional[str] = Query(None, description="high|medium|low"),
+                                contested: bool = Query(False),
+                                response: Response = None,
+                                user=Depends(get_user)):
+    """Section-1 KPIs. Every filter the tables accept also moves these numbers —
+    the headline is recomputed over the filtered subset with the SAME arithmetic
+    (market_share.summarize), never re-derived a second way."""
+    ds, meta = await _market_share_dataset(db, days, include_today)
+    _apply_cache_headers(response, meta)
+    all_rows = ds.get("my_products") or []
+    all_missing = ds.get("missing_products") or []
+    orders_connected = (ds.get("data_quality") or {}).get("own_orders_ledger_connected")
+    applied = {k: v for k, v in (
+        ("search", search), ("category", category), ("brand", brand),
+        ("store_id", store_id), ("catalog", catalog if catalog != "all" else None),
+        ("min_confidence", min_confidence), ("quality", quality),
+        ("contested", contested or None)) if v not in (None, "")}
+
+    if applied:
+        rows = _ms_filter(all_rows, search=search, category=category, brand=brand,
+                          store_id=store_id, catalog=catalog, min_confidence=min_confidence,
+                          quality=quality, contested=contested)
+        # the opportunity list shares every filter that means anything for a
+        # product we do not stock (a row outside the catalog can never be "mine")
+        missing_rows = ([] if catalog == "mine" else
+                        _ms_filter(all_missing, search=search, category=category,
+                                   brand=brand, store_id=store_id, quality=quality))
+        brand_rows = market_share.aggregate_groups(rows, missing_rows, "brand")
+        category_rows = market_share.aggregate_groups(rows, missing_rows, "category")
+        kpis = market_share.summarize(rows, missing_rows, ds.get("stores") or [],
+                                      catalog_total=len(rows),
+                                      orders_connected=orders_connected,
+                                      brands=len(brand_rows), categories=len(category_rows))
+        quality_block = market_share.quality_summary(rows, orders_connected)
+    else:
+        rows, missing_rows = all_rows, all_missing
+        brand_rows = ds.get("brands") or []
+        category_rows = ds.get("categories") or []
+        kpis, quality_block = ds.get("kpis"), ds.get("data_quality")
+
+    return {
+        "window": ds.get("window"),
+        "kpis": kpis,
+        "stores": ds.get("stores"),
+        "data_quality": quality_block,
+        "filtered": bool(applied),
+        "filters_applied": applied,
+        "top_brands": brand_rows[:8],
+        "top_categories": category_rows[:8],
+        "top_share": sorted([r for r in rows if r.get("revenue_share_pct") is not None
+                             and r.get("contested")],
+                            key=lambda r: (-(r["revenue_share_pct"]), -(r.get("market_revenue") or 0)))[:10],
+        "weakest_share": sorted([r for r in rows if r.get("revenue_share_pct") is not None
+                                 and r.get("contested") and (r.get("market_revenue") or 0) > 0],
+                                key=lambda r: r["revenue_share_pct"])[:10],
+        "top_opportunities": missing_rows[:10],
+        "filters": {
+            "categories": sorted({r.get("category") for r in all_rows if r.get("category")}),
+            "brands": sorted({r.get("brand") for r in all_rows if r.get("brand")}),
+            "stores": [{"store_id": s["store_id"], "store_name": s["store_name"]}
+                       for s in (ds.get("stores") or [])],
+        },
+    }
+
+
+@router.get("/market-share/my-products")
+async def market_share_my_products(days: int = Query(30),
+                                   search: Optional[str] = Query(None),
+                                   category: Optional[str] = Query(None),
+                                   brand: Optional[str] = Query(None),
+                                   store_id: Optional[str] = Query(None),
+                                   catalog: Optional[str] = Query(None, description="mine|not_mine|all"),
+                                   min_confidence: Optional[int] = Query(None, ge=0, le=100),
+                                   quality: Optional[str] = Query(None, description="high|medium|low"),
+                                   contested: bool = Query(False, description="Only products another tracked seller's sales can be compared against"),
+                                   sort: str = Query("market_revenue_desc"),
+                                   include_today: bool = Query(False),
+                                   limit: int = Query(100, ge=1, le=500),
+                                   offset: int = Query(0, ge=0),
+                                   response: Response = None, user=Depends(get_user)):
+    ds, meta = await _market_share_dataset(db, days, include_today)
+    _apply_cache_headers(response, meta)
+    rows = _ms_filter(ds.get("my_products") or [], search=search, category=category,
+                      brand=brand, store_id=store_id, catalog=catalog,
+                      min_confidence=min_confidence, quality=quality, contested=contested)
+    rows = sorted(rows, key=_MS_SORTS.get(sort, _MS_SORTS["market_revenue_desc"]))
+    return {"window": ds.get("window"), "total": len(rows),
+            "rows": rows[offset:offset + limit],
+            "totals": {
+                "my_revenue": round(sum(r.get("my_revenue") or 0 for r in rows), 2),
+                "market_revenue": round(sum(r.get("market_revenue") or 0 for r in rows), 2),
+                "my_units": sum(r.get("my_units") or 0 for r in rows),
+                "market_units": sum(r.get("market_units") or 0 for r in rows),
+            }}
+
+
+@router.get("/market-share/product/{key}")
+async def market_share_product(key: str, days: int = Query(30),
+                               include_today: bool = Query(False),
+                               response: Response = None, user=Depends(get_user)):
+    """Section B — the full competitor breakdown for ONE product. `key` accepts
+    the SKU or the canonical GTIN key."""
+    ds, meta = await _market_share_dataset(db, days, include_today)
+    _apply_cache_headers(response, meta)
+    k = str(key).strip().lower()
+    for row in (ds.get("my_products") or []) + (ds.get("missing_products") or []):
+        if k in ((row.get("sku") or "").lower(), (row.get("canonical_key") or "").lower(),
+                 (row.get("barcode") or "").lower()):
+            return {"window": ds.get("window"), "product": row}
+    raise HTTPException(404, "No tracked product for that SKU / barcode in this window")
+
+
+@router.get("/market-share/missing-products")
+async def market_share_missing(days: int = Query(30),
+                               search: Optional[str] = Query(None),
+                               category: Optional[str] = Query(None),
+                               brand: Optional[str] = Query(None),
+                               store_id: Optional[str] = Query(None),
+                               quality: Optional[str] = Query(None),
+                               sort: str = Query("opportunity_desc"),
+                               include_today: bool = Query(False),
+                               limit: int = Query(100, ge=1, le=500),
+                               offset: int = Query(0, ge=0),
+                               response: Response = None, user=Depends(get_user)):
+    ds, meta = await _market_share_dataset(db, days, include_today)
+    _apply_cache_headers(response, meta)
+    rows = _ms_filter(ds.get("missing_products") or [], search=search, category=category,
+                      brand=brand, store_id=store_id, quality=quality)
+    rows = sorted(rows, key=_MS_SORTS.get(sort, _MS_SORTS["opportunity_desc"]))
+    return {"window": ds.get("window"), "total": len(rows),
+            "total_untruncated": ds.get("missing_products_total"),
+            "rows": rows[offset:offset + limit],
+            "opportunity_value": round(sum(r.get("market_revenue") or 0 for r in rows), 2)}
+
+
+@router.get("/market-share/brands")
+async def market_share_brands(days: int = Query(30), category: Optional[str] = Query(None),
+                              search: Optional[str] = Query(None),
+                              brand: Optional[str] = Query(None),
+                              store_id: Optional[str] = Query(None),
+                              catalog: Optional[str] = Query(None, description="mine|not_mine|all"),
+                              min_confidence: Optional[int] = Query(None, ge=0, le=100),
+                              quality: Optional[str] = Query(None),
+                              contested: bool = Query(False),
+                              include_today: bool = Query(False),
+                              response: Response = None, user=Depends(get_user)):
+    ds, meta = await _market_share_dataset(db, days, include_today)
+    _apply_cache_headers(response, meta)
+    my_rows = ds.get("my_products") or []
+    applied = [v for v in (category, brand, store_id,
+                           catalog if catalog != "all" else None,
+                           min_confidence, quality, contested or None)
+               if v not in (None, "")]
+    if applied:
+        # Rebuild the rollup from the FILTERED product rows so the shares belong
+        # to the selection (a category's brands, one store's brands, …) and not
+        # to the whole tracked market. Same aggregation as the unfiltered table.
+        rows = market_share.aggregate_groups(
+            _ms_filter(my_rows, category=category, brand=brand, store_id=store_id,
+                       catalog=catalog, min_confidence=min_confidence, quality=quality,
+                       contested=contested),
+            ([] if catalog == "mine" else
+             _ms_filter(ds.get("missing_products") or [], category=category, brand=brand,
+                        store_id=store_id, quality=quality)),
+            "brand")
+    else:
+        rows = ds.get("brands") or []
+    if search:
+        q = search.strip().lower()
+        rows = [r for r in rows if q in (r.get("brand") or "").lower()]
+    resolved = (ds.get("data_quality") or {}).get("my_products_with_brand", 0)
+    return {"window": ds.get("window"), "rows": rows, "total": len(rows),
+            "filtered": bool(applied) or bool(search),
+            "unresolved_brand_products": max(0, len(my_rows) - resolved)}
+
+
+@router.get("/market-share/categories")
+async def market_share_categories(days: int = Query(30),
+                                  search: Optional[str] = Query(None),
+                                  category: Optional[str] = Query(None),
+                                  brand: Optional[str] = Query(None),
+                                  store_id: Optional[str] = Query(None),
+                                  catalog: Optional[str] = Query(None, description="mine|not_mine|all"),
+                                  min_confidence: Optional[int] = Query(None, ge=0, le=100),
+                                  quality: Optional[str] = Query(None),
+                                  contested: bool = Query(False),
+                                  include_today: bool = Query(False),
+                                  response: Response = None,
+                                  user=Depends(get_user)):
+    ds, meta = await _market_share_dataset(db, days, include_today)
+    _apply_cache_headers(response, meta)
+    applied = [v for v in (search, category, brand, store_id,
+                           catalog if catalog != "all" else None,
+                           min_confidence, quality, contested or None)
+               if v not in (None, "")]
+    if applied:
+        rows = market_share.aggregate_groups(
+            _ms_filter(ds.get("my_products") or [], search=search, category=category,
+                       brand=brand, store_id=store_id, catalog=catalog,
+                       min_confidence=min_confidence, quality=quality, contested=contested),
+            ([] if catalog == "mine" else
+             _ms_filter(ds.get("missing_products") or [], search=search, category=category,
+                        brand=brand, store_id=store_id, quality=quality)),
+            "category")
+    else:
+        rows = ds.get("categories") or []
+    return {"window": ds.get("window"), "rows": rows, "total": len(rows),
+            "filtered": bool(applied)}
+
+
+@router.get("/market-share/methodology")
+async def market_share_methodology(days: int = Query(30),
+                                   include_today: bool = Query(False),
+                                   response: Response = None,
+                                   user=Depends(get_user)):
+    ds, meta = await _market_share_dataset(db, days, include_today)
+    _apply_cache_headers(response, meta)
+    zid = await zid_oauth.status(db)
+    return {
+        "window": ds.get("window"),
+        "tracked_market": ("Market share is based on tracked measured data inside Daleel, "
+                           "not the total Saudi market. It covers only the stores Daleel "
+                           "crawls, only the products it can match, and only the sales it "
+                           "can measure in the selected period."),
+        "stores": ds.get("stores"),
+        "sources": [
+            {"id": market_share.SRC_ORDERS, "label": "Actual",
+             "what": "My own store's Zid orders ledger — real invoices, exact units and revenue",
+             "applies_to": "My store only",
+             "available": bool(zid.get("connected")),
+             "unavailable_reason": None if zid.get("connected") else zid.get("action_required")},
+            {"id": market_share.SRC_COUNTER, "label": "Measured (approx.)",
+             "what": "Difference between two crawls of a store's published cumulative units-sold counter",
+             "applies_to": "Stores that publish a sold counter (Salla's sold badge, Zid sold_count)",
+             "caveat": "The badge is bucketed and capped by the platform, so it is an approximation of real sales — never an estimate of them"},
+            {"id": market_share.SRC_STOCK, "label": "Measured (approx.)",
+             "what": "Stock level dropping between two crawls",
+             "applies_to": "Stores that publish stock quantities",
+             "caveat": "A floor, not a total: a sale followed by a restock inside one crawl interval is invisible"},
+            {"id": market_share.SRC_ZERO, "label": "Measured zero",
+             "what": "The store publishes a signal, was crawled at least twice, and this product never moved",
+             "applies_to": "All stores with a signal"},
+            {"id": market_share.SRC_NONE, "label": "Unavailable",
+             "what": "The store publishes no sales signal, or was crawled fewer than twice in the window",
+             "applies_to": "Reported with a reason on every affected row — never shown as zero"},
+        ],
+        "not_used": [
+            {"id": "salla_category_velocity_estimate",
+             "why": "The ±50% store-revenue model (back-tested at ~±48% median error) cannot "
+                    "produce a trustworthy per-product share. It stays on the Market Strength "
+                    "ranking where it is labelled Estimated."},
+        ],
+        "formulas": {
+            "unit_share_pct": "my units ÷ total units of the SAME canonical product across every seller with sales data",
+            "revenue_share_pct": "my revenue ÷ total revenue of the same canonical product across every seller with sales data",
+            "market_revenue": "Σ (units × the price observed when they sold) per seller",
+            "trend": "same metric over the previous equal-length window",
+            "opportunity_score": "0.5×measured revenue + 0.3×measured units + 0.2×seller count, each scaled to the largest row — a ranking heuristic, not a forecast",
+            "price_rank": "my price's position among comparable sellers, cheapest first",
+        },
+        "identity": {
+            "order": ["GTIN / barcode (canonical GTIN-14)", "identical SKU string",
+                      "our GTIN inside the seller's variant array", "matcher row (product_matches)"],
+            "note": ("Own-store SKUs are EANs, so a numeric SKU is treated as a GTIN. "
+                     "Pack-size guards (iter78) drop a seller whose own product URL states a "
+                     "different pack size, and a price the rest of the market contradicts."),
+            "match_strength": market_share.MATCH_STRENGTH,
+        },
+        "confidence": {
+            "high": "Exact identity match on every seller, sales data for all of them, my units invoiced, prices ≤7 days old",
+            "medium": "Sales data for at least half the sellers and a strong identity match",
+            "low": "Sales data for fewer than half the sellers, the weakest identity match is below 88%, or the sellers' prices differ by 3× or more (one listing may be a different pack size)",
+            "unavailable": "No seller of this product publishes sales data — the number is withheld, not zeroed",
+        },
+        "data_quality": ds.get("data_quality"),
+        "own_orders_connection": {k: zid.get(k) for k in
+                                  ("connected", "configured", "orders_stored", "action_required")},
+        "last_updated": (meta or {}).get("computed_at"),
+    }
+
+
+def _ms_method_my_products(r):
+    """The plain-English calculation method for ONE product row — exported so a
+    number can always be traced back to how it was produced."""
+    if r.get("market_revenue") is None:
+        return ("withheld — " + (market_share.REASON_NO_SELLER_DATA
+                                 if not r.get("unavailable_reason") else r["unavailable_reason"]))
+    src = {
+        market_share.SRC_ORDERS: "my units are exact invoices from the Zid orders ledger",
+        market_share.SRC_COUNTER: "my units come from the store's published sold-counter difference between two crawls",
+        market_share.SRC_STOCK: "my units come from stock depletion between two crawls (a floor)",
+        market_share.SRC_ZERO: "my units measured as zero — signal present, product never moved",
+        market_share.SRC_NONE: "my units unavailable",
+    }.get(r.get("my_units_source"), "my units unavailable")
+    return (f"share = my revenue ÷ Σ revenue of the {r.get('sellers_with_sales')} of "
+            f"{r.get('sellers_total')} sellers with sales data; {src}; "
+            f"trend vs the previous equal-length window")
+
+
+@router.get("/market-share/export")
+async def market_share_export(days: int = Query(30),
+                              section: str = Query("my_products", description="my_products|missing|brands|categories"),
+                              search: Optional[str] = Query(None),
+                              category: Optional[str] = Query(None),
+                              brand: Optional[str] = Query(None),
+                              store_id: Optional[str] = Query(None),
+                              catalog: Optional[str] = Query(None, description="mine|not_mine|all"),
+                              min_confidence: Optional[int] = Query(None, ge=0, le=100),
+                              quality: Optional[str] = Query(None),
+                              contested: bool = Query(False),
+                              include_today: bool = Query(False),
+                              user=Depends(get_user)):
+    """CSV with every visible column PLUS the source label, confidence level,
+    unavailable reason and the calculation method behind each row."""
+    ds, _ = await _market_share_dataset(db, days, include_today)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    if section == "my_products":
+        rows = _ms_filter(ds.get("my_products") or [], search=search, category=category,
+                          brand=brand, store_id=store_id, catalog=catalog,
+                          min_confidence=min_confidence, quality=quality, contested=contested)
+        w.writerow(["Product", "SKU", "Barcode/GTIN", "Category", "Brand", "Brand source",
+                    "My price (SAR)", "My units", "My units source", "My revenue (SAR)",
+                    "Market units", "Market revenue (SAR)", "Unit share %", "Revenue share %",
+                    "Stores carrying it (competitors)", "Sellers total (incl. me)",
+                    "Sales data available (sellers)", "Top competitor",
+                    "Competitor price min", "Competitor price max", "Price spread ×",
+                    "Price spread warning", "My price rank",
+                    "Units rank", "Trend units %", "Trend revenue %", "Confidence",
+                    "Confidence reason", "Unavailable reason", "Calculation method",
+                    "Last crawl"])
+        for r in rows:
+            w.writerow([r.get("name"), r.get("sku"), r.get("barcode"), r.get("category"),
+                        r.get("brand"), r.get("brand_source"), r.get("my_price"),
+                        r.get("my_units"), r.get("my_units_source"), r.get("my_revenue"),
+                        r.get("market_units"), r.get("market_revenue"),
+                        r.get("unit_share_pct"), r.get("revenue_share_pct"),
+                        r.get("competitor_count"), r.get("sellers_total"),
+                        r.get("sellers_with_sales"),
+                        (r.get("top_competitor") or {}).get("store_name"),
+                        r.get("competitor_price_min"), r.get("competitor_price_max"),
+                        r.get("price_spread_ratio"), r.get("price_spread_warning"),
+                        r.get("price_rank"), r.get("units_rank"),
+                        (r.get("trend") or {}).get("units_pct"),
+                        (r.get("trend") or {}).get("revenue_pct"),
+                        r.get("confidence"), r.get("confidence_reason"),
+                        r.get("unavailable_reason"), _ms_method_my_products(r),
+                        r.get("last_crawl_at")])
+    elif section == "missing":
+        rows = _ms_filter(ds.get("missing_products") or [], search=search, category=category,
+                          brand=brand, store_id=store_id, quality=quality)
+        w.writerow(["Product", "SKU", "Barcode/GTIN", "Category", "Brand", "Competitors selling it",
+                    "Stores carrying it", "Sales data available (sellers)",
+                    "Market units", "Market revenue (SAR)", "Top competitor",
+                    "Avg price", "Min price", "Max price", "Trend units %", "Trend revenue %",
+                    "Opportunity score", "Confidence", "Unavailable reason",
+                    "Calculation method", "Recommended action"])
+        for r in rows:
+            w.writerow([r.get("name"), r.get("sku"), r.get("barcode"), r.get("category"),
+                        r.get("brand"), " | ".join(r.get("competitors") or []),
+                        r.get("competitor_count"), r.get("sellers_with_sales"),
+                        r.get("market_units"), r.get("market_revenue"),
+                        (r.get("top_competitor") or {}).get("store_name"), r.get("avg_price"),
+                        r.get("min_price"), r.get("max_price"),
+                        (r.get("trend") or {}).get("units_pct"),
+                        (r.get("trend") or {}).get("revenue_pct"),
+                        r.get("opportunity_score"), r.get("confidence"),
+                        r.get("unavailable_reason"),
+                        (f"Σ measured revenue of the {r.get('sellers_with_sales')} of "
+                         f"{r.get('competitor_count')} sellers with sales data; "
+                         f"opportunity score = {r.get('opportunity_formula')}"),
+                        r.get("recommended_action")])
+    elif section in ("brands", "categories"):
+        label = "brand" if section == "brands" else "category"
+        applied = [v for v in (category, brand, store_id,
+                               catalog if catalog != "all" else None,
+                               min_confidence, quality, contested or None)
+                   if v not in (None, "")]
+        if applied:
+            rows = market_share.aggregate_groups(
+                _ms_filter(ds.get("my_products") or [], search=search, category=category,
+                           brand=brand, store_id=store_id, catalog=catalog,
+                           min_confidence=min_confidence, quality=quality, contested=contested),
+                ([] if catalog == "mine" else
+                 _ms_filter(ds.get("missing_products") or [], search=search, category=category,
+                            brand=brand, store_id=store_id, quality=quality)),
+                label)
+        else:
+            rows = ds.get(section) or []
+        w.writerow([label.title(), "Units", "Revenue (SAR)", "Market share %", "My units",
+                    "My revenue (SAR)", "My share of this row %", "Products",
+                    "Products in my catalog", "Products with measurable sales",
+                    "Missing products", "Missing opportunity value (SAR)",
+                    "Trend units %", "Trend revenue %", "Confidence", "Coverage",
+                    "Calculation method"])
+        for r in rows:
+            w.writerow([r.get(label), r.get("units"), r.get("revenue"), r.get("revenue_share_pct"),
+                        r.get("my_units"), r.get("my_revenue"), r.get("my_revenue_share_pct"),
+                        r.get("products"), r.get("my_products_count"), r.get("measured_products"),
+                        r.get("missing_products"), r.get("missing_opportunity_value"),
+                        (r.get("trend") or {}).get("units_pct"),
+                        (r.get("trend") or {}).get("revenue_pct"),
+                        r.get("confidence"), r.get("coverage"),
+                        (f"market share % = this row's measured revenue ÷ Σ measured revenue of "
+                         f"every {label} row; my share % = my measured revenue ÷ this row's "
+                         f"measured revenue; {r.get('coverage')}")])
+    else:
+        raise HTTPException(400, "section must be my_products|missing|brands|categories")
+    return Response(
+        content=buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="daleel_market_share_{section}_{days}d.csv"'})
+
+
 # Register cache specs for background recompute. insights/sales gets a synthetic
 # super_admin user (my_products only uses it for the auth dependency, which is
 # bypassed for in-process calls).
@@ -10420,6 +11171,8 @@ _WINDOW_CACHE_SPECS.extend([
     ("insights/price-wars", lambda db, d: _insights_price_wars_compute(db, d)),
     ("insights/restock-opportunities", lambda db, d: _insights_restock_compute(db, d)),
     ("insights/sales", lambda db, d: _insights_sales_compute(db, d, None, None, None, "revenue_desc", _CACHE_USER)),
+    # iter79 — one dataset per window feeds all six Market Share endpoints
+    ("market-share/dataset", lambda db, d: _market_share_compute(db, d)),
 ])
 _SINGLE_CACHE_SPECS.extend([
     ("price-intel/dashboard", lambda db: _price_intel_dashboard_compute(db)),
@@ -10521,7 +11274,23 @@ async def startup():
             logger.exception("[Ledger] scheduled day-seal failed")
     scheduler.add_job(_scheduled_ledger_seal, CronTrigger(hour=21, minute=30, timezone="UTC"),
                       id="ledger_day_seal", replace_existing=True)
-    logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync + ledger day-seal")
+
+    # iter78 — archive the closed KSA day to object storage. 03:00 UTC = 06:00
+    # Riyadh: after the 01:00-01:55 UTC crawl window AND after the 21:30 UTC
+    # seal, so snapshots and rollups are both final before they are frozen.
+    scheduler.add_job(scheduled_archive, CronTrigger(hour=3, minute=0, timezone="UTC"),
+                      id="nightly_price_archive", replace_existing=True)
+    # Storage key is session-scoped: mint it once here so the nightly job and the
+    # admin panel never pay for it, and a bad key is visible in the boot log.
+    if archive._emergent_key():
+        try:
+            await asyncio.to_thread(archive.init_storage)
+            logger.info("[Archive] object storage ready (%s)", archive.STORAGE_URL)
+        except Exception as e:
+            logger.warning("[Archive] storage init failed — archive disabled until fixed: %s", e)
+    else:
+        logger.warning("[Archive] EMERGENT_LLM_KEY not set — nightly price archive disabled")
+    logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync + ledger day-seal + nightly archive")
 
     # iter25 — warm the my-products dashboard cache in the background so the first
     # request after a deploy/restart is fast instead of paying the live-compute

@@ -26,10 +26,9 @@ PWD = "Ahmaddc90@"
 
 @pytest.fixture(scope="module")
 def token():
-    r = requests.post(f"{BASE}/api/auth/login",
-                      json={"email": EMAIL, "password": PWD}, timeout=30)
-    assert r.status_code == 200, r.text
-    return r.json()["token"]
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import login_token
+    return login_token(EMAIL, PWD)
 
 
 @pytest.fixture(scope="module")

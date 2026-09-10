@@ -29,6 +29,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_barcode_sanity"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_barcode_sanity"
 import matcher as M  # noqa: E402
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -266,7 +269,7 @@ def _snap(sku, store, price, at):
 
 def test_scanner_gap_over_300_drops_to_zero_for_the_cluster():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("stores", "my_products", "products", "product_snapshots"):
             await db[c].delete_many({})
         await db.stores.insert_many([
@@ -323,7 +326,7 @@ def test_scanner_gap_over_300_drops_to_zero_for_the_cluster():
 
 def test_scanner_skips_sku_when_every_competitor_is_unreliable():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("stores", "my_products", "products", "product_snapshots"):
             await db[c].delete_many({})
         await db.stores.insert_many([

@@ -26,6 +26,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_sf_pagination"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_sf_pagination"
 import crawlers  # noqa: E402
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -183,7 +186,7 @@ def test_backfill_dry_run_with_full_catalogue_and_mixed_keys():
     """End-to-end: full pagination + the new keys, on a catalogue shaped like
     production (clean SKUs, Z. ids, carton barcodes, and true absentees)."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("stores", "my_products"):
             await db[c].delete_many({})
         await db.stores.insert_one({"id": "own", "name": "PH", "domain": "pets-houses.com",

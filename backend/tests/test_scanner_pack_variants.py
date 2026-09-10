@@ -32,6 +32,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_pack_variants"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_pack_variants"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -134,7 +137,7 @@ def _row(out, sku):
 # ── the live case ────────────────────────────────────────────────────────────
 def test_butchers_variant_is_excluded_from_the_market_low():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one(
@@ -172,7 +175,7 @@ def test_butchers_variant_is_excluded_from_the_market_low():
 
 def test_variant_detector_returns_the_evidence():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         await db.product_snapshots.insert_many([
@@ -195,7 +198,7 @@ def test_genuine_single_store_discount_is_never_excluded():
     """Royal Canin 118 on sale from 466 — one consistent price per crawl. It is
     a real competitor discount and must stay in the market low."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         old = now - server.timedelta(days=3)
@@ -231,13 +234,19 @@ def test_wild_outlier_without_variant_evidence_is_kept_and_flagged():
     """iter52 policy: when in doubt, KEEP — a lone deep discount with no
     same-store spread stays in the comparison and is surfaced.
 
-    iter53 NARROWS this: past a 6x gap on a shared EAN, an uncorroborated low is
-    now dropped as a barcode collision. So the "kept" band is 4x-6x, below
-    iter53's threshold and above ordinary noise. The 20.0-vs-431 case this test
-    originally used is 21x and is now excluded by iter53 instead.
+    iter53 NARROWED this: past a 6x gap on a shared EAN, an uncorroborated low is
+    dropped as a barcode collision.
+
+    iter78 narrows it AGAIN, on the client's report that a rival's single sachet
+    at 4.30 was faking a +445% gap against their 23.45 multipack. A price that
+    sits far below the cluster the OTHER sellers and our own price form is now
+    excluded from the market low — 3x when three or more prices corroborate,
+    5x when only two do. 91 against 431/440/466 is 4.8x on three references, so
+    the "keep and flag" band no longer covers it. What still keeps it: evidence
+    that the store CUT its price (see the discount escape below).
     """
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one(
@@ -247,8 +256,8 @@ def test_wild_outlier_without_variant_evidence_is_kept_and_flagged():
             {"id": "p3", "sku": RC, "name_ar": "", "name_en": "Royal Canin Medium Adult 15kg"})
         await db.product_snapshots.insert_many([
             _snap(RC, OWN, 466.0, now),
-            # 5.1x below us — a wild low, but UNDER iter53's 6x cut, so it is
-            # still governed by iter52's keep-and-flag policy
+            # 5.1x below us and 4.8x below the cluster — under iter53's 6x cut,
+            # so iter53 keeps it and iter78 is what decides
             _snap(RC, "aleef", 91.0, now),
             _snap(RC, "petsy", 431.0, now),
             _snap(RC, "zarafa", 440.0, now),
@@ -257,14 +266,19 @@ def test_wild_outlier_without_variant_evidence_is_kept_and_flagged():
 
         assert out["summary"]["suspected_pack_mismatch"] == 0
         assert out["summary"]["barcode_unreliable"] == 0, out["summary"]
-        assert out["summary"]["low_outliers_kept"] == 1, out["summary"]
-        k = out["summary"]["low_outliers_kept_sample"][0]
-        assert k["sku"] == RC and k["price"] == 91.0 and k["kept"] is True
-        assert k["reason"] == "low_price_no_variant_evidence"
-        # kept means kept: it still sets the low
-        assert _row(out, RC)["market_lowest"] == 91.0
+        assert out["summary"]["low_outliers_excluded"] == 1, out["summary"]
+        k = out["summary"]["low_outliers_excluded_sample"][0]
+        assert k["sku"] == RC and k["price"] == 91.0
+        assert k["references"] == 3 and k["needed"] == 3.0 and k["ratio"] == 4.84
+        # excluded means excluded: with 91 gone the low is 431, which puts us
+        # 8.1% above the market — under the 10% floor, so no row at all
+        assert _row(out, RC) is None
+        # prove the low really moved to 431 by pricing ourselves above the floor
+        await db.my_products.update_one({"sku": RC}, {"$set": {"price": 600.0}})
+        assert _row(await _scan(), RC)["market_lowest"] == 431.0
+        await db.my_products.update_one({"sku": RC}, {"$set": {"price": 466.0}})
 
-        # ...and past 6x the newer rule takes over and excludes it
+        # ...and past 6x iter53's shared-barcode rule takes over first
         await db.product_snapshots.update_one({"sku": RC, "store_id": "aleef"},
                                               {"$set": {"price": 20.0}})
         out2 = await _scan()
@@ -276,10 +290,38 @@ def test_wild_outlier_without_variant_evidence_is_kept_and_flagged():
     asyncio.run(main())
 
 
+def test_a_store_that_cut_its_own_price_keeps_its_deep_discount():
+    """The discount escape. Same 91 as above, but this store was selling at 440
+    earlier in the window — that is a clearance, which is exactly the competitor
+    move worth seeing, not a pack collision."""
+    async def main():
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
+        await _base(db)
+        now = server.datetime.now(server.timezone.utc)
+        old = now - server.timedelta(days=2)
+        await db.my_products.insert_one(
+            {"sku": RC, "name_en": "Royal Canin Medium Adult 15kg", "name_ar": "",
+             "price": 466.0, "price_basis": "storefront_inc_vat"})
+        await db.products.insert_one(
+            {"id": "p3b", "sku": RC, "name_ar": "", "name_en": "Royal Canin Medium Adult 15kg"})
+        await db.product_snapshots.insert_many([
+            _snap(RC, OWN, 466.0, now),
+            _snap(RC, "aleef", 440.0, old),          # the price it cut FROM
+            _snap(RC, "aleef", 91.0, now),
+            _snap(RC, "petsy", 431.0, now),
+            _snap(RC, "zarafa", 440.0, now),
+        ])
+        out = await _scan()
+
+        assert out["summary"]["low_outliers_excluded"] == 0, out["summary"]
+        assert _row(out, RC)["market_lowest"] == 91.0
+    asyncio.run(main())
+
+
 def test_moderate_spreads_are_untouched():
     """A normal market spread must not trip either rule."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one(
@@ -307,7 +349,7 @@ def test_store_with_variants_still_competes_at_its_real_price():
     """Excluding the tin must not remove the store from the market — its carton
     price is a genuine competitor price and may even be the low."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _base(db)
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one(

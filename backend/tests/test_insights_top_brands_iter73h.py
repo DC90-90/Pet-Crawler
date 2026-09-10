@@ -23,13 +23,9 @@ ADMIN_PASSWORD = "Ahmaddc90@"
 
 @pytest.fixture(scope="module")
 def auth_headers():
-    r = requests.post(f"{BASE_URL}/api/auth/login",
-                      json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
-                      timeout=30)
-    assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
-    token = r.json().get("access_token") or r.json().get("token")
-    assert token, f"No token in login response: {r.json()}"
-    return {"Authorization": f"Bearer {token}"}
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import auth_headers as shared_auth_headers
+    return shared_auth_headers(ADMIN_EMAIL, ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="module")

@@ -11,9 +11,12 @@ import time
 BASE_URL_LOCAL = "http://localhost:8001"
 BASE_URL_EXTERNAL = os.environ.get('REACT_APP_BACKEND_URL', 'https://daleel-price-intel.preview.emergentagent.com').rstrip('/')
 
-# Test credentials — from environment or clearly labeled test-only defaults
-ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "admin@daleelpets.com")
-ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "admin123")
+# Test credentials — from environment, else the super-admin account that
+# actually exists in this database (see /app/memory/test_credentials.md).
+# The old admin@daleelpets.com account was removed long ago, which is why the
+# auth-flow checks below used to fail with 401.
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "a.disi@taqueen.sa")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Ahmaddc90@")
 
 
 class TestHealthEndpoint:

@@ -32,7 +32,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_iter73x_hotfix")
+os.environ["DB_NAME"] = "test_iter73x_hotfix"   # setdefault is a NO-OP once a sibling module set it
+_TEST_DB = "test_iter73x_hotfix"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -121,7 +122,7 @@ def test_admin_endpoint_end_to_end():
     three indexes are reported as created. Uses super_admin credentials
     from /app/memory/test_credentials.md."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         try:
             await db.product_snapshots.drop_indexes()
         except Exception:
@@ -145,7 +146,7 @@ def test_created_indexes_match_query_shape():
     """After the endpoint runs, the collection must carry indexes on all
     three fields — the same shape the iter73v query fires against."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         server.db = db
         # Idempotently ensure the endpoint has run.
         await server.admin_ensure_snapshot_indexes(
@@ -168,7 +169,7 @@ def test_endpoint_is_idempotent():
     """Re-running the endpoint must be a no-op — safe to call from any
     monitoring script."""
     async def main():
-        server.db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        server.db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         user = {"id": "t", "email": "t@t", "role": "super_admin"}
         r1 = await server.admin_ensure_snapshot_indexes(user=user)
         r2 = await server.admin_ensure_snapshot_indexes(user=user)
@@ -185,7 +186,7 @@ def test_variant_arrays_query_uses_multikey_index_semantics():
     single string' refactor that would still LOOK like it works on a
     thin DB but silently miss all multi-variant products in production."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await db.product_snapshots.delete_many({"_probe": True})
         await db.product_snapshots.insert_one({
             "_probe": True,

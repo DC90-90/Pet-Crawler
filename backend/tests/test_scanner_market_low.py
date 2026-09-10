@@ -34,6 +34,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_scanner_low"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_scanner_low"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -175,7 +178,7 @@ def own_shelf_price(sku):
 
 def test_market_low_is_the_lowest_competitor_not_our_own_price():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         out = await _scan()
         lows = {}
@@ -199,7 +202,7 @@ def test_the_three_ex_vat_cases_now_report_the_inc_vat_low():
     """Hills / Intersand / Lindo: the old low was exactly our_price, i.e.
     real_low / 1.15. The new low is the real inc-VAT competitor price."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         out = await _scan()
         for case in CASES[:3]:
@@ -219,7 +222,7 @@ def test_signor_gatto_case_is_unchanged():
     """The control: a competitor genuinely holds the low, so the market low was
     already correct and must stay exactly as it was — including our gap."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         out = await _scan()
         row = _ours(out, "SIGNOR-GATTO")
@@ -238,7 +241,7 @@ def test_overpriced_count_drops_to_exclude_self_comparisons():
     """The headline number: products that were only ever "overpriced" against
     our own ex-VAT price must fall out of the count."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         out = await _scan()
 
@@ -267,7 +270,7 @@ def test_overpriced_count_drops_to_exclude_self_comparisons():
 def test_uplift_is_the_gap_times_our_own_units_sold():
     """The new contract: money on the table = price gap × units WE moved."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         now = server.datetime.now(server.timezone.utc)
         # a SEALED KSA day (today is excluded from the sales window by design)
@@ -294,7 +297,7 @@ def test_our_row_carries_every_seller_and_names_the_cheapest_and_dearest():
     holding the market low was never drawn and the graph contradicted the
     "market lowest" KPI on the same panel."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         out = await _scan()
         row = _ours(out, "SIGNOR-GATTO")
@@ -316,7 +319,7 @@ def test_opportunities_are_our_products_only_competitors_get_their_own_list():
     """The identity bug: a row per SELLER meant a competitor's price was served
     in a field called `my_price` and rendered as "YOUR PRICE"."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         out = await _scan()
         assert out["opportunities"], "we are overpriced on Signor Gatto"
@@ -338,7 +341,7 @@ def test_product_with_no_competitor_is_skipped_entirely():
     """Our store alone carrying a SKU is not a market — it must not produce a
     market low, a gap, or an opportunity row."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         now = server.datetime.now(server.timezone.utc)
         await db.my_products.insert_one({"sku": "SOLO-1", "price": 50})
@@ -368,7 +371,7 @@ def test_competitor_only_low_is_used_when_we_are_the_expensive_one():
     the same source My Products and Price Intel read, so the raise is applied
     there rather than to our storefront snapshot."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         await db.my_products.update_one(
             {"sku": "LINDO-400"}, {"$set": {"price": 60.0}})

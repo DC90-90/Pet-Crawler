@@ -16,16 +16,9 @@ VALID_BUCKETS = {"today", "this_week", "this_month", "stale", "no_data"}
 
 @pytest.fixture(scope="module")
 def auth_token():
-    r = requests.post(
-        f"{BASE_URL}/api/auth/login",
-        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PASSWORD},
-        timeout=20,
-    )
-    assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
-    body = r.json()
-    token = body.get("access_token") or body.get("token")
-    assert token, f"No token returned; body keys={list(body.keys())}"
-    return token
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import login_token
+    return login_token(SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="module")

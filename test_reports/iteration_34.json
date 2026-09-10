@@ -1,0 +1,26 @@
+{
+  "summary": "iter78 (Pack Guard + History Archive) fully verified. 24/24 unit tests pass (test_iter78_pack_guard.py + test_iter78_archive.py). 10/10 new live-preview tests pass (test_iter78_live.py). Frontend Scanner + Settings/Archive UI all functional with 0 console errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter78_pack_guard.py",
+    "/app/backend/tests/test_iter78_archive.py",
+    "/app/backend/tests/test_iter78_live.py"
+  ],
+  "verification_details": {
+    "pack_guard_backend": "GET /api/scanner/opportunities?days=14 returns summary.slug_pack_mismatch + low_outliers_excluded with *_sample arrays. For every opportunity row market_lowest == min(sellers.price) and no excluded seller appears in that row's sellers list. SKU 6928485301495 (toothpaste 45g) no longer appears in opportunities. SKU 780348005638 not present in preview data (but similar Kit Cat 15g variants such as 780348005652/780348005676 etc show market_lowest 6.5, all with Aleef 7.5/Petsy 10 excluded via slug rule).",
+    "excluded_prices_ui": "excluded-prices-card starts collapsed (0 visible rows), toggle expands to 21 excluded-row-N entries with plain-English reasons e.g. 'Seller lists 3.5g — ours is 15g', 'Seller lists 100g — ours is 25g'. No raw reason codes ('slug_weight_...') and no NaN/undefined.",
+    "archive_backend": "GET /admin/archive/status configured=true, days[], totals. GET /admin/archive/files?date=2026-08-25 returns 11 files (snapshots per crawled store + manifest + rollups) each with rows/bytes/path. GET /admin/archive/download returns HTTP 200 content-type application/gzip and Content-Disposition filename shaped '2026-08-25_<Store>.jsonl.gz'; body decompresses to JSONL rows carrying sku/price/sale_price/discount_pct/qty_available/in_stock/product_url. POST /admin/archive/run returns {ok:true,status:'started'} and is idempotent (file count unchanged before/after).",
+    "archive_auth": "All 4 /api/admin/archive/* endpoints return 401/403 without a token.",
+    "archive_ui": "archive-panel visible on /settings for super_admin with 4 KPIs (1 night, 11 files, 45,006 rows, 975.6 KB). Refresh + Archive last night buttons present. archive-day-0 expands to 11 archive-file-N rows each with a Download button.",
+    "regression": "/scanner opp-row-0 -> opp-detail-panel opens correctly. 7D/14D/30D re-fetch. / (My Products) and /price-intel render. 0 console errors on any page tested."
+  },
+  "critical_code_review_comments": [],
+  "updated_files": ["/app/backend/tests/test_iter78_live.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "a.disi@taqueen.sa / Ahmaddc90@ (super_admin)",
+  "seed_data_creation": "None — used existing preview data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "iter78 (Pack Guard + Nightly Archive) shipped clean. New live test file at /app/backend/tests/test_iter78_live.py covers scanner pack-guard summary/consistency, the two client-reported SKUs, archive status/files/download/idempotency/auth. All 34 iter78 tests pass (24 unit + 10 live)."
+}

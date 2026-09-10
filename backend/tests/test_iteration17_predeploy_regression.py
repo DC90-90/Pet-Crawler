@@ -20,11 +20,9 @@ SUPER_ADMIN_PASSWORD = "Ahmaddc90@"
 
 @pytest.fixture(scope="module")
 def headers():
-    r = requests.post(
-        f"{BASE_URL}/api/auth/login",
-        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PASSWORD},
-        timeout=20,
-    )
+    # shared cached login response — login is rate limited to 5/min (tests/_auth.py)
+    from _auth import login_response
+    r = login_response(SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD)
     assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
     body = r.json()
     # Spec: token must be in 'token' field

@@ -25,6 +25,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_salla_rev"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_salla_rev"
 import salla_revenue_estimate as E  # noqa: E402
 import server  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
@@ -182,7 +185,7 @@ async def _seed(db):
 
 def test_preview_is_read_only_and_keeps_the_estimate_separate():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         counts_before = {c: await db[c].count_documents({})
                          for c in ("stores", "products", "sku_store_coverage", "sku_sales_daily")}
@@ -222,7 +225,7 @@ def test_preview_is_read_only_and_keeps_the_estimate_separate():
 
 def test_preview_requires_super_admin():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         try:
             await server.salla_revenue_estimate_preview(days=DAYS,
@@ -237,7 +240,7 @@ def test_ranking_is_untouched_by_this_change():
     """Contract: Salla stores still report not_measurable until this is wired in
     deliberately."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         out = await server._store_ranking_compute(db)
         rows = {r["name"]: r for r in out["stores"]}
@@ -367,7 +370,7 @@ async def _seed_ranking(db):
 
 def test_ranking_exposes_the_estimate_as_a_labelled_sort_value():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_ranking(db)
 
         out = await server._store_ranking_compute(db)
@@ -453,7 +456,7 @@ def test_ranking_exposes_the_estimate_as_a_labelled_sort_value():
 def test_estimate_failure_never_breaks_the_ranking():
     """The estimate is best-effort: if it raises, the leaderboard still renders."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_ranking(db)
         orig = server.salla_build_velocity_pools
 

@@ -19,15 +19,9 @@ SUPER_PWD = "Ahmaddc90@"
 # ---------- shared fixtures ----------
 @pytest.fixture(scope="module")
 def token():
-    r = requests.post(
-        f"{BASE_URL}/api/auth/login",
-        json={"email": SUPER_EMAIL, "password": SUPER_PWD},
-        timeout=30,
-    )
-    assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
-    body = r.json()
-    assert "access_token" in body or "token" in body, body
-    return body.get("access_token") or body.get("token")
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import login_token
+    return login_token(SUPER_EMAIL, SUPER_PWD)
 
 
 @pytest.fixture(scope="module")

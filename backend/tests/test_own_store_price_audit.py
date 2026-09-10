@@ -25,6 +25,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_price_audit"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_price_audit"
 import server  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -78,7 +81,7 @@ async def _prep(db):
 
 def test_audit_answers_all_four_step1_questions():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _prep(db)
         server.db = db
         orig = _stub()
@@ -134,7 +137,7 @@ def test_audit_answers_all_four_step1_questions():
 
 def test_audit_flags_partial_storefront_and_requires_super_admin():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _prep(db)
         server.db = db
         # a storefront row with no usable price must lower the priced_pct so a

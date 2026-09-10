@@ -30,6 +30,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_match_keys"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_match_keys"
 import crawlers  # noqa: E402
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -139,7 +142,7 @@ def test_short_skus_are_untouched_and_distinct_eans_stay_distinct():
 # ── D — before/after on the backfill dry-run ─────────────────────────────────
 def test_backfill_dry_run_reports_no_live_source_before_and_after():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("stores", "my_products"):
             await db[c].delete_many({})
         await db.stores.insert_one({"id": "own", "name": "PH", "domain": "pets-houses.com",

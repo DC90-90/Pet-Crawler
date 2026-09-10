@@ -25,6 +25,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 os.environ["DB_NAME"] = "test_iter76_stability"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_iter76_stability"
 import fetch_policy  # noqa: E402
 import ledger  # noqa: E402
 import server  # noqa: E402
@@ -114,7 +117,7 @@ def test_ranking_fixtures_seed_a_sealed_day_not_today():
 # ── 3. reserved-domain test stores never reach the client's Stores page ──────
 def test_ensure_stores_removes_reserved_domain_test_stores():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await db.stores.delete_many({})
         await db.stores.insert_many([
             {"id": "t1", "name": "TEST_Regression_Store",

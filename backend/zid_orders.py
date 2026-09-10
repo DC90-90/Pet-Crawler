@@ -21,6 +21,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+import zid_oauth
+
 logger = logging.getLogger("zid_orders")
 
 ZID_ORDERS_ENDPOINT = "https://api.zid.sa/v1/managers/store/orders"
@@ -245,7 +247,11 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
     # answers 401 "Unauthenticated". So the missing piece is a credential, not
     # code — and the moment `ZID_OAUTH_TOKEN` is present we send the dual-header
     # form Zid documents, with no further changes needed.
-    oauth_token = (os.environ.get("ZID_OAUTH_TOKEN") or "").strip()
+    # iter79 — the partner-app half of the credential is now obtained through the
+    # OAuth authorization-code flow (zid_oauth.py) and stored encrypted, so the
+    # dual-header form is assembled from the SAME token pair Zid issued:
+    #   Authorization: Bearer <authorization>   X-Manager-Token: <access_token>
+    # A raw ZID_OAUTH_TOKEN in the environment still works as a manual override.
     headers = {
         "Access-Token": token,
         "Store-Id": store_id,
@@ -253,9 +259,22 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
         "Accept-Language": "en",
         "Accept": "application/json",
     }
-    if oauth_token:
+    creds = None
+    try:
+        creds = await zid_oauth.credentials(db)
+    except Exception:
+        logger.exception("[Orders] could not read stored Zid OAuth credentials")
+    oauth_token = (os.environ.get("ZID_OAUTH_TOKEN") or "").strip()
+    if creds:
+        headers["Authorization"] = f"Bearer {creds['authorization']}"
+        headers["X-Manager-Token"] = creds["access_token"]
+        auth_source = "partner_oauth"
+    elif oauth_token:
         headers["Authorization"] = f"Bearer {oauth_token}"
         headers["X-Manager-Token"] = token
+        auth_source = "env_oauth_token"
+    else:
+        auth_source = "store_token_only"
     refresh_floor = datetime.now(timezone.utc) - timedelta(days=INCREMENTAL_REFRESH_DAYS)
     upserted, skipped, pages = 0, 0, 0
     oldest_seen = None
@@ -270,17 +289,18 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
                 )
                 if resp.status_code in (401, 403):
                     logger.error(
-                        "[Orders] auth rejected status=%s oauth_token_present=%s. "
-                        "Zid's orders route needs a PARTNER-APP OAuth access "
-                        "token (Authorization: Bearer) alongside the store token "
-                        "(X-Manager-Token) — set ZID_OAUTH_TOKEN in the "
-                        "environment. The catalogue route is unaffected.",
-                        resp.status_code, bool(oauth_token))
+                        "[Orders] auth rejected status=%s auth_source=%s. Zid's "
+                        "orders route needs the PARTNER-APP token pair "
+                        "(Authorization: Bearer <authorization> + X-Manager-Token "
+                        "<access_token>) from an OAuth installation with the "
+                        "orders.read scope. The catalogue route is unaffected.",
+                        resp.status_code, auth_source)
                     return {"status": "auth_failed", "upserted": upserted,
-                            "pages": pages,
-                            "needs": None if oauth_token else "ZID_OAUTH_TOKEN",
-                            "hint": "Zid Partner dashboard → your app → OAuth "
-                                    "access token for store " + str(store_id)}
+                            "pages": pages, "auth_source": auth_source,
+                            "needs": None if auth_source == "partner_oauth" else "zid_partner_oauth",
+                            "hint": "Settings → Zid Orders Connection → Connect "
+                                    "(authorises the partner app for store "
+                                    + str(store_id) + ")"}
                 resp.raise_for_status()
                 payload = resp.json()
                 rows = payload.get("orders") or payload.get("results") or payload.get("data") or []
@@ -319,6 +339,7 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
                 "oldest_seen": oldest_seen.isoformat() if oldest_seen else None}
 
     logger.info(f"[Orders] synced {upserted} orders across {pages} page(s) "
-                f"(full_backfill={full_backfill}, oldest={oldest_seen})")
+                f"(full_backfill={full_backfill}, auth={auth_source}, oldest={oldest_seen})")
     return {"status": "ok", "upserted": upserted, "skipped": skipped, "pages": pages,
+            "auth_source": auth_source,
             "oldest_seen": oldest_seen.isoformat() if oldest_seen else None}

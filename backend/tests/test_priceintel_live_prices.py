@@ -30,6 +30,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_pi_live"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_pi_live"
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -99,7 +102,7 @@ def _run(coro):
 
 def test_dashboard_serves_the_live_snapshot_price_not_the_frozen_one():
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         # match frozen at the pre-VAT 100.00; the store was re-crawled post-fix
         # at the inc-VAT 115.00 (and an older in-window 110.00 must lose to it)
         await db.product_matches.insert_one(_match("HILLS", "Z-HILLS", "zarafa", "Zarafa", 100.0))
@@ -125,7 +128,7 @@ def test_dashboard_serves_the_live_snapshot_price_not_the_frozen_one():
 
 def test_own_price_is_live_never_the_frozen_match_value():
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         await db.product_matches.insert_one(_match("HILLS", "Z-HILLS", "zarafa", "Zarafa", 100.0))
         await db.product_snapshots.insert_one(_snap("Z-HILLS", "zarafa", 115.0))
         out = await server._price_intel_dashboard_compute(db)
@@ -148,7 +151,7 @@ def test_own_price_is_live_never_the_frozen_match_value():
 
 def test_match_without_in_window_snapshot_is_stale_and_uncounted():
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         await db.product_matches.insert_one(_match("HILLS", "Z-HILLS", "zarafa", "Zarafa", 100.0))
         # only snapshot is OUTSIDE the freshness window
         await db.product_snapshots.insert_one(
@@ -184,7 +187,7 @@ def test_dashboard_gap_agrees_with_my_products_for_the_same_pair():
     the SAME snapshot price — so each must be exactly derivable from the other
     through the shared cheapest price."""
     async def main():
-        db = await _seed(AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]])
+        db = await _seed(AsyncIOMotorClient(MONGO)[_TEST_DB])
         await db.product_matches.insert_one(_match("HILLS", "Z-HILLS", "zarafa", "Zarafa", 100.0))
         await db.product_snapshots.insert_many([
             _snap("Z-HILLS", "zarafa", 115.0, age_days=1),

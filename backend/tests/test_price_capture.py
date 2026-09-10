@@ -21,6 +21,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_price_capture"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_price_capture"
 from crawlers import _normalize_raw_product, _price_amount, process_crawled_products  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
@@ -146,7 +149,7 @@ def test_snapshot_carries_sale_price_and_discount():
     """Integration on real Mongo: process_crawled_products persists the new
     sale_price field and a REAL discount_pct for a Salla variant-level sale."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("product_snapshots", "products"):
             await db[c].delete_many({})
         store = {"id": "lana-pets-001", "name": "LanaPets", "domain": "lanapets.com"}

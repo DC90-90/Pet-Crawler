@@ -25,20 +25,17 @@ _session = None
 _token = None
 
 def get_auth_session():
-    """Get authenticated session (cached to avoid rate limiting)"""
+    """Authenticated session on the suite-wide cached token (tests/_auth.py).
+
+    This legacy suite is bound to an account that no longer exists in the
+    database, so it skips instead of burning the 5/min login budget.
+    """
     global _session, _token
     if _session is None or _token is None:
+        from _auth import login_token_or_skip
+        _token = login_token_or_skip(ADMIN_EMAIL, ADMIN_PASSWORD)
         _session = requests.Session()
-        time.sleep(1)  # Small delay to avoid rate limiting
-        login_resp = _session.post(f"{BASE_URL}/api/auth/login", json={
-            "email": ADMIN_EMAIL,
-            "password": ADMIN_PASSWORD
-        })
-        if login_resp.status_code == 200:
-            _token = login_resp.json().get("token")
-            _session.headers.update({"Authorization": f"Bearer {_token}"})
-        else:
-            print(f"Login failed: {login_resp.status_code} - {login_resp.text}")
+        _session.headers.update({"Authorization": f"Bearer {_token}"})
     return _session, _token
 
 

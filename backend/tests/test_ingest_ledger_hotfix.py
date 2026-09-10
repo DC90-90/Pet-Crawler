@@ -36,6 +36,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_ingest_ledger_fix"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_ingest_ledger_fix"
 import ledger  # noqa: E402
 import server  # noqa: E402
 from models import IngestPayload  # noqa: E402
@@ -73,7 +76,7 @@ def _payload():
 
 def test_ingest_writes_snapshot_and_ledger_with_clean_response():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _reset(db)
         server.db = db
         out = await server.crawler_ingest(_Req(server.CRAWLER_TOKEN), _payload())
@@ -102,7 +105,7 @@ def test_ledger_failure_never_costs_the_snapshot():
     must leave the ingest completely healthy: snapshot written, no errors,
     nothing skipped."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _reset(db)
         server.db = db
         orig = server.ledger.record_observations

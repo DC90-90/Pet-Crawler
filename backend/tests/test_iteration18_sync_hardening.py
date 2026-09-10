@@ -18,15 +18,9 @@ SUPER_ADMIN_PASSWORD = "Ahmaddc90@"
 
 @pytest.fixture(scope="session")
 def auth_token():
-    r = requests.post(
-        f"{BASE_URL}/api/auth/login",
-        json={"email": SUPER_ADMIN_EMAIL, "password": SUPER_ADMIN_PASSWORD},
-        timeout=15,
-    )
-    assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
-    tok = r.json().get("token") or r.json().get("access_token")
-    assert tok, "no token in login response"
-    return tok
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import login_token
+    return login_token(SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="session")

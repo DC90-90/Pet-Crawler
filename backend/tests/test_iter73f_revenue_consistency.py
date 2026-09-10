@@ -27,12 +27,10 @@ PASSWORD = "Ahmaddc90@"
 
 @pytest.fixture(scope="module")
 def token():
-    r = requests.post(f"{BASE_URL}/api/auth/login",
-                      json={"email": EMAIL, "password": PASSWORD}, timeout=30)
-    assert r.status_code == 200, f"login failed: {r.status_code} {r.text[:200]}"
-    data = r.json()
-    tok = data.get("token") or data.get("access_token")
-    assert tok and isinstance(tok, str) and len(tok) > 10
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import login_token
+    tok = login_token(EMAIL, PASSWORD)
+    assert isinstance(tok, str) and len(tok) > 10
     return tok
 
 

@@ -20,6 +20,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_dashcache"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_dashcache"
 import server  # noqa: E402
 from fastapi.encoders import jsonable_encoder  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -90,7 +93,7 @@ def _call(**kw):
 
 def test_cache_is_byte_identical_to_live_across_windows_sorts_pages():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         server.db = db
         await _seed(db)
         await server.recompute_dashboard_cache(db)
@@ -118,7 +121,7 @@ def test_cache_is_byte_identical_to_live_across_windows_sorts_pages():
 
 def test_non_default_requests_bypass_cache():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         server.db = db
         await _seed(db)
         await server.recompute_dashboard_cache(db)
@@ -134,7 +137,7 @@ def test_non_default_requests_bypass_cache():
 
 def test_stale_cache_falls_back_to_live():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         server.db = db
         await _seed(db)
         await server.recompute_dashboard_cache(db)
@@ -151,7 +154,7 @@ def test_stale_cache_falls_back_to_live():
 
 def test_recompute_populates_all_windows():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         server.db = db
         await _seed(db)
         stats = await server.recompute_dashboard_cache(db)

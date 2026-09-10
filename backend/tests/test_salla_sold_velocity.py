@@ -28,6 +28,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_salla_sold"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_salla_sold"
 import crawlers  # noqa: E402
 import salla_sold_velocity as V  # noqa: E402
 import server  # noqa: E402
@@ -75,7 +78,7 @@ def test_capped_badge_readings_are_flagged():
 def test_snapshot_carries_the_cumulative_counter():
     """It must reach product_snapshots — the field was parsed then dropped."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("products", "product_snapshots"):
             await db[c].delete_many({})
         store = {"id": "sal", "name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla"}
@@ -214,7 +217,7 @@ async def _seed_tiers(db):
 
 def test_three_tiers_are_distinct_fields_and_never_conflated():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_tiers(db)
         out = await server._store_ranking_compute(db)
         rows = {r["name"]: r for r in out["stores"]}
@@ -246,7 +249,7 @@ def test_three_tiers_are_distinct_fields_and_never_conflated():
 def test_badge_store_with_only_one_reading_stays_on_the_estimate():
     """A cumulative counter needs two points; until then, nothing changes."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_tiers(db)
         # drop the older reading -> baseline only
         await db.product_snapshots.delete_many({"id": {"$regex": "^b0-"}})
@@ -270,7 +273,7 @@ def test_ranking_order_follows_revenue_across_all_three_tiers():
     What has NOT changed is that the score is computed only from the four
     components. Revenue must never feed back into it."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_tiers(db)
         out = await server._store_ranking_compute(db)
         order = [r["name"] for r in out["stores"]]
@@ -302,7 +305,7 @@ def test_ranking_order_follows_revenue_across_all_three_tiers():
 # ── 5. coverage report ─────────────────────────────────────────────────────
 def test_coverage_report_says_which_stores_expose_the_badge():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed_tiers(db)
         rep = await server.salla_sold_badge_coverage(days=30, user=SUPER)
 

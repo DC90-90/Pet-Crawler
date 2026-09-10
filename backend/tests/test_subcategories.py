@@ -21,6 +21,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_subcategories"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_subcategories"
 from crawlers import (  # noqa: E402
     classify_food_subcategory, classify_food_subcategory_hybrid,
     extract_store_category_names, guess_category,
@@ -299,7 +302,7 @@ def test_corpus_classification_sanity():
 
 def test_crawler_and_backfill_and_trending_integration():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         for c in ("products", "product_snapshots", "sku_sales_daily",
                   "metric_daily_rollups", "sku_store_coverage",
                   # iter75 — the classifier version marker lives here; leaving it

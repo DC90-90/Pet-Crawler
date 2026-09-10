@@ -34,7 +34,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-os.environ.setdefault("DB_NAME", "test_matcher_norm")
+os.environ["DB_NAME"] = "test_matcher_norm"   # setdefault is a NO-OP once a sibling module set it
+_TEST_DB = "test_matcher_norm"
 import crawlers  # noqa: E402
 import matcher  # noqa: E402
 from core.utils import canonical_barcode  # noqa: E402

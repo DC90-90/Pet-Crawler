@@ -11,6 +11,7 @@ const PAGE_LABELS = {
   price_intel: "Price Intel",
   insights: "Insights",
   scanner: "Price Scanner",
+  market_share: "Market Share",
   discounts: "Discounts",
   alerts: "Alerts",
   stores: "Stores",

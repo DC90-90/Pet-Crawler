@@ -24,7 +24,8 @@ load_dotenv("/app/frontend/.env")
 
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
+from _auth import live_db_name   # backend/.env, not the polluted env var
+DB_NAME = live_db_name()
 EMAIL = "a.disi@taqueen.sa"
 PASSWORD = "Ahmaddc90@"
 
@@ -35,11 +36,9 @@ BEAPHAR_SKU = "8711231124985"
 # ── fixtures ─────────────────────────────────────────────
 @pytest.fixture(scope="module")
 def client():
-    s = requests.Session()
-    r = s.post(f"{BASE_URL}/api/auth/login",
-               json={"email": EMAIL, "password": PASSWORD}, timeout=20)
-    assert r.status_code == 200, f"login failed: {r.status_code} {r.text[:200]}"
-    return s
+    # shared cached token — login is rate limited to 5/min (see tests/_auth.py)
+    from _auth import auth_session
+    return auth_session(EMAIL, PASSWORD)
 
 
 @pytest.fixture(scope="module")

@@ -23,6 +23,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
 os.environ["DB_NAME"] = "test_store_cleanup"
+# Snapshot: sibling test modules reassign DB_NAME at import, so a
+# call-time read of the env var can point at ANOTHER suite's database.
+_TEST_DB = "test_store_cleanup"
 import server  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
@@ -148,7 +151,7 @@ def test_domain_normalization():
 # ── dry run ──────────────────────────────────────────────────────────────────
 def test_dry_run_resolves_keep_list_and_writes_nothing():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         rep = await server.store_cleanup_get(dry_run=True, user=SUPER)
 
@@ -189,7 +192,7 @@ def test_dry_run_resolves_keep_list_and_writes_nothing():
 
 def test_get_is_dry_run_only_and_requires_super_admin():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         try:
             await server.store_cleanup_get(dry_run=False, user=SUPER)
@@ -208,7 +211,7 @@ def test_get_is_dry_run_only_and_requires_super_admin():
 # ── guard 1: the own store is never deletable ────────────────────────────────
 def test_own_store_never_in_delete_set():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         # the own store's domain is re-pointed, so the keep-list can no longer
         # resolve it by domain — it must NOT silently fall into the delete set
         await _seed(db)
@@ -244,7 +247,7 @@ def test_own_store_never_in_delete_set():
 # ── guard 2: keep-list must resolve to exactly 11 ────────────────────────────
 def test_keep_list_not_eleven_aborts():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         # a duplicate row for one keep domain -> 12 resolved live stores
         await _seed(db)
         await db.stores.insert_one(_store(900, "Aleef Duplicate", "aleef.com"))
@@ -263,7 +266,7 @@ def test_keep_list_not_eleven_aborts():
 
 def test_zero_match_keep_domain_aborts_and_names_it():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         # hobbapet.com is gone from the registry entirely — a domain-format
         # mismatch looks exactly like this, and must never delete silently
         await _seed(db, keep=[k for k in KEEP if k[1] != "hobbapet.com"])
@@ -288,7 +291,7 @@ def test_zero_match_keep_domain_aborts_and_names_it():
 # ── guard 3: catastrophe cap ─────────────────────────────────────────────────
 def test_catastrophe_cap_aborts_above_fifty():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         await db.stores.insert_many([_store(200 + i, f"Junk {i}", f"junk{i}.example")
                                      for i in range(50)])
@@ -308,7 +311,7 @@ def test_catastrophe_cap_aborts_above_fifty():
 # ── confirm_count contract ───────────────────────────────────────────────────
 def test_confirm_count_must_match_exactly():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         for bad in (None, 0, 3, 5):
             try:
@@ -323,7 +326,7 @@ def test_confirm_count_must_match_exactly():
 # ── real run ─────────────────────────────────────────────────────────────────
 def test_real_run_backs_up_before_delete_and_leaves_no_orphans():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         orig, calls = _patch_recompute()
         try:
@@ -427,7 +430,7 @@ def test_backup_is_batched_not_one_giant_insert():
     """The backup must move in bounded batches, so a large collection can never
     be one unbounded round trip again."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         # a "CuteCat-sized" collection, scaled down but well over one batch
         await db.product_snapshots.insert_many(
@@ -458,7 +461,7 @@ def test_copy_in_batches_respects_the_batch_size():
     """The actual regression guard: 2500 documents must never leave as one
     insert_many, which is what blew the 45s socket cap in production."""
     async def main():
-        real = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        real = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await real.copy_src.delete_many({})
         await real.copy_dst.delete_many({})
         await real.copy_src.insert_many([{"n": i} for i in range(2500)])
@@ -481,7 +484,7 @@ def test_backup_failure_aborts_with_the_collection_named_and_deletes_nothing():
     """A backup failure is the safe failure: it must abort before any delete and
     say WHICH collection failed and WHY, not 500 blindly."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         before_stores = await db.stores.count_documents({})
         before_snaps = await db.product_snapshots.count_documents({})
@@ -527,7 +530,7 @@ def test_backup_verification_catches_a_short_copy():
     """A backup that silently copies fewer docs than the source holds must abort
     rather than let the delete proceed against an incomplete safety net."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         real_copy = server._copy_in_batches
 
@@ -558,7 +561,7 @@ def test_mid_cascade_delete_failure_rolls_back_and_leaves_no_orphans():
     """The dangerous failure: some collections already deleted. Everything must
     be restored from the backups so no orphan store reference survives."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         before = {c: await db[c].count_documents({}) for c in CASCADE_COLLECTIONS}
 
@@ -604,7 +607,7 @@ def test_recompute_failure_does_not_mask_a_successful_delete():
     in the body — not turned into a 500 that makes the operator re-run a cleanup
     that already happened."""
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         orig, _ = _patch_recompute()
 
@@ -629,7 +632,7 @@ def test_recompute_failure_does_not_mask_a_successful_delete():
 
 def test_same_second_rerun_refuses_to_merge_two_backups():
     async def main():
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
         # Pre-create backup collections for both the current second AND the
         # next second so a wall-clock tick between this compute and the one
@@ -699,7 +702,7 @@ def test_registry_recreation_warning_is_now_clean_but_still_works():
     domain is ever re-added to REQUIRED_STORES."""
     async def main():
         import store_registry
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await _seed(db)
 
         rep = await server.store_cleanup(dry_run=True, user=SUPER)
@@ -726,7 +729,7 @@ def test_ensure_stores_seeds_only_the_eleven():
     keep-list stores — nothing the cleanup would immediately delete again."""
     async def main():
         from store_registry import ensure_stores
-        db = AsyncIOMotorClient(MONGO)[os.environ["DB_NAME"]]
+        db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await db.stores.delete_many({})
         added = await ensure_stores(db)
         assert added == 11, added
