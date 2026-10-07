@@ -78,6 +78,7 @@ class MatchActionIn(BaseModel):
     my_sku: str
     competitor_sku: str
     competitor_store_id: str
+    competitor_offer_id: Optional[str] = None
 
 
 class IngestPayload(BaseModel):
@@ -86,3 +87,6 @@ class IngestPayload(BaseModel):
     domain: str
     platform: str
     products: list
+    run_id: Optional[str] = None
+    observed_at: Optional[str] = None
+    catalog_complete: bool = False

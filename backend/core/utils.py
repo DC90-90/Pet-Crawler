@@ -9,6 +9,8 @@ import time
 import statistics
 import functools
 import inspect
+from observation_contract import gtin
+from sales_evidence import estimate as estimate_evidence
 
 
 # ── TTL Cache (Feb 2026 perf sprint) ────────────────────────
@@ -116,7 +118,7 @@ def barcode_keys(value, canonical=True):
     if not raw:
         return []
     keys = [raw]
-    m = _BARCODE_LEAD_RE.match(raw)
+    m = re.fullmatch(r"(\d{8,14})", raw) if gtin(raw) else None
     if m:
         lead = m.group(1)
         if lead != raw:
@@ -135,8 +137,7 @@ def canonical_barcode(value):
     same trade item iff their GTIN-14 forms are equal.
     """
     raw = str(value or "").strip().lower()
-    m = _BARCODE_LEAD_RE.match(raw)
-    return m.group(1).zfill(14) if m else None
+    return gtin(raw)
 
 
 def get_stock_signal(qty, in_stock=None):
@@ -150,7 +151,9 @@ def get_stock_signal(qty, in_stock=None):
         return "OOS"
     if in_stock is True and (qty is None or qty == 0):
         return "AVAIL"  # In-stock but quantity not tracked
-    if qty is None or qty == 0:
+    if qty is None:
+        return "UNKNOWN"
+    if qty == 0:
         return "OOS"
     if qty < 10:
         return "LOW"
@@ -185,6 +188,10 @@ def _coerce_int(v, default=0):
 
 
 def _estimate_sales_from_snapshots(snaps, days):
+    return estimate_evidence(snaps, days)
+
+
+def _retired_estimator(snaps, days):
     """Estimate sales for a SKU at a single store from a chronological snapshot list.
 
     Strategy:
@@ -273,7 +280,7 @@ def compute_product_metrics(snapshots_by_store, days):
         all_latest_prices.append(latest["price"])
         confidences.append(latest["confidence_score"])
         latest_tier = latest["source_tier"]
-        latest_qty = max(latest_qty, latest.get("qty_available", 0))
+        latest_qty = max(latest_qty, latest.get("qty_available") or 0)
         if latest.get("in_stock") is True:
             any_in_stock = True
 

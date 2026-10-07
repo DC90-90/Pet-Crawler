@@ -93,7 +93,7 @@ KNOWN_BRANDS_LOWER = [
 def _is_valid_barcode(val: str) -> bool:
     if not val:
         return False
-    return bool(NUMERIC_BARCODE_RE.match(str(val).strip()))
+    return canonical_barcode(val) is not None
 
 
 def _is_numeric_sku(val: str) -> bool:
@@ -372,6 +372,11 @@ def _pack_compatible(my_text: str, comp_text: str) -> bool:
 
 
 async def match_my_product(db, my_product: dict, comp_snapshots: list = None, comp_products: dict = None, own_store_id: str = None) -> list:
+    from verified_matching import match
+    return await match(db, my_product, comp_snapshots, own_store_id)
+
+
+async def _retired_match_my_product(db, my_product, comp_snapshots=None, comp_products=None, own_store_id=None):
     """Run 3-level matching waterfall for a single my_product."""
     matches = []
     my_sku = str(my_product.get("sku", "")).strip()
@@ -622,6 +627,18 @@ def _dedupe_matches(matches):
 
 
 async def _build_competitor_lookups(db, own_store_id):
+    from price_cohort import FIELDS
+    since = datetime.now(timezone.utc)-timedelta(days=MATCH_WINDOW_DAYS)
+    active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
+    rows = await db.product_snapshots.aggregate([
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False}},
+        {"$sort": {"crawled_at": -1}}, {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
+        {"$replaceRoot": {"newRoot": "$row"}}, {"$project": FIELDS},
+    ], allowDiskUse=True).to_list(200000)
+    return rows, {}
+
+
+async def _retired_build_competitor_lookups(db, own_store_id):
     """Pre-build competitor snapshot and product lookups ONCE for batch matching.
 
     iter22 (Jul 2026) — PRODUCTION-SCALE FIX. The previous pipeline ran

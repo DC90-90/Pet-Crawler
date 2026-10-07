@@ -176,7 +176,7 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <p className="text-xs text-center mt-5" style={{ color: "#A1E4DB" }}>
+          {process.env.REACT_APP_ALLOW_PUBLIC_REGISTRATION === "true" && <p className="text-xs text-center mt-5" style={{ color: "#A1E4DB" }}>
             {isLogin ? t("no_account") : t("has_account")}{" "}
             <button
               type="button"
@@ -190,7 +190,7 @@ export default function LoginPage() {
             >
               {isLogin ? t("btn_register") : t("btn_login")}
             </button>
-          </p>
+          </p>}
         </div>
       </div>
     </div>

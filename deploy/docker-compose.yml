@@ -26,7 +26,7 @@ services:
     ports:
       - "127.0.0.1:27017:27017"
     environment:
-      MONGO_INITDB_DATABASE: ${DB_NAME:-daleel_pets}
+      MONGO_INITDB_DATABASE: ${DB_NAME:?DB_NAME required}
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
@@ -36,20 +36,22 @@ services:
   # ── FastAPI Backend + Crawler ──────────────────
   backend:
     build:
-      context: ./backend
-      dockerfile: ../deploy/backend.Dockerfile
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
     container_name: daleel-backend
     restart: unless-stopped
     depends_on:
       mongo:
         condition: service_healthy
     environment:
-      MONGO_URL: mongodb://mongo:27017
-      DB_NAME: ${DB_NAME:-daleel_pets}
+      MONGO_URL: ${MONGO_URL:?MONGO_URL required}
+      DB_NAME: ${DB_NAME:?DB_NAME required}
       JWT_SECRET: ${JWT_SECRET}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@daleelpets.com}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:?SUPER_ADMIN_EMAIL required}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:?SUPER_ADMIN_PASSWORD required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS required}
+      WEBHOOK_CRON_SECRET: ${WEBHOOK_CRON_SECRET:?WEBHOOK_CRON_SECRET required}
+      SEED_DEMO_DATA: "false"
       PLAYWRIGHT_BROWSERS_PATH: /pw-browsers
     ports:
       - "127.0.0.1:8001:8001"
@@ -67,10 +69,10 @@ services:
   # ── React Frontend ─────────────────────────────
   frontend:
     build:
-      context: ./frontend
-      dockerfile: ../deploy/frontend.Dockerfile
+      context: ..
+      dockerfile: deploy/frontend.Dockerfile
       args:
-        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-https://your-domain.com}
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:?REACT_APP_BACKEND_URL required}
     container_name: daleel-frontend
     restart: unless-stopped
     depends_on:
@@ -90,8 +92,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./deploy/ssl:/etc/nginx/ssl:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
       - nginx_logs:/var/log/nginx
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/api/"]

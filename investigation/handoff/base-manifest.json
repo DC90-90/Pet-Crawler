@@ -1,0 +1,55 @@
+{
+  "base_commit": "62a1a7261ae181ca51c65283b137109a9d02df93",
+  "files": [
+    {
+      "path": "backend/core/utils.py",
+      "base_sha256": "6f626266cee215b3ec9ea415701ee98112bcd4a8af3ff3b7354226a87315d73f",
+      "patched_sha256_lf": "f886a8f98f1228fbd7267ebda459c6e83400759a8ed86ceebd7a1e514b143ac3"
+    },
+    {
+      "path": "backend/market_share.py",
+      "base_sha256": "9ba3b6c7185a22ae253788e5a86ec922d4307069e9c46e19ca5f717dd13ac75e",
+      "patched_sha256_lf": "9da732e8127c5b6a1d1ee0e3b0e1b493631df817d3156e28b764a120f8f3bc9b"
+    },
+    {
+      "path": "backend/server.py",
+      "base_sha256": "5569c9959a39f13351d9f690a6d2f3a5f20df37d203b14b5f527064c238de780",
+      "patched_sha256_lf": "d1395a6c380af6872f59c0ab6c38cda8629f1a96ab1f6ae529e18bb8340e2363"
+    },
+    {
+      "path": "backend/tests/test_audit_containment.py",
+      "base_sha256": null,
+      "patched_sha256_lf": "dc44c33de16dbd0a8b5ccb635053f9f2454b4bfaadb4e70d4e252ab5a8bd2113"
+    },
+    {
+      "path": "frontend/src/components/marketShare/Methodology.jsx",
+      "base_sha256": "f079333552793f1c407b2a93e141da9702006c351ad0fd6458b9a0a738b01edd",
+      "patched_sha256_lf": "cd7caaf2491ba04dfb69940c5c1c1aa320924bca47c2deb35dfc0487ed936397"
+    },
+    {
+      "path": "frontend/src/components/marketShare/ShareOverview.jsx",
+      "base_sha256": "7d439df48da583cb39716c37280b758c8f083a3d70e4f62e2bb9838250157031",
+      "patched_sha256_lf": "8e1f6e649e2dd38298cf127ff879a8824ddb4c5639c73eb6166890b61c3a53fc"
+    },
+    {
+      "path": "frontend/src/components/marketShare/SourceChip.jsx",
+      "base_sha256": "afbee1af3bbff33cddb31994fae1dd9ace89fe9cd87f863b9772a9e777069cd4",
+      "patched_sha256_lf": "435871cd1a9ab7620248c3bd84a9c710267a506c22b0a319b9adf44c52dc780f"
+    },
+    {
+      "path": "frontend/src/pages/MarketSharePage.jsx",
+      "base_sha256": "486b7bbbea4af621753ed32983b79dd490132a87f8de2b7cc8cbdb3f766de530",
+      "patched_sha256_lf": "747d7c2cea107b6cf863d16cdfb3d10c673bf81b4672344a7838bfebf946cac4"
+    },
+    {
+      "path": "frontend/src/pages/MyProductsPage.jsx",
+      "base_sha256": "4708c55c875b32ab03c60f0b84e1c3e45a02b4479e42ad759b001a1330771621",
+      "patched_sha256_lf": "38cb3ece2e12a315622857db39c1513ebd81aec51a275862111178e9f59865d6"
+    },
+    {
+      "path": "frontend/src/pages/ScannerPage.jsx",
+      "base_sha256": "882c4d7e2c5f493a99fb8b9c7a0919130aba05a93a1851b338e745065beb1d42",
+      "patched_sha256_lf": "78bff2e78afbbeb7c92fef9bbf1423cf5893c9890011450af6d155d9068fc2de"
+    }
+  ]
+}

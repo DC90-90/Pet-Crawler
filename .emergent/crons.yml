@@ -1,0 +1,31 @@
+crons:
+  - name: crawl-stores
+    description: "Refreshes active store offers with cross-worker crawl locks"
+    cron: "0 1 * * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/crawl"
+    method: POST
+  - name: own-catalog
+    description: "Syncs own catalog, order coverage, and verified product matches"
+    cron: "15 */6 * * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/own-sync"
+    method: POST
+  - name: seal-ledger
+    description: "Seals the completed Saudi calendar day without rewriting history"
+    cron: "30 21 * * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/seal"
+    method: POST
+  - name: archive-prices
+    description: "Archives completed price observations to configured object storage"
+    cron: "0 3 * * *"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/archive"
+    method: POST
+  - name: weekly-digest
+    description: "Generates the weekly market digest from available evidence"
+    cron: "0 5 * * 0"
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    endpoint: "{{BASE_URL}}/api/cron/digest"
+    method: POST

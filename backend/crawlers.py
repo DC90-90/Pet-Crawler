@@ -285,7 +285,7 @@ def extract_brand_smart(name_ar, name_en, existing=None):
     Returns the canonical form via `canonical_brand()` or None if nothing
     lands. Never returns "Unknown".
     """
-    if existing:
+    if existing and str(existing).strip().lower() in CANONICAL_BRAND_MAP:
         c = canonical_brand(existing)
         if c:
             return c
@@ -295,6 +295,7 @@ def extract_brand_smart(name_ar, name_en, existing=None):
         got = extract_brand(nm)
         if got:
             return canonical_brand(got) or got
+    return None  # Descriptive leading words are not verified brands.
     # Fallback: leading English word(s) heuristic. Only fires when the string
     # is Latin (avoiding false positives on Arabic-only names) and the token
     # doesn't sit on the "generic descriptor" blocklist.
@@ -518,10 +519,10 @@ def extract_weight(name):
 
 
 def _extract_price_from_text(text):
-    if not text:
-        return 0
-    nums = re.findall(r'[\d,]+\.?\d*', text.replace(",", ""))
-    return float(nums[0]) if nums else 0
+    from observation_contract import money
+    text = str(text or "").replace("٫", ".").replace("٬", "")
+    nums = re.findall(r'[\d]+(?:\.[\d]+)?', text)
+    return money(nums[0]) if nums else None
 
 
 # ── Crawl Log Builder ────────────────────────────────────────
@@ -549,20 +550,25 @@ def _make_crawl_log(store, tier_attempted):
 async def _finalize_crawl_log(db, crawl_log, store_id):
     """Save crawl log to DB and update store metadata."""
     crawl_log["completed_at"] = datetime.now(timezone.utc).isoformat()
-    await db.crawl_logs.insert_one(crawl_log)
+    complete = bool(crawl_log.get("complete"))
+    succeeded = crawl_log["tier_used"] is not None and not crawl_log.get("error")
+    crawl_log["status"] = "complete" if succeeded and complete else "partial" if succeeded else "failed"
+    await db.crawl_logs.insert_one(dict(crawl_log))
     await db.stores.update_one({"id": store_id}, {"$set": {
-        "last_crawled_at": crawl_log["completed_at"],
+        "last_crawl_attempt_at": crawl_log["completed_at"],
         "last_crawl_tier": crawl_log["tier_used"],
         # iter75 — `tier_used == 0` means the AUTHENTICATED merchant API won
         # (own store, best possible source). `if crawl_log["tier_used"]` treated
         # that 0 as falsy, so "Pets Houses" was reported FAILED on the Stores
         # page after every successful 2233-product sync from api.zid.sa —
         # exactly the failure the client reported. Only None is a failure.
-        "last_crawl_status": "success" if crawl_log["tier_used"] is not None else "failed",
+        "last_crawl_status": crawl_log["status"],
         "last_crawl_error": crawl_log["error"],
         "last_crawl_products": crawl_log["products_found"],
         "last_crawl_endpoint": crawl_log.get("endpoint_used"),
     }})
+    if succeeded and complete:
+        await db.stores.update_one({"id": store_id}, {"$set": {"last_successful_crawl_at": crawl_log["completed_at"], "last_crawled_at": crawl_log["completed_at"]}})
 
 
 # ── iter73w soft-block guard ────────────────────────────────────────────────
@@ -682,12 +688,9 @@ def _absolutize_url(raw_url, store_domain):
 def _price_amount(f):
     """Dict-aware price coercion — Salla prices are {amount, currency} objects,
     Zid prices are plain numbers, legacy feeds may send strings."""
-    if isinstance(f, dict):
-        f = f.get("amount")
-    try:
-        return float(f or 0)
-    except (TypeError, ValueError):
-        return 0.0
+    from observation_contract import money
+    # Compatibility arithmetic sentinel only; normalized offers preserve None.
+    return money(f) or 0.0
 
 
 # iter59 — cumulative units-sold counter, all platforms.
@@ -732,7 +735,7 @@ def _extract_sold_count(raw):
             return max(0, int(float(digits))), capped
         except (ValueError, TypeError):
             continue
-    return 0, False
+    return None, False
 
 # Module-scoped: 8-14 digit numeric-only string ⇒ candidate barcode. Kept at
 # module scope so `_collect_variant_field_list` and any future extractor
@@ -742,6 +745,11 @@ _EAN_MATCH_RE = re.compile(r"^\d{8,14}$")
 
 
 def _normalize_raw_product(raw, store_name):
+    from observation_contract import normalize_offer
+    return normalize_offer(raw, store_name)
+
+
+def _retired_parent_normalizer(raw, store_name):
     """Normalize a single raw product dict from any source into a standard form."""
     name_ar = raw.get("name", raw.get("title", ""))
 
@@ -1010,12 +1018,36 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
     snap_count = 0
     store_domain = store.get("domain", "")
     ledger_obs = []            # iter67 — one ledger observation per normalized item
-    for raw in all_raw:
+    from observation_contract import expand_variants, stable_id
+    expanded = [offer for listing in all_raw for offer in expand_variants({
+        **listing, "_currency": store.get("currency", "SAR") if store.get("platform") in ("salla", "zid") else store.get("currency"),
+        "_price_basis": "storefront_inc_vat" if tier in (1, 2, 3, 4) else listing.get("price_basis"),
+    })]
+    seen_offers = set()
+    for raw in expanded:
         norm = _normalize_raw_product(raw, store["name"])
-        ledger_obs.append(ledger.crawl_observation(norm))
+        offer_id = stable_id(store["id"], norm["listing_id"], norm["variant_id"])
+        if offer_id in seen_offers:
+            continue
+        seen_offers.add(offer_id)
+        norm["offer_id"] = offer_id
+        if not norm["comparable"]:
+            await db.observation_quarantine.update_one(
+                {"event_id": stable_id(offer_id, now.isoformat())},
+                {"$setOnInsert": {**norm, "store_id": store["id"], "observed_at": now,
+                                   "ingested_at": datetime.now(timezone.utc)}}, upsert=True)
+            marker = {**norm, "store_id": store["id"], "store_name": store["name"],
+                      "event_id": stable_id(offer_id, now.isoformat()), "crawled_at": now,
+                      "qty_available": norm.get("qty"), "confidence_score": confidence,
+                      "quarantined": True, "source_tier": tier}
+            inserted = await db.product_snapshots.update_one({"event_id": marker["event_id"]}, {"$setOnInsert": marker}, upsert=True)
+            if inserted.upserted_id:
+                from evidence_ledger import record
+                await record(db, marker)
+            continue
         product_url = _absolutize_url(norm.get("product_url"), store_domain)
 
-        existing = await db.products.find_one({"sku": norm["sku"]})
+        existing = await db.products.find_one({"offer_id": offer_id}, {"_id": 0})
         # iter36 — hybrid classifier input: product name + the store's own
         # category tag names (when the raw payload carries them).
         store_cats = extract_store_category_names(raw)
@@ -1023,7 +1055,9 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             pid = str(uuid.uuid4())
             category = guess_category(norm["name_ar"])
             await db.products.insert_one({
-                "id": pid, "sku": norm["sku"],
+                "id": pid, "sku": norm["sku"], "offer_id": offer_id,
+                "store_id": store["id"], "listing_id": norm["listing_id"], "variant_id": norm["variant_id"],
+                "metadata_source": "store_observation",
                 # iter61 — _normalize_raw_product has extracted this since
                 # iter35 (variant-aware, from skus[].barcode/gtin/mpn) and both
                 # write sites dropped it. The matcher's Level-1 barcode step
@@ -1067,12 +1101,15 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 await db.products.update_one({"id": pid}, {"$set": patch})
 
         disc_pct = round((1 - norm["price"] / norm["original_price"]) * 100) if norm["original_price"] > norm["price"] > 0 else 0
-        await db.product_snapshots.insert_one({
+        snapshot = {
             "id": str(uuid.uuid4()),
             "product_id": pid,
             "store_id": store["id"],
             "store_name": store["name"],
             "sku": norm["sku"],
+            **{k: norm.get(k) for k in ("offer_id", "listing_id", "variant_id", "attributes", "name_ar", "name_en", "brand", "brand_source", "currency", "price_basis", "price_kind", "price_decimal", "observation_version", "is_synthetic", "data_origin", "comparable", "sold_count_observed", "quantity_observed", "present_on_store")},
+            "event_id": stable_id(offer_id, now.isoformat()),
+            "observed_at": now, "ingested_at": datetime.now(timezone.utc),
             # iter61 — snapshots carry it too. db.products is ONE row per SKU
             # shared across every store (first writer wins), so the per-store
             # observation of a barcode is only recoverable from the snapshot.
@@ -1089,7 +1126,7 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "sold_count": norm["sold_count"],
             # iter59 — Salla's cumulative badge counter, persisted so velocity
             # can be diffed between crawls. Was parsed and discarded before.
-            "sold_count_cumulative": norm.get("sold_count_cumulative", 0),
+            "sold_count_cumulative": norm.get("sold_count_cumulative"),
             "sold_count_capped": norm.get("sold_count_capped", False),
             "product_url": product_url,
             # iter73v (Aug 8 2026) — variant arrays persisted so the matcher's
@@ -1103,7 +1140,12 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "source_tier": tier,
             "confidence_score": confidence,
             "crawled_at": now,
-        })
+        }
+        result = await db.product_snapshots.update_one({"event_id": snapshot["event_id"]}, {"$setOnInsert": snapshot}, upsert=True)
+        from evidence_ledger import record
+        if result.upserted_id:
+            await record(db, snapshot)
+            ledger_obs.append(ledger.crawl_observation(norm))
         snap_count += 1
 
     # iter67 — Phase-1 ledger write, ALONGSIDE the rollups (nothing reads it
@@ -1176,7 +1218,8 @@ async def _try_single_endpoint(http, ep, crawl_log):
                 items = inner_products["data"]
             elif isinstance(items.get("data"), list):
                 items = items["data"]
-        if isinstance(items, list) and len(items) >= 3:
+        if isinstance(items, list) and len(items) >= 1:
+            ep["_initial_body"] = body
             attempt["products"] = len(items)
             # Store cursor info for Salla cursor pagination
             cursor = body.get("cursor")
@@ -1197,6 +1240,11 @@ async def _try_single_endpoint(http, ep, crawl_log):
 
 
 async def _paginate_endpoint(http, ep, initial_items):
+    from catalog_pagination import paginate
+    return await paginate(http, ep, initial_items, polite_get)
+
+
+async def _retired_paginate_endpoint(http, ep, initial_items):
     """Paginate through remaining pages. Supports Salla cursor and Zid page-number pagination."""
     all_items = list(initial_items)
     pagination = ep.get("pagination", "page")
@@ -1301,6 +1349,10 @@ async def crawl_salla_tier1(db, store):
 
     now = datetime.now(timezone.utc)
     if all_raw and winning_endpoint:
+        crawl_log.update(winning_endpoint.get("_pagination") or {})
+        # Retain collected pages before any slow optional barcode enrichment.
+        for offset in range(0, len(all_raw), 50):
+            await db.crawl_checkpoints.update_one({"_id": f"{crawl_log['id']}:{offset}"}, {"$setOnInsert": {"store_id": store["id"], "observed_at": now, "rows": all_raw[offset:offset+50], "pagination": winning_endpoint.get("_pagination")}}, upsert=True)
         # iter73w — soft-block guard. If this crawl produced far fewer products
         # than the store's recent baseline (typical Salla HTTP 200 + data:[]
         # false success under Cloudflare/WAF rate-limits), refuse to persist:
@@ -1314,6 +1366,7 @@ async def crawl_salla_tier1(db, store):
             crawl_log["http_status"] = 200
             crawl_log["endpoint_used"] = winning_endpoint["tag"]
             crawl_log["products_found"] = len(all_raw)
+            await process_crawled_products(db, store, all_raw, now, tier=1, confidence=95)
             await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
             # iter64 — barcode detail supplement for Salla stores, BEFORE persistence
             # (it mutates the raw items). No-op with a logged "skipped" entry when it
@@ -2609,7 +2662,8 @@ _NUMERIC_BARCODE_RE = re.compile(r"^\d{8,14}$")
 
 
 def _is_valid_ean(val):
-    return bool(val) and bool(_NUMERIC_BARCODE_RE.match(str(val).strip()))
+    from observation_contract import gtin
+    return gtin(val) is not None
 
 
 # Zid's Merchant API has exposed the cumulative sold counter under different
@@ -2621,6 +2675,11 @@ ZID_SOLD_FIELD_CANDIDATES = ("sold_quantity", "sold_count", "sales_count", "tota
 
 
 def _extract_zid_sold_count(product: dict) -> int:
+    from observation_contract import observed_int
+    return next((observed_int(product[k]) for k in ZID_SOLD_FIELD_CANDIDATES if product.get(k) is not None), None)
+
+
+def _retired_extract_zid_sold_count(product):
     """Best-effort extraction of the cumulative units-sold counter from a Zid
     Merchant API product payload. Returns 0 when absent or unparseable."""
     for key in ZID_SOLD_FIELD_CANDIDATES:
@@ -2713,16 +2772,19 @@ async def _fetch_zid_api_catalog(db, store):
                 resp.raise_for_status()
                 payload = resp.json()
                 items = payload.get("results") or []
-                for p in items:
+                from observation_contract import expand_variants, money, observed_int
+                for p in [v for item in items for v in expand_variants(item)]:
                     name_obj = p.get("name") or {}
+                    if isinstance(name_obj, str):
+                        name_obj = {"ar": name_obj, "en": name_obj}
                     # iter73d — preserve the LIST price separately so
                     # `resolve_own_price` can gross both list AND sale to the
                     # same VAT basis. Before, `raw.price` collapsed to
                     # `sale_price OR list`, dropping the list on on-sale
                     # products — which erased the strikethrough / discount %
                     # everywhere the Discounts / detail panels expect it.
-                    _list = p.get("price") or 0
-                    _sale = p.get("sale_price") or 0
+                    _list = money(p.get("price")) or 0
+                    _sale = money(p.get("sale_price")) or 0
                     _eff = _sale if _sale and _sale > 0 else _list
                     out.append({
                         "sku": str(p.get("sku") or "").strip(),
@@ -2732,8 +2794,9 @@ async def _fetch_zid_api_catalog(db, store):
                         "price": _eff,
                         "sale_price": _sale if _sale and _sale > 0 else None,
                         "list_price": _list,       # NEW — always the regular price
-                        "qty_available": 0 if p.get("is_infinite") else (p.get("quantity") or 0),
-                        "in_stock": bool(p.get("is_infinite")) or ((p.get("quantity") or 0) > 0),
+                        "qty_available": None if p.get("is_infinite") else observed_int(p.get("quantity")),
+                        "in_stock": True if p.get("is_infinite") else (observed_int(p.get("quantity")) > 0 if observed_int(p.get("quantity")) is not None else None),
+                        "listing_id": p.get("_listing_id"), "variant_id": p.get("_variant_id"),
                         # Cumulative units-sold counter — feeds the estimator's
                         # sold_count_diff method (works even for is_infinite
                         # products whose qty can never show depletion).
@@ -2756,7 +2819,7 @@ async def _fetch_zid_api_catalog(db, store):
                 await asyncio.sleep(0.15)
                 if page > 100:
                     logger.warning("[OwnSync][Zid API] hit 100-page safety cap")
-                    break
+                    return out, "partial"
     except httpx.HTTPError as e:
         logger.error(f"[OwnSync][Zid API] network error after {len(out)} products: {e}")
         return out, "partial" if out else "network_failed"
@@ -2811,19 +2874,22 @@ def build_key_index(rows, payload_fn):
     ids like "Z.123456", barcodes with variant suffixes), so the SAME rules are
     used for the storefront and the Merchant catalogues.
     """
-    idx = {"by_sku": {}, "by_barcode": {}, "by_id": {}}
+    idx = {"by_sku": {}, "by_barcode": {}, "by_id": {}, "sku_barcodes": {}}
+    def put(bucket, key, value):
+        idx[bucket][key] = None if key in idx[bucket] else value
     for r in rows:
         payload = payload_fn(r)
         if payload is None:
             continue
         sku = str(r.get("sku") or "").strip().lower()
         if sku:
-            idx["by_sku"][sku] = payload
+            put("by_sku", sku, payload)
+            idx["sku_barcodes"][sku] = canonical_barcode(r.get("barcode"))
         for k in barcode_keys(r.get("barcode")):
-            idx["by_barcode"][k] = payload
+            put("by_barcode", k, payload)
         rid = str(r.get("id") or r.get("_zid_id") or "").strip().lower()
         if rid:
-            idx["by_id"][rid] = payload
+            put("by_id", rid, payload)
     return idx
 
 
@@ -2832,7 +2898,8 @@ def _storefront_price_index(rows):
     def _payload(r):
         shelf, list_price = storefront_shelf_price(r)
         return (shelf, list_price) if shelf > 0 else None
-    return build_key_index(rows, _payload)
+    from observation_contract import expand_variants
+    return build_key_index([v for raw in rows for v in expand_variants(raw)], _payload)
 
 
 def merchant_index(rows):
@@ -2853,6 +2920,13 @@ def storefront_price_lookup(idx, sku=None, barcode=None, product_url=None, canon
     caller can measure what the previous key set would have matched.
     """
     s = str(sku or "").strip().lower()
+    bc = canonical_barcode(barcode)
+    for key in barcode_keys(barcode) if bc else []:
+        if idx["by_barcode"].get(key) is not None:
+            return idx["by_barcode"][key], "barcode"
+    observed_bc = idx.get("sku_barcodes", {}).get(s)
+    if bc and observed_bc and bc != observed_bc:
+        return None, "contradictory_barcode"
     if s and s in idx["by_sku"]:
         return idx["by_sku"][s], "sku"
 
@@ -2958,6 +3032,13 @@ def _sf_page_meta(body):
 
 
 async def _paginate_own_storefront(http, ep, initial_items, max_pages=OWN_SF_MAX_PAGES):
+    from catalog_pagination import paginate
+    rows = await paginate(http, ep, initial_items, polite_get, max_pages=max_pages)
+    meta = ep["_pagination"]
+    return rows, meta["pages_fetched"], meta["stop_reason"]
+
+
+async def _retired_paginate_own_storefront(http, ep, initial_items, max_pages=OWN_SF_MAX_PAGES):
     """Walk the FULL own-store catalogue. Never stops on a short page — only on
     explicit end-of-pagination, an empty page, a page cap, or an error.
     Returns (rows, pages_fetched, stop_reason)."""
@@ -3073,6 +3154,12 @@ def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
                 _orig,
                 "storefront_inc_vat")
 
+    if is_taxable is None:
+        # Missing tax evidence is not permission to add 15%.
+        value = _price_amount(merchant_price)
+        original = _price_amount(merchant_list_price) or value
+        return value, None, original, "merchant_unknown_tax"
+
     price = _price_amount(merchant_price)
     sale = _price_amount(merchant_sale_price)
     # The list-price argument is optional so pre-iter73d callers still work;
@@ -3083,7 +3170,7 @@ def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
 
     # iter73i — storefront ran, this SKU isn't on it: the merchant sale is
     # invisible to the shopper. Anchor on the LIST price only.
-    if storefront_authoritative:
+    if False:  # Absence from a listing never proves that a merchant sale is hidden.
         # Effective price = list_price (fall back to merchant_price when the
         # merchant didn't distinguish list vs sale).
         eff = list_p if list_p > 0 else price
@@ -3147,13 +3234,27 @@ async def fetch_own_storefront_catalog_raw(store, max_pages=OWN_SF_MAX_PAGES):
         return rows, {"ok": False, "error": str(e)[:300], "endpoint": (matched or {}).get("tag"),
                       "rows": len(rows), "pages": pages, "stop_reason": "exception",
                       "attempts": crawl_log.get("attempts")}
-    return rows, {"ok": bool(matched), "endpoint": (matched or {}).get("tag"),
+    return rows, {"ok": bool(matched), "complete": bool((matched or {}).get("_pagination", {}).get("complete")), "endpoint": (matched or {}).get("tag"),
                   "rows": len(rows), "pages": pages, "stop_reason": stop_reason,
                   "truncated": stop_reason == "max_pages",
                   "attempts": crawl_log.get("attempts")}
 
 
 async def sync_own_store_prices(db, store=None):
+    import job_control
+    store = store or await db.stores.find_one({"is_own_store": True}, {"_id": 0})
+    if not store:
+        return {"status": "error", "error": "no_own_store_flagged"}
+    owner = str(uuid.uuid4())
+    if not await job_control.acquire(db, f"store:{store['id']}", owner):
+        return {"status": "deferred", "error": "store_job_already_running"}
+    try:
+        return await asyncio.wait_for(_sync_own_store_prices_locked(db, store), timeout=2.5*3600)
+    finally:
+        await job_control.release(db, f"store:{store['id']}", owner)
+
+
+async def _sync_own_store_prices_locked(db, store=None):
     """Sync prices/quantities from the user's own Zid store back into db.my_products.
 
     Strategy:
@@ -3262,10 +3363,9 @@ async def sync_own_store_prices(db, store=None):
     # successfully and produced any keyed entry. A SKU missing from an
     # authoritative index means the shopper never sees any merchant-side
     # sale on that product (see resolve_own_price for the rationale).
-    storefront_authoritative = bool(
-        sf_index.get("by_sku") or sf_index.get("by_barcode")
-        or sf_index.get("by_id")
-    )
+    storefront_authoritative = bool((storefront_overlay_meta or {}).get("complete"))
+    catalog_complete = zid_status == "ok" if sync_source_label == "zid_api" else bool((winning_endpoint or {}).get("_pagination", {}).get("complete"))
+    crawl_log["complete"] = catalog_complete
 
     # ── Pre-build lookup tables of my_products by barcode + SKU ──
     my_by_sku, my_by_barcode = {}, {}
@@ -3286,6 +3386,9 @@ async def sync_own_store_prices(db, store=None):
     }
 
     own_store_id = store.get("id")
+    from observation_contract import expand_variants, stable_id
+    if sync_source_label == "public_crawl":
+        all_raw = [v for row in all_raw for v in expand_variants({**row, "_currency": "SAR", "_price_basis": "storefront_inc_vat"})]
 
     for raw in all_raw:
         # Zid API rows arrive pre-normalised (see _fetch_zid_api_catalog); the
@@ -3318,8 +3421,8 @@ async def sync_own_store_prices(db, store=None):
                 "price": price_v,
                 "sale_price": sale_v,
                 "original_price": orig_v,   # iter73d — surfaced through the norm
-                "qty": raw.get("qty_available") or 0,
-                "in_stock": raw.get("in_stock", False),
+                "qty": raw.get("qty_available"),
+                "in_stock": raw.get("in_stock"),
                 "img_url": raw.get("img_url", ""),
                 "product_url": raw.get("product_url", ""),
             }
@@ -3340,6 +3443,8 @@ async def sync_own_store_prices(db, store=None):
                 norm["original_price"] = list_price if list_price > 0 else shelf
             else:
                 norm["original_price"] = norm.get("price")
+        if norm.get("price") is None:
+            continue
         basis_counts[price_basis] = basis_counts.get(price_basis, 0) + 1
         # iter54 — hand the RESOLVED price to the snapshot writer below.
         # That writer re-read `raw["price"]` from scratch, i.e. the Zid Merchant
@@ -3357,6 +3462,7 @@ async def sync_own_store_prices(db, store=None):
                 norm.get("original_price"), price_basis)
         crawled_sku = str(norm["sku"]).strip()
         crawled_barcode = str(norm.get("barcode") or "").strip()
+        own_offer_id = stable_id(own_store_id, raw.get("listing_id") or raw.get("_listing_id") or raw.get("_zid_id") or raw.get("id"), raw.get("variant_id") or raw.get("_variant_id") or "root")
 
         target_sku = None
         # Level 1: barcode (EAN 8-14 digits)
@@ -3378,6 +3484,7 @@ async def sync_own_store_prices(db, store=None):
             new_doc = {
                 "id": str(uuid.uuid4()),
                 "sku": crawled_sku,
+                "offer_id": own_offer_id,
                 "barcode": crawled_barcode or "",
                 "name_ar": norm.get("name_ar", ""),
                 "name_en": norm.get("name_en") or norm.get("name_ar", ""),
@@ -3389,8 +3496,8 @@ async def sync_own_store_prices(db, store=None):
                 # sale so downstream readers (Discounts strikethrough,
                 # detail-panel history) never need to reconstruct it.
                 "original_price": round(norm["original_price"], 2) if norm.get("original_price") else round(norm["price"], 2),
-                "quantity": int(norm["qty"]),
-                "in_stock": bool(norm["in_stock"]),
+                "quantity": norm["qty"],
+                "in_stock": norm["in_stock"],
                 "is_own_store": True,
                 "store_id": own_store_id,
                 "imported_at": sync_ts,
@@ -3417,12 +3524,13 @@ async def sync_own_store_prices(db, store=None):
             continue
 
         update_doc = {
+            "offer_id": own_offer_id,
             "price": round(norm["price"], 2),
             "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
             # iter73d — see setOnInsert comment above; must land on updates too.
             "original_price": round(norm["original_price"], 2) if norm.get("original_price") else round(norm["price"], 2),
-            "quantity": int(norm["qty"]),
-            "in_stock": bool(norm["in_stock"]),
+            "quantity": norm["qty"],
+            "in_stock": norm["in_stock"],
             "last_synced_at": sync_ts,
             "sync_source": sync_source_label,
             "price_basis": price_basis,
@@ -3441,6 +3549,8 @@ async def sync_own_store_prices(db, store=None):
     snapshots_created = 0
     snapshots_deduped = 0
     if sync_source_label == "zid_api" and all_raw:
+        from observation_contract import stable_id, TRUSTED_PRICE_BASES
+        from evidence_ledger import record
         # ── Change-only writes + daily heartbeat (iter24, Jul 2026) ──
         # The 6h sync + daily crawl job wrote ~5.2 snapshots/SKU/day, ~80% of
         # them byte-identical to the previous one. At 2,175 SKUs that's ~11.3k
@@ -3481,7 +3591,10 @@ async def sync_own_store_prices(db, store=None):
             sale_price_v = _res[1] if _res else None
             list_price_v = _res[2] if _res else None
             price_basis_v = _res[3] if _res else "merchant_assumed_inc_vat"
-            qty = raw.get("qty_available") or 0
+            if price_basis_v not in TRUSTED_PRICE_BASES:
+                continue
+            offer_id = stable_id(own_store_id, raw.get("listing_id") or raw.get("_zid_id"), raw.get("variant_id") or "root")
+            qty = raw.get("qty_available")
             in_stock = bool(raw.get("in_stock")) if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""
             _prev = _todays_latest.get(sku)
@@ -3529,12 +3642,12 @@ async def sync_own_store_prices(db, store=None):
                 "discount_pct": _snap_disc_pct,
                 "on_sale": _snap_disc_pct > 0,
                 "in_stock": in_stock,
-                "qty_available": int(qty),
-                "sold_count_cumulative": int(raw.get("sold_count") or 0),
+                "qty_available": qty,
+                "sold_count_cumulative": raw.get("sold_count"),
             })
             _snapshot_unchanged_today = _prev is not None and (
                 round(float(_prev.get("price") or 0), 2) == _snap_price
-                and int(_prev.get("qty_available") or 0) == int(qty)
+                and _prev.get("qty_available") == qty
                 and int(_prev.get("sold_count") or 0) == int(raw.get("sold_count") or 0)
                 and bool(_prev.get("in_stock")) == in_stock
             )
@@ -3544,6 +3657,7 @@ async def sync_own_store_prices(db, store=None):
                 "set_on_insert": {
                     "id": str(uuid.uuid4()),
                     "sku": sku,
+                    "store_id": own_store_id, "offer_id": offer_id,
                     "barcode": barcode,
                     "name_ar": raw.get("name_ar") or "",
                     "name_en": raw.get("name_en") or "",
@@ -3563,6 +3677,12 @@ async def sync_own_store_prices(db, store=None):
                 "store_id": own_store_id,
                 "store_name": store["name"],
                 "sku": sku,
+                "offer_id": offer_id, "event_id": stable_id(offer_id, sync_ts),
+                "listing_id": raw.get("listing_id"), "variant_id": raw.get("variant_id"),
+                "observation_version": 2, "comparable": True, "currency": "SAR", "is_synthetic": False,
+                "name_ar": raw.get("name_ar"), "name_en": raw.get("name_en"), "barcode": barcode,
+                "sold_count_observed": raw.get("sold_count") is not None,
+                "data_origin": "zid_merchant_observation",
                 # iter73 — derived above, coherent with the ledger obs.
                 # A row on sale now truthfully carries the sale price under
                 # `price`, the regular reference under `original_price`, and
@@ -3577,10 +3697,10 @@ async def sync_own_store_prices(db, store=None):
                 "sale_price": _snap_price if _snap_disc_pct > 0 else None,
                 "discount_pct": _snap_disc_pct,
                 "in_stock": in_stock,
-                "qty_available": int(qty),
+                "qty_available": qty,
                 # Real cumulative sold counter from the Zid Merchant API (was
                 # hardcoded 0 until Feb 2026, which zeroed all own-sales KPIs).
-                "sold_count": int(raw.get("sold_count") or 0),
+                "sold_count": raw.get("sold_count"),
                 "product_url": raw.get("product_url") or "",
                 "source_tier": 0,  # 0 = authenticated API (best signal we have)
                 "confidence_score": 99,
@@ -3588,10 +3708,12 @@ async def sync_own_store_prices(db, store=None):
             })
         # Bulk upsert catalog rows (only sets on insert; never overwrites)
         for up in prod_upserts:
-            await db.products.update_one({"sku": up["sku"]}, {"$setOnInsert": up["set_on_insert"]}, upsert=True)
+            await db.products.update_one({"offer_id": up["set_on_insert"]["offer_id"]}, {"$setOnInsert": up["set_on_insert"]}, upsert=True)
         # Bulk insert snapshots
         if snap_docs:
             await db.product_snapshots.insert_many(snap_docs)
+            for snap in snap_docs:
+                await record(db, snap)
             snapshots_created = len(snap_docs)
         # iter67 — own-store ledger write (source_tier 0 = authenticated API,
         # confidence 99: the same labels the synthetic snapshots carry).
@@ -3606,7 +3728,7 @@ async def sync_own_store_prices(db, store=None):
     # Soft-archive only: row + history are preserved, but `present_on_store=False`
     # lets the UI badge them as "Removed from store" without filtering them out.
     archived = 0
-    if all_raw:  # safety: skip archival if the crawl returned nothing (likely upstream block)
+    if all_raw and catalog_complete and len(seen_skus) == len({str(r.get("sku") or "") for r in all_raw}):
         res = await db.my_products.update_many(
             {"sku": {"$nin": list(seen_skus)}},
             {"$set": {"present_on_store": False, "last_archive_check": sync_ts}},
@@ -3683,6 +3805,19 @@ async def sync_own_store_prices(db, store=None):
 
 # ── Waterfall Orchestrator ───────────────────────────────────
 async def crawl_store_waterfall(db, store):
+    if store.get("is_own_store"):
+        return await sync_own_store_prices(db, store)
+    import job_control
+    owner = str(uuid.uuid4())
+    if not await job_control.acquire(db, f"store:{store['id']}", owner):
+        return {"status": "deferred", "error": "store_job_already_running"}
+    try:
+        return await asyncio.wait_for(_crawl_store_waterfall_locked(db, store), timeout=2.5*3600)
+    finally:
+        await job_control.release(db, f"store:{store['id']}", owner)
+
+
+async def _crawl_store_waterfall_locked(db, store):
     """Run the multi-tier waterfall crawler for a store, with optional Tier 4 supplement.
 
     Special-case: own store (is_own_store=True) is sync'd into my_products via

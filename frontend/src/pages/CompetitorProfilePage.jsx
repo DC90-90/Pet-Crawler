@@ -56,10 +56,10 @@ export default function CompetitorProfilePage() {
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
-          { label: "Catalog Size", val: kpis.catalog_size },
-          { label: "Active SKUs", val: kpis.active_skus },
+          { label: "Verified Catalog Entries", val: kpis.catalog_size },
+          { label: "Verified Active Offers", val: kpis.active_skus },
           {
-            label: "Est. Monthly Revenue",
+            label: kpis.revenue_basis === "orders_exact" ? "Order Revenue · 30D" : "Observed Value Proxy · 30D",
             /* iter73f — honest labels: a Salla store the platform never
                exposes sold_count for renders "Not measurable" instead of a
                misleading 0 SAR that used to contradict the Insights
@@ -73,7 +73,7 @@ export default function CompetitorProfilePage() {
             val: kpis.revenue_status === "sales_data_unavailable" ? "Not measurable"
               : kpis.revenue_status === "insufficient_history" ? "Accumulating"
               : `${(kpis.est_monthly_revenue || 0).toLocaleString()} SAR`,
-            chip: kpis.revenue_basis === "estimated" ? {
+            chip: kpis.revenue_basis === "inventory_proxy" ? { text: "INVENTORY PROXY", bg: "rgba(56,189,248,0.10)", color: "#38BDF8", tip: "Observed inventory movement valued at shelf prices; not verified sales or revenue.", testId: "kpi-inventory-proxy" } : kpis.revenue_basis === "estimated" ? {
               text: `ESTIMATE ±${kpis.revenue_band_pct || 50}%`,
               bg: "rgba(245,158,11,0.10)", color: "#F59E0B",
               tip: `Rough estimate. Salla storefronts don't expose sold counters, so this figure is projected from Zid-store sales velocity applied to this store's catalog — accurate only to roughly ±${kpis.revenue_band_pct || 50}%.\n\nRange: ${(kpis.revenue_range_low || 0).toLocaleString()} – ${(kpis.revenue_range_high || 0).toLocaleString()} SAR.\n\nBecomes MEASURED once we have two readings of the storefront's cumulative sold-counter to diff.`,
@@ -85,7 +85,7 @@ export default function CompetitorProfilePage() {
               testId: "kpi-revenue-chip-approx",
             } : null,
           },
-          { label: "Avg Discount Rate", val: `${kpis.avg_discount_rate}%` },
+          { label: "Avg Discount Rate", val: kpis.avg_discount_rate == null ? "—" : `${kpis.avg_discount_rate}%` },
           { label: "Last Crawled", val: kpis.last_crawled ? new Date(kpis.last_crawled).toLocaleDateString("en-GB", { day: "2-digit", month: "short" }) : "-" },
         ].map((k) => (
           <div key={k.label} className="kpi-card" data-testid={`profile-kpi-${k.label}`}>
@@ -115,7 +115,7 @@ export default function CompetitorProfilePage() {
       {/* Revenue Trend Chart */}
       <div className="glass-card rounded-md p-5">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-white">Revenue Trend (90 days)</h3>
+          <h3 className="text-sm font-semibold text-white">Observed Value · Sealed Days</h3>
           <div className="flex gap-2 items-center">
             <SeasonalToggle show={seasonal.show} toggle={seasonal.toggle} />
             {["weekly", "daily"].map((m) => (
@@ -158,7 +158,7 @@ export default function CompetitorProfilePage() {
                     in catalog
                   </span>
                 ) : (
-                  <span className="text-xs font-bold text-white">{p.units_sold} sold</span>
+                  <span className="text-xs font-bold text-white" data-testid={`profile-units-${i}`}>{p.units_sold} {p.basis === "inventory_proxy" ? "observed movement" : "sold"}</span>
                 )}
               </div>
             ))}

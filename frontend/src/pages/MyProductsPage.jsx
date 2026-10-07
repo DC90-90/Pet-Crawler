@@ -85,6 +85,7 @@ export default function MyProductsPage() {
   // Auto-sync from pets-houses.com (Feb 2026)
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
+  const [syncRunId, setSyncRunId] = useState(() => sessionStorage.getItem("daleel-own-sync-run"));
 
   const categories = data.categories || [...new Set(data.products.map((p) => p.category))].sort();
 
@@ -106,6 +107,30 @@ export default function MyProductsPage() {
   }, [days, onDate, debouncedSearch, category, sortBy, sortOrder, page, pageSize]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    if (!syncRunId) return;
+    let stopped = false;
+    let timer;
+    setSyncing(true);
+    const poll = async () => {
+      try {
+        const { data: run } = await api.get(`/jobs/${syncRunId}`);
+        if (stopped) return;
+        if (["completed", "failed", "interrupted", "deferred", "degraded"].includes(run.status)) {
+          setSyncMsg(run.status === "completed" ? (isRTL ? "اكتملت المزامنة" : "Sync complete") : `Sync ${run.status}${run.error ? `: ${run.error}` : ""}`);
+          setSyncing(false); setSyncRunId(null);
+          sessionStorage.removeItem("daleel-own-sync-run");
+          fetchData(); return;
+        }
+        setSyncMsg(isRTL ? "المزامنة قيد التنفيذ" : `Sync ${run.status}…`);
+      } catch {
+        if (!stopped) setSyncMsg(isRTL ? "تعذر التحقق من حالة المزامنة" : "Sync status unavailable — checking again…");
+      }
+      if (!stopped) timer = setTimeout(poll, 4000);
+    };
+    poll();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [syncRunId, isRTL, fetchData]);
 
   // 300ms search debounce — avoids hammering the API on every keystroke
   useEffect(() => {
@@ -139,9 +164,9 @@ export default function MyProductsPage() {
           ? `جاري المزامنة من ${data.domain || "pets-houses.com"} — قد يستغرق حتى دقيقتين`
           : `Syncing from ${data.domain || "pets-houses.com"} — this can take up to ~2 min`
       );
-      // Poll once after 20s and again after 60s to refresh the table when sync completes
-      setTimeout(fetchData, 20_000);
-      setTimeout(() => { fetchData(); setSyncMsg(isRTL ? "اكتملت المزامنة" : "Sync complete"); setSyncing(false); }, 60_000);
+      if (!data.run_id) throw new Error("Sync run was not accepted");
+      sessionStorage.setItem("daleel-own-sync-run", data.run_id);
+      setSyncRunId(data.run_id);
     } catch (e) {
       setSyncMsg((isRTL ? "فشل في المزامنة: " : "Sync failed: ") + (e?.response?.data?.detail || e?.message || "unknown"));
       setSyncing(false);
@@ -186,7 +211,7 @@ export default function MyProductsPage() {
          precomputed dashboard cache, show when it was last recomputed. */}
       {data.cache?.source === "cache" && data.cache?.computed_at && (
         <p className="text-[11px] text-[#6AC1B5] -mt-2 font-mono" data-testid="cache-freshness">
-          {isRTL ? "المؤشرات محدثة حتى" : "Metrics as of"}{" "}
+          {isRTL ? "وقت حساب المؤشرات" : "Metrics computed"}{" "}
           {new Date(data.cache.computed_at).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
         </p>
       )}
@@ -200,12 +225,12 @@ export default function MyProductsPage() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
           { key: "kpi_products", tipKey: "kpi_products_tip", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
-          { key: "kpi_units_sold", tipKey: "kpi_units_sold_tip", val: (kpis.total_units_sold ?? 0).toLocaleString(), icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_mkt_revenue", tipKey: "kpi_mkt_revenue_tip", val: `${(kpis.market_revenue ?? 0).toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
+          { key: "kpi_units_sold", tipKey: "kpi_units_sold_tip", val: kpis.total_units_sold?.toLocaleString() ?? "—", icon: TrendingUp, accent: "#10B981" },
+          { key: "kpi_mkt_revenue", tipKey: "kpi_mkt_revenue_tip", val: kpis.market_revenue == null ? "—" : `${kpis.market_revenue.toLocaleString()} ${t("sar")}`, icon: TrendingUp, accent: "#1E988E" },
           // Real ledger data (Zid Orders API) drops the "(Est.)" suffix and
           // shows the order count; the estimation fallback keeps the old label.
-          { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", tipKey: "kpi_my_revenue_tip", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : null, icon: TrendingUp, accent: "#10B981" },
-          { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: `${kpis.avg_market_share ?? 0}%`, sub: kpis.share_sample_size != null ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : null, icon: TrendingDown, accent: "#F59E0B" },
+          { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", tipKey: "kpi_my_revenue_tip", val: kpis.my_revenue == null ? "—" : `${kpis.my_revenue.toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : (kpis.my_revenue_source === "inventory_proxy" ? "Inventory-value proxy" : "Unavailable"), icon: TrendingUp, accent: "#10B981" },
+          { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: kpis.avg_market_share == null ? "—" : `${kpis.avg_market_share}%`, sub: kpis.share_sample_size ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} products` : (isRTL ? "أدلة غير كافية" : "Insufficient sales evidence"), icon: TrendingDown, accent: "#F59E0B" },
           { key: "kpi_market_coverage", tipKey: "kpi_market_coverage_tip", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
         ].map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
@@ -421,8 +446,8 @@ export default function MyProductsPage() {
                       </span>
                     )}
                   </TableCell>
-                  <TableCell><span className="text-sm font-semibold text-white metric-number" title={isRTL ? "تقدير مبيعات السوق" : "Market-wide sales estimate"}>{p.qty_sold_est.toLocaleString()}</span></TableCell>
-                  <TableCell><span className="text-sm font-semibold text-white metric-number" title={isRTL ? "تقدير إيرادات السوق" : "Market-wide revenue estimate"}>{p.revenue_est.toLocaleString()} {t("sar")}</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-units-${p.sku}`} title={p.sales_basis}>{p.qty_sold_est?.toLocaleString() ?? "—"}</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-value-${p.sku}`} title={p.sales_basis}>{p.revenue_est?.toLocaleString() ?? "—"} {t("sar")}</span></TableCell>
                   <TableCell>
                     <Badge
                       className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]"

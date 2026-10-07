@@ -36,6 +36,9 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from core.utils import barcode_keys, canonical_barcode, get_stock_signal
+from ledger import ksa_day_str
+from evidence_ledger import sales_map
+from price_cohort import FIELDS, build_cohorts, identity_agrees
 from pack_guard import (
     slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers,
 )
@@ -80,7 +83,7 @@ PRICE_SPREAD_SUSPECT = 3.0
 
 
 def _day(dt):
-    return dt.strftime("%Y-%m-%d")
+    return ksa_day_str(dt)
 
 
 def _aware(v):
@@ -90,7 +93,7 @@ def _aware(v):
 
 
 def _pct(part, whole):
-    if not whole or whole <= 0:
+    if part is None or not whole or whole <= 0:
         return None
     return round(part / whole * 100, 2)
 
@@ -101,7 +104,11 @@ def _delta_pct(now_v, prev_v):
     return round((now_v - prev_v) / prev_v * 100, 1)
 
 
-async def _read_sales(db, start, end):
+async def _read_sales(db, start, end, sealed=True):
+    return await sales_map(db, start, end, sealed=sealed)
+
+
+async def _retired_read_sales(db, start, end):
     """Windowed units/revenue per (store_id, sku) from the sealed daily rollups,
     keeping WHICH method produced the figure so the row can label its source.
 
@@ -181,6 +188,15 @@ async def _store_signals(db, start, end):
 
 
 async def _latest_snapshots(db, since, min_confidence):
+    active = await db.stores.distinct("id", {"is_active": {"$ne": False}})
+    return await db.product_snapshots.aggregate([
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False}},
+        {"$sort": {"crawled_at": -1}}, {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
+        {"$replaceRoot": {"newRoot": "$row"}}, {"$project": FIELDS},
+    ], allowDiskUse=True).to_list(200000)
+
+
+async def _retired_latest_snapshots(db, since, min_confidence):
     """Latest accepted snapshot per (sku, store) in the window — the price,
     stock and slug every row is built from. Lean projection (no variant arrays:
     those are fetched separately and only for our own keys)."""
@@ -208,6 +224,10 @@ async def _latest_snapshots(db, since, min_confidence):
 
 
 async def _variant_links(db, own_keys, since):
+    return {}  # Discovery-only arrays may never supply a parent's price or units.
+
+
+async def _retired_variant_links(db, own_keys, since):
     """(store_id, sku) → (own_key, key_class) for competitors whose VARIANT
     arrays carry one of our GTINs/SKUs. Indexed multikey lookups (iter73x), so
     this stays a bounded query instead of dragging variant arrays through the
@@ -247,8 +267,7 @@ def _resolve_units(pair, sales, store_signals, is_own, own_units):
         return None, None, SRC_NONE, REASON_NOT_CRAWLED
     if sg.get("days_observed", 0) < 2:
         return None, None, SRC_NONE, REASON_ONE_CRAWL
-    if sg.get("signal") in ("counter", "stock"):
-        return 0, 0.0, SRC_ZERO, None
+    # Store-wide capability is not evidence that this product was observed twice.
     return None, None, SRC_NONE, REASON_NO_SIGNAL
 
 
@@ -268,7 +287,7 @@ def _row_confidence(sellers, my_source, fresh_days=FRESH_DAYS, now=None):
         if isinstance(ca, datetime):
             ages.append((now - ca).days)
     oldest = max(ages) if ages else None
-    if (my_source in ACTUAL_SOURCES and coverage >= 0.999 and weakest >= 95
+    if (all(s.get("units_source") == SRC_ORDERS for s in sellers) and coverage >= 0.999 and weakest >= 95
             and (oldest is None or oldest <= fresh_days)):
         return "high", None
     if coverage >= 0.5 and weakest >= 88:
@@ -398,7 +417,7 @@ def aggregate_groups(my_rows, missing_rows, key):
             "revenue_share_pct": _pct(v["revenue"], total_rev),
             "unit_share_pct": _pct(v["units"], total_units),
             "my_units": v["my_units"], "my_revenue": round(v["my_revenue"], 2),
-            "my_revenue_share_pct": _pct(v["my_revenue"], v["revenue"]),
+            "my_revenue_share_pct": None,
             "my_unit_share_pct": _pct(v["my_units"], v["units"]),
             "products": v["products"], "my_products_count": v["my_products"],
             "measured_products": v["measured_products"],
@@ -442,6 +461,7 @@ def summarize(my_rows, missing_rows, store_rows, *, catalog_total, orders_connec
     measured_rows = [r for r in my_rows if r["market_revenue"] is not None]
     contested = [r for r in measured_rows if r["contested"]]
     sole = [r for r in measured_rows if r["sole_seller"]]
+    contested = [r for r in contested if r.get("my_revenue") is not None and r.get("share_comparable")]
     my_measured = [r for r in contested if r["my_revenue"] is not None]
     total_my_rev = round(sum(r["my_revenue"] or 0 for r in my_measured), 2)
     total_mkt_rev = round(sum(r["market_revenue"] or 0 for r in contested), 2)
@@ -464,10 +484,10 @@ def summarize(my_rows, missing_rows, store_rows, *, catalog_total, orders_connec
                         "measurable — products only we sell are reported separately"),
         "my_units": total_my_units if my_measured else None,
         "my_revenue": total_my_rev if my_measured else None,
-        "market_units": total_mkt_units if measured_rows else None,
-        "market_revenue": total_mkt_rev if measured_rows else None,
-        "my_unit_share_pct": _pct(total_my_units, total_mkt_units),
-        "my_revenue_share_pct": _pct(total_my_rev, total_mkt_rev),
+        "market_units": total_mkt_units if my_measured else None,
+        "market_revenue": total_mkt_rev if my_measured else None,
+        "my_unit_share_pct": _pct(total_my_units, total_mkt_units) if my_measured else None,
+        "my_revenue_share_pct": _pct(total_my_rev, total_mkt_rev) if my_measured else None,
         "my_units_source": own_units_source,
         "missing_products_total": (missing_total if missing_total is not None
                                    else len(missing_rows)),
@@ -488,11 +508,11 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     snap_since = now - timedelta(days=days)
 
     stores = {s["id"]: s for s in await db.stores.find(
-        {}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "is_own_store": 1,
+        {"is_active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "is_own_store": 1,
              "is_active": 1, "last_crawl_at": 1, "last_crawl_status": 1}).to_list(200)}
 
-    sales = await _read_sales(db, window_start, window_end)
-    prev_sales = await _read_sales(db, prev_start, prev_end)
+    sales = await _read_sales(db, window_start, window_end, sealed=sealed)
+    prev_sales = await _read_sales(db, prev_start, prev_end, sealed=sealed)
     signals = await _store_signals(db, window_start, window_end)
     snaps = await _latest_snapshots(db, snap_since, min_confidence)
 
@@ -500,8 +520,9 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "price": 1,
              "sale_price": 1, "original_price": 1, "price_basis": 1,
              "quantity": 1, "in_stock": 1, "brand": 1, "category": 1,
-             "barcode": 1}).to_list(50000)
+             "barcode": 1, "brand_source": 1, "category_source": 1}).to_list(50000)
     my_by_sku = {r["sku"]: r for r in my_rows if r.get("sku")}
+    cohorts = await build_cohorts(db, my_rows, own_store_id, own_price_fn, now=now)
 
     # ── identity: every key that resolves to one of OUR products ────────────
     own_key_index = {}          # normalized key -> (my_sku, key_class)
@@ -514,7 +535,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
 
     alias = {}                  # (store_id, competitor_sku) -> (my_sku, strength, method)
     async for m in db.product_matches.find(
-            {}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1,
+            {"identity_version": 2}, {"_id": 0, "my_sku": 1, "competitor_sku": 1, "competitor_store_id": 1,
                  "confidence": 1, "match_method": 1}):
         if not (m.get("my_sku") in my_by_sku and m.get("competitor_sku")
                 and m.get("competitor_store_id")):
@@ -527,10 +548,10 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     # catalog names / brand / category for every SKU we may render
     catalog = {}
     async for p in db.products.find(
-            {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "brand": 1,
-                 "category": 1, "barcode": 1}).batch_size(2000):
-        if p.get("sku"):
-            catalog[p["sku"]] = p
+            {}, {"_id": 0, "sku": 1, "offer_id": 1, "name_ar": 1, "name_en": 1, "brand": 1,
+                 "category": 1, "brand_source": 1, "category_source": 1, "barcode": 1}).batch_size(2000):
+        if p.get("offer_id"):
+            catalog[p["offer_id"]] = p
 
     # ── group every (sku, store) observation under a canonical product ──────
     mine = {}                   # my_sku -> {"sellers": [...]}
@@ -562,17 +583,21 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
                 if hit:
                     my_sku, klass = hit[0], vl[1]
                     strength = MATCH_STRENGTH.get(vl[1], 88)
+        if my_sku and not is_own and not identity_agrees(my_by_sku[my_sku], s):
+            my_sku = None
         seller = {
             "store_id": sid,
             "store_name": s.get("store_name") or (stores.get(sid) or {}).get("name") or sid,
             "platform": (stores.get(sid) or {}).get("platform"),
             "is_own": is_own,
             "sku_at_store": sku,
+            "offer_id": s.get("offer_id"),
+            "name_ar": s.get("name_ar"), "name_en": s.get("name_en"),
             "match_source": klass,
             "match_strength": strength,
             "price": round(float(s.get("price") or 0), 2),
             "discount_pct": s.get("discount_pct") or 0,
-            "in_stock": bool(s.get("in_stock")) or (s.get("qty_available") or 0) > 0,
+            "in_stock": s.get("in_stock"),
             "stock_signal": get_stock_signal(s.get("qty_available"), s.get("in_stock")),
             "qty_available": s.get("qty_available"),
             "product_url": s.get("product_url"),
@@ -581,7 +606,10 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         if my_sku:
             mine.setdefault(my_sku, []).append(seller)
         elif not is_own:
-            ckey = canonical_barcode(s.get("barcode")) or canonical_barcode(sku) or f"sku:{sku}"
+            code = canonical_barcode(s.get("barcode")) or canonical_barcode(sku)
+            name = f"{s.get('name_ar') or ''} {s.get('name_en') or ''}"
+            weight = stated_weight_grams(name)
+            ckey = f"gtin:{code}:grams:{weight}" if code else f"offer:{s.get('offer_id') or sid + ':' + sku}"
             g = others.setdefault(ckey, {"sellers": [], "skus": set()})
             g["sellers"].append(seller)
             g["skus"].add(sku)
@@ -592,7 +620,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     my_products = []
     for sku, mp in my_by_sku.items():
         sellers = mine.get(sku, [])
-        cat_row = catalog.get(sku, {})
+        cat_row = mp
         name_ar = mp.get("name_ar") or cat_row.get("name_ar") or ""
         name_en = mp.get("name_en") or cat_row.get("name_en") or ""
         my_name = f"{name_ar} {name_en}".strip()
@@ -615,19 +643,20 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         own_seller["price"] = my_price      # catalogue price is the truth for us
 
         kept, excluded = _apply_pack_guard(my_name, sellers, my_price)
-        own_units = own_units_map.get(sku)
+        own_units = own_units_map.get(sku, {"units": 0, "revenue": 0.0}) if orders_by_sku is not None else None
         for s in kept:
             u, rev, src, reason = _resolve_units(
-                (s["store_id"], s["sku_at_store"]), sales, signals, s["is_own"], own_units)
+                (s["store_id"], s.get("offer_id") or s["sku_at_store"]), sales, signals, s["is_own"], own_units)
             s["units"], s["revenue"], s["units_source"], s["unavailable_reason"] = u, rev, src, reason
-            pu = prev_sales.get((s["store_id"], s["sku_at_store"])) or {}
+            pu = prev_sales.get((s["store_id"], s.get("offer_id") or s["sku_at_store"])) or {}
             s["prev_units"], s["prev_revenue"] = pu.get("units"), pu.get("revenue")
 
         own = next((s for s in kept if s["is_own"]), None)
         comps = [s for s in kept if not s["is_own"]]
         with_sales = [s for s in kept if s["units"] is not None]
-        market_units = sum(s["units"] for s in with_sales) or 0
-        market_revenue = round(sum(s["revenue"] or 0 for s in with_sales), 2)
+        compatible = bool(with_sales) and len({s["units_source"] for s in with_sales}) == 1
+        market_units = sum(s["units"] for s in with_sales) if compatible else None
+        market_revenue = round(sum(s["revenue"] or 0 for s in with_sales), 2) if compatible else None
         prev_units = sum((s.get("prev_units") or 0) for s in kept)
         prev_revenue = round(sum((s.get("prev_revenue") or 0) for s in kept), 2)
 
@@ -637,7 +666,10 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         spread_ratio, spread_warning = _price_spread(kept)
         if spread_warning and confidence in ("high", "medium"):
             confidence, conf_reason = "low", spread_warning
-        stats = _price_stats(kept)
+        cohort = cohorts[sku]
+        stats = {"min": cohort["min"], "max": cohort["max"], "avg": cohort["avg"]}
+        share_comparable = (my_units is not None and len(with_sales) == len(kept) and len(with_sales) >= 2
+                            and all(s["units_source"] == SRC_ORDERS for s in with_sales))
 
         ranked_price = sorted([s for s in kept if (s.get("price") or 0) > 0],
                              key=lambda s: s["price"])
@@ -649,17 +681,13 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
                        key=lambda s: (s["units"] or 0, s["revenue"] or 0), default=None)
 
         for s in kept:
-            s["unit_share_pct"] = _pct(s["units"], market_units) if s["units"] is not None else None
-            s["revenue_share_pct"] = _pct(s["revenue"], market_revenue) if s["revenue"] is not None else None
+            s["unit_share_pct"] = _pct(s["units"], market_units) if share_comparable else None
+            s["revenue_share_pct"] = _pct(s["revenue"], market_revenue) if share_comparable else None
 
-        brand = brand_fn(name_ar, name_en, existing=mp.get("brand") or cat_row.get("brand") or "") or ""
-        brand_source = ("catalog" if (mp.get("brand") or cat_row.get("brand")) else
-                        ("derived_from_name" if brand else "unresolved"))
-        category = mp.get("category") or cat_row.get("category") or ""
-        category_source = "catalog" if category else "unclassified"
-        if not category:
-            category = category_fn(my_name) or ""
-            category_source = "derived_from_name" if category else "unclassified"
+        brand = mp.get("brand") if mp.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=mp.get("brand") or "") or ""
+        brand_source = mp.get("brand_source") if mp.get("brand_source") in ("reviewed", "store_supplied") else "derived_from_name" if brand else "unresolved"
+        category = mp.get("category") if mp.get("category_source") in ("reviewed", "store_supplied", "import_file") else ""
+        category_source = mp.get("category_source") if category else "unclassified"
 
         my_products.append({
             "canonical_key": canonical_barcode(sku) or f"sku:{sku}",
@@ -677,8 +705,11 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "my_unavailable_reason": (own or {}).get("unavailable_reason"),
             "market_units": market_units if with_sales else None,
             "market_revenue": market_revenue if with_sales else None,
-            "unit_share_pct": _pct(my_units, market_units) if (my_units is not None and with_sales) else None,
-            "revenue_share_pct": _pct(my_revenue, market_revenue) if (my_revenue is not None and with_sales) else None,
+            "unit_share_pct": _pct(my_units, market_units) if share_comparable else None,
+            "revenue_share_pct": _pct(my_revenue, market_revenue) if share_comparable else None,
+            "share_comparable": share_comparable, "cohort_id": cohort["cohort_id"],
+            "share_unavailable_reason": None if share_comparable else "incomplete_or_incompatible_sales_evidence",
+            "market_value_basis": "shelf_price_proxy" if any(s["units_source"] != SRC_ORDERS for s in with_sales) else "orders_exact",
             "competitor_count": len(comps),
             "sellers_total": len(kept),
             "sellers_with_sales": len(with_sales),
@@ -686,8 +717,8 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             # denominator. Products where we are the ONLY measurable seller are
             # honestly 100% — and are excluded from the headline KPI, which
             # would otherwise drift toward 100% as the catalogue grows.
-            "contested": bool(comps) and len(with_sales) >= 2,
-            "sole_seller": bool(with_sales) and not [s for s in with_sales if not s["is_own"]],
+            "contested": my_units is not None and any(s["units"] is not None for s in comps),
+            "sole_seller": not comps and my_units is not None,
             "top_competitor": ({"store_name": top_comp["store_name"],
                                 "units": top_comp["units"],
                                 "revenue": top_comp["revenue"]} if top_comp else None),
@@ -710,7 +741,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "unavailable_reason": None if with_sales else REASON_NO_SELLER_DATA,
             "last_crawl_at": max([s["last_crawl_at"] for s in kept
                                   if isinstance(s.get("last_crawl_at"), datetime)], default=None),
-            "sellers": sorted(kept, key=lambda s: (s.get("price") or 0))[:SELLERS_PER_ROW_CAP],
+            "sellers": sorted(kept, key=lambda s: (s.get("price") or 0)),
             "excluded_sellers": [{
                 "store_name": e["store_name"], "price": e["price"],
                 "reason": e.get("excluded_reason"), "detail": e.get("excluded_detail"),
@@ -723,21 +754,22 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         sellers = g["sellers"]
         for s in sellers:
             u, rev, src, reason = _resolve_units(
-                (s["store_id"], s["sku_at_store"]), sales, signals, False, None)
+                (s["store_id"], s.get("offer_id") or s["sku_at_store"]), sales, signals, False, None)
             s["units"], s["revenue"], s["units_source"], s["unavailable_reason"] = u, rev, src, reason
-            pu = prev_sales.get((s["store_id"], s["sku_at_store"])) or {}
+            pu = prev_sales.get((s["store_id"], s.get("offer_id") or s["sku_at_store"])) or {}
             s["prev_units"], s["prev_revenue"] = pu.get("units"), pu.get("revenue")
         with_sales = [s for s in sellers if s["units"] is not None]
-        market_units = sum(s["units"] for s in with_sales) or 0
-        market_revenue = round(sum(s["revenue"] or 0 for s in with_sales), 2)
+        compatible = bool(with_sales) and len({s["units_source"] for s in with_sales}) == 1
+        market_units = sum(s["units"] for s in with_sales) if compatible else None
+        market_revenue = round(sum(s["revenue"] or 0 for s in with_sales), 2) if compatible else None
         prev_units = sum((s.get("prev_units") or 0) for s in sellers)
         prev_revenue = round(sum((s.get("prev_revenue") or 0) for s in sellers), 2)
         stats = _price_stats(sellers)
         sample_sku = sorted(g["skus"])[0]
-        cat_row = catalog.get(sample_sku, {})
-        name_ar, name_en = cat_row.get("name_ar") or "", cat_row.get("name_en") or ""
-        brand = brand_fn(name_ar, name_en, existing=cat_row.get("brand") or "") or ""
-        category = cat_row.get("category") or category_fn(f"{name_ar} {name_en}") or ""
+        cat_row = catalog.get(sellers[0].get("offer_id"), {})
+        name_ar, name_en = sellers[0].get("name_ar") or "", sellers[0].get("name_en") or ""
+        brand = cat_row.get("brand") if cat_row.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=cat_row.get("brand") or "") or ""
+        category = cat_row.get("category") if cat_row.get("category_source") in ("reviewed", "store_supplied", "import_file") else ""
         top = max(with_sales, key=lambda s: (s["units"] or 0, s["revenue"] or 0), default=None)
         spread_ratio, spread_warning = _price_spread(sellers)
         confidence = ("unavailable" if not with_sales else
@@ -767,7 +799,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "confidence": confidence,
             "unavailable_reason": None if with_sales else REASON_NO_SELLER_DATA,
             "in_stock_sellers": sum(1 for s in sellers if s["in_stock"]),
-            "sellers": sorted(sellers, key=lambda s: (s.get("price") or 0))[:SELLERS_PER_ROW_CAP],
+            "sellers": sorted(sellers, key=lambda s: (s.get("price") or 0)),
         })
 
     # opportunity score — a transparent RANKING heuristic over the rows we can
@@ -792,7 +824,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             m["recommended_action"] = "Low priority — carried but no measured movement"
     missing.sort(key=lambda m: -m["opportunity_score"])
     missing_total = len(missing)
-    missing = missing[:MISSING_ROWS_CAP]
+    # Pagination belongs to the API, never before grouping or denominators.
 
     # ── sections D/E: brands and categories ─────────────────────────────────
     brand_rows = aggregate_groups(my_products, missing, "brand")
@@ -817,13 +849,13 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         "window": {
             "days": days,
             "date_from": _day(window_start), "date_to": _day(window_end - timedelta(seconds=1)),
-            "sealed": sealed,
+            "sealed": sealed, "sales_basis": "immutable_offer_intervals_v2", "algorithm_version": 2,
             "prev_date_from": _day(prev_start), "prev_date_to": _day(prev_end - timedelta(seconds=1)),
             "generated_at": now,
         },
         "kpis": summarize(my_products, missing, store_rows,
                           catalog_total=len(my_by_sku),
-                          orders_connected=bool(own_units_map),
+                          orders_connected=orders_by_sku is not None,
                           missing_total=missing_total,
                           brands=len(brand_rows), categories=len(category_rows)),
         "stores": store_rows,
@@ -832,5 +864,5 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         "missing_products_total": missing_total,
         "brands": brand_rows,
         "categories": category_rows,
-        "data_quality": quality_summary(my_products, bool(own_units_map)),
+        "data_quality": quality_summary(my_products, orders_by_sku is not None),
     }

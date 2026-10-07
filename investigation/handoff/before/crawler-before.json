@@ -1,0 +1,127 @@
+{
+  "competitor_effective_price_ignored": {
+    "fixture": {
+      "id": 1,
+      "sku": "ZID-1",
+      "name": "Food",
+      "price": 100,
+      "effective_price": 75
+    },
+    "competitor_result": 100.0,
+    "own_store_shelf_result": 75.0
+  },
+  "variant_order_changes_price_for_same_root_sku": {
+    "first": {
+      "sku": "ROOT",
+      "barcode": "1234567890123",
+      "price": 20.0,
+      "qty": 10,
+      "in_stock": true
+    },
+    "reversed": {
+      "sku": "ROOT",
+      "barcode": "9876543210987",
+      "price": 200.0,
+      "qty": 10,
+      "in_stock": true
+    }
+  },
+  "tier3_emitted_record_is_unstable_and_loses_discount": {
+    "fixture_matches_tier3_output_shape": {
+      "name": "HTML Food",
+      "price": 80,
+      "sale_price": 80,
+      "original_price": 100,
+      "quantity": 0,
+      "status": "sale"
+    },
+    "first": {
+      "sku": "S-DE-d4b44f",
+      "price": 80.0,
+      "original_price": 80.0,
+      "sale_price": null,
+      "in_stock": true
+    },
+    "second_sku": "S-DE-7250a9",
+    "same_sku": false
+  },
+  "arabic_decimal_price_truncated": {
+    "fixture": "\u0661\u0662\u0663\u066b\u0664\u0665 \u0631.\u0633",
+    "result": 123.0
+  },
+  "invalid_price_not_rejected": {
+    "missing_price_becomes": 0.0,
+    "nan_string_accepted": true,
+    "USD_accepted_as_unlabelled_amount": 10.0
+  },
+  "different_store_skus_collide": {
+    "product_count": 1,
+    "catalog_product": {
+      "sku": "LOCAL-100",
+      "barcode": "1111111111111",
+      "name_ar": "Cat food 1kg"
+    },
+    "snapshots": [
+      {
+        "product_id": "e04983ee-944c-418a-8e43-c43980425e36",
+        "store_id": "A",
+        "sku": "LOCAL-100",
+        "barcode": "1111111111111",
+        "price": 25.0
+      },
+      {
+        "product_id": "e04983ee-944c-418a-8e43-c43980425e36",
+        "store_id": "B",
+        "sku": "LOCAL-100",
+        "barcode": "2222222222222",
+        "price": 500.0
+      }
+    ],
+    "same_product_id": true
+  },
+  "pagination_stops_before_declared_end": {
+    "expected_rows": 36,
+    "actual_rows": 24,
+    "requested_pages": [
+      2
+    ]
+  },
+  "successful_authenticated_sync_labelled_failed": {
+    "id": "OWN",
+    "last_crawled_at": "2026-10-07T07:08:39.523775+00:00",
+    "last_crawl_tier": 0,
+    "last_crawl_status": "success",
+    "last_crawl_error": null,
+    "last_crawl_products": 2233,
+    "last_crawl_endpoint": null
+  },
+  "barcode_alias_collision_overwrites_unit_with_carton": {
+    "fixture": [
+      {
+        "sku": "UNIT",
+        "barcode": "9003579308936",
+        "price": 20
+      },
+      {
+        "sku": "CASE",
+        "barcode": "9003579308936carton",
+        "price": 240
+      }
+    ],
+    "unit_lookup_result": [
+      [
+        240.0,
+        240.0
+      ],
+      "barcode"
+    ]
+  },
+  "vat_unknown_remains_unverified_but_numeric": {
+    "merchant_ex_vat_100_unknown_tax": [
+      115.0,
+      null,
+      115.0,
+      "merchant_assumed_inc_vat"
+    ]
+  }
+}

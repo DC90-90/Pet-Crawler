@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart } from "lucide-react";
+import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X } from "lucide-react";
 import { useState, useEffect } from "react";
 
 // Feb 2026 — Insights + Price Intel merged into a single "Price & Market Intel"
@@ -18,10 +18,11 @@ const navItems = [
   { to: "/import", pageKey: "import", icon: Upload, labelKey: "nav_import", label: "Import" },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ mobileOpen = false, onClose, onCollapse }) {
   const { logout, user } = useAuth();
   const { t, toggleLang, lang, isRTL } = useI18n();
   const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => { onCollapse?.(collapsed); }, [collapsed, onCollapse]);
   const [theme, setTheme] = useState(() => {
     if (typeof window === "undefined") return "dark";
     return localStorage.getItem("daleel_theme") || "dark";
@@ -39,7 +40,7 @@ export default function Sidebar() {
   return (
     <aside
       data-testid="sidebar-nav"
-      className={`fixed inset-y-0 start-0 ${w} flex flex-col z-40 transition-all duration-300`}
+      className={`fixed inset-y-0 start-0 ${w} max-w-[85vw] ${mobileOpen ? "flex" : "hidden"} md:flex flex-col z-40 overflow-y-auto transition-[width] duration-300`}
       style={{ background: "#090E1C", borderInlineEnd: "1px solid #13625F" }}
     >
       {/* Brand */}
@@ -58,12 +59,13 @@ export default function Sidebar() {
         {collapsed && <span className="text-lg font-bold" style={{ color: "#1E988E", fontFamily: "'Space Grotesk', sans-serif" }}>D</span>}
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="transition-colors p-1 rounded"
+          className="hidden md:block transition-colors p-1 rounded"
           style={{ color: "#A1E4DB" }}
           data-testid="sidebar-collapse-btn"
         >
           {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
         </button>
+        <button onClick={onClose} className="md:hidden p-1 text-[#A1E4DB]" aria-label="Close navigation" data-testid="mobile-nav-close"><X className="w-5 h-5" /></button>
       </div>
 
       {/* Navigation */}
@@ -78,6 +80,7 @@ export default function Sidebar() {
             <NavLink
               key={item.to}
               to={item.to}
+              onClick={onClose}
               end={item.to === "/"}
               data-testid={`nav-${item.labelKey}`}
               title={collapsed ? t(item.labelKey) : undefined}
@@ -96,6 +99,7 @@ export default function Sidebar() {
         {user?.role === "super_admin" && (
           <NavLink
             to="/users"
+            onClick={onClose}
             data-testid="nav-users"
             title={collapsed ? "Users" : undefined}
             className={({ isActive }) =>
@@ -142,6 +146,7 @@ export default function Sidebar() {
         {canAccessPage(user, "settings") && (
           <NavLink
             to="/settings"
+            onClick={onClose}
             data-testid="nav-settings"
             className={({ isActive }) =>
               `flex items-center gap-2 w-full px-3 py-2 rounded text-xs transition-all ${

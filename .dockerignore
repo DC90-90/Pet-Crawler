@@ -1,0 +1,11 @@
+.git
+**/.env
+**/.env.*
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/test_credentials.md
+investigation
+test_reports
+frontend/build
+memory

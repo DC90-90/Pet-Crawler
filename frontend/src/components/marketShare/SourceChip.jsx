@@ -12,19 +12,19 @@ export const SOURCE_META = {
     tip: "My own Zid orders ledger — real invoices",
   },
   sold_counter_diff: {
-    label: "Measured (approx.)", icon: Activity,
+    label: "Counter proxy", icon: Activity,
     cls: "bg-[#1E988E]/12 text-[#5FD3C7] border-[#1E988E]/25",
     tip: "Difference between two crawls of the store's published units-sold counter. The platform buckets and caps that badge, so it approximates real sales",
   },
   stock_depletion: {
-    label: "Measured (approx.)", icon: Activity,
+    label: "Inventory proxy", icon: Activity,
     cls: "bg-[#1E988E]/12 text-[#5FD3C7] border-[#1E988E]/25",
-    tip: "Stock level dropping between two crawls — a floor, since a sale followed by a restock inside one interval is invisible",
+    tip: "Observed inventory depletion, not verified sales. Restocks, adjustments, transfers, and missed observations can change this signal",
   },
   measured_zero: {
-    label: "Measured zero", icon: MinusCircle,
+    label: "No observed movement", icon: MinusCircle,
     cls: "bg-white/5 text-[#A1E4DB] border-white/15",
-    tip: "The store publishes a signal and was crawled at least twice — this product genuinely did not move",
+    tip: "Repeated valid observations showed no movement; this does not prove zero sales",
   },
   unavailable: {
     label: "Unavailable", icon: HelpCircle,

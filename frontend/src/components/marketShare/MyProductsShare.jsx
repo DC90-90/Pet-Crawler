@@ -45,7 +45,7 @@ export default function MyProductsShare({ days, includeToday, filters, onPickPro
     <div className="space-y-3" data-testid="ms-my-products">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-[11px] text-[#A1E4DB]" data-testid="ms-my-products-count">
-          {fmtNum(total)} product(s) · showing {rows.length} · my measured revenue{" "}
+          {fmtNum(total)} product(s) · showing {rows.length} · my observed value{" "}
           <span dir="ltr">{fmtMoney(data?.totals?.my_revenue)}</span> of{" "}
           <span dir="ltr">{fmtMoney(data?.totals?.market_revenue)}</span> tracked
         </p>

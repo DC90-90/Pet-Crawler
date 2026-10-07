@@ -1,0 +1,6 @@
+Syntax OK: work/current/frontend/src/pages/ScannerPage.jsx
+Syntax OK: work/current/frontend/src/pages/MyProductsPage.jsx
+Syntax OK: work/current/frontend/src/pages/MarketSharePage.jsx
+Syntax OK: work/current/frontend/src/components/marketShare/SourceChip.jsx
+Syntax OK: work/current/frontend/src/components/marketShare/ShareOverview.jsx
+Syntax OK: work/current/frontend/src/components/marketShare/Methodology.jsx

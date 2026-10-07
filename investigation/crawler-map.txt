@@ -1,0 +1,115 @@
+17:# iter61 — one definition of barcode canonicalisation, shared with matcher.py.
+19:from core.utils import _BARCODE_LEAD_RE, barcode_keys, canonical_barcode  # noqa: F401
+45:def get_proxy_credentials():
+54:def get_proxy_url():
+63:def playwright_proxy_config(user, pwd, host, port):
+83:async def proxy_health(force=False):
+113:async def resolve_proxy_for(store, crawl_log=None, tier=""):
+128:async def record_proxy_usage(db, store, bytes_estimate):
+178:# iter73h — canonical brand map. Merges Arabic + English variants of the same
+247:def canonical_brand(raw):
+251:    own field) into a display-ready canonical name. Handles Arabic/English
+268:    # Third: the raw value doesn't match a known canonical form. Return the
+275:def extract_brand_smart(name_ar, name_en, existing=None):
+285:    Returns the canonical form via `canonical_brand()` or None if nothing
+289:        c = canonical_brand(existing)
+297:            return canonical_brand(got) or got
+316:                    c2 = canonical_brand(two)
+319:                return canonical_brand(cand) or cand
+351:def extract_brand(name):
+364:def guess_category(name):
+428:def _has_treat_signal(t):
+432:def _is_bundle(t):
+436:def classify_food_subcategory(parent_category, *texts):
+464:def classify_food_subcategory_hybrid(parent_category, name, store_tags):
+475:def extract_store_category_names(raw):
+493:def guess_animal(name):
+510:def extract_weight(name):
+520:def _extract_price_from_text(text):
+528:def _make_crawl_log(store, tier_attempted):
+549:async def _finalize_crawl_log(db, crawl_log, store_id):
+590:async def _detect_soft_block(db, store, current_count, crawl_log):
+651:def _apply_soft_block(crawl_log, current_count, endpoint_tag, reason):
+665:def _absolutize_url(raw_url, store_domain):
+682:def _price_amount(f):
+714:def _extract_sold_count(raw):
+744:def _normalize_raw_product(raw, store_name):
+786:            qty = max(0, int(float(str(raw.get("quantity") or raw.get("stock_quantity") or raw.get("qty") or 0))))
+971:def _collect_variant_field_list(raw, keys, *, fallback="", numeric_only=False):
+1007:async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=95):
+1122:def _build_salla_endpoints(base, cached_endpoint, platform="salla"):
+1141:async def _try_single_endpoint(http, ep, crawl_log):
+1199:async def _paginate_endpoint(http, ep, initial_items):
+1265:async def crawl_salla_tier1(db, store):
+1340:async def _playwright_navigate_and_scroll(page, base):
+1361:def _build_xhr_response_handler(intercepted_list):
+1387:async def crawl_tier2_xhr(db, store):
+1523:def _extract_products_from_html(html_content, platform):
+1581:def _select_first_text(card, selectors):
+1589:def _select_first_price(card, selectors):
+1597:def _select_first_attr(card, selectors, *attrs):
+1608:async def crawl_tier3_html(db, store):
+1682:async def _discover_salla_category_ids(page, base):
+1727:async def _capture_salla_store_identifier(page, base):
+1832:def _salla_raw_barcode(raw):
+1859:def _select_salla_variant_barcode(detail, listed_price=0.0):
+1871:    A candidate counts only if canonical_barcode() accepts it. Returned as the
+1872:    raw digits when the whole string is already an EAN, else as the canonical
+1874:    as its digits-only canonical form, since the normalizer's root scan
+1881:        canon = canonical_barcode(cand)
+1895:                           if (v.get("stock_quantity") or 0) > 0), None)
+1910:def _salla_missing_barcode_items(items):
+1924:# declared barcode/gtin fields keep the shipped canonical-only gate.
+1928:def _is_strict_gtin(val):
+1938:def _stage1_extract_barcode(detail, listed_price=0.0):
+1942:    declared root gtin/mpn/barcode/ean/upc fields, canonical-gated) — then, new
+1957:async def _salla_detail_barcode_supplement(client, captured, store_domain=None,
+2088:def _pick_dom_barcode(preferred_texts, body_text):
+2100:         _is_strict_gtin, not just the canonical gate.
+2113:def _salla_item_page_url(it, store_domain):
+2124:async def _salla_dom_barcode_supplement(store, items, cap=SALLA_DOM_BARCODE_CAP,
+2224:async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
+2339:async def _salla_store_identifier_from_html(domain):
+2364:def _flatten_salla_categories(nodes, out=None, depth=0):
+2380:async def _salla_categories_from_api(store_identifier, domain=None):
+2407:async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=200, max_pages_per_cat=200):
+2611:def _is_valid_ean(val):
+2623:def _extract_zid_sold_count(product: dict) -> int:
+2639:def _own_sync_fallback_warning(zid_status: str):
+2663:def _zid_is_taxable(p):
+2676:async def _fetch_zid_api_catalog(db, store):
+2735:                        "qty_available": 0 if p.get("is_infinite") else (p.get("quantity") or 0),
+2736:                        "in_stock": bool(p.get("is_infinite")) or ((p.get("quantity") or 0) > 0),
+2767:def storefront_shelf_price(raw):
+2770:    `effective_price` is the price actually on the shelf (it reflects any live
+2771:    discount); `price` is the list price and the fallback when effective_price
+2776:    effective = _price_amount(raw.get("effective_price"))
+2785:# iter47 — plus the canonical GTIN-14 form, so UPC-A-with-leading-zero and
+2800:def product_url_id(url):
+2806:def build_key_index(rows, payload_fn):
+2830:def _storefront_price_index(rows):
+2838:def merchant_index(rows):
+2844:def storefront_price_lookup(idx, sku=None, barcode=None, product_url=None, canonical=True):
+2848:    exact SKU, barcode (literal -> suffix-stripped -> GTIN-14 canonical), the
+2852:    canonical=False disables the iter47 keys (GTIN-14 + product URL) so the
+2864:    for k in barcode_keys(barcode, canonical=canonical):
+2876:    if canonical:
+2877:        for k in barcode_keys(barcode, canonical=False):
+2882:    if canonical:
+2889:        for k in barcode_keys(s, canonical=canonical):
+2916:def _sf_items(body):
+2931:def _sf_page_meta(body):
+2960:async def _paginate_own_storefront(http, ep, initial_items, max_pages=OWN_SF_MAX_PAGES):
+3051:def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
+3117:async def fetch_own_storefront_catalog_raw(store, max_pages=OWN_SF_MAX_PAGES):
+3121:    _normalize_raw_product() drops `effective_price` and `is_taxable`, which are
+3156:async def sync_own_store_prices(db, store=None):
+3330:            # effective_price-first shelf rule here on the raw row.
+3533:                "sold_count_cumulative": int(raw.get("sold_count") or 0),
+3538:                and int(_prev.get("sold_count") or 0) == int(raw.get("sold_count") or 0)
+3583:                "sold_count": int(raw.get("sold_count") or 0),
+3685:async def crawl_store_waterfall(db, store):
+3728:async def _try_tier4_supplement(db, store, base_result):
+3764:async def crawl_tier4_authenticated(db, store, cookies):
+3822:async def _extract_tier4_data(card, page, platform):
+3871:def _extract_price_from_card_text(text):

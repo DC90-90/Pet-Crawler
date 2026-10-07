@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="7" time="0.969" timestamp="2026-10-07T10:42:29.143049+00:00" hostname="agent-env-24867ce7-9497-42ab-89a5-067b1dc88c54"><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_process_crawled_products_keeps_variant_prices_and_store_isolation" time="0.162" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_shared_cohort_is_consistent_across_adapters_and_exclusions_are_explicit" time="0.031"><failure message="AssertionError: assert 2 == 1&#10; +  where 2 = len({'27c268d4b80d261047b89fd0265f21a93a9133c589989b7565a51ee8a2ae136e', '7d151834374b9a8bce2b3b8074dc20838570d5af83fb84af974033037aa4d576'})">backend/tests/test_iteration37_integration_real_mongo.py:247: in test_shared_cohort_is_consistent_across_adapters_and_exclusions_are_explicit
+    _run(_go())
+backend/tests/test_iteration37_integration_real_mongo.py:37: in _run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_iteration37_integration_real_mongo.py:244: in _go
+    assert len(cohort_ids) == 1
+E   AssertionError: assert 2 == 1
+E    +  where 2 = len({'27c268d4b80d261047b89fd0265f21a93a9133c589989b7565a51ee8a2ae136e', '7d151834374b9a8bce2b3b8074dc20838570d5af83fb84af974033037aa4d576'})</failure></testcase><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_ledger_idempotency_quarantine_and_sealed_cutoff" time="0.026" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_ingest_v2_concurrent_same_run_has_single_writer" time="0.034" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_own_orders_aggregate_requires_complete_coverage_and_normalizes_invalid_orders" time="0.025"><failure message="assert 3 == 1">backend/tests/test_iteration37_integration_real_mongo.py:417: in test_own_orders_aggregate_requires_complete_coverage_and_normalizes_invalid_orders
+    _run(_go())
+backend/tests/test_iteration37_integration_real_mongo.py:37: in _run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_iteration37_integration_real_mongo.py:413: in _go
+    assert agg["orders_count"] == 1
+E   assert 3 == 1</failure></testcase><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_job_control_lease_queue_and_execute_status" time="0.005" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_cron_dispatch_auth_payload_and_duplicate_queue" time="0.012" /></testsuite></testsuites>

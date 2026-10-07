@@ -1,0 +1,157 @@
+{
+  "audit_date": "2026-10-07",
+  "base_commit": "62a1a7261ae181ca51c65283b137109a9d02df93",
+  "deployed_commit_verified": false,
+  "findings": [
+    {
+      "id": "F01",
+      "severity": "Critical",
+      "title": "A variant barcode can inherit another variant’s price",
+      "basis": "Live + source + reproduction",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/crawlers.py#L744\">backend/crawlers.py:744</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/matcher.py#L374\">backend/matcher.py:374</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/market_share.py#L210\">backend/market_share.py:210</a>",
+      "detail": "The crawler selects the first numeric variant identifier and its price but retains the parent SKU and parent quantity. It then stores all variant identifiers in arrays. The matcher and Market Share can match any identifier in those arrays to the same single snapshot price. Reversing two variants in a fixture changed the price from 20 to 200 under the same ROOT SKU. A 99% identity score does not validate the price’s variant.",
+      "action": "Persist one offer per store, listing and variant, with that variant’s own price, quantity, attributes and source evidence. Parent arrays may discover candidates but must never supply a comparable price. Quarantine unresolved variants; do not repair this with product-specific price exceptions."
+    },
+    {
+      "id": "F02",
+      "severity": "Critical",
+      "title": "Production can generate fabricated historical observations",
+      "basis": "Source + reproduction; production contamination unconfirmed",
+      "status": "Contained locally",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L612\">backend/server.py:612</a>",
+      "detail": "On an empty stores collection, SEED_DEMO_DATA defaults to true. The exact current seed function generated 31,450 backdated snapshots for 202 products across seven stores in an isolated in-memory test. 27,133 received confidence ≥85. The original seed does not label those observations synthetic. This proves a fabrication mechanism, not that every live historical point came from it.",
+      "action": "The patch defaults seeding off, requires explicit development/test opt-in and labels generated snapshots synthetic. Inspect a backed-up production database for seed provenance before quarantining any existing records. Never reconstruct missing historical prices by randomization or interpolation presented as observations."
+    },
+    {
+      "id": "F03",
+      "severity": "Critical",
+      "title": "Missing observations manufacture sales",
+      "basis": "Source + reproduction",
+      "status": "Partially contained locally",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/core/utils.py#L187\">backend/core/utils.py:187</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L4120\">backend/server.py:4120</a>",
+      "detail": "Quantity [20, null] becomes 20 estimated sales. Counter [100, null, 100] becomes 50 estimated sales because null is converted to zero and the apparent increase is clipped. Quantity [40, 0] produces 40 despite the advertised 10-unit interval cap. Filtering missing/placeholder readings can also bridge intervals that were never continuously observed.",
+      "action": "The patch preserves gaps in the shared estimator and daily rollup, rejects implausible jumps instead of inventing a clipped count, and retains genuine observed zero. Upstream extractors still collapse some missing fields into zero, and other legacy velocity paths remain: migrate them to one typed observation contract before release."
+    },
+    {
+      "id": "F04",
+      "severity": "Critical",
+      "title": "Store capability is incorrectly treated as product-level zero sales",
+      "basis": "Live + source",
+      "status": "Contained locally",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/market_share.py#L237\">backend/market_share.py:237</a>",
+      "detail": "If any product proves a store publishes stock/counters and the store has two days of data, _resolve_units returns zero for another product with no sales row. That product may never have been observed twice. The live UI calls this “Measured zero” and says the product genuinely did not move. Unchanged inventory also cannot rule out sales followed by restocking.",
+      "action": "The patch returns Unavailable when product-level evidence is missing. Exact zero requires a complete order-feed window or an explicitly defined observation-only metric; it cannot be inferred from another product’s signal."
+    },
+    {
+      "id": "F05",
+      "severity": "Critical",
+      "title": "Merchant-local SKUs and manual decisions leak across stores",
+      "basis": "Source + reproduction",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/crawlers.py#L1007\">backend/crawlers.py:1007</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/matcher.py#L400\">backend/matcher.py:400</a>",
+      "detail": "products is looked up by SKU alone. Two stores’ LOCAL-100 fixtures—cat food at 25 and a dog cage at 500—share one catalogue product ID. A contradictory store barcode can be overridden by the shared catalogue barcode. A manual confirmation keyed by competitor SKU applies to a different store. Exact proprietary SKU equality matched different brands with conflicting barcodes at confidence 95. SKU-level deduplication drops a second retailer, and an early barcode return skips other stores’ SKU matches.",
+      "action": "Store-scoped offer identity and explicit catalogue mappings are required. Key approvals/blacklists by own product plus competitor store, listing and variant. Validate GTIN check digits and reject conflicting pack/size evidence. Merchant SKU equality should only propose a match unless corroborated."
+    },
+    {
+      "id": "F06",
+      "severity": "Critical",
+      "title": "Prices do not share a consistent eligibility rule across screens",
+      "basis": "Live + source",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L3588\">backend/server.py:3588</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L5766\">backend/server.py:5766</a>",
+      "detail": "The sampled 20 kg litter row used Lana’s 13-day-old SAR 29.95 price. Detail also showed Zarafa’s April 25 observation and two out-of-stock offers. The detail rank included six sellers. “All data fresh” describes store runs, not the age or validity of each contributing offer. Pack guards differ between My Products, Scanner, detail and Market Share; matching windows, seller lookbacks and freshness windows also differ.",
+      "action": "One query service must return a versioned cohort with the same selected stores, variant eligibility, timestamp cutoff, currency, tax basis and stock policy. Historical/OOS offers may remain visible with labels but must not silently define an actionable current market low."
+    },
+    {
+      "id": "F07",
+      "severity": "High",
+      "title": "Sales proxies and incomplete denominators are presented too strongly",
+      "basis": "Live + source + reproduction",
+      "status": "Partially contained locally",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L2792\">backend/server.py:2792</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L7325\">backend/server.py:7325</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/market_share.py#L438\">backend/market_share.py:438</a>",
+      "detail": "Stock depletion is not a sales floor: transfers, damage, reservations and corrections can reduce stock without sales. Revenue uses shelf prices, not invoice prices. The legacy My Products calculation can combine 20 actual own units with a 10-unit snapshot denominator and display 200%, marked non-estimated. Ranking labels any numeric revenue_30d “exact.” In live Market Share, 2,832 own products and 1,358 with a tracked competitor imply 1,474 without one, yet 1,765 were labelled “Only I sell it”: the code conflates missing competitor sales with absent competitors.",
+      "action": "The patch withholds the unreconciled legacy share, labels revenue proxies as estimates, separates catalogue presence from sales availability, and aligns headline numerator/denominator cohorts. Remaining estimates need per-product coverage and uncertainty. Exact own invoices do not make an estimated competitor denominator exact."
+    },
+    {
+      "id": "F08",
+      "severity": "High",
+      "title": "The scanner’s “revenue uplift” has the wrong business meaning",
+      "basis": "Live + source",
+      "status": "Presentation contained locally",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L5766\">backend/server.py:5766</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/frontend/src/pages/ScannerPage.jsx#L100\">frontend/src/pages/ScannerPage.jsx:100</a>",
+      "detail": "The live scanner shows SAR 822.1 as potential revenue uplift for 14 days. Its formula is (own price − cheapest price) × past own units. One row uses (204.70 − 122.43) × 3 = 246.81. At unchanged volume this is revenue lost by cutting the price, not revenue gained. The panel also says matching the lowest price will “beat” that competitor. Missing sales often become zero in the scanner.",
+      "action": "The patch calls this price-gap exposure, explicitly says it is not a forecast, and removes the automatic undercut recommendation. Keep API aliases temporarily but migrate consumers to the explicit new field. A real recommendation needs unit cost, margin limits, comparable available offers and a validated demand model or experiment."
+    },
+    {
+      "id": "F09",
+      "severity": "High",
+      "title": "A successful crawl can still be incomplete",
+      "basis": "Live + source + reproduction",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/crawlers.py#L1199\">backend/crawlers.py:1199</a>",
+      "detail": "All 11 stores showed successful runs today, but this does not prove catalogue completeness. The shared page-number paginator stops when a page has fewer than 20 items, ignoring declared continuation: a three-page fixture of 12 products returns only 24 of 36. Exceptions break the loop and return partial results. The new soft-block threshold is useful but a partial catalogue above its threshold can still pass. Tier success and product counts alone do not prove complete variants or offers.",
+      "action": "Return a CrawlRun with explicit expected/discovered/fetched/parsed/accepted/rejected counts, continuation exhaustion, errors and completeness. Follow actual pagination metadata, deduplicate stable IDs and detect cursor loops. Do not archive unseen listings or certify a full store refresh after a partial run."
+    },
+    {
+      "id": "F10",
+      "severity": "Critical",
+      "title": "Currency, tax, missing prices and aliases are not safely normalized",
+      "basis": "Source + reproduction",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/crawlers.py#L682\">backend/crawlers.py:682</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/crawlers.py#L2830\">backend/crawlers.py:2830</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/crawlers.py#L3051\">backend/crawlers.py:3051</a>",
+      "detail": "Competitor normalization ignores effective_price: a fixture with list 100 and effective 75 remains 100, while the own-store shelf helper returns 75. A USD amount is accepted without currency context; missing price becomes 0; NaN is accepted. Arabic decimal ١٢٣٫٤٥ is parsed as 123.0. Canonical suffix stripping lets a carton barcode alias overwrite a unit’s price (20 becomes 240). Unknown own-store tax status is automatically grossed up: merchant 100 becomes 115 with basis merchant_assumed_inc_vat.",
+      "action": "Use Decimal money and explicit currency/tax/price-kind metadata. Reject nonfinite, missing or ambiguous amounts from comparable offers. Source-specific adapters must distinguish effective/list/member/coupon/from-prices. Unknown tax basis stays unknown pending storefront or documented feed verification; do not assume a 15% discrepancy explains every wrong price."
+    },
+    {
+      "id": "F11",
+      "severity": "High",
+      "title": "Daily closes and mutable rollups undermine history and window accuracy",
+      "basis": "Live + source + reproduction",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/ledger.py#L109\">backend/ledger.py:109</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L4115\">backend/server.py:4115</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/market_share.py#L104\">backend/market_share.py:104</a>",
+      "detail": "Snapshots [10, 5, 10] within one day yield five depletion units in one path but none after daily-close reduction. The ledger writer allows an older event to overwrite a newer same-day close, and replaying the same event increments observations_that_day again. Market Share reads sku_sales_daily, a rebuilt rollup, rather than immutable sealed sales facts. A 30D KSA boundary is formatted as a UTC date for ledger queries/display: the live window was Sep 6–Oct 6 (31 dates), although 30 complete KSA days should be Sep 7–Oct 6. _store_signals also counts no_data store-day rows as days observed.",
+      "action": "Persist immutable observation events with unique event IDs, observation time and ingestion time. Guard late/replayed events; derive KSA days explicitly. Seal versioned daily outputs only after coverage checks. Rebuild corrected derived tables in parallel from retained evidence, then reconcile before switching readers; do not rewrite source history to fit today’s interpretation."
+    },
+    {
+      "id": "F12",
+      "severity": "High",
+      "title": "Cache and job status can imply freshness/completion without evidence",
+      "basis": "Source + reproduction",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L2590\">backend/server.py:2590</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/frontend/src/pages/MyProductsPage.jsx#L143\">frontend/src/pages/MyProductsPage.jsx:143</a>",
+      "detail": "The actual page-cache TTL is 24 hours; an isolated 23-hour cache was served with stale=false, despite the report’s six-hour freshness description. My Products announces “Sync complete” after a fixed 60-second timer, without polling a successful job completion. Store schedules are daily, with own-store sync every six hours; this is not continuous live price detection.",
+      "action": "Show source observation age separately from computation/cache age. Invalidate all affected datasets after successful ingestion/mapping changes. Return durable job IDs and poll real status; label partial/failed runs. Define freshness objectives by store and product priority and show stale/unknown honestly when they are missed."
+    },
+    {
+      "id": "F13",
+      "severity": "Critical",
+      "title": "Authentication does not enforce the advertised page permissions",
+      "basis": "Source review; no exploit attempted",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L209\">backend/server.py:209</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L733\">backend/server.py:733</a>; <a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/server.py#L1792\">backend/server.py:1792</a>",
+      "detail": "Public registration grants zero allowed_pages, but get_user returns those permissions without enforcing them. Store creation, update, deletion, crawl and scheduler mutation handlers depend only on get_user, not require_super_admin. Hiding a page in React does not restrict its API. The public main branch also contains embedded administrator/crawler credentials; newer source uses environment variables, but older public versions remain exposed. No credentials are reproduced in this handoff.",
+      "action": "Rotate exposed credentials and revoke sessions through the account owner. Add explicit read/operator/admin permissions at every API route and object scope, disable unnecessary public registration, test denial paths, and audit access logs. Do not test destructive permissions on the live client database."
+    },
+    {
+      "id": "F14",
+      "severity": "High",
+      "title": "The deployment package and source-of-truth workflow are incomplete",
+      "basis": "Repository + source review",
+      "status": "Release blocker",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/deploy/backend.Dockerfile#L34\">deploy/backend.Dockerfile:34</a>",
+      "detail": "GitHub main is older than the report. The newer work lives on a conflict-named branch. The checked-in backend Dockerfile copies only server.py and crawlers.py plus .env, omitting imported modules such as core, models, ledger and market_share and baking an environment file into the image. This would not reproduce the present backend as written; it is not proof Emergent uses that Dockerfile. Scheduler jobs live in the API process, so replica scaling needs shared locking and a separate worker design.",
+      "action": "Establish one reviewed release branch, immutable build SHA and /version endpoint. Build from a complete source manifest, inject secrets at runtime, pin dependencies, use separate durable workers/queues with per-store locks, and run migrations/restore tests in staging."
+    },
+    {
+      "id": "F15",
+      "severity": "Medium",
+      "title": "Brand and category analytics inherit heuristic metadata errors",
+      "basis": "Live + source",
+      "status": "Release blocker for brand conclusions",
+      "source": "<a href=\"https://github.com/DC90-90/Pet-Crawler/blob/62a1a7261ae181ca51c65283b137109a9d02df93/backend/market_share.py#L650\">backend/market_share.py:650</a>",
+      "detail": "The live methodology reported 2,437 brand values derived from names and zero high-confidence rows. Brand selectors contained generic terms such as Plastic, Small and Water and inconsistent Kit Cat casing. A wrong brand taxonomy makes category and brand “share” appear precise while grouping unrelated products.",
+      "action": "Use a curated canonical taxonomy, multilingual aliases and an explicit unresolved state. Preserve supplied vs derived metadata and require review before derived classifications contribute to client-facing brand conclusions."
+    }
+  ]
+}

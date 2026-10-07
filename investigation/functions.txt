@@ -1,0 +1,384 @@
+backend/server.py:103:def encrypt_value(plaintext: str) -> str:
+backend/server.py:108:def decrypt_value(ciphertext: str) -> str:
+backend/server.py:129:async def _migration_applied(key: str) -> bool:
+backend/server.py:136:async def _mark_migration(key: str, info: dict = None):
+backend/server.py:180:async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+backend/server.py:187:class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+backend/server.py:197:def hash_pw(pw):
+backend/server.py:200:def check_pw(pw, h):
+backend/server.py:203:def make_token(uid, email):
+backend/server.py:209:async def get_user(request: Request):
+backend/server.py:241:def require_super_admin(user=Depends(get_user)):
+backend/server.py:247:def is_super_admin_email(email: str) -> bool:
+backend/server.py:254:async def health_check():
+backend/server.py:319:async def health_detailed(user=Depends(get_user)):
+backend/server.py:612:async def seed_database():
+backend/server.py:722:async def ensure_stores():
+backend/server.py:733:async def register(request: Request, data: AuthIn, response: Response):
+backend/server.py:757:async def login(request: Request, data: AuthIn, response: Response):
+backend/server.py:779:async def me(user=Depends(get_user)):
+backend/server.py:783:async def logout(response: Response):
+backend/server.py:788:async def protected(user=Depends(get_user)):
+backend/server.py:792:def _serialize_user(u: dict) -> dict:
+backend/server.py:806:def _validate_pages(pages: List[str]) -> List[str]:
+backend/server.py:811:async def admin_list_users(user=Depends(require_super_admin)):
+backend/server.py:820:async def admin_create_user(data: AdminCreateUserIn, _=Depends(require_super_admin)):
+backend/server.py:846:async def admin_delete_user(user_id: str, _=Depends(require_super_admin)):
+backend/server.py:860:async def admin_update_password(user_id: str, data: AdminUpdatePasswordIn, current_user=Depends(require_super_admin)):
+backend/server.py:877:async def admin_update_role(user_id: str, data: AdminUpdateRoleIn, _=Depends(require_super_admin)):
+backend/server.py:894:async def admin_update_pages(user_id: str, data: AdminUpdatePagesIn, _=Depends(require_super_admin)):
+backend/server.py:917:async def admin_coverage_report(user=Depends(require_super_admin)):
+backend/server.py:997:async def admin_recrawl_store(store_id: str, user=Depends(require_super_admin)):
+backend/server.py:1041:async def admin_archive_status(user=Depends(require_super_admin)):
+backend/server.py:1046:async def admin_archive_files(date: str = Query(..., description="KSA date, YYYY-MM-DD"),
+backend/server.py:1054:async def admin_archive_download(path: str = Query(...),
+backend/server.py:1075:async def admin_archive_run(background: BackgroundTasks,
+backend/server.py:1096:async def scheduled_archive():
+backend/server.py:1115:async def zid_oauth_status(_=Depends(require_super_admin)):
+backend/server.py:1120:async def zid_oauth_start(request: Request,
+backend/server.py:1137:async def zid_oauth_callback(request: Request, code: str = Query(None),
+backend/server.py:1157:async def zid_oauth_disconnect(_=Depends(require_super_admin)):
+backend/server.py:1162:async def zid_orders_sync(full: bool = Query(False, description="Walk every page, not just the recent window"),
+backend/server.py:1171:class BackfillIn(BaseModel):
+backend/server.py:1178:async def admin_backfill(payload: BackfillIn, user=Depends(require_super_admin)):
+backend/server.py:1267:async def admin_backfill_status(run_id: Optional[str] = Query(None),
+backend/server.py:1276:class RematchIn(BaseModel):
+backend/server.py:1281:async def admin_rematch(payload: RematchIn, user=Depends(require_super_admin)):
+backend/server.py:1366:async def ensure_all_indexes(db):
+backend/server.py:1388:async def admin_ensure_snapshot_indexes(user=Depends(require_super_admin)):
+backend/server.py:1435:async def admin_proxy_health(force: bool = Query(True), user=Depends(require_super_admin)):
+backend/server.py:1466:async def admin_refresh_caches(user=Depends(require_super_admin)):
+backend/server.py:1493:def _plan_summary(explain_doc):
+backend/server.py:1520:async def admin_perf_probe(sku: str = Query(...), user=Depends(require_super_admin)):
+backend/server.py:1580:async def admin_proxy_usage(user=Depends(get_user)):
+backend/server.py:1622:async def seed_super_admin():
+backend/server.py:1669:async def scheduled_crawl_job(store_id: str):
+backend/server.py:1720:def register_crawl_job(store_id, store_name, store_domain):
+backend/server.py:1745:def unregister_crawl_job(store_id):
+backend/server.py:1751:def get_next_run(store_id):
+backend/server.py:1762:async def list_stores(user=Depends(get_user)):
+backend/server.py:1792:async def create_store(data: StoreIn, user=Depends(get_user)):
+backend/server.py:1816:async def update_store(store_id: str, data: StoreUpdate, user=Depends(get_user)):
+backend/server.py:1826:async def delete_store(store_id: str, user=Depends(get_user)):
+backend/server.py:1834:async def trigger_crawl(store_id: str, user=Depends(get_user)):
+backend/server.py:1854:async def get_crawl_logs(store_id: str, limit: int = Query(10), user=Depends(get_user)):
+backend/server.py:1859:async def toggle_pause_crawls(user=Depends(get_user)):
+backend/server.py:1865:async def scheduler_status(user=Depends(get_user)):
+backend/server.py:1877:async def data_freshness(user=Depends(get_user)):
+backend/server.py:2093:async def verify_encryption(user=Depends(get_user)):
+backend/server.py:2104:async def save_tier4_credentials(store_id: str, data: Tier4CredentialsIn, user=Depends(get_user)):
+backend/server.py:2133:async def get_tier4_status(store_id: str, user=Depends(get_user)):
+backend/server.py:2180:async def test_tier4_login(store_id: str, user=Depends(get_user)):
+backend/server.py:2198:async def clear_tier4_session(store_id: str, user=Depends(get_user)):
+backend/server.py:2212:async def tier4_summary(user=Depends(get_user)):
+backend/server.py:2254:async def list_pending_otps(user=Depends(get_user)):
+backend/server.py:2264:async def submit_otp(request: Request, data: OtpSubmitIn, user=Depends(get_user)):
+backend/server.py:2287:async def retry_otp(store_id: str, user=Depends(get_user)):
+backend/server.py:2301:async def otp_status(store_id: str, user=Depends(get_user)):
+backend/server.py:2309:async def _create_otp_request(store_id: str, store_name: str, phone_last4: str):
+backend/server.py:2327:async def _wait_for_otp(store_id: str, timeout_secs: int = 600) -> Optional[str]:
+backend/server.py:2339:async def _run_tier4_login(store_id: str):
+backend/server.py:2407:async def _login_salla(page, base_url, store, credentials, phone_last4):
+backend/server.py:2486:async def _login_zid(page, base_url, store, credentials, phone_last4):
+backend/server.py:2530:async def _login_shopify(page, base_url, store, credentials, phone_last4):
+backend/server.py:2594:def _dashboard_cache_key(days: int) -> str:
+backend/server.py:2598:async def _store_dashboard_cache(db, days, dataset):
+backend/server.py:2610:async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
+backend/server.py:2629:async def maybe_recompute_dashboard_cache(db, min_interval_secs=600, force=False):
+backend/server.py:2656:def _page_cache_key(base: str, days=None) -> str:
+backend/server.py:2660:async def _store_page_cache(db, base, days, payload):
+backend/server.py:2671:async def _serve_page_cache(db, base, days, compute, cacheable=True):
+backend/server.py:2710:def _apply_cache_headers(response, meta):
+backend/server.py:2730:async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
+backend/server.py:2761:async def maybe_recompute_page_caches(db, min_interval_secs=600, force=False):
+backend/server.py:2775:async def _own_orders_aggregate(db, o_start, o_end=None):
+backend/server.py:2792:async def _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only):
+backend/server.py:3392:async def my_products(
+backend/server.py:3470:async def list_products(
+backend/server.py:3540:async def _discover_snapshot_pairs(db, clause, since):
+backend/server.py:3561:async def _pair_snapshot_rows(db, store_id, psku, series_since, lookback_since):
+backend/server.py:3588:async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS,
+backend/server.py:3742:def _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name, now=None,
+backend/server.py:3814:async def get_product(sku: str, user=Depends(get_user)):
+backend/server.py:3846:async def product_history(sku: str, days: int = Query(30), user=Depends(get_user)):
+backend/server.py:3865:async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_user)):
+backend/server.py:4000:async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_user)):
+backend/server.py:4115:def _metric_day_str(dt):
+backend/server.py:4120:async def _recompute_store_metrics(db, store_id):
+backend/server.py:4284:async def recompute_all_store_metrics(db):
+backend/server.py:4314:async def _maybe_backfill_store_metrics(db):
+backend/server.py:4345:async def _drops_from_rollups(db, since):
+backend/server.py:4356:async def _gaps_from_coverage(db, since):
+backend/server.py:4370:async def _spread_docs_from_coverage(db, since):
+backend/server.py:4381:async def _conf_avg_from_rollups(db, since):
+backend/server.py:4396:async def _freshness_from_coverage(db, now):
+backend/server.py:4423:async def _gaps_rows_from_coverage(db, since, total_stores, limit=15):
+backend/server.py:4436:async def _price_wars_rows_from_coverage(db, since, limit=10):
+backend/server.py:4455:async def _restock_rows_from_coverage(db, since):
+backend/server.py:4466:async def _sales_pairs_from_rollups(db, since, store_id=None, until=None):
+backend/server.py:4517:async def _insights_summary_compute(db, days):
+backend/server.py:4584:async def _compute_market_position_summary(db):
+backend/server.py:4689:async def _insights_leaderboard_compute(db, days):
+backend/server.py:4824:async def _salla_badge_revenue_by_store(db, since):
+backend/server.py:4879:async def _insights_top_sellers_compute(db, days, store_id):
+backend/server.py:4908:async def _insights_trending_compute(db, days):
+backend/server.py:4942:async def _insights_gaps_compute(db, days):
+backend/server.py:4967:async def _insights_price_wars_compute(db, days):
+backend/server.py:4988:async def _insights_restock_compute(db, days):
+backend/server.py:5022:async def _insights_sales_compute(db, days, date_from, date_to, search, sort, user):
+backend/server.py:5160:async def list_filters(user=Depends(get_user)):
+backend/server.py:5165:async def create_filter(data: SavedFilterIn, user=Depends(get_user)):
+backend/server.py:5201:def _num(v):
+backend/server.py:5206:def _aware(dt):
+backend/server.py:5212:async def _discount_history(db, rows, since):
+backend/server.py:5287:async def _sold_during_discount(db, rows, history, platform_by_store):
+backend/server.py:5329:async def _enrich_discount_rows(db, rows, since):
+backend/server.py:5385:def _discount_match(since, store_id):
+backend/server.py:5422:def _latest_per_pair_stage():
+backend/server.py:5436:async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+backend/server.py:5490:async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+backend/server.py:5537:async def discount_timeline(user=Depends(get_user)):
+backend/server.py:5602:async def discount_aggression(user=Depends(get_user)):
+backend/server.py:5728:async def _detect_pack_variants(db, skus, since):
+backend/server.py:5766:async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
+backend/server.py:6189:def send_alert_notification(alert, event, channel="console"):
+backend/server.py:6195:async def list_alerts(user=Depends(get_user)):
+backend/server.py:6209:async def create_alert(data: AlertIn, user=Depends(get_user)):
+backend/server.py:6225:async def toggle_alert(alert_id: str, user=Depends(get_user)):
+backend/server.py:6234:async def delete_alert(alert_id: str, user=Depends(get_user)):
+backend/server.py:6241:async def alert_feed(days: int = Query(30), user=Depends(get_user)):
+backend/server.py:6250:async def check_alerts_now(user=Depends(get_user)):
+backend/server.py:6301:async def auto_generate_alerts(user=Depends(get_user)):
+backend/server.py:6378:async def list_notifications(user=Depends(get_user)):
+backend/server.py:6414:async def store_profile(store_id: str, user=Depends(get_user)):
+backend/server.py:6845:async def export_csv(days: int = Query(30), user=Depends(get_user)):
+backend/server.py:6862:async def generate_market_digest():
+backend/server.py:6948:def deliver_digest(digest):
+backend/server.py:6955:async def list_digests(user=Depends(get_user)):
+backend/server.py:6960:async def latest_digest(user=Depends(get_user)):
+backend/server.py:6965:async def trigger_digest(user=Depends(get_user)):
+backend/server.py:6977:async def import_products(file: UploadFile = File(...), user=Depends(get_user)):
+backend/server.py:7084:async def trigger_matching(background: BackgroundTasks, user=Depends(get_user)):
+backend/server.py:7097:async def _background_matching():
+backend/server.py:7116:async def import_status(user=Depends(get_user)):
+backend/server.py:7163:async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_user)):
+backend/server.py:7174:async def trigger_orders_sync(background: BackgroundTasks, full: bool = Query(False, description="Full backfill: walk ALL order pages the Zid API will serve, not just the recent refresh window"), user=Depends(get_user)):
+backend/server.py:7210:async def _run_sync_and_match(kind: str):
+backend/server.py:7325:def _ranking_revenue_value(row):
+backend/server.py:7355:async def _store_ranking_compute(db):
+backend/server.py:7828:async def _resolve_match_prices(db, matches, now=None,
+backend/server.py:7857:def _live_match_price(m, resolved):
+backend/server.py:7897:def _effective_own_price(mp):
+backend/server.py:7936:async def _price_intel_dashboard_compute(db):
+backend/server.py:8181:async def price_intel_product_detail(sku: str, user=Depends(get_user)):
+backend/server.py:8295:async def confirm_match(data: MatchActionIn, user=Depends(get_user)):
+backend/server.py:8306:async def reject_match(data: MatchActionIn, user=Depends(get_user)):
+backend/server.py:8324:async def list_my_products(page: int = 1, limit: int = 50, search: str = "", user=Depends(get_user)):
+backend/server.py:8341:async def get_my_skus(user=Depends(get_user)):
+backend/server.py:8366:async def backfill_food_subcategories(db):
+backend/server.py:8422:async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+backend/server.py:8609:async def own_snapshot_vat_backfill_get(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+backend/server.py:8618:async def own_snapshot_vat_backfill(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+backend/server.py:8824:async def own_store_price_audit(sample: int = Query(20, ge=1, le=200), user=Depends(get_user)):
+backend/server.py:8951:def _demo_seed_skus():
+backend/server.py:8965:def _demo_cascade_queries(skus, ids):
+backend/server.py:8985:async def _demo_subcategory_counts(db):
+backend/server.py:8999:async def own_sku_diagnose(sku: str = Query(..., min_length=1),
+backend/server.py:9057:async def demo_cleanup_get(dry_run: bool = Query(True), user=Depends(get_user)):
+backend/server.py:9067:async def demo_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int] = Query(None), user=Depends(get_user)):
+backend/server.py:9206:def normalize_store_domain(value):
+backend/server.py:9214:def _normalize_store_name(value):
+backend/server.py:9238:def _store_cascade_queries(store_ids, domains, names):
+backend/server.py:9283:class StoreCleanupError(Exception):
+backend/server.py:9291:async def _copy_in_batches(db, src, dst, q, batch=_STORE_CLEANUP_BATCH,
+backend/server.py:9320:async def _store_cleanup_backup(db, cascade, ts):
+backend/server.py:9357:async def _store_cleanup_delete(db, cascade, backups, ts):
+backend/server.py:9398:async def _resolve_store_cleanup(db):
+backend/server.py:9439:async def store_cleanup_get(dry_run: bool = Query(True), user=Depends(get_user)):
+backend/server.py:9449:async def store_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int] = Query(None),
+backend/server.py:9656:async def subcategory_preview(samples: int = Query(20, ge=1, le=100), user=Depends(get_user)):
+backend/server.py:9713:async def admin_recent_snapshots(limit: int = Query(200, ge=1, le=1000), user=Depends(get_user)):
+backend/server.py:9742:async def admin_salla_category_audit(user=Depends(get_user)):
+backend/server.py:9765:async def snapshot_horizon(days: int = Query(90), user=Depends(get_user)):
+backend/server.py:9831:async def cleanup_own_snapshots(dry_run: bool = Query(False, description="If true, only count without deleting"), user=Depends(get_user)):
+backend/server.py:9870:async def crawler_ingest(request: Request, payload: IngestPayload):
+backend/server.py:10156:async def get_raw_products(store_id: str, page: int = 1, limit: int = 50, user=Depends(get_user)):
+backend/server.py:10203:async def import_baseline(user=Depends(get_user)):
+backend/server.py:10390:async def get_leaderboard(user=Depends(get_user)):
+backend/server.py:10399:async def get_catalog_gaps(user=Depends(get_user)):
+backend/server.py:10405:async def get_product_stats(user=Depends(get_user)):
+backend/server.py:10412:async def root():
+backend/server.py:10427:async def insights_summary(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+backend/server.py:10435:async def insights_leaderboard(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+backend/server.py:10443:async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = Query(None), response: Response = None, user=Depends(get_user)):
+backend/server.py:10452:async def insights_trending(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+backend/server.py:10460:async def insights_gaps(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+backend/server.py:10468:async def insights_price_wars(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+backend/server.py:10476:async def insights_restock(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+backend/server.py:10484:async def insights_sales(days: int = Query(30),
+backend/server.py:10508:async def price_intel_dashboard(response: Response = None, user=Depends(get_user)):
+backend/server.py:10516:async def price_intel_store_ranking(response: Response = None, user=Depends(get_user)):
+backend/server.py:10526:async def salla_sold_badge_coverage(days: int = Query(30, ge=7, le=90),
+backend/server.py:10616:async def salla_revenue_estimate_preview(days: int = Query(30, ge=7, le=90),
+backend/server.py:10715:async def store_ranking_preview(user=Depends(get_user)):
+backend/server.py:10796:async def _market_share_compute(db, days, include_today=False):
+backend/server.py:10828:async def _market_share_dataset(db, days, include_today=False):
+backend/server.py:10847:def _ms_filter(rows, *, search=None, category=None, brand=None, store_id=None,
+backend/server.py:10893:async def market_share_overview(days: int = Query(30),
+backend/server.py:10967:async def market_share_my_products(days: int = Query(30),
+backend/server.py:10998:async def market_share_product(key: str, days: int = Query(30),
+backend/server.py:11014:async def market_share_missing(days: int = Query(30),
+backend/server.py:11037:async def market_share_brands(days: int = Query(30), category: Optional[str] = Query(None),
+backend/server.py:11078:async def market_share_categories(days: int = Query(30),
+backend/server.py:11112:async def market_share_methodology(days: int = Query(30),
+backend/server.py:11182:def _ms_method_my_products(r):
+backend/server.py:11201:async def market_share_export(days: int = Query(30),
+backend/server.py:11361:async def _wait_for_mongo(attempts: int = 20, delay: float = 3.0) -> bool:
+backend/server.py:11386:async def startup():
+backend/server.py:11400:async def _boot():
+backend/server.py:11413:async def _boot_sequence():
+backend/server.py:11711:async def shutdown():
+backend/matcher.py:93:def _is_valid_barcode(val: str) -> bool:
+backend/matcher.py:99:def _is_numeric_sku(val: str) -> bool:
+backend/matcher.py:116:def _barcode_key_set(barcodes=(), skus=()):
+backend/matcher.py:151:def _tokenize(text: str) -> list:
+backend/matcher.py:159:def _extract_brand(text: str) -> Optional[str]:
+backend/matcher.py:170:def _extract_weight_grams(text: str) -> Optional[float]:
+backend/matcher.py:192:def _extract_pack_qty(text: str) -> int:
+backend/matcher.py:219:def _is_bundle_sku(sku: str) -> bool:
+backend/matcher.py:225:def _has_pack_indicator(text: str) -> bool:
+backend/matcher.py:275:def _pack_qty_explicit(text: str) -> Optional[int]:
+backend/matcher.py:292:def _name_similarity(a: str, b: str) -> float:
+backend/matcher.py:300:def _names_are_independent(a: str, b: str) -> bool:
+backend/matcher.py:313:def barcode_price_sane(my_price, comp_price, my_name, comp_name):
+backend/matcher.py:344:def _weights_reject(w1_g: Optional[float], w2_g: Optional[float]) -> bool:
+backend/matcher.py:354:def _pack_compatible(my_text: str, comp_text: str) -> bool:
+backend/matcher.py:374:async def match_my_product(db, my_product: dict, comp_snapshots: list = None, comp_products: dict = None, own_store_id: str = None) -> list:
+backend/matcher.py:575:def _build_match(my_prod, snap, comp_prod, confidence, method):
+backend/matcher.py:614:def _dedupe_matches(matches):
+backend/matcher.py:624:async def _build_competitor_lookups(db, own_store_id):
+backend/matcher.py:679:async def run_matching_for_all(db, progress_callback=None):
+backend/ledger.py:61:def ksa_day_str(dt):
+backend/ledger.py:68:def _store_day_id(store_id, day):
+backend/ledger.py:72:def _row_id(store_id, sku, day):
+backend/ledger.py:76:def crawl_observation(norm):
+backend/ledger.py:102:async def ensure_ledger_indexes(db):
+backend/ledger.py:109:async def record_observations(db, store_id, store_name, observations, observed_at,
+backend/ledger.py:210:def sealed_ksa_window(days, now=None):
+backend/ledger.py:235:async def sealed_days_in_window(db, days, now=None):
+backend/ledger.py:272:async def seal_ksa_day(db, day=None, now=None):
+backend/seller_set.py:51:def alias_map_from_matches(matches, sku):
+backend/seller_set.py:75:def hub_skus_from_matches(matches, sku):
+backend/seller_set.py:87:def snapshot_or_clauses(sku_keys, alias_by_store):
+backend/seller_set.py:110:def pack_guard_ok(hub_name, comp_name):
+backend/seller_set.py:129:def _as_aware(v):
+backend/seller_set.py:141:def freshness_labels(crawled_at, now=None, stale_after_days=STALE_AFTER_DAYS):
+backend/seller_set.py:158:def stock_labels(stock_signal, in_stock, qty_available):
+backend/seller_set.py:166:def latest_per_store(rows):
+backend/seller_set.py:176:def seller_summary(store_prices, excluded=0):
+backend/crawlers.py:45:def get_proxy_credentials():
+backend/crawlers.py:54:def get_proxy_url():
+backend/crawlers.py:63:def playwright_proxy_config(user, pwd, host, port):
+backend/crawlers.py:83:async def proxy_health(force=False):
+backend/crawlers.py:113:async def resolve_proxy_for(store, crawl_log=None, tier=""):
+backend/crawlers.py:128:async def record_proxy_usage(db, store, bytes_estimate):
+backend/crawlers.py:247:def canonical_brand(raw):
+backend/crawlers.py:275:def extract_brand_smart(name_ar, name_en, existing=None):
+backend/crawlers.py:351:def extract_brand(name):
+backend/crawlers.py:364:def guess_category(name):
+backend/crawlers.py:428:def _has_treat_signal(t):
+backend/crawlers.py:432:def _is_bundle(t):
+backend/crawlers.py:436:def classify_food_subcategory(parent_category, *texts):
+backend/crawlers.py:464:def classify_food_subcategory_hybrid(parent_category, name, store_tags):
+backend/crawlers.py:475:def extract_store_category_names(raw):
+backend/crawlers.py:493:def guess_animal(name):
+backend/crawlers.py:510:def extract_weight(name):
+backend/crawlers.py:520:def _extract_price_from_text(text):
+backend/crawlers.py:528:def _make_crawl_log(store, tier_attempted):
+backend/crawlers.py:549:async def _finalize_crawl_log(db, crawl_log, store_id):
+backend/crawlers.py:590:async def _detect_soft_block(db, store, current_count, crawl_log):
+backend/crawlers.py:651:def _apply_soft_block(crawl_log, current_count, endpoint_tag, reason):
+backend/crawlers.py:665:def _absolutize_url(raw_url, store_domain):
+backend/crawlers.py:682:def _price_amount(f):
+backend/crawlers.py:714:def _extract_sold_count(raw):
+backend/crawlers.py:744:def _normalize_raw_product(raw, store_name):
+backend/crawlers.py:971:def _collect_variant_field_list(raw, keys, *, fallback="", numeric_only=False):
+backend/crawlers.py:1007:async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=95):
+backend/crawlers.py:1122:def _build_salla_endpoints(base, cached_endpoint, platform="salla"):
+backend/crawlers.py:1141:async def _try_single_endpoint(http, ep, crawl_log):
+backend/crawlers.py:1199:async def _paginate_endpoint(http, ep, initial_items):
+backend/crawlers.py:1265:async def crawl_salla_tier1(db, store):
+backend/crawlers.py:1340:async def _playwright_navigate_and_scroll(page, base):
+backend/crawlers.py:1361:def _build_xhr_response_handler(intercepted_list):
+backend/crawlers.py:1387:async def crawl_tier2_xhr(db, store):
+backend/crawlers.py:1523:def _extract_products_from_html(html_content, platform):
+backend/crawlers.py:1581:def _select_first_text(card, selectors):
+backend/crawlers.py:1589:def _select_first_price(card, selectors):
+backend/crawlers.py:1597:def _select_first_attr(card, selectors, *attrs):
+backend/crawlers.py:1608:async def crawl_tier3_html(db, store):
+backend/crawlers.py:1682:async def _discover_salla_category_ids(page, base):
+backend/crawlers.py:1727:async def _capture_salla_store_identifier(page, base):
+backend/crawlers.py:1832:def _salla_raw_barcode(raw):
+backend/crawlers.py:1859:def _select_salla_variant_barcode(detail, listed_price=0.0):
+backend/crawlers.py:1910:def _salla_missing_barcode_items(items):
+backend/crawlers.py:1928:def _is_strict_gtin(val):
+backend/crawlers.py:1938:def _stage1_extract_barcode(detail, listed_price=0.0):
+backend/crawlers.py:1957:async def _salla_detail_barcode_supplement(client, captured, store_domain=None,
+backend/crawlers.py:2088:def _pick_dom_barcode(preferred_texts, body_text):
+backend/crawlers.py:2113:def _salla_item_page_url(it, store_domain):
+backend/crawlers.py:2124:async def _salla_dom_barcode_supplement(store, items, cap=SALLA_DOM_BARCODE_CAP,
+backend/crawlers.py:2224:async def _maybe_salla_detail_supplement(db, store, raw_items, crawl_log,
+backend/crawlers.py:2327:class _CheapPathIsEnough(Exception):
+backend/crawlers.py:2339:async def _salla_store_identifier_from_html(domain):
+backend/crawlers.py:2364:def _flatten_salla_categories(nodes, out=None, depth=0):
+backend/crawlers.py:2380:async def _salla_categories_from_api(store_identifier, domain=None):
+backend/crawlers.py:2407:async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=200, max_pages_per_cat=200):
+backend/crawlers.py:2611:def _is_valid_ean(val):
+backend/crawlers.py:2623:def _extract_zid_sold_count(product: dict) -> int:
+backend/crawlers.py:2639:def _own_sync_fallback_warning(zid_status: str):
+backend/crawlers.py:2663:def _zid_is_taxable(p):
+backend/crawlers.py:2676:async def _fetch_zid_api_catalog(db, store):
+backend/crawlers.py:2767:def storefront_shelf_price(raw):
+backend/crawlers.py:2800:def product_url_id(url):
+backend/crawlers.py:2806:def build_key_index(rows, payload_fn):
+backend/crawlers.py:2830:def _storefront_price_index(rows):
+backend/crawlers.py:2838:def merchant_index(rows):
+backend/crawlers.py:2844:def storefront_price_lookup(idx, sku=None, barcode=None, product_url=None, canonical=True):
+backend/crawlers.py:2916:def _sf_items(body):
+backend/crawlers.py:2931:def _sf_page_meta(body):
+backend/crawlers.py:2960:async def _paginate_own_storefront(http, ep, initial_items, max_pages=OWN_SF_MAX_PAGES):
+backend/crawlers.py:3051:def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
+backend/crawlers.py:3117:async def fetch_own_storefront_catalog_raw(store, max_pages=OWN_SF_MAX_PAGES):
+backend/crawlers.py:3156:async def sync_own_store_prices(db, store=None):
+backend/crawlers.py:3685:async def crawl_store_waterfall(db, store):
+backend/crawlers.py:3728:async def _try_tier4_supplement(db, store, base_result):
+backend/crawlers.py:3764:async def crawl_tier4_authenticated(db, store, cookies):
+backend/crawlers.py:3822:async def _extract_tier4_data(card, page, platform):
+backend/crawlers.py:3871:def _extract_price_from_card_text(text):
+backend/market_share.py:82:def _day(dt):
+backend/market_share.py:86:def _aware(v):
+backend/market_share.py:92:def _pct(part, whole):
+backend/market_share.py:98:def _delta_pct(now_v, prev_v):
+backend/market_share.py:104:async def _read_sales(db, start, end):
+backend/market_share.py:135:async def _store_signals(db, start, end):
+backend/market_share.py:183:async def _latest_snapshots(db, since, min_confidence):
+backend/market_share.py:210:async def _variant_links(db, own_keys, since):
+backend/market_share.py:237:def _resolve_units(pair, sales, store_signals, is_own, own_units):
+backend/market_share.py:255:def _row_confidence(sellers, my_source, fresh_days=FRESH_DAYS, now=None):
+backend/market_share.py:284:def _apply_pack_guard(my_name, sellers, own_price):
+backend/market_share.py:323:def _price_spread(sellers):
+backend/market_share.py:335:def _price_stats(sellers):
+backend/market_share.py:343:def aggregate_groups(my_rows, missing_rows, key):
+backend/market_share.py:423:def quality_summary(my_rows, orders_connected):
+backend/market_share.py:438:def summarize(my_rows, missing_rows, store_rows, *, catalog_total, orders_connected,
+backend/market_share.py:480:async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
+backend/core/utils.py:24:def cache_clear():
+backend/core/utils.py:29:def ttl_cache(ttl_seconds: int = 60, key_prefix: str = ""):
+backend/core/utils.py:105:def barcode_keys(value, canonical=True):
+backend/core/utils.py:131:def canonical_barcode(value):
+backend/core/utils.py:142:def get_stock_signal(qty, in_stock=None):
+backend/core/utils.py:162:def _coerce_num(v, default=0.0):
+backend/core/utils.py:180:def _coerce_int(v, default=0):
+backend/core/utils.py:187:def _estimate_sales_from_snapshots(snaps, days):
+backend/core/utils.py:259:def compute_product_metrics(snapshots_by_store, days):
+backend/core/utils.py:317:def compute_market_position(seller_prices, my_store_id, max_age_days=7,

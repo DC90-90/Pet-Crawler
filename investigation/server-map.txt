@@ -1,0 +1,266 @@
+18:from apscheduler.schedulers.asyncio import AsyncIOScheduler
+19:from apscheduler.triggers.interval import IntervalTrigger
+20:from apscheduler.triggers.cron import CronTrigger
+103:def encrypt_value(plaintext: str) -> str:
+108:def decrypt_value(ciphertext: str) -> str:
+129:async def _migration_applied(key: str) -> bool:
+136:async def _mark_migration(key: str, info: dict = None):
+180:async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+197:def hash_pw(pw):
+200:def check_pw(pw, h):
+203:def make_token(uid, email):
+209:async def get_user(request: Request):
+241:def require_super_admin(user=Depends(get_user)):
+247:def is_super_admin_email(email: str) -> bool:
+254:async def health_check():
+268:    jobs_count = len(scheduler.get_jobs()) if scheduler.running else 0
+319:async def health_detailed(user=Depends(get_user)):
+612:async def seed_database():
+722:async def ensure_stores():
+733:async def register(request: Request, data: AuthIn, response: Response):
+757:async def login(request: Request, data: AuthIn, response: Response):
+779:async def me(user=Depends(get_user)):
+783:async def logout(response: Response):
+788:async def protected(user=Depends(get_user)):
+792:def _serialize_user(u: dict) -> dict:
+806:def _validate_pages(pages: List[str]) -> List[str]:
+811:async def admin_list_users(user=Depends(require_super_admin)):
+820:async def admin_create_user(data: AdminCreateUserIn, _=Depends(require_super_admin)):
+846:async def admin_delete_user(user_id: str, _=Depends(require_super_admin)):
+860:async def admin_update_password(user_id: str, data: AdminUpdatePasswordIn, current_user=Depends(require_super_admin)):
+877:async def admin_update_role(user_id: str, data: AdminUpdateRoleIn, _=Depends(require_super_admin)):
+894:async def admin_update_pages(user_id: str, data: AdminUpdatePagesIn, _=Depends(require_super_admin)):
+917:async def admin_coverage_report(user=Depends(require_super_admin)):
+997:async def admin_recrawl_store(store_id: str, user=Depends(require_super_admin)):
+1041:async def admin_archive_status(user=Depends(require_super_admin)):
+1046:async def admin_archive_files(date: str = Query(..., description="KSA date, YYYY-MM-DD"),
+1054:async def admin_archive_download(path: str = Query(...),
+1075:async def admin_archive_run(background: BackgroundTasks,
+1096:async def scheduled_archive():
+1115:async def zid_oauth_status(_=Depends(require_super_admin)):
+1120:async def zid_oauth_start(request: Request,
+1137:async def zid_oauth_callback(request: Request, code: str = Query(None),
+1157:async def zid_oauth_disconnect(_=Depends(require_super_admin)):
+1162:async def zid_orders_sync(full: bool = Query(False, description="Walk every page, not just the recent window"),
+1178:async def admin_backfill(payload: BackfillIn, user=Depends(require_super_admin)):
+1267:async def admin_backfill_status(run_id: Optional[str] = Query(None),
+1281:async def admin_rematch(payload: RematchIn, user=Depends(require_super_admin)):
+1366:async def ensure_all_indexes(db):
+1388:async def admin_ensure_snapshot_indexes(user=Depends(require_super_admin)):
+1435:async def admin_proxy_health(force: bool = Query(True), user=Depends(require_super_admin)):
+1466:async def admin_refresh_caches(user=Depends(require_super_admin)):
+1493:def _plan_summary(explain_doc):
+1520:async def admin_perf_probe(sku: str = Query(...), user=Depends(require_super_admin)):
+1580:async def admin_proxy_usage(user=Depends(get_user)):
+1622:async def seed_super_admin():
+1669:async def scheduled_crawl_job(store_id: str):
+1720:def register_crawl_job(store_id, store_name, store_domain):
+1729:        scheduler.remove_job(job_id)
+1733:    scheduler.add_job(
+1745:def unregister_crawl_job(store_id):
+1747:        scheduler.remove_job(f"crawl_{store_id}")
+1751:def get_next_run(store_id):
+1753:        job = scheduler.get_job(f"crawl_{store_id}")
+1762:async def list_stores(user=Depends(get_user)):
+1792:async def create_store(data: StoreIn, user=Depends(get_user)):
+1816:async def update_store(store_id: str, data: StoreUpdate, user=Depends(get_user)):
+1826:async def delete_store(store_id: str, user=Depends(get_user)):
+1834:async def trigger_crawl(store_id: str, user=Depends(get_user)):
+1839:    cache_clear()  # invalidate insight/discount TTL cache after new snapshots land
+1854:async def get_crawl_logs(store_id: str, limit: int = Query(10), user=Depends(get_user)):
+1859:async def toggle_pause_crawls(user=Depends(get_user)):
+1865:async def scheduler_status(user=Depends(get_user)):
+1867:    for job in scheduler.get_jobs():
+1877:async def data_freshness(user=Depends(get_user)):
+1897:    # cache miss (60s TTL) scanned every snapshot in the database — on
+2002:    if not crawl_paused and scheduler.running:
+2003:        for job in scheduler.get_jobs():
+2030:        "scheduler_running": bool(scheduler.running),
+2055:    sync_job = scheduler.get_job("own_store_sync") if scheduler.running else None
+2093:async def verify_encryption(user=Depends(get_user)):
+2104:async def save_tier4_credentials(store_id: str, data: Tier4CredentialsIn, user=Depends(get_user)):
+2133:async def get_tier4_status(store_id: str, user=Depends(get_user)):
+2180:async def test_tier4_login(store_id: str, user=Depends(get_user)):
+2198:async def clear_tier4_session(store_id: str, user=Depends(get_user)):
+2212:async def tier4_summary(user=Depends(get_user)):
+2254:async def list_pending_otps(user=Depends(get_user)):
+2264:async def submit_otp(request: Request, data: OtpSubmitIn, user=Depends(get_user)):
+2287:async def retry_otp(store_id: str, user=Depends(get_user)):
+2301:async def otp_status(store_id: str, user=Depends(get_user)):
+2309:async def _create_otp_request(store_id: str, store_name: str, phone_last4: str):
+2327:async def _wait_for_otp(store_id: str, timeout_secs: int = 600) -> Optional[str]:
+2339:async def _run_tier4_login(store_id: str):
+2407:async def _login_salla(page, base_url, store, credentials, phone_last4):
+2486:async def _login_zid(page, base_url, store, credentials, phone_last4):
+2530:async def _login_shopify(page, base_url, store, credentials, phone_last4):
+2594:def _dashboard_cache_key(days: int) -> str:
+2598:async def _store_dashboard_cache(db, days, dataset):
+2610:async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
+2629:async def maybe_recompute_dashboard_cache(db, min_interval_secs=600, force=False):
+2653:_LAST_PAGE_CACHE_RECOMPUTE = None
+2656:def _page_cache_key(base: str, days=None) -> str:
+2660:async def _store_page_cache(db, base, days, payload):
+2671:async def _serve_page_cache(db, base, days, compute, cacheable=True):
+2710:def _apply_cache_headers(response, meta):
+2730:async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
+2735:    global _LAST_PAGE_CACHE_RECOMPUTE
+2756:    _LAST_PAGE_CACHE_RECOMPUTE = datetime.now(timezone.utc)
+2761:async def maybe_recompute_page_caches(db, min_interval_secs=600, force=False):
+2762:    global _LAST_PAGE_CACHE_RECOMPUTE
+2764:    if (not force and _LAST_PAGE_CACHE_RECOMPUTE
+2765:            and (now - _LAST_PAGE_CACHE_RECOMPUTE).total_seconds() < min_interval_secs):
+2775:async def _own_orders_aggregate(db, o_start, o_end=None):
+2792:async def _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only):
+3392:async def my_products(
+3470:async def list_products(
+3540:async def _discover_snapshot_pairs(db, clause, since):
+3561:async def _pair_snapshot_rows(db, store_id, psku, series_since, lookback_since):
+3588:async def _seller_snapshots(db, sku, product, lookback_days=SELLER_LOOKBACK_DAYS,
+3742:def _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name, now=None,
+3814:async def get_product(sku: str, user=Depends(get_user)):
+3846:async def product_history(sku: str, days: int = Query(30), user=Depends(get_user)):
+3865:async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_user)):
+4000:async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_user)):
+4115:def _metric_day_str(dt):
+4120:async def _recompute_store_metrics(db, store_id):
+4284:async def recompute_all_store_metrics(db):
+4314:async def _maybe_backfill_store_metrics(db):
+4345:async def _drops_from_rollups(db, since):
+4356:async def _gaps_from_coverage(db, since):
+4370:async def _spread_docs_from_coverage(db, since):
+4381:async def _conf_avg_from_rollups(db, since):
+4396:async def _freshness_from_coverage(db, now):
+4423:async def _gaps_rows_from_coverage(db, since, total_stores, limit=15):
+4436:async def _price_wars_rows_from_coverage(db, since, limit=10):
+4455:async def _restock_rows_from_coverage(db, since):
+4466:async def _sales_pairs_from_rollups(db, since, store_id=None, until=None):
+4517:async def _insights_summary_compute(db, days):
+4584:async def _compute_market_position_summary(db):
+4689:async def _insights_leaderboard_compute(db, days):
+4824:async def _salla_badge_revenue_by_store(db, since):
+4879:async def _insights_top_sellers_compute(db, days, store_id):
+4908:async def _insights_trending_compute(db, days):
+4942:async def _insights_gaps_compute(db, days):
+4967:async def _insights_price_wars_compute(db, days):
+4988:async def _insights_restock_compute(db, days):
+5022:async def _insights_sales_compute(db, days, date_from, date_to, search, sort, user):
+5160:async def list_filters(user=Depends(get_user)):
+5165:async def create_filter(data: SavedFilterIn, user=Depends(get_user)):
+5201:def _num(v):
+5206:def _aware(dt):
+5212:async def _discount_history(db, rows, since):
+5287:async def _sold_during_discount(db, rows, history, platform_by_store):
+5329:async def _enrich_discount_rows(db, rows, since):
+5385:def _discount_match(since, store_id):
+5422:def _latest_per_pair_stage():
+5436:async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+5490:async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+5537:async def discount_timeline(user=Depends(get_user)):
+5602:async def discount_aggression(user=Depends(get_user)):
+5728:async def _detect_pack_variants(db, skus, since):
+5766:async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
+6189:def send_alert_notification(alert, event, channel="console"):
+6195:async def list_alerts(user=Depends(get_user)):
+6209:async def create_alert(data: AlertIn, user=Depends(get_user)):
+6225:async def toggle_alert(alert_id: str, user=Depends(get_user)):
+6234:async def delete_alert(alert_id: str, user=Depends(get_user)):
+6241:async def alert_feed(days: int = Query(30), user=Depends(get_user)):
+6250:async def check_alerts_now(user=Depends(get_user)):
+6301:async def auto_generate_alerts(user=Depends(get_user)):
+6378:async def list_notifications(user=Depends(get_user)):
+6414:async def store_profile(store_id: str, user=Depends(get_user)):
+6845:async def export_csv(days: int = Query(30), user=Depends(get_user)):
+6862:async def generate_market_digest():
+6948:def deliver_digest(digest):
+6955:async def list_digests(user=Depends(get_user)):
+6960:async def latest_digest(user=Depends(get_user)):
+6965:async def trigger_digest(user=Depends(get_user)):
+6977:async def import_products(file: UploadFile = File(...), user=Depends(get_user)):
+7084:async def trigger_matching(background: BackgroundTasks, user=Depends(get_user)):
+7097:async def _background_matching():
+7116:async def import_status(user=Depends(get_user)):
+7163:async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_user)):
+7174:async def trigger_orders_sync(background: BackgroundTasks, full: bool = Query(False, description="Full backfill: walk ALL order pages the Zid API will serve, not just the recent refresh window"), user=Depends(get_user)):
+7210:async def _run_sync_and_match(kind: str):
+7325:def _ranking_revenue_value(row):
+7355:async def _store_ranking_compute(db):
+7828:async def _resolve_match_prices(db, matches, now=None,
+7857:def _live_match_price(m, resolved):
+7897:def _effective_own_price(mp):
+7936:async def _price_intel_dashboard_compute(db):
+8181:async def price_intel_product_detail(sku: str, user=Depends(get_user)):
+8295:async def confirm_match(data: MatchActionIn, user=Depends(get_user)):
+8306:async def reject_match(data: MatchActionIn, user=Depends(get_user)):
+8324:async def list_my_products(page: int = 1, limit: int = 50, search: str = "", user=Depends(get_user)):
+8341:async def get_my_skus(user=Depends(get_user)):
+8366:async def backfill_food_subcategories(db):
+8422:async def own_store_vat_backfill(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+8609:async def own_snapshot_vat_backfill_get(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+8618:async def own_snapshot_vat_backfill(dry_run: bool = Query(True), sample: int = Query(10, ge=1, le=100),
+8824:async def own_store_price_audit(sample: int = Query(20, ge=1, le=200), user=Depends(get_user)):
+8951:def _demo_seed_skus():
+8965:def _demo_cascade_queries(skus, ids):
+8985:async def _demo_subcategory_counts(db):
+8999:async def own_sku_diagnose(sku: str = Query(..., min_length=1),
+9057:async def demo_cleanup_get(dry_run: bool = Query(True), user=Depends(get_user)):
+9067:async def demo_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int] = Query(None), user=Depends(get_user)):
+9206:def normalize_store_domain(value):
+9214:def _normalize_store_name(value):
+9238:def _store_cascade_queries(store_ids, domains, names):
+9291:async def _copy_in_batches(db, src, dst, q, batch=_STORE_CLEANUP_BATCH,
+9320:async def _store_cleanup_backup(db, cascade, ts):
+9357:async def _store_cleanup_delete(db, cascade, backups, ts):
+9398:async def _resolve_store_cleanup(db):
+9439:async def store_cleanup_get(dry_run: bool = Query(True), user=Depends(get_user)):
+9449:async def store_cleanup(dry_run: bool = Query(True), confirm_count: Optional[int] = Query(None),
+9656:async def subcategory_preview(samples: int = Query(20, ge=1, le=100), user=Depends(get_user)):
+9713:async def admin_recent_snapshots(limit: int = Query(200, ge=1, le=1000), user=Depends(get_user)):
+9742:async def admin_salla_category_audit(user=Depends(get_user)):
+9765:async def snapshot_horizon(days: int = Query(90), user=Depends(get_user)):
+9831:async def cleanup_own_snapshots(dry_run: bool = Query(False, description="If true, only count without deleting"), user=Depends(get_user)):
+9870:async def crawler_ingest(request: Request, payload: IngestPayload):
+10156:async def get_raw_products(store_id: str, page: int = 1, limit: int = 50, user=Depends(get_user)):
+10203:async def import_baseline(user=Depends(get_user)):
+10390:async def get_leaderboard(user=Depends(get_user)):
+10399:async def get_catalog_gaps(user=Depends(get_user)):
+10405:async def get_product_stats(user=Depends(get_user)):
+10412:async def root():
+10427:async def insights_summary(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+10435:async def insights_leaderboard(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+10443:async def insights_top_sellers(days: int = Query(30), store_id: Optional[str] = Query(None), response: Response = None, user=Depends(get_user)):
+10452:async def insights_trending(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+10460:async def insights_gaps(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+10468:async def insights_price_wars(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+10476:async def insights_restock(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+10484:async def insights_sales(days: int = Query(30),
+10508:async def price_intel_dashboard(response: Response = None, user=Depends(get_user)):
+10516:async def price_intel_store_ranking(response: Response = None, user=Depends(get_user)):
+10526:async def salla_sold_badge_coverage(days: int = Query(30, ge=7, le=90),
+10616:async def salla_revenue_estimate_preview(days: int = Query(30, ge=7, le=90),
+10715:async def store_ranking_preview(user=Depends(get_user)):
+10796:async def _market_share_compute(db, days, include_today=False):
+10828:async def _market_share_dataset(db, days, include_today=False):
+10847:def _ms_filter(rows, *, search=None, category=None, brand=None, store_id=None,
+10893:async def market_share_overview(days: int = Query(30),
+10967:async def market_share_my_products(days: int = Query(30),
+10998:async def market_share_product(key: str, days: int = Query(30),
+11014:async def market_share_missing(days: int = Query(30),
+11037:async def market_share_brands(days: int = Query(30), category: Optional[str] = Query(None),
+11078:async def market_share_categories(days: int = Query(30),
+11112:async def market_share_methodology(days: int = Query(30),
+11182:def _ms_method_my_products(r):
+11201:async def market_share_export(days: int = Query(30),
+11341:app.include_router(router)
+11361:async def _wait_for_mongo(attempts: int = 20, delay: float = 3.0) -> bool:
+11386:async def startup():
+11400:async def _boot():
+11413:async def _boot_sequence():
+11484:    if not scheduler.running:
+11485:        scheduler.start()
+11486:    scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0, id="weekly_digest", replace_existing=True)
+11492:    scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
+11503:    scheduler.add_job(_scheduled_ledger_seal, CronTrigger(hour=21, minute=30, timezone="UTC"),
+11509:    scheduler.add_job(scheduled_archive, CronTrigger(hour=3, minute=0, timezone="UTC"),
+11711:async def shutdown():
+11712:    if scheduler.running:
+11713:        scheduler.shutdown(wait=False)

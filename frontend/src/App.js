@@ -9,6 +9,7 @@ import api from "@/lib/api";
 import Sidebar from "@/components/Sidebar";
 import LoginPage from "@/pages/LoginPage";
 import NotificationBell from "@/components/NotificationBell";
+import { Menu } from "lucide-react";
 
 // Perf sprint Feb 2026 — route-based code splitting. Each page is fetched on
 // demand the first time it's navigated to. Cuts initial JS bundle from ~600KB
@@ -147,14 +148,23 @@ function NoAccessPage() {
 }
 
 function AppLayout() {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(false);
+  useEffect(() => {
+    const close = (event) => { if (event.key === "Escape") setMobileNavOpen(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, []);
   return (
     <div className="flex min-h-screen" style={{ background: "radial-gradient(circle at top center, #090E1C 0%, #090E1C 100%)" }} data-testid="app-layout">
-      <Sidebar />
-      <main className="flex-1 ms-[240px] min-h-screen flex flex-col">
-        <div className="flex items-center justify-end px-6 py-3 border-b border-white/5">
+      {mobileNavOpen && <button className="fixed inset-0 z-30 bg-black/60 md:hidden" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation" data-testid="mobile-nav-backdrop" />}
+      <Sidebar mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} onCollapse={setNavCollapsed} />
+      <main className={`app-main flex-1 min-w-0 min-h-screen flex flex-col ms-0 ${navCollapsed ? "md:ms-[68px]" : "md:ms-[240px]"}`}>
+        <div className="flex items-center justify-between md:justify-end px-4 md:px-6 py-3 border-b border-white/5">
+          <button className="md:hidden p-2 text-[#A1E4DB]" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-expanded={mobileNavOpen} data-testid="mobile-nav-open"><Menu className="w-5 h-5" /></button>
           <NotificationBell />
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
         <Routes>
           <Route path="/" element={<ProtectedRoute pageKey="my_products"><MyProductsPage /></ProtectedRoute>} />
           <Route path="/insights" element={<ProtectedRoute pageKey="insights"><IntelPage /></ProtectedRoute>} />

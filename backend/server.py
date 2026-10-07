@@ -55,6 +55,10 @@ from salla_revenue_estimate import (
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 import zid_oauth  # iter79 — Zid partner-app OAuth (unlocks the Orders API)
 import market_share  # iter79 — Market Share aggregation
+import price_cohort
+import comparison_views
+import job_control
+from access_policy import enforce as enforce_access
 from cryptography.fernet import Fernet, InvalidToken
 
 # ── Refactored modules (Feb 2026) ───────────────────────────
@@ -202,7 +206,8 @@ def check_pw(pw, h):
 
 def make_token(uid, email):
     return pyjwt.encode(
-        {"sub": uid, "email": email, "exp": datetime.now(timezone.utc) + timedelta(hours=24), "jti": secrets.token_hex(8)},
+        {"sub": uid, "email": email, "exp": datetime.now(timezone.utc) + timedelta(hours=24),
+         "iat": time.time(), "auth_version": 2, "jti": secrets.token_hex(16)},
         JWT_SECRET, algorithm=JWT_ALG
     )
 
@@ -217,10 +222,16 @@ async def get_user(request: Request):
         raise HTTPException(401, "Not authenticated")
     try:
         p = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        if p.get("auth_version") != 2 or await db.revoked_tokens.find_one({"jti": p.get("jti")}):
+            raise HTTPException(401, "Session revoked; sign in again")
         u = await db.users.find_one({"_id": ObjectId(p["sub"])})
         if not u:
             raise HTTPException(401, "User not found")
         role = u.get("role", "user")
+        revoked_before = u.get("sessions_revoked_before")
+        if revoked_before and p.get("iat", 0) <= _as_aware(revoked_before).timestamp():
+            raise HTTPException(401, "Session revoked; sign in again")
+        enforce_access(u, request.url.path, request.method)
         # super_admin always has access to every page (implicit)
         allowed = ALL_PAGES if role == "super_admin" else list(u.get("allowed_pages", []) or [])
         return {
@@ -230,6 +241,8 @@ async def get_user(request: Request):
             "role": role,
             "allowed_pages": allowed,
         }
+    except HTTPException:
+        raise
     except pyjwt.ExpiredSignatureError:
         raise HTTPException(401, "Token expired")
     except HTTPException:
@@ -615,7 +628,8 @@ async def seed_database():
     # Real-data deployments must set SEED_DEMO_DATA=false: the demo seed writes
     # synthetic products/snapshots that would pollute live crawl analytics.
     # Stores are seeded by ensure_stores() (store_registry.py) either way.
-    if os.environ.get("SEED_DEMO_DATA", "true").lower() in ("false", "0", "no"):
+    if not (os.environ.get("SEED_DEMO_DATA", "false").lower() in ("true", "1", "yes")
+            and os.environ.get("APP_ENV", "production").lower() in ("development", "test")):
         logger.info("SEED_DEMO_DATA=false — skipping synthetic demo seed")
         return
     logger.info("Seeding Daleel database...")
@@ -680,6 +694,7 @@ async def seed_database():
                     "price": price, "original_price": orig_price, "discount_pct": disc_pct,
                     "in_stock": qty > 0, "qty_available": max(0, qty),
                     "source_tier": tier, "confidence_score": conf,
+                    "is_synthetic": True, "data_origin": "demo_seed",
                     "crawled_at": crawled_at,
                 })
                 day -= random.randint(2, 4)
@@ -731,6 +746,8 @@ async def ensure_stores():
 @router.post("/auth/register")
 @limiter.limit("5/minute")
 async def register(request: Request, data: AuthIn, response: Response):
+    if os.environ.get("ALLOW_PUBLIC_REGISTRATION") != "true":
+        raise HTTPException(403, "Registration is administrator-managed")
     email = data.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(400, "Email already registered")
@@ -780,7 +797,10 @@ async def me(user=Depends(get_user)):
     return user
 
 @router.post("/auth/logout")
-async def logout(response: Response):
+async def logout(request: Request, response: Response, user=Depends(get_user)):
+    token = request.cookies.get("daleel_token") or request.headers.get("Authorization", "").removeprefix("Bearer ")
+    payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    await db.revoked_tokens.update_one({"jti": payload["jti"]}, {"$set": {"expires_at": datetime.fromtimestamp(payload["exp"], timezone.utc)}}, upsert=True)
     response.delete_cookie("daleel_token", path="/")
     return {"message": "Logged out"}
 
@@ -869,7 +889,7 @@ async def admin_update_password(user_id: str, data: AdminUpdatePasswordIn, curre
         raise HTTPException(403, "Only the super admin can change their own password")
     if len(data.password) < 6:
         raise HTTPException(400, "Password must be at least 6 characters")
-    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"password_hash": hash_pw(data.password)}})
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": {"password_hash": hash_pw(data.password), "sessions_revoked_before": datetime.now(timezone.utc)}})
     return {"updated": True, "id": user_id}
 
 
@@ -1644,10 +1664,8 @@ async def seed_super_admin():
         await db.users.insert_one(payload)
         logger.info(f"[RBAC] Seeded super admin {SUPER_ADMIN_EMAIL}")
     else:
-        await db.users.update_one(
-            {"_id": existing["_id"]},
-            {"$set": payload},
-        )
+        payload.pop("password_hash", None)
+        await db.users.update_one({"_id": existing["_id"]}, {"$set": payload})
         logger.info(f"[RBAC] Refreshed super admin {SUPER_ADMIN_EMAIL}")
 
     # Remove the legacy admin account (one-time, per the client's instruction).
@@ -1718,6 +1736,10 @@ DAILY_CRAWL_BY_DOMAIN = {d: (h, m) for d, h, m in DAILY_CRAWL_SCHEDULE}
 
 
 def register_crawl_job(store_id, store_name, store_domain):
+    return  # .emergent/crons.yml is the sole scheduling authority.
+
+
+def _retired_register_crawl_job(store_id, store_name, store_domain):
     """Register a daily cron job at the store's assigned 04:00–04:55 KSA slot.
 
     Stores not in the hardcoded schedule (e.g. newly added via /api/stores)
@@ -1858,7 +1880,9 @@ async def get_crawl_logs(store_id: str, limit: int = Query(10), user=Depends(get
 @router.post("/scheduler/toggle-pause")
 async def toggle_pause_crawls(user=Depends(get_user)):
     global crawl_paused
-    crawl_paused = not crawl_paused
+    current = await db.runtime_settings.find_one({"_id": "crawls"}) or {}
+    crawl_paused = not current.get("paused", False)
+    await db.runtime_settings.update_one({"_id": "crawls"}, {"$set": {"paused": crawl_paused}}, upsert=True)
     return {"crawl_paused": crawl_paused, "message": f"Crawls {'paused' if crawl_paused else 'resumed'}"}
 
 @router.get("/scheduler/status")
@@ -2010,6 +2034,11 @@ async def data_freshness(user=Depends(get_user)):
                 nr = nr.replace(tzinfo=timezone.utc)
             if next_run_dt is None or nr < next_run_dt:
                 next_run_dt = nr
+    config = await db.runtime_settings.find_one({"_id": "crawls"}) or {}
+    if not config.get("paused"):
+        next_run_dt = now.replace(hour=1, minute=0, second=0, microsecond=0)
+        if next_run_dt <= now:
+            next_run_dt += timedelta(days=1)
 
     # ── sync_health (Feb 2026 hardening) ──
     # Combines two signals so silent failures become visible:
@@ -2027,7 +2056,8 @@ async def data_freshness(user=Depends(get_user)):
         "last_sync_source": None,
         "last_sync_warning": None,
         "next_run_expected": None,
-        "scheduler_running": bool(scheduler.running),
+        "scheduler_running": None,
+        "scheduler_mode": "platform_cron",
         "is_stale": False,  # True if last_run is older than 2× the 6h interval (12h)
         "alarm": None,  # Human-readable reason if banner should flip red
     }
@@ -2060,11 +2090,7 @@ async def data_freshness(user=Depends(get_user)):
         sync_health["next_run_expected"] = nr.isoformat()
 
     # Compose alarm — banner uses this to flip red
-    if not sync_health["scheduler_running"]:
-        sync_health["alarm"] = "Scheduler is not running"
-    elif sync_job is None:
-        sync_health["alarm"] = "own_store_sync job is not registered"
-    elif sync_health["last_run"] is None:
+    if sync_health["last_run"] is None:
         sync_health["alarm"] = "Own-store sync has never run since last deploy"
     elif sync_health["is_stale"]:
         sync_health["alarm"] = f"Last sync was {sync_health['last_run_age_hours']}h ago (expected every 6h)"
@@ -2587,21 +2613,23 @@ MIN_SNAPSHOT_PAIRS_FOR_SALES = 2  # need at least 2 valid deltas before any sale
 # BSON round-trip can't perturb a value), and the endpoint applies the identical
 # sort + pagination on top.
 DASHBOARD_CACHE_STD_WINDOWS = (7, 14, 30, 90)
-DASHBOARD_CACHE_MAX_AGE_SECS = 24 * 3600  # beyond this, fall back to live compute
+DASHBOARD_CACHE_MAX_AGE_SECS = 300  # live prices must not inherit a day-old cache
 _LAST_DASHBOARD_RECOMPUTE = None           # module-level debounce for crawl bursts
 
 
 def _dashboard_cache_key(days: int) -> str:
-    return f"my_products:v1:days={days}"
+    from investigation_status import build_identity
+    return f"my_products:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:{ledger.ksa_day_str(datetime.now(timezone.utc))}:days={days}"
 
 
 async def _store_dashboard_cache(db, days, dataset):
     """Persist one window's dataset (jsonable-encoded) with a fresh timestamp."""
     now = datetime.now(timezone.utc)
+    revision = await db.data_versions.find_one({"_id": "observations"}) or {}
     await db.dashboard_cache.replace_one(
         {"key": _dashboard_cache_key(days)},
         {"key": _dashboard_cache_key(days), "window_days": days,
-         "computed_at": now, "dataset": jsonable_encoder(dataset)},
+         "computed_at": now, "dataset": jsonable_encoder(dataset), "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at")},
         upsert=True,
     )
     return now
@@ -2654,15 +2682,17 @@ _LAST_PAGE_CACHE_RECOMPUTE = None
 
 
 def _page_cache_key(base: str, days=None) -> str:
-    return f"{base}:v1:days={days}" if days is not None else f"{base}:v1"
+    from investigation_status import build_identity
+    return f"{base}:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:{ledger.ksa_day_str(datetime.now(timezone.utc))}:days={days}"
 
 
 async def _store_page_cache(db, base, days, payload):
     now = datetime.now(timezone.utc)
+    revision = await db.data_versions.find_one({"_id": "observations"}) or {}
     await db.dashboard_cache.replace_one(
         {"key": _page_cache_key(base, days)},
         {"key": _page_cache_key(base, days), "base": base, "window_days": days,
-         "computed_at": now, "payload": jsonable_encoder(payload)},
+         "computed_at": now, "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at"), "payload": jsonable_encoder(payload)},
         upsert=True,
     )
     return now
@@ -2694,7 +2724,8 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
             if ca.tzinfo is None:
                 ca = ca.replace(tzinfo=timezone.utc)
             age = (now - ca).total_seconds()
-            if age <= DASHBOARD_CACHE_MAX_AGE_SECS:
+            revision = await db.data_versions.find_one({"_id": "observations"}) or {}
+            if age <= DASHBOARD_CACHE_MAX_AGE_SECS and doc.get("source_revision") == revision.get("revision", 0):
                 return doc["payload"], {"source": "cache", "computed_at": ca.isoformat(),
                                         "age_seconds": round(age, 1), "stale": False}
     body = await compute()
@@ -2778,18 +2809,25 @@ async def _own_orders_aggregate(db, o_start, o_end=None):
     metric can never show two different values again. Returns
     aggregate_orders() output, or None when no non-excluded orders fall in the
     window (callers fall back / show 'accumulating')."""
-    order_query = {"created_at": {"$gte": o_start, **({"$lt": o_end} if o_end else {})}}
+    o_end = o_end or datetime.now(timezone.utc)
+    coverage = await db.orders_sync_coverage.find_one({"status": "complete", "window_start": {"$lte": o_start}, "window_end": {"$gte": o_end}}, {"_id": 0})
+    if not coverage:
+        return None
+    order_query = {"created_at": {"$gte": o_start, "$lt": o_end}}
     order_docs = await db.own_store_orders.find(
-        order_query, {"_id": 0, "excluded": 1, "total": 1, "units": 1, "items": 1},
+        order_query, {"_id": 0, "excluded": 1, "total": 1, "units": 1, "items": 1, "currency": 1, "financials_complete": 1},
     ).to_list(100000)
-    if order_docs:
-        _agg = aggregate_orders(order_docs)
-        if _agg["orders_count"] > 0:
-            return _agg
-    return None
+    _agg = aggregate_orders(order_docs)
+    _agg["coverage"] = coverage
+    return _agg
 
 
 async def _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only):
+    from catalog_views import dataset
+    return await dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only, _effective_own_price, _own_orders_aggregate)
+
+
+async def _retired_my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only):
     """Compute the FULL my-products dataset — every enriched row + KPIs +
     categories + total — for the given filters, WITHOUT sort or pagination.
 
@@ -2922,7 +2960,8 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
         else:
             # No own catalog yet — return empty rather than the entire market
             prod_query["sku"] = {"$in": []}
-    products = await db.products.find(prod_query, {"_id": 0}).to_list(5000)
+    products = await db.products.find(prod_query, {"_id": 0}).to_list(50000)
+    products = list({p["sku"]: p for p in products if p.get("sku")}.values())
 
     # When own_only=True, also stitch in db.my_products SKUs that don't yet have
     # a db.products catalog row (e.g. just synced from Zid, no scheduled crawl
@@ -2958,6 +2997,7 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
     # below. Doing this OUTSIDE the loop avoids N+1 queries.
     own_store_doc = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
     own_store_id = own_store_doc.get("id") if own_store_doc else None
+    current_cohorts = await price_cohort.build_cohorts(db, my_products_docs, own_store_id, _effective_own_price)
     store_name_by_id = {s["id"]: s.get("name", "") for s in await db.stores.find({}, {"_id": 0, "id": 1, "name": 1}).to_list(200)}
     matches_by_my_sku = {}
     if own_store_id:
@@ -3295,6 +3335,15 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
     # The retired fair-share fallback (assigning 100% to unmatched products)
     # caused the production 92.4% inflation; removed entirely — no imputation.
     for r in result:
+        cohort = current_cohorts.get(r["sku"])
+        if cohort:
+            mine_price = _effective_own_price(my_price_lookup.get(r["sku"]))
+            r.update(competitor_min_price=cohort["min"], competitor_max_price=cohort["max"],
+                     num_priced_competitors=len(cohort["sellers"]), num_competitors=len({s["store_id"] for s in cohort["sellers"]+cohort["excluded"]}),
+                     vs_my_price_pct=round((cohort["min"]-mine_price)/mine_price*100, 1) if cohort["min"] and mine_price else None,
+                     cohort_id=cohort["cohort_id"], price_policy=cohort["policy_version"],
+                     excluded_sellers=cohort["excluded"], source_observed_at=cohort["observed_at"],
+                     market_position=comparison_views.position({"id": own_store_id}, {}, mine_price, cohort))
         market_units_for_sku = r.get("qty_sold_est") or 0
         my_units_for_sku = r.get("my_units_sold") or 0
         n_priced = r.get("num_priced_competitors")
@@ -3304,13 +3353,10 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
             n_priced = max(0, (r.get("num_sellers") or 0) - 1)
         r["market_size"] = market_units_for_sku
         r["has_competitor_pricing"] = n_priced >= 1
-        if n_priced >= 1 and market_units_for_sku > 0:
-            r["market_share_pct"] = round((my_units_for_sku / market_units_for_sku) * 100, 1)
-            r["has_market_share"] = True
-        else:
-            r["market_share_pct"] = None
-            r["has_market_share"] = False
-        r["my_share_is_estimate"] = False  # fair-share fallback retired
+        r["market_share_pct"] = None
+        r["has_market_share"] = False
+        r["my_share_is_estimate"] = True
+        r["market_share_unavailable_reason"] = "unreconciled_sales_denominator"
 
     total_count = len(result)
     # KPI totals — when own_only=True (the My Products page):
@@ -3350,7 +3396,7 @@ async def _my_products_dataset(db, days, on_date, date_from, date_to, category, 
             my_revenue_source = "estimated"
         avg_market_share_honest = (
             round((total_my_units_share / total_market_units_share) * 100, 1)
-            if total_market_units_share > 0 else 0
+            if total_market_units_share > 0 else None
         )
         kpis = {
             "total_products": total_count,
@@ -3435,7 +3481,8 @@ async def my_products(
                 if ca.tzinfo is None:
                     ca = ca.replace(tzinfo=timezone.utc)
                 age = (datetime.now(timezone.utc) - ca).total_seconds()
-                if age <= DASHBOARD_CACHE_MAX_AGE_SECS and isinstance(doc.get("dataset"), dict):
+                revision = await db.data_versions.find_one({"_id": "observations"}) or {}
+                if age <= DASHBOARD_CACHE_MAX_AGE_SECS and isinstance(doc.get("dataset"), dict) and doc.get("source_revision") == revision.get("revision", 0):
                     dataset = doc["dataset"]
                     cache_meta = {"source": "cache", "computed_at": ca.isoformat(),
                                   "age_seconds": round(age, 1), "stale": False}
@@ -3812,6 +3859,11 @@ def _build_store_prices(snapshots, sku_keys, stores_meta, store_id_to_name, now=
 
 @router.get("/products/{sku}")
 async def get_product(sku: str, user=Depends(get_user)):
+    from catalog_views import detail
+    return await detail(db, sku, 30, _effective_own_price)
+
+
+async def _retired_get_product(sku, user=None):
     product = await db.products.find_one({"sku": sku}, {"_id": 0})
     if not product:
         raise HTTPException(404, "Product not found")
@@ -3844,6 +3896,12 @@ async def get_product(sku: str, user=Depends(get_user)):
 
 @router.get("/products/{sku}/history")
 async def product_history(sku: str, days: int = Query(30), user=Depends(get_user)):
+    from catalog_views import detail
+    result = await detail(db, sku, int(days), _effective_own_price)
+    return result["history"]
+
+
+async def _retired_product_history(sku, days, user=None):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     snapshots = await db.product_snapshots.find(
         {"sku": sku, "crawled_at": {"$gte": since}}, {"_id": 0}
@@ -3863,6 +3921,11 @@ async def product_history(sku: str, days: int = Query(30), user=Depends(get_user
 
 @router.get("/products/{sku}/full")
 async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_user)):
+    from catalog_views import detail
+    return await detail(db, sku, int(days), _effective_own_price)
+
+
+async def _retired_get_product_full(sku, days, user=None):
     """Combined endpoint — returns product + store_prices + history + velocity in a single payload.
     Built to replace 3 separate endpoint round-trips for the Product Detail panel.
     """
@@ -3998,6 +4061,15 @@ async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_use
 
 @router.get("/products/{sku}/velocity")
 async def product_velocity(sku: str, days: int = Query(14), user=Depends(get_user)):
+    from evidence_ledger import sales_map
+    start, end = ledger.sealed_ksa_window(int(days))
+    rows = await sales_map(db, start, end)
+    total = sum(r["units"] for (_, key), r in rows.items() if key == sku)
+    measured = any(key == sku for _, key in rows)
+    return {"velocity": [], "avg_daily": round(total/int(days), 1) if measured else None, "total_units": total if measured else None, "basis": "inventory_proxy" if measured else "unavailable"}
+
+
+async def _retired_product_velocity(sku, days, user=None):
     since = datetime.now(timezone.utc) - timedelta(days=days)
     # P1 confidence floor: velocity is an aggregation — exclude Tier-3 noise.
     snapshots = await db.product_snapshots.find(
@@ -4113,6 +4185,10 @@ _METRIC_STORE_CONCURRENCY = 4
 
 
 def _metric_day_str(dt):
+    return ledger.ksa_day_str(dt) if isinstance(dt, datetime) else str(dt)[:10]
+
+
+def _retired_metric_day_str(dt):
     """UTC calendar day key 'YYYY-MM-DD' for a crawled_at datetime."""
     return dt.strftime("%Y-%m-%d")
 
@@ -4464,6 +4540,13 @@ async def _restock_rows_from_coverage(db, since):
 
 # ── iter34 read helper: windowed sales per (store, sku) from sku_sales_daily ──
 async def _sales_pairs_from_rollups(db, since, store_id=None, until=None):
+    from evidence_ledger import sales_map
+    rows = await sales_map(db, since, until or datetime.now(timezone.utc), sealed=until is not None)
+    return [{"store_id": sid, "sku": sku, **value, "qty_drop": value["units"] if value["source"] == "stock_depletion" else 0}
+            for (sid, sku), value in rows.items() if store_id is None or sid == store_id]
+
+
+async def _retired_sales_pairs_from_rollups(db, since, store_id=None, until=None):
     """Per (store_id, sku): windowed units + revenue with the estimator's
     method-exclusivity preserved per pair: if the pair had ANY positive
     sold_count step in the window, the cumulative-counter figures are used and
@@ -4515,6 +4598,11 @@ async def _sales_pairs_from_rollups(db, since, store_id=None, until=None):
 
 
 async def _insights_summary_compute(db, days):
+    from store_views import market_summary
+    return await market_summary(db, days, _effective_own_price)
+
+
+async def _retired_insights_summary_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # iter31 — this function NO LONGER touches product_snapshots. Every metric is
@@ -4582,6 +4670,10 @@ async def _insights_summary_compute(db, days):
 
 
 async def _compute_market_position_summary(db):
+    return await comparison_views.position_summary(db, _effective_own_price)
+
+
+async def _retired_compute_market_position_summary(db):
     """Aggregate market position over my products that have a computed
     market_position. Uses last-7-day, confidence>=75 snapshots (filtering
     happens in compute_market_position). Extracted verbatim from
@@ -4687,6 +4779,11 @@ async def _compute_market_position_summary(db):
 
 
 async def _insights_leaderboard_compute(db, days):
+    from store_views import leaderboard
+    return await leaderboard(db, days)
+
+
+async def _retired_insights_leaderboard_compute(db, days):
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # Get store name lookup + platform-tag every store so we can route Salla
@@ -4877,6 +4974,11 @@ async def _salla_badge_revenue_by_store(db, since):
     return per_store
 
 async def _insights_top_sellers_compute(db, days, store_id):
+    from store_views import top_sellers
+    return await top_sellers(db, days, store_id)
+
+
+async def _retired_insights_top_sellers_compute(db, days, store_id):
     # iter34 — served from sku_sales_daily instead of an unprojected full-window
     # snapshot fetch (to_list(None) of complete documents — the heaviest single
     # read in the codebase). Per-pair estimation method preference preserved by
@@ -4906,6 +5008,11 @@ async def _insights_top_sellers_compute(db, days, store_id):
     return sellers[:20]
 
 async def _insights_trending_compute(db, days):
+    from additional_insights import categories
+    return await categories(db, days)
+
+
+async def _retired_insights_trending_compute(db, days):
     # iter34 — served from sku_sales_daily.qty_drop (raw positive depletion,
     # trending's own definition — NOT the estimator's filtered/capped units)
     # instead of an unprojected full-window snapshot fetch.
@@ -4940,6 +5047,11 @@ async def _insights_trending_compute(db, days):
     return trending
 
 async def _insights_gaps_compute(db, days):
+    from additional_insights import gaps
+    return await gaps(db)
+
+
+async def _retired_insights_gaps_compute(db, days):
     # iter33 — served from sku_store_coverage instead of a windowed snapshot scan
     # ($match window → $sort → $group $addToSet — the exact shape that
     # NetworkTimeout'd as pipeline_gaps at 14D; the pre-group $sort was a no-op
@@ -4965,6 +5077,11 @@ async def _insights_gaps_compute(db, days):
     return result
 
 async def _insights_price_wars_compute(db, days):
+    from additional_insights import prices
+    return await prices(db, _effective_own_price, "wars")
+
+
+async def _retired_insights_price_wars_compute(db, days):
     # iter33 — served from sku_store_coverage: the old per-pair
     # $sort desc → $group $first over the windowed snapshots is precomputed as
     # last_priced_* at rollup-build time; the per-sku spread stages run unchanged
@@ -4986,6 +5103,11 @@ async def _insights_price_wars_compute(db, days):
     return result
 
 async def _insights_restock_compute(db, days):
+    from additional_insights import prices
+    return await prices(db, _effective_own_price, "restock")
+
+
+async def _retired_insights_restock_compute(db, days):
     # iter33 — served from sku_store_coverage: the per-pair latest-accepted stock
     # state ($sort desc → $group $first over windowed snapshots) is precomputed
     # as last_in_stock/last_qty/last_store_name. Same window + confidence
@@ -5082,8 +5204,8 @@ async def _insights_sales_compute(db, days, date_from, date_to, search, sort, us
         "name_ar":          p.get("name_ar"),
         "name_en":          p.get("name_en"),
         "brand":            p.get("brand") or "",
-        "qty_sold_est":     p.get("qty_sold_est", 0) or 0,
-        "revenue_est":      p.get("revenue_est", 0.0) or 0.0,
+        "qty_sold_est":     p.get("qty_sold_est"),
+        "revenue_est":      p.get("revenue_est"),
         "avg_price":        p.get("price", 0.0) or 0.0,
         "num_sellers":      p.get("num_sellers", 0) or 0,
         "stock_signal":     p.get("stock_signal", "") or "",
@@ -5145,9 +5267,9 @@ async def _insights_sales_compute(db, days, date_from, date_to, search, sort, us
 
     return {
         "kpis": {
-            "total_units_sold":        total_units,
-            "total_revenue":           round(total_revenue, 2),
-            "avg_revenue_per_product": avg_rev_per_product,
+            "total_units_sold":        total_units if any(p.get("qty_sold_est") is not None for p in src_products) else None,
+            "total_revenue":           round(total_revenue, 2) if any(p.get("revenue_est") is not None for p in src_products) else None,
+            "avg_revenue_per_product": avg_rev_per_product if any(p.get("revenue_est") is not None for p in src_products) else None,
             "top_brand":               top_brand_name,
             "product_count":           product_count,
         },
@@ -5404,8 +5526,8 @@ def _discount_match(since, store_id):
                               "onError": 0, "onNull": 0}}
     _num_price = {"$convert": {"input": "$price", "to": "double",
                                "onError": 0, "onNull": 0}}
-    m = {"crawled_at": {"$gte": since},
-         "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE},
+    m = {"crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False, "comparable": True,
+         "confidence_score": {"$gte": 85},
          "$or": [
              {"discount_pct": {"$gt": 0}},
              {"$expr": {"$and": [
@@ -5434,6 +5556,11 @@ def _latest_per_pair_stage():
 @router.get("/discounts/top-pct")
 @ttl_cache(60)
 async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+    from discount_views import top
+    return await top(db, days, store_id, category, limit)
+
+
+async def _retired_top_discounts_pct(days, store_id, category, limit, user=None):
     days = min(int(days or 90), _DISCOUNT_MAX_DAYS)
     since = datetime.now(timezone.utc) - timedelta(days=days)
     # iter73g — sort by the EFFECTIVE discount pct (row-level), not the stored
@@ -5488,6 +5615,11 @@ async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Que
 @router.get("/discounts/top-amount")
 @ttl_cache(60)
 async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
+    from discount_views import top
+    return await top(db, days, store_id, category, limit, by_amount=True)
+
+
+async def _retired_top_discounts_amount(days, store_id, category, limit, user=None):
     days = min(int(days or 90), _DISCOUNT_MAX_DAYS)
     since = datetime.now(timezone.utc) - timedelta(days=days)
     # iter73g — rank by absolute SAR saving via row-level $subtract inside the
@@ -5611,8 +5743,8 @@ async def discount_aggression(user=Depends(get_user)):
         {"is_active": True}, {"_id": 0, "id": 1, "name": 1, "platform": 1})}
     if not stores:
         return []
-    base = {"crawled_at": {"$gte": since},
-            "confidence_score": {"$gte": MIN_AGGREGATION_CONFIDENCE}}
+    base = {"crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False, "comparable": True,
+            "confidence_score": {"$gte": 85}}
 
     # iter73 — row-level effective discount: honour `discount_pct` when > 0,
     # else fall back to the price arithmetic the row itself carries. Same
@@ -5648,7 +5780,7 @@ async def discount_aggression(user=Depends(get_user)):
             {"$match": base},
             {"$addFields": {"_eff_disc": _eff_disc}},
             {"$match": {"_eff_disc": {"$gt": 0}}},
-            {"$group": {"_id": {"store_id": "$store_id", "sku": "$sku"},
+            {"$group": {"_id": {"store_id": "$store_id", "offer_id": "$offer_id"},
                         "depth": {"$avg": "$_eff_disc"}, "rows": {"$sum": 1},
                         "max_disc": {"$max": "$_eff_disc"}}},
             {"$group": {"_id": "$_id.store_id",
@@ -5671,6 +5803,8 @@ async def discount_aggression(user=Depends(get_user)):
     leaderboard = []
     for sid, st in stores.items():
         d = by_store.get(sid)
+        if not total_by_store.get(sid):
+            continue  # No verified observations is not a measured zero-discount strategy.
         if not d:
             leaderboard.append({
                 "store_id": sid, "store": st.get("name") or sid,
@@ -5691,7 +5825,7 @@ async def discount_aggression(user=Depends(get_user)):
             "discounted_snapshots": d.get("discounted_rows") or 0,
         })
     leaderboard.sort(key=lambda x: x["score"], reverse=True)
-    if leaderboard:
+    if leaderboard and leaderboard[0]["score"] > 0:
         leaderboard[0]["label"] = "Most Aggressive"
         leaderboard[-1]["label"] = "Most Stable Pricing"
         max_single = max(leaderboard, key=lambda x: x["max_discount"])
@@ -5764,6 +5898,10 @@ async def _detect_pack_variants(db, skus, since):
 @router.get("/scanner/opportunities")
 @ttl_cache(60)
 async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
+    return await comparison_views.scanner(db, int(days), _effective_own_price, _own_orders_aggregate, _sales_pairs_from_rollups)
+
+
+async def _retired_price_opportunities(days, user=None):
     """Returns price opportunities — uses MongoDB aggregation instead of loading 100K snapshots into memory."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -6258,7 +6396,13 @@ async def check_alerts_now(user=Depends(get_user)):
         if not sku:
             continue
         # Get latest two snapshots for this SKU
-        snaps = await db.product_snapshots.find({"sku": sku}, {"_id": 0}).sort("crawled_at", -1).limit(2).to_list(2)
+        scope = {"sku": sku, "observation_version": 2, "is_synthetic": False, "comparable": True, "confidence_score": {"$gte": 85}, "crawled_at": {"$gte": now-timedelta(days=7)}}
+        if alert.get("store_id"):
+            scope["store_id"] = alert["store_id"]
+        newest = await db.product_snapshots.find_one(scope, {"_id": 0}, sort=[("crawled_at", -1)])
+        if not newest or not newest.get("offer_id"):
+            continue
+        snaps = await db.product_snapshots.find({**scope, "offer_id": newest["offer_id"]}, {"_id": 0}).sort("crawled_at", -1).limit(2).to_list(2)
         if len(snaps) < 2:
             continue
         latest, prev = snaps[0], snaps[1]
@@ -6274,11 +6418,11 @@ async def check_alerts_now(user=Depends(get_user)):
             inc_pct = round((latest["price"] / prev["price"] - 1) * 100, 1) if prev["price"] > 0 else 0
             if inc_pct >= threshold:
                 event = {"old_value": f"{prev['price']} SAR", "new_value": f"{latest['price']} SAR (+{inc_pct}%)"}
-        elif at == "out_of_stock" and not latest["in_stock"] and prev["in_stock"]:
+        elif at == "out_of_stock" and latest.get("in_stock") is False and prev.get("in_stock") is True:
             event = {"old_value": "In Stock", "new_value": "Out of Stock"}
-        elif at == "back_in_stock" and latest["in_stock"] and not prev["in_stock"]:
+        elif at == "back_in_stock" and latest.get("in_stock") is True and prev.get("in_stock") is False:
             event = {"old_value": "Out of Stock", "new_value": "Back in Stock"}
-        elif at == "low_stock" and latest.get("qty_available", 0) <= (threshold or 10) and prev.get("qty_available", 0) > (threshold or 10):
+        elif at == "low_stock" and latest.get("qty_available") is not None and prev.get("qty_available") is not None and latest["qty_available"] <= (threshold or 10) and prev["qty_available"] > (threshold or 10):
             event = {"old_value": f"{prev.get('qty_available', 0)} units", "new_value": f"{latest.get('qty_available', 0)} units"}
 
         if event:
@@ -6412,6 +6556,11 @@ async def list_notifications(user=Depends(get_user)):
 # ── Competitor Profile Routes ────────────────────────────────
 @router.get("/stores/{store_id}/profile")
 async def store_profile(store_id: str, user=Depends(get_user)):
+    from store_views import profile
+    return await profile(db, store_id, _own_orders_aggregate)
+
+
+async def _retired_store_profile(store_id, user=None):
     store = await db.stores.find_one({"id": store_id}, {"_id": 0})
     if not store:
         raise HTTPException(404, "Store not found")
@@ -6868,19 +7017,20 @@ async def generate_market_digest():
     prev_start = since - timedelta(days=7)
 
     # Section 1: Top 5 Price Drops
-    snaps_week = await db.product_snapshots.find({"crawled_at": {"$gte": since}}, {"_id": 0}).sort("crawled_at", 1).to_list(100000)
+    snaps_week = await db.product_snapshots.find({"crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False, "comparable": True, "confidence_score": {"$gte": 85}}, {"_id": 0}).sort("crawled_at", 1).to_list(100000)
     by_sku_store = {}
     for s in snaps_week:
-        by_sku_store.setdefault((s["sku"], s["store_id"]), []).append(s)
+        by_sku_store.setdefault((s["offer_id"], s["store_id"]), []).append(s)
     price_drops = []
     for (sku, sid), slist in by_sku_store.items():
+        sku = slist[-1]["sku"]
         if len(slist) < 2:
             continue
         first_p, last_p = slist[0]["price"], slist[-1]["price"]
         if last_p < first_p:
             drop_pct = round((1 - last_p / first_p) * 100, 1) if first_p > 0 else 0
             if drop_pct >= 5:
-                p = await db.products.find_one({"sku": sku}, {"_id": 0, "name_ar": 1})
+                p = slist[-1]
                 price_drops.append({"sku": sku, "name_ar": p.get("name_ar", sku) if p else sku, "store_name": slist[-1].get("store_name", ""), "old_price": first_p, "new_price": last_p, "drop_pct": drop_pct})
     price_drops.sort(key=lambda x: x["drop_pct"], reverse=True)
 
@@ -6890,11 +7040,12 @@ async def generate_market_digest():
     # Section 3: OOS Events
     oos_events = []
     for (sku, sid), slist in by_sku_store.items():
+        sku = slist[-1]["sku"]
         if len(slist) < 2:
             continue
         for i in range(1, len(slist)):
-            if slist[i-1].get("in_stock") and not slist[i].get("in_stock"):
-                p = await db.products.find_one({"sku": sku}, {"_id": 0, "name_ar": 1})
+            if slist[i-1].get("in_stock") is True and slist[i].get("in_stock") is False:
+                p = slist[i]
                 oos_events.append({"sku": sku, "name_ar": p.get("name_ar", sku) if p else sku, "store_name": slist[i].get("store_name", ""), "price": slist[i]["price"]})
                 break
 
@@ -7166,8 +7317,9 @@ async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_u
     if not own:
         raise HTTPException(400, "No store flagged is_own_store=True. Set the flag on your store first.")
 
-    background.add_task(_run_sync_and_match, "manual")
-    return {"message": "Sync started", "status": "running", "store": own.get("name"), "domain": own.get("domain")}
+    run_id, _ = await job_control.queue(db, "own-sync")
+    background.add_task(job_control.execute, db, run_id, "own-sync", lambda: _run_sync_and_match("manual"))
+    return {"message": "Sync queued", "status": "queued", "run_id": run_id, "store": own.get("name"), "domain": own.get("domain")}
 
 
 @router.post("/import/sync-orders")
@@ -7340,19 +7492,23 @@ def _ranking_revenue_value(row):
     """
     rev = row.get("revenue_30d")
     if isinstance(rev, (int, float)) and not isinstance(rev, bool):
-        return float(rev), "exact"
+        return float(rev), "exact" if row.get("revenue_basis") == "orders_exact" else "estimated"
     ap = row.get("revenue_approx") or {}
     ap_rev = ap.get("revenue")
     if ap.get("usable") and isinstance(ap_rev, (int, float)) and ap_rev > 0:
         return float(ap_rev), "measured_approx"
     est = row.get("revenue_est_salla") or {}
     est_rev = est.get("revenue_est")
-    if isinstance(est_rev, (int, float)) and est_rev > 0:
-        return float(est_rev), "estimated"
+    # Unvalidated category-velocity projections are not measured store revenue.
     return None, "none"
 
 
 async def _store_ranking_compute(db):
+    from store_views import ranking
+    return await ranking(db, _own_orders_aggregate)
+
+
+async def _retired_store_ranking_compute(db):
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=_RANKING_WINDOW_DAYS)
     fresh_floor = now - timedelta(hours=_RANKING_FRESH_HOURS)
@@ -7749,9 +7905,10 @@ async def _store_ranking_compute(db):
             #   revenue_30d        exact      Zid orders ledger / stock signals
             #   revenue_approx     measured   Salla sold-badge diff (bucketed)
             #   revenue_est_salla  estimated  category velocity, +/-50%
-            "revenue_est_salla": est_by_store.get(sid),
+            "revenue_est_salla": None,
             "revenue_approx": approx_by_store.get(sid),
-            "revenue_tier": ("exact" if revenue is not None
+            "revenue_basis": "orders_exact" if rev_status == "ledger" else "inventory_proxy",
+            "revenue_tier": ("exact" if rev_status == "ledger" else "estimated" if revenue is not None
                              else "measured_approx" if sid in approx_by_store
                              else "estimated" if est_by_store.get(sid) else "none"),
             "overlap": len(overlap.get(sid, ())) if not is_own else None,
@@ -7899,6 +8056,8 @@ def _effective_own_price(mp):
     if not mp:
         return 0.0
     basis = mp.get("price_basis") or ""
+    if basis not in {"storefront_inc_vat", "merchant_computed_inc_vat", "merchant_non_taxable"}:
+        return 0.0  # unavailable, not a zero-priced offer
     try:
         price_v = float(mp.get("price") or 0)
     except (TypeError, ValueError):
@@ -7917,7 +8076,7 @@ def _effective_own_price(mp):
         return sale_v if sale_v > 0 else price_v
 
     # Merchant-derived rows: phantom-sale heal (iter73i).
-    if orig_v > 0 and price_v > 0 and orig_v > price_v * 1.005:
+    if basis.startswith("merchant_hidden") and orig_v > 0 and price_v > 0 and orig_v > price_v * 1.005:
         return orig_v
 
     # iter73p — LEGACY basis heal. A row with no VAT tag at all is either
@@ -7934,6 +8093,10 @@ def _effective_own_price(mp):
 
 
 async def _price_intel_dashboard_compute(db):
+    return await comparison_views.intel(db, _effective_own_price)
+
+
+async def _retired_price_intel_dashboard_compute(db):
     """Price Intelligence Dashboard — all sections."""
     now = datetime.now(timezone.utc)
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
@@ -8179,6 +8342,11 @@ async def _price_intel_dashboard_compute(db):
 
 @router.get("/price-intel/product/{sku}")
 async def price_intel_product_detail(sku: str, user=Depends(get_user)):
+    from catalog_views import intel_detail
+    return await intel_detail(db, sku, _effective_own_price)
+
+
+async def _retired_price_intel_product_detail(sku, user=None):
     """Section D — drill-down for a single product. Strictly own-store sourced."""
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1, "name": 1, "domain": 1})
     own_store_id = own_store["id"] if own_store else None
@@ -8293,12 +8461,17 @@ async def price_intel_product_detail(sku: str, user=Depends(get_user)):
 
 @router.post("/price-intel/confirm-match")
 async def confirm_match(data: MatchActionIn, user=Depends(get_user)):
+    if not data.competitor_offer_id:
+        raise HTTPException(422, "A specific competitor_offer_id is required")
+    own = await db.my_products.find_one({"sku": data.my_sku}, {"_id": 0})
+    offer = await db.product_snapshots.find_one({"store_id": data.competitor_store_id, "offer_id": data.competitor_offer_id, "observation_version": 2}, {"_id": 0}, sort=[("crawled_at", -1)])
+    if not own or not offer or not price_cohort.identity_agrees(own, offer, manual=True):
+        raise HTTPException(409, "Contradictory or unverified product identity")
     result = await db.product_matches.update_one(
-        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id},
-        {"$set": {"manually_confirmed": True, "confidence": 100, "confirmed_at": datetime.now(timezone.utc).isoformat(), "confirmed_by": user.get("email", "")}},
+        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id, "competitor_offer_id": data.competitor_offer_id},
+        {"$set": {"manually_confirmed": True, "identity_version": 2, "confidence": 100, "confirmed_at": datetime.now(timezone.utc).isoformat(), "confirmed_by": user.get("email", "")}}, upsert=True,
     )
-    if result.modified_count == 0:
-        raise HTTPException(404, "Match not found")
+    await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}}, upsert=True)
     return {"message": "Match confirmed with confidence 100"}
 
 
@@ -8308,15 +8481,17 @@ async def reject_match(data: MatchActionIn, user=Depends(get_user)):
         {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id}
     )
     await db.match_blacklist.update_one(
-        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku},
+        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id, "competitor_offer_id": data.competitor_offer_id},
         {"$set": {
             "my_sku": data.my_sku, "competitor_sku": data.competitor_sku,
             "competitor_store_id": data.competitor_store_id,
+            "competitor_offer_id": data.competitor_offer_id,
             "rejected_at": datetime.now(timezone.utc).isoformat(),
             "rejected_by": user.get("email", ""),
         }},
         upsert=True,
     )
+    await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}}, upsert=True)
     return {"message": "Match rejected and blacklisted permanently"}
 
 
@@ -9873,8 +10048,13 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
     auth_header = request.headers.get("authorization", "")
     if not CRAWLER_TOKEN:
         raise HTTPException(500, "CRAWLER_TOKEN not configured")
-    if not auth_header.startswith("Bearer ") or auth_header[7:] != CRAWLER_TOKEN:
+    if not auth_header.startswith("Bearer ") or not secrets.compare_digest(auth_header[7:], CRAWLER_TOKEN):
         raise HTTPException(401, "Invalid or missing crawler token")
+    from ingest_v2 import ingest
+    return await ingest(db, payload)
+
+
+async def _retired_crawler_ingest(request, payload):
 
     # iter68 HOTFIX — the ledger buffer is bound at HANDLER START, before any
     # branch. iter67 initialised it further down; on the drifted workspace copy
@@ -10811,7 +10991,7 @@ async def _market_share_compute(db, days, include_today=False):
         own_price_fn=_effective_own_price,
         brand_fn=extract_brand_smart,
         category_fn=guess_category,
-        orders_by_sku=(orders or {}).get("by_sku") or {},
+        orders_by_sku=orders.get("by_sku") if orders is not None else None,
         min_confidence=MIN_AGGREGATION_CONFIDENCE,
         window_start=start, window_end=end, sealed=not include_today,
     )
@@ -10987,10 +11167,10 @@ async def market_share_my_products(days: int = Query(30),
     return {"window": ds.get("window"), "total": len(rows),
             "rows": rows[offset:offset + limit],
             "totals": {
-                "my_revenue": round(sum(r.get("my_revenue") or 0 for r in rows), 2),
-                "market_revenue": round(sum(r.get("market_revenue") or 0 for r in rows), 2),
-                "my_units": sum(r.get("my_units") or 0 for r in rows),
-                "market_units": sum(r.get("market_units") or 0 for r in rows),
+                "my_revenue": round(sum(r.get("my_revenue") or 0 for r in rows), 2) if any(r.get("my_revenue") is not None for r in rows) else None,
+                "market_revenue": round(sum(r.get("market_revenue") or 0 for r in rows), 2) if any(r.get("market_revenue") is not None for r in rows) else None,
+                "my_units": sum(r.get("my_units") or 0 for r in rows) if any(r.get("my_units") is not None for r in rows) else None,
+                "market_units": sum(r.get("market_units") or 0 for r in rows) if any(r.get("market_units") is not None for r in rows) else None,
             }}
 
 
@@ -11338,6 +11518,77 @@ _SINGLE_CACHE_SPECS.extend([
 ])
 
 
+@router.get("/jobs/{run_id}")
+async def job_status(run_id: str, user=Depends(get_user)):
+    row = await db.job_runs.find_one({"id": run_id}, {"_id": 0})
+    if not row:
+        raise HTTPException(404, "Run not found")
+    return row
+
+
+@router.get("/admin/investigation/status")
+async def investigation_diagnostics(user=Depends(require_super_admin)):
+    from investigation_status import status
+    return await status(db)
+
+
+@router.post("/admin/metadata/review")
+async def review_metadata(request: Request, user=Depends(require_super_admin)):
+    body = await request.json()
+    if not isinstance(body, dict) or not body.get("sku") or body.get("scope") not in ("own", "offer"):
+        raise HTTPException(422, "Provide scope (own/offer), sku and optional store_id/offer_id")
+    fields = {k: body[k].strip() for k in ("brand", "category") if isinstance(body.get(k), str) and 0 < len(body[k].strip()) <= 120}
+    if not fields:
+        raise HTTPException(422, "Provide brand or category (1–120 characters)")
+    target = db.my_products if body["scope"] == "own" else db.products
+    query = {"sku": body["sku"]}
+    if body["scope"] == "offer":
+        if not body.get("store_id") or not body.get("offer_id"):
+            raise HTTPException(422, "Store and specific offer are required")
+        query.update(store_id=body["store_id"], offer_id=body["offer_id"])
+    if not await target.find_one(query, {"_id": 0, "sku": 1}):
+        raise HTTPException(404, "Catalog entry not found")
+    fields.update({f"{k}_source": "reviewed" for k in list(fields)})
+    fields.update(metadata_reviewed_at=datetime.now(timezone.utc), metadata_reviewed_by=user["email"])
+    await target.update_one(query, {"$set": fields})
+    await db.metadata_review_log.insert_one({"scope": body["scope"], "target": query, "changes": dict(fields)})
+    await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}}, upsert=True)
+    return {"status": "reviewed", "target": query, "fields": fields}
+
+
+@router.post("/cron/{kind}")
+async def cron_dispatch(kind: str, request: Request, background: BackgroundTasks):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    secret = os.environ.get("WEBHOOK_CRON_SECRET")
+    auth = request.headers.get("authorization", "")
+    if not secret or not secrets.compare_digest(auth, "Bearer " + secret):
+        raise HTTPException(401, "Invalid cron credentials")
+    try:
+        envelope = await request.json()
+        if not isinstance(envelope, dict):
+            raise ValueError()
+        run_id = request.headers.get("X-Webhook-Id") or envelope.get("run_id")
+        if envelope.get("event") != "schedule.triggered" or not isinstance(run_id, str) or not run_id:
+            raise ValueError()
+    except Exception:
+        raise HTTPException(400, "Invalid schedule envelope")
+    async def crawl_all():
+        config = await db.runtime_settings.find_one({"_id": "crawls"}) or {}
+        if config.get("paused"):
+            return {"status": "paused"}
+        async for store in db.stores.find({"is_active": True, "is_own_store": {"$ne": True}}, {"_id": 0}):
+            await scheduled_crawl_job(store["id"])
+        return {"status": "complete"}
+    actions = {"crawl": crawl_all, "own-sync": lambda: _run_sync_and_match("scheduled"),
+               "seal": lambda: ledger.seal_ksa_day(db), "archive": scheduled_archive, "digest": generate_market_digest}
+    if kind not in actions:
+        raise HTTPException(404, "Unknown schedule")
+    run_id, fresh = await job_control.queue(db, kind, run_id)
+    if fresh:
+        background.add_task(job_control.execute, db, run_id, kind, actions[kind])
+    return {"accepted": True, "duplicate": not fresh, "run_id": run_id}
+
+
 app.include_router(router)
 
 cors_origins = os.environ.get('CORS_ORIGINS', '*')
@@ -11423,6 +11674,8 @@ async def _boot_sequence():
             BOOT_STATE["errors"].append(f"{label}: {type(exc).__name__}: {str(exc)[:200]}")
             logger.exception("[Boot] %s failed — continuing", label)
     BOOT_STATE["phase"] = "indexes"
+    import integrity_indexes
+    await integrity_indexes.ensure(db)
     # Idempotent indexes (safe to run on every startup; no-op if already present)
     # iter73y — one registry, one independent attempt per index. Previously a
     # single failure anywhere in this block skipped every index after it, which
@@ -11481,15 +11734,12 @@ async def _boot_sequence():
     except Exception:
         logger.exception("[Boot] crawl-job registration failed — the scheduler still "
                          "starts; re-register by restarting once Mongo is healthy")
-    if not scheduler.running:
-        scheduler.start()
-    scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0, id="weekly_digest", replace_existing=True)
+    # Platform crons run independently of the API replica count.
     # Own-store price sync every 6h (Feb 2026)
     # Uses the shared _run_sync_and_match helper so the scheduled and manual
     # paths share identical error handling + sync_runs logging.
     async def _scheduled_own_sync():
         await _run_sync_and_match("scheduled")
-    scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
 
     # iter67 — seal the KSA day that just ended. 21:30 UTC = 00:30 Asia/Riyadh,
     # after midnight KSA and before the 01:00-01:55 UTC crawl window opens, so
@@ -11500,14 +11750,10 @@ async def _boot_sequence():
             await ledger.seal_ksa_day(db)
         except Exception:
             logger.exception("[Ledger] scheduled day-seal failed")
-    scheduler.add_job(_scheduled_ledger_seal, CronTrigger(hour=21, minute=30, timezone="UTC"),
-                      id="ledger_day_seal", replace_existing=True)
 
     # iter78 — archive the closed KSA day to object storage. 03:00 UTC = 06:00
     # Riyadh: after the 01:00-01:55 UTC crawl window AND after the 21:30 UTC
     # seal, so snapshots and rollups are both final before they are frozen.
-    scheduler.add_job(scheduled_archive, CronTrigger(hour=3, minute=0, timezone="UTC"),
-                      id="nightly_price_archive", replace_existing=True)
     # Storage key is session-scoped: mint it once here so the nightly job and the
     # admin panel never pay for it, and a bad key is visible in the boot log.
     if archive._emergent_key():
@@ -11518,7 +11764,7 @@ async def _boot_sequence():
             logger.warning("[Archive] storage init failed — archive disabled until fixed: %s", e)
     else:
         logger.warning("[Archive] EMERGENT_LLM_KEY not set — nightly price archive disabled")
-    logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync + ledger day-seal + nightly archive")
+    logger.info("Platform cron routes ready; no in-process scheduler running")
 
     # iter25 — warm the my-products dashboard cache in the background so the first
     # request after a deploy/restart is fast instead of paying the live-compute

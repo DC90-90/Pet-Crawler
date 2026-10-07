@@ -92,10 +92,13 @@ def crawl_observation(norm):
         "close_original_price": round(original, 2) if isinstance(original, (int, float)) else None,
         "discount_pct": max(0, disc),
         "on_sale": bool(norm.get("sale_price")) or disc > 0,
-        "in_stock": bool(norm.get("in_stock")),
+        "in_stock": norm.get("in_stock"),
         "qty_available": norm.get("qty"),
         # the LEVEL of the cumulative counter — never a delta (Ahmad ruling 2)
         "sold_count_cumulative": norm.get("sold_count_cumulative"),
+        "sold_count_observed": norm.get("sold_count_observed"),
+        "sold_count_capped": norm.get("sold_count_capped"),
+        "offer_id": norm.get("offer_id"),
     }
 
 
@@ -145,7 +148,7 @@ async def record_observations(db, store_id, store_name, observations, observed_a
 
     for o in obs:
         sku = str(o["sku"])
-        rid = _row_id(store_id, sku, day)
+        rid = _row_id(store_id, o.get("offer_id") or sku, day)
         first = sku not in known_prior
         update = {
             "$set": {
@@ -157,6 +160,9 @@ async def record_observations(db, store_id, store_name, observations, observed_a
                 "in_stock": o.get("in_stock"),
                 "qty_available": o.get("qty_available"),
                 "sold_count_cumulative": o.get("sold_count_cumulative"),
+                "sold_count_observed": o.get("sold_count_observed"),
+                "sold_count_capped": o.get("sold_count_capped"),
+                "offer_id": o.get("offer_id"),
                 "confidence": confidence,
                 "source_tier": source_tier,
                 "last_observed_at": observed_at,
@@ -285,6 +291,8 @@ async def seal_ksa_day(db, day=None, now=None):
     now = now or datetime.now(timezone.utc)
     if day is None:
         day = ksa_day_str(now - timedelta(days=1))
+    if day >= ksa_day_str(now):
+        raise ValueError("Only completed KSA days may be sealed")
     sealed_at = now
     summary = {"day": day, "stores_sealed": 0, "no_data_stores": 0, "rows_sealed": 0}
 

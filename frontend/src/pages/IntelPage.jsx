@@ -135,7 +135,7 @@ export default function IntelPage() {
   const closeDetail = () => { setSelectedSku(null); setDetail(null); };
   const confirmMatch = async (m) => {
     try {
-      await api.post("/price-intel/confirm-match", { my_sku: m.my_sku, competitor_sku: m.competitor_sku, competitor_store_id: m.competitor_store_id });
+      await api.post("/price-intel/confirm-match", { my_sku: m.my_sku, competitor_sku: m.competitor_sku, competitor_store_id: m.competitor_store_id, competitor_offer_id: m.competitor_offer_id });
       toast.success("Match confirmed (confidence → 100)");
       if (selectedSku) openDetail(selectedSku);
       piQ.refetch();
@@ -143,7 +143,7 @@ export default function IntelPage() {
   };
   const rejectMatch = async (m) => {
     try {
-      await api.post("/price-intel/reject-match", { my_sku: m.my_sku, competitor_sku: m.competitor_sku, competitor_store_id: m.competitor_store_id });
+      await api.post("/price-intel/reject-match", { my_sku: m.my_sku, competitor_sku: m.competitor_sku, competitor_store_id: m.competitor_store_id, competitor_offer_id: m.competitor_offer_id });
       toast.success("Match rejected and blacklisted");
       if (selectedSku) openDetail(selectedSku);
       piQ.refetch();
@@ -178,7 +178,7 @@ export default function IntelPage() {
           </p>
           {cacheComputedAt && (
             <p className="text-[11px] text-[#6AC1B5] mt-0.5 font-mono" data-testid="intel-cache-freshness">
-              {isRTL ? "المؤشرات محدثة حتى" : "Metrics as of"}{" "}
+              {isRTL ? "وقت حساب المؤشرات" : "Metrics computed"}{" "}
               {new Date(cacheComputedAt).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "medium", timeStyle: "short" })}
             </p>
           )}
@@ -476,7 +476,7 @@ export default function IntelPage() {
               </TabsList>
               {trending.slice(0, 9).map((c) => (
                 <TabsContent key={c.category} value={c.category} className="mt-0">
-                  <p className="text-xs text-[#A1E4DB] mb-2">Total: {c.total_sales} units sold</p>
+                  <p className="text-xs text-[#A1E4DB] mb-2">Observed movement: {c.total_sales} units</p>
                   <div className="space-y-1.5">
                     {c.top_products.map((p) => (
                       <div key={p.sku} className="flex items-center justify-between text-xs py-1 border-b border-white/5">
@@ -507,10 +507,10 @@ export default function IntelPage() {
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-medium text-white truncate inline-flex items-center gap-1.5"><MineBadge sku={g.sku} />{g.name_ar}</p>
                 <SkuLine sku={g.sku} barcode={g.barcode} />
-                <p className="text-[10px] text-[#A1E4DB]">{g.num_stores} stores / {g.missing_count} missing</p>
+                <p className="text-[10px] text-[#A1E4DB]">{g.num_stores} verified sellers · not in my saved catalogue</p>
               </div>
               <Badge className="text-[10px] bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30" variant="outline">
-                {g.opportunity_score}%
+                {g.opportunity_score == null ? "Unranked" : `${g.opportunity_score}%`}
               </Badge>
             </div>
           ))}

@@ -1,0 +1,143 @@
+{
+  "conflicting_barcode_and_brand_still_sku_match": [
+    {
+      "my_sku": "ABC-01",
+      "my_name_ar": "",
+      "my_name_en": "Royal Canin Adult Cat Food 2kg",
+      "my_price": 100.0,
+      "competitor_sku": "ABC-01",
+      "competitor_name": "Hills Dog Food 2kg",
+      "competitor_store_id": "competitor",
+      "competitor_store_name": "competitor",
+      "competitor_price": 100.0,
+      "competitor_original_price": 100.0,
+      "competitor_in_stock": false,
+      "competitor_qty": 0,
+      "diff_sar": 0.0,
+      "diff_pct": 0.0,
+      "position": "equal",
+      "confidence": 95,
+      "match_method": "sku",
+      "flags": [],
+      "crawled_at": null
+    }
+  ],
+  "same_sku_two_stores_only_one_retained": [
+    "first"
+  ],
+  "barcode_match_hides_other_store_sku_match": [
+    "barcode-store"
+  ],
+  "global_catalog_barcode_overrides_conflicting_store_observation": [
+    {
+      "my_sku": "ABC-01",
+      "my_name_ar": "",
+      "my_name_en": "Royal Canin Adult Cat Food 2kg",
+      "my_price": 100.0,
+      "competitor_sku": "C1",
+      "competitor_name": "Royal Canin Adult Cat Food 2kg",
+      "competitor_store_id": "competitor",
+      "competitor_store_name": "competitor",
+      "competitor_price": 100.0,
+      "competitor_original_price": 100.0,
+      "competitor_in_stock": false,
+      "competitor_qty": 0,
+      "diff_sar": 0.0,
+      "diff_pct": 0.0,
+      "position": "equal",
+      "confidence": 99,
+      "match_method": "barcode",
+      "flags": [],
+      "crawled_at": null,
+      "barcode_key": "literal"
+    }
+  ],
+  "manual_confirmation_leaks_to_another_store": [
+    {
+      "my_sku": "ABC-01",
+      "my_name_ar": "",
+      "my_name_en": "Royal Canin Adult Cat Food 2kg",
+      "my_price": 100.0,
+      "competitor_sku": "C1",
+      "competitor_name": "Royal Canin Adult Cat Food 2kg",
+      "competitor_store_id": "unapproved-store",
+      "competitor_store_name": "unapproved-store",
+      "competitor_price": 10.0,
+      "competitor_original_price": 10.0,
+      "competitor_in_stock": false,
+      "competitor_qty": 0,
+      "diff_sar": -90.0,
+      "diff_pct": -90.0,
+      "position": "expensive",
+      "confidence": 100,
+      "match_method": "barcode",
+      "flags": [],
+      "crawled_at": null,
+      "barcode_key": "literal"
+    }
+  ],
+  "snapshot_confidence_1_becomes_match_confidence_99": [
+    {
+      "my_sku": "ABC-01",
+      "my_name_ar": "",
+      "my_name_en": "Royal Canin Adult Cat Food 2kg",
+      "my_price": 100.0,
+      "competitor_sku": "C1",
+      "competitor_name": "Royal Canin Adult Cat Food 2kg",
+      "competitor_store_id": "low-quality-store",
+      "competitor_store_name": "low-quality-store",
+      "competitor_price": 100.0,
+      "competitor_original_price": 100.0,
+      "competitor_in_stock": false,
+      "competitor_qty": 0,
+      "diff_sar": 0.0,
+      "diff_pct": 0.0,
+      "position": "equal",
+      "confidence": 99,
+      "match_method": "barcode",
+      "flags": [],
+      "crawled_at": null,
+      "barcode_key": "literal"
+    }
+  ],
+  "variant_barcode_array_uses_parent_price": [
+    {
+      "my_sku": "ABC-01",
+      "my_name_ar": "",
+      "my_name_en": "Royal Canin Adult Cat Food 2kg",
+      "my_price": 100.0,
+      "competitor_sku": "C1",
+      "competitor_name": "Royal Canin Adult Cat Food 2kg",
+      "competitor_store_id": "variant-store",
+      "competitor_store_name": "variant-store",
+      "competitor_price": 100.0,
+      "competitor_original_price": 100.0,
+      "competitor_in_stock": false,
+      "competitor_qty": 0,
+      "diff_sar": 0.0,
+      "diff_pct": 0.0,
+      "position": "equal",
+      "confidence": 99,
+      "match_method": "barcode",
+      "flags": [],
+      "crawled_at": null,
+      "barcode_key": "literal"
+    }
+  ],
+  "missing_price_crashes_matcher": "TypeError: float() argument must be a string or a real number, not 'NoneType'",
+  "unknown_pack_asymmetry": {
+    "single_vs_unknown_carton": true,
+    "unknown_carton_vs_single": false
+  },
+  "detail_selector_unscoped_base_sku": [
+    {
+      "sku": "ABC-01"
+    }
+  ],
+  "six_day_old_price_status": {
+    "days_since_crawl": 6,
+    "is_stale": false,
+    "price_as_of": "2026-10-01",
+    "data_status": "live"
+  }
+}

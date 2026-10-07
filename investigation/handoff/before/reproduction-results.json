@@ -1,0 +1,125 @@
+{
+  "scope": "Offline provided-source reproductions, not a production database audit",
+  "cases": {
+    "missing_quantity_becomes_sales": {
+      "input": [
+        20,
+        null
+      ],
+      "result": [
+        20,
+        200.0,
+        "qty_positive_delta_sum"
+      ]
+    },
+    "missing_counter_becomes_sales": {
+      "input": [
+        100,
+        null,
+        100
+      ],
+      "result": [
+        50,
+        500.0,
+        "sold_count_diff"
+      ]
+    },
+    "advertised_10_unit_cap_not_applied": {
+      "input": [
+        40,
+        0
+      ],
+      "result": [
+        40,
+        400.0,
+        "qty_positive_delta_sum"
+      ]
+    },
+    "constant_counter_falls_back_to_stock_depletion": {
+      "counter": [
+        100,
+        100
+      ],
+      "qty": [
+        20,
+        10
+      ],
+      "result": [
+        10,
+        100.0,
+        "qty_positive_delta_sum"
+      ]
+    },
+    "stock_revenue_labeled_exact": {
+      "input": {
+        "revenue_30d": 200,
+        "revenue_status": "computed"
+      },
+      "result": [
+        200.0,
+        "exact"
+      ]
+    },
+    "exact_order_numerator_snapshot_denominator": {
+      "qty_sold_est": 10,
+      "my_units_sold": 20,
+      "num_priced_competitors": 1,
+      "market_size": 10,
+      "has_competitor_pricing": true,
+      "market_share_pct": 200.0,
+      "has_market_share": true,
+      "my_share_is_estimate": false
+    },
+    "default_empty_database_seed": {
+      "stores": 7,
+      "products": 202,
+      "invented_snapshots": 31450,
+      "earliest": "2026-07-08 19:05:40.515682+00:00",
+      "count_with_confidence_at_least_85": 27133,
+      "has_explicit_synthetic_flag": false
+    },
+    "intraday_sales_dropped_by_rollup": {
+      "snapshot_estimator": [
+        5,
+        50.0,
+        "qty_positive_delta_sum"
+      ],
+      "daily_sales_documents": []
+    },
+    "ledger_old_event_overwrites_new_and_replay_increments": {
+      "_id": "store|SKU|2026-10-01",
+      "sealed_at": null,
+      "store_id": "store",
+      "sku": "SKU",
+      "ksa_date": "2026-10-01",
+      "is_first_day_for_store": true,
+      "writer_version": 1,
+      "backfilled": false,
+      "close_price": 100,
+      "close_sale_price": null,
+      "close_original_price": null,
+      "discount_pct": null,
+      "on_sale": null,
+      "in_stock": null,
+      "qty_available": null,
+      "sold_count_cumulative": null,
+      "confidence": null,
+      "source_tier": null,
+      "last_observed_at": "2026-10-01 07:00:00+00:00",
+      "observations_that_day": 3
+    },
+    "complete_zero_order_window_returns_missing": null,
+    "cancelled_only_window_returns_missing": null,
+    "23_hour_cache_marked_fresh": {
+      "body": {
+        "cached_value": "23-hour-old figure"
+      },
+      "meta": {
+        "source": "cache",
+        "computed_at": "2026-10-06T08:05:43.822425+00:00",
+        "age_seconds": 82800.0,
+        "stale": false
+      }
+    }
+  }
+}

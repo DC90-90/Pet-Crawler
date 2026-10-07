@@ -1,0 +1,35 @@
+test_daily_rollup_does_not_bridge_missing_stock (test_audit_containment.ServerTests.test_daily_rollup_does_not_bridge_missing_stock) ... ok
+test_daily_rollup_missing_counter_not_sales (test_audit_containment.ServerTests.test_daily_rollup_missing_counter_not_sales) ... ok
+test_daily_rollup_missing_stock_not_sales (test_audit_containment.ServerTests.test_daily_rollup_missing_stock_not_sales) ... ok
+test_daily_rollup_real_depletion_preserved (test_audit_containment.ServerTests.test_daily_rollup_real_depletion_preserved) ... ok
+test_explicit_development_seed_marked_synthetic (test_audit_containment.ServerTests.test_explicit_development_seed_marked_synthetic) ... ok
+test_legacy_share_withheld_instead_of_200_percent (test_audit_containment.ServerTests.test_legacy_share_withheld_instead_of_200_percent) ... ok
+test_proxy_revenue_not_exact (test_audit_containment.ServerTests.test_proxy_revenue_not_exact) ... ok
+test_seed_cannot_opt_in_in_production (test_audit_containment.ServerTests.test_seed_cannot_opt_in_in_production) ... ok
+test_seed_off_by_default (test_audit_containment.ServerTests.test_seed_off_by_default) ... ok
+test_competitor_unknown_sales_is_not_sole_seller (test_audit_containment.ShareTests.test_competitor_unknown_sales_is_not_sole_seller) ... ok
+test_headline_uses_same_cohort_for_both_sides (test_audit_containment.ShareTests.test_headline_uses_same_cohort_for_both_sides) ... ok
+test_missing_numerator_stays_unknown (test_audit_containment.ShareTests.test_missing_numerator_stays_unknown) ... ok
+test_missing_timestamp_not_high_confidence (test_audit_containment.ShareTests.test_missing_timestamp_not_high_confidence) ... ok
+test_no_tracked_competitor (test_audit_containment.ShareTests.test_no_tracked_competitor) ... ok
+test_order_backed_zero_preserved (test_audit_containment.ShareTests.test_order_backed_zero_preserved) ... ok
+test_own_exact_does_not_make_estimated_denominator_high_confidence (test_audit_containment.ShareTests.test_own_exact_does_not_make_estimated_denominator_high_confidence) ... ok
+test_store_capability_does_not_invent_product_zero (test_audit_containment.ShareTests.test_store_capability_does_not_invent_product_zero) ... ok
+test_two_competitors_without_own_sales_not_comparable (test_audit_containment.ShareTests.test_two_competitors_without_own_sales_not_comparable) ... ok
+test_capped_counter_not_used (test_audit_containment.SignalTests.test_capped_counter_not_used) ... ok
+test_counter_change_is_preserved (test_audit_containment.SignalTests.test_counter_change_is_preserved) ... ok
+test_counter_gap_is_withheld_not_capped (test_audit_containment.SignalTests.test_counter_gap_is_withheld_not_capped) ... ok
+test_flat_observed_counter_does_not_switch_methods (test_audit_containment.SignalTests.test_flat_observed_counter_does_not_switch_methods) ... ok
+test_large_stock_drop_is_withheld_not_capped (test_audit_containment.SignalTests.test_large_stock_drop_is_withheld_not_capped) ... ok
+test_missing_counter_is_not_a_reset_to_zero (test_audit_containment.SignalTests.test_missing_counter_is_not_a_reset_to_zero) ... ok
+test_missing_quantity_is_not_depletion (test_audit_containment.SignalTests.test_missing_quantity_is_not_depletion) ... ok
+test_missing_stock_breaks_interval (test_audit_containment.SignalTests.test_missing_stock_breaks_interval) ... ok
+test_nan_is_not_an_observation (test_audit_containment.SignalTests.test_nan_is_not_an_observation) ... ok
+test_placeholder_breaks_interval (test_audit_containment.SignalTests.test_placeholder_breaks_interval) ... ok
+test_real_zero_quantity_is_usable (test_audit_containment.SignalTests.test_real_zero_quantity_is_usable) ... ok
+test_usable_stock_drop_is_preserved (test_audit_containment.SignalTests.test_usable_stock_drop_is_preserved) ... ok
+
+----------------------------------------------------------------------
+Ran 30 tests in 3.930s
+
+OK

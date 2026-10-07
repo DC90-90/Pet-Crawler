@@ -1,0 +1,65 @@
+{
+  "summary": "Executed real Mongo integration tests for ingestion/cohort/views/ledger/jobs/cron plus live frontend navigation checks on preview URL. Backend suite produced meaningful adapter-to-adapter inconsistencies and one orders exactness bug; UI core flows passed with a minor mobile overflow offender.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "Shared cohort adapters (catalog_views/comparison_views vs market_share.build_dataset)",
+        "issue": "Cohort IDs are inconsistent across adapters for the same seeded product and window (failing assertion at /app/backend/tests/test_iteration37_integration_real_mongo.py:244; observed two different cohort_id hashes). This breaks F06 shared-cohort consistency expectation.",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "server._own_orders_aggregate",
+        "issue": "Aggregation projection excludes currency/financials_complete, so aggregate_orders cannot filter invalid/wrong-currency orders. Repro fails at /app/backend/tests/test_iteration37_integration_real_mongo.py:413 (expected orders_count=1, actual=3). This can overstate exact own revenue/units (F07 risk).",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Market Share header area (mobile 390x844)",
+        "issue": "Small residual horizontal overflow offender remains in header flex wrapper (page delta 0 but offender delta 13px detected by runtime sweep).",
+        "selector": "div.flex.flex-wrap.items-start.justify-between.gap-3",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Detail dialogs",
+        "issues": [
+          "Console warning: missing Description/aria-describedby on DialogContent (accessibility warning)."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration37_integration_real_mongo.py",
+    "/app/test_reports/pytest/iteration_37_backend.xml"
+  ],
+  "action_items": [
+    "Fix cohort determinism/consistency so catalog_views, comparison_views, scanner/detail/intel_detail and market_share all resolve identical cohort_id for same evidence window.",
+    "Patch server._own_orders_aggregate projection to include currency + financials_complete (or avoid restrictive projection) before calling aggregate_orders.",
+    "Re-run iteration37 backend suite after fixes and verify failing lines 244 and 413 pass.",
+    "Tighten Market Share mobile header wrapping to eliminate 13px offender at 390px width."
+  ],
+  "critical_code_review_comments": [
+    "server._own_orders_aggregate currently fetches only excluded/total/units/items, but aggregate_orders relies on financials_complete and currency for exactness filters.",
+    "Shared cohort contract still diverges between adapter paths; this directly undermines single source-of-truth pricing semantics.",
+    "Cron auth/envelope/duplicate behavior works under isolated route tests when queue execution is harmlessly monkeypatched."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration37_integration_real_mongo.py",
+    "/app/test_reports/iteration_37.json"
+  ],
+  "success_rate": {
+    "backend": "71%",
+    "frontend": "90%"
+  },
+  "seed_data_creation": "Created and cleaned isolated disposable Mongo DB via MONGO_URL with random DB name; no application DB mutation.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Backend integration suite now exists and uses real Mongo + integrity_indexes.ensure. Current status: 5/7 pass, 2 reproducible backend failures. Frontend live check confirms login, MyProducts (KPI shows 2303), detail panel, /insights, /price-intel, Market Share tabs, scanner, and mobile drawer behaviors; one minor mobile overflow offender remains.",
+  "rca of the issue": "RCA-1 Cohort mismatch: Adapter paths do not produce one stable cohort identity for the same evidence window, indicating drift in cohort inputs/timing/filtering (likely now/cutoff path variance). RCA-2 Own orders exactness: _own_orders_aggregate projection strips fields needed by aggregate_orders filters, causing invalid orders to be counted as exact. Repro in test file lines 413/244 with real Mongo writes."
+}

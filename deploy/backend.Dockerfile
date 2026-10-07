@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python dependencies
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers (Chromium only)
@@ -28,8 +28,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/pw-browsers
 RUN playwright install chromium && playwright install-deps chromium
 
 # Copy application code
-COPY server.py crawlers.py ./
-COPY .env .env
+COPY backend/ ./
 
 # Expose port
 EXPOSE 8001

@@ -89,7 +89,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
 
   return (
     <Sheet open={!!sku} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent className="w-[520px] sm:max-w-[520px] overflow-y-auto p-0" data-testid="product-detail-panel">
+      <SheetContent aria-describedby={undefined} className="w-[520px] sm:max-w-[520px] overflow-y-auto p-0" data-testid="product-detail-panel">
         <SheetHeader className="px-5 py-4 border-b border-white/10 sticky top-0 bg-[#0A2728]/80 z-10">
           <SheetTitle className="text-base font-bold text-white inline-flex items-center gap-2">
             <MineBadge sku={sku} />

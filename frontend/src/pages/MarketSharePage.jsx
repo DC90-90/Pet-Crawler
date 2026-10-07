@@ -98,10 +98,10 @@ export default function MarketSharePage() {
             <PieChart className="w-5 h-5 text-[#1E988E]" /> Market Share
           </h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">
-            My position against the same products in tracked Saudi stores — measured, never guessed
+            Tracked-store coverage · order totals where complete · inventory proxies labelled separately
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full" data-testid="ms-header-controls">
           <div className="flex gap-1" data-testid="ms-range">
             {RANGES.map((d) => (
               <Button key={d} size="sm" variant={days === d ? "default" : "outline"}
@@ -130,7 +130,7 @@ export default function MarketSharePage() {
         </div>
       </div>
 
-      <div className="flex gap-1 overflow-x-auto pb-1" data-testid="ms-tabs">
+      <div className="flex flex-wrap gap-1 pb-1" data-testid="ms-tabs">
         {TABS.map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)}
             className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs transition-colors ${

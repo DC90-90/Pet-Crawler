@@ -1,0 +1,830 @@
+--- a/backend/core/utils.py
++++ b/backend/core/utils.py
+@@ -185,75 +185,66 @@
+ 
+ 
+ def _estimate_sales_from_snapshots(snaps, days):
+-    """Estimate sales for a SKU at a single store from a chronological snapshot list.
+-
+-    Strategy:
+-      1. PREFER `sold_count` diff (Salla `sales_count` / Zid `sold_count`) — cumulative
+-         sales counter, most reliable.
+-      2. FALL BACK to qty depletion with sanity filters (drop placeholder values,
+-         cap deltas).
+-
+-    Returns: (units_sold, revenue, used_method).
+-    """
++    """Estimate changes in observed signals, never replace an unknown with zero.
++
++    Consecutive valid readings are required. Missing/capped readings break an
++    interval. Implausible jumps are withheld, rather than fabricated by clipping.
++    Revenue remains an estimate at observed shelf prices, not invoiced revenue.
++    """
++    import math
++
++    def number(v):
++        if isinstance(v, bool) or not isinstance(v, (int, float)):
++            return None
++        return v if math.isfinite(v) and v >= 0 else None
++
+     if not snaps or len(snaps) < 2:
+         return 0, 0.0, "insufficient_data"
+ 
+-    # ── Method 1: sold_count cumulative diff (most reliable) ──
+-    # We now sum CLAMPED per-step positive diffs rather than `last - first`.
+-    # Reason: a single bad data point (sold_count reset, partner-sync backfill)
+-    # used to inflate the window total by thousands. Per-step clamping caps
+-    # each interval at MAX_SOLD_COUNT_DELTA_PER_INTERVAL and a total cap of
+-    # MAX_DAILY_SALES_PER_SKU * days keeps the window-level number sane too.
+-    sold_counts = [s.get("sold_count", 0) or 0 for s in snaps]
+-    if max(sold_counts) > 0:
+-        units_from_counter = 0
+-        any_positive_step = False
+-        for i in range(1, len(sold_counts)):
+-            delta = sold_counts[i] - sold_counts[i - 1]
+-            if delta <= 0:
+-                # Counter went down (reset / refurbished history) — ignore.
++    def readings(field, counter=False):
++        out = []
++        for s in snaps:
++            v = number(s.get(field))
++            if counter and s.get("sold_count_capped"):
++                v = None
++            if not counter and v is not None and (v in PLACEHOLDER_QTY_VALUES or v > 200):
++                v = None
++            out.append(v)
++        return out
++
++    def deltas(values, cap, direction):
++        total, intervals = 0, 0
++        for prev, cur in zip(values, values[1:]):
++            if prev is None or cur is None:
+                 continue
+-            any_positive_step = True
+-            units_from_counter += min(delta, MAX_SOLD_COUNT_DELTA_PER_INTERVAL)
+-        if any_positive_step and units_from_counter > 0:
+-            avg_price = sum((s.get("price") or 0) for s in snaps) / max(1, len(snaps))
+-            units_capped = min(units_from_counter, MAX_DAILY_SALES_PER_SKU * max(1, days))
+-            return units_capped, round(units_capped * avg_price, 2), "sold_count_diff"
+-
+-    # ── Method 2: positive-delta SUM with restock filtering ──
+-    # Monotonic by construction: each additional snapshot can only ADD a non-negative
+-    # delta to the total. Prior implementation used `net_drop = first_qty − last_qty`,
+-    # which made 90D windows occasionally report LESS than their 7D sub-windows when
+-    # the SKU was restocked between them.
+-    valid_qtys = [
+-        s.get("qty_available", 0) or 0
+-        for s in snaps
+-        if (s.get("qty_available", 0) or 0) not in PLACEHOLDER_QTY_VALUES
+-        and (s.get("qty_available", 0) or 0) <= 200
+-    ]
+-    if len(valid_qtys) < 2:
++            delta = direction * (cur - prev)
++            if delta > cap or (direction == 1 and delta < 0):
++                continue  # an anomaly/reset requires evidence, not a made-up cap
++            intervals += 1
++            total += max(0, delta)
++        return total, intervals
++
++    counter = readings("sold_count", counter=True)
++    # Legacy extractors used 0 for a missing counter. An all-zero sequence
++    # needs an explicit observation marker before it can override stock.
++    if not any(v is not None and v > 0 for v in counter) and not all(
++            s.get("sold_count_observed") is True for s in snaps):
++        counter = [None] * len(snaps)
++    units, intervals = deltas(counter, MAX_SOLD_COUNT_DELTA_PER_INTERVAL, 1)
++    if intervals:
++        method = "sold_count_diff"
++    else:
++        units, intervals = deltas(readings("qty_available"), MAX_QTY_DELTA_PER_INTERVAL, -1)
++        method = "qty_positive_delta_sum"
++    if not intervals:
+         return 0, 0.0, "insufficient_signal"
+-
+-    # Sum positive (downward) deltas only; treat upward jumps > 5 as restocks
+-    # (they contribute 0 to sales).
+-    total_drop = 0
+-    RESTOCK_SPIKE = 5  # an UPWARD jump > 5 within one sample is a restock, not a sale
+-    for i in range(1, len(valid_qtys)):
+-        delta = valid_qtys[i - 1] - valid_qtys[i]
+-        if delta > 0:
+-            total_drop += delta
+-        elif delta < -RESTOCK_SPIKE:
+-            # explicit no-op: the previous step is the restock event itself.
+-            # Sales captured before it are already in total_drop.
+-            pass
+-
+-    if total_drop < 1:
+-        return 0, 0.0, "no_depletion"
+-
+-    units = min(total_drop, MAX_DAILY_SALES_PER_SKU * max(1, days))
+-    avg_price = sum((s.get("price") or 0) for s in snaps) / max(1, len(snaps))
+-    revenue = round(units * avg_price, 2)
+-    return units, round(revenue, 2), "qty_positive_delta_sum"
++    if units > MAX_DAILY_SALES_PER_SKU * max(1, days):
++        return 0, 0.0, "anomalous_signal"
++    prices = [number(s.get("price")) for s in snaps]
++    prices = [p for p in prices if p is not None and p > 0]
++    if not prices:
++        return units, 0.0, "price_unavailable"
++    return units, round(units * statistics.mean(prices), 2), method
+ 
+ 
+ def compute_product_metrics(snapshots_by_store, days):
+--- a/backend/market_share.py
++++ b/backend/market_share.py
+@@ -1,22 +1,18 @@
+ """iter79 — Market Share.
+ 
+-ONE question, answered without inventing anything: of the sales Daleel can
+-actually MEASURE inside its tracked market, how much is ours?
++Share of available sales signals inside the tracked store cohort.
+ 
+ What "measurable" means here, in order of strength:
+ 
+   1. `orders_exact`      — my own store's Zid orders ledger. Real invoices.
+   2. `sold_counter_diff` — a store publishes a CUMULATIVE units-sold counter
+                            (Salla's "تم بيعه أكثر من N مرة", Zid's sold_count).
+-                           A diff between two crawls is a real observation of
+-                           real sales, but the badge is bucketed and capped, so
+-                           it is reported as measured-APPROX.
++                           A diff is an observed signal, used as a sales estimate.
+   3. `stock_depletion`   — a store publishes stock levels; a drop between two
+-                           crawls is a sale FLOOR (a sell-then-restock inside
+-                           one interval is invisible). Also measured-approx.
+-  4. `measured_zero`     — the store DOES publish a signal, was crawled at
+-                           least twice in the window, and this product's
+-                           counter/stock never moved. Zero is a fact here.
++                           crawls is a proxy affected by transfers, corrections,
++                           and restocking; it can overstate or understate sales.
++  4. `measured_zero`     — legacy value only; store capability no longer creates
++                           zero-sales claims for individual products.
+   5. `unavailable`       — the store publishes neither signal, or was crawled
+                            fewer than twice. NOT zero. The number is withheld
+                            and the reason is carried on the row.
+@@ -90,9 +86,17 @@
+ 
+ 
+ def _pct(part, whole):
+-    if not whole or whole <= 0:
++    if part is None or not whole or whole <= 0:
+         return None
+     return round(part / whole * 100, 2)
++
++
++def _seller_coverage(my_units, competitors):
++    """Catalogue presence and comparable sales are different facts."""
++    return {
++        "contested": my_units is not None and any(s.get("units") is not None for s in competitors),
++        "sole_seller": not competitors,
++    }
+ 
+ 
+ def _delta_pct(now_v, prev_v):
+@@ -248,7 +252,8 @@
+     if sg.get("days_observed", 0) < 2:
+         return None, None, SRC_NONE, REASON_ONE_CRAWL
+     if sg.get("signal") in ("counter", "stock"):
+-        return 0, 0.0, SRC_ZERO, None
++        # Store-level capability cannot prove a particular SKU sold zero.
++        return None, None, SRC_NONE, "no_product_level_sales_evidence"
+     return None, None, SRC_NONE, REASON_NO_SIGNAL
+ 
+ 
+@@ -269,7 +274,8 @@
+             ages.append((now - ca).days)
+     oldest = max(ages) if ages else None
+     if (my_source in ACTUAL_SOURCES and coverage >= 0.999 and weakest >= 95
+-            and (oldest is None or oldest <= fresh_days)):
++            and all(s.get("units_source") in ACTUAL_SOURCES for s in with_sales)
++            and len(ages) == len(sellers) and oldest is not None and oldest <= fresh_days):
+         return "high", None
+     if coverage >= 0.5 and weakest >= 88:
+         return "medium", (f"sales data for {len(with_sales)} of {len(sellers)} sellers"
+@@ -441,12 +447,12 @@
+     any filtered subset — so a filtered headline is the same arithmetic."""
+     measured_rows = [r for r in my_rows if r["market_revenue"] is not None]
+     contested = [r for r in measured_rows if r["contested"]]
+-    sole = [r for r in measured_rows if r["sole_seller"]]
++    sole = [r for r in my_rows if r["sole_seller"]]
+     my_measured = [r for r in contested if r["my_revenue"] is not None]
+     total_my_rev = round(sum(r["my_revenue"] or 0 for r in my_measured), 2)
+-    total_mkt_rev = round(sum(r["market_revenue"] or 0 for r in contested), 2)
++    total_mkt_rev = round(sum(r["market_revenue"] or 0 for r in my_measured), 2)
+     total_my_units = sum(r["my_units"] or 0 for r in my_measured)
+-    total_mkt_units = sum(r["market_units"] or 0 for r in contested)
++    total_mkt_units = sum(r["market_units"] or 0 for r in my_measured)
+     own_units_source = (SRC_ORDERS if orders_connected else
+                         (SRC_COUNTER if any(r["my_units_source"] == SRC_COUNTER for r in my_rows)
+                          else SRC_STOCK if any(r["my_units_source"] == SRC_STOCK for r in my_rows)
+@@ -464,11 +470,16 @@
+                         "measurable — products only we sell are reported separately"),
+         "my_units": total_my_units if my_measured else None,
+         "my_revenue": total_my_rev if my_measured else None,
+-        "market_units": total_mkt_units if measured_rows else None,
+-        "market_revenue": total_mkt_rev if measured_rows else None,
+-        "my_unit_share_pct": _pct(total_my_units, total_mkt_units),
+-        "my_revenue_share_pct": _pct(total_my_rev, total_mkt_rev),
++        "market_units": total_mkt_units if my_measured else None,
++        "market_revenue": total_mkt_rev if my_measured else None,
++        "my_unit_share_pct": _pct(total_my_units, total_mkt_units) if my_measured else None,
++        "my_revenue_share_pct": _pct(total_my_rev, total_mkt_rev) if my_measured else None,
+         "my_units_source": own_units_source,
++        "share_source": ("orders_exact" if my_measured and all(
++            r.get("my_units_source") == SRC_ORDERS and r.get("sellers") and
++            r.get("sellers_with_sales") == r.get("sellers_total") and all(
++                s.get("units_source") == SRC_ORDERS for s in r.get("sellers", []))
++            for r in my_measured) else "estimated_share" if my_measured else SRC_NONE),
+         "missing_products_total": (missing_total if missing_total is not None
+                                    else len(missing_rows)),
+         "missing_opportunity_value": round(sum(m["market_revenue"] or 0 for m in missing_rows), 2),
+@@ -686,8 +697,7 @@
+             # denominator. Products where we are the ONLY measurable seller are
+             # honestly 100% — and are excluded from the headline KPI, which
+             # would otherwise drift toward 100% as the catalogue grows.
+-            "contested": bool(comps) and len(with_sales) >= 2,
+-            "sole_seller": bool(with_sales) and not [s for s in with_sales if not s["is_own"]],
++            **_seller_coverage(my_units, comps),
+             "top_competitor": ({"store_name": top_comp["store_name"],
+                                 "units": top_comp["units"],
+                                 "revenue": top_comp["revenue"]} if top_comp else None),
+--- a/backend/server.py
++++ b/backend/server.py
+@@ -612,11 +612,12 @@
+ async def seed_database():
+     if await db.stores.count_documents({}) > 0:
+         return
+-    # Real-data deployments must set SEED_DEMO_DATA=false: the demo seed writes
+-    # synthetic products/snapshots that would pollute live crawl analytics.
++    # Synthetic history is opt-in and limited to development/test databases.
++    # Never infer production permission from a missing environment variable.
+     # Stores are seeded by ensure_stores() (store_registry.py) either way.
+-    if os.environ.get("SEED_DEMO_DATA", "true").lower() in ("false", "0", "no"):
+-        logger.info("SEED_DEMO_DATA=false — skipping synthetic demo seed")
++    if not (os.environ.get("SEED_DEMO_DATA", "false").lower() in ("true", "1", "yes")
++            and os.environ.get("APP_ENV", "production").lower() in ("development", "test")):
++        logger.info("Synthetic demo seed disabled; requires an explicit opt-in in development/test")
+         return
+     logger.info("Seeding Daleel database...")
+     random.seed(42)
+@@ -680,6 +681,7 @@
+                     "price": price, "original_price": orig_price, "discount_pct": disc_pct,
+                     "in_stock": qty > 0, "qty_available": max(0, qty),
+                     "source_tier": tier, "confidence_score": conf,
++                    "is_synthetic": True, "data_origin": "demo_seed",
+                     "crawled_at": crawled_at,
+                 })
+                 day -= random.randint(2, 4)
+@@ -3304,13 +3306,14 @@
+             n_priced = max(0, (r.get("num_sellers") or 0) - 1)
+         r["market_size"] = market_units_for_sku
+         r["has_competitor_pricing"] = n_priced >= 1
+-        if n_priced >= 1 and market_units_for_sku > 0:
+-            r["market_share_pct"] = round((my_units_for_sku / market_units_for_sku) * 100, 1)
+-            r["has_market_share"] = True
+-        else:
+-            r["market_share_pct"] = None
+-            r["has_market_share"] = False
+-        r["my_share_is_estimate"] = False  # fair-share fallback retired
++        # This legacy denominator includes a snapshot estimate of our sales,
++        # while the numerator may contain invoice units. They are not additive
++        # components of one total (and previously produced shares above 100%).
++        # Withhold until this page consumes the reconciled shared dataset.
++        r["market_share_pct"] = None
++        r["has_market_share"] = False
++        r["my_share_is_estimate"] = True
++        r["market_share_unavailable_reason"] = "unreconciled_sales_denominator"
+ 
+     total_count = len(result)
+     # KPI totals — when own_only=True (the My Products page):
+@@ -3350,7 +3353,7 @@
+             my_revenue_source = "estimated"
+         avg_market_share_honest = (
+             round((total_my_units_share / total_market_units_share) * 100, 1)
+-            if total_market_units_share > 0 else 0
++            if total_market_units_share > 0 else None
+         )
+         kpis = {
+             "total_products": total_count,
+@@ -4191,18 +4194,24 @@
+ 
+             if close is None or close <= 0:
+                 continue                      # junk close — bridge over it
+-            cur_sold = sold or 0
+-            cur_raw = qty or 0
+-            cur_valid = cur_raw if (cur_raw not in PLACEHOLDER_QTY_VALUES and cur_raw <= 200) else None
++            import math
++            def observed_number(value):
++                return (value if isinstance(value, (int, float)) and not isinstance(value, bool)
++                        and math.isfinite(value) and value >= 0 else None)
++            cur_sold = observed_number(sold)
++            cur_raw = observed_number(qty)
++            cur_valid = (cur_raw if cur_raw is not None and
++                         cur_raw not in PLACEHOLDER_QTY_VALUES and cur_raw <= 200 else None)
+ 
+             units_sold_d = units_qty_d = qty_drop_d = 0
+-            if prev_sold is not None:
++            if prev_sold is not None and cur_sold is not None:
+                 # sold_count cumulative counter — per-step clamp, same constant
+                 # as _estimate_sales_from_snapshots Method 1.
+                 delta = cur_sold - prev_sold
+-                if delta > 0:
+-                    units_sold_d = min(delta, MAX_SOLD_COUNT_DELTA_PER_INTERVAL)
++                if 0 < delta <= MAX_SOLD_COUNT_DELTA_PER_INTERVAL:
++                    units_sold_d = delta
+                 # raw depletion (trending's definition: positive deltas, no filters)
++            if prev_raw_qty is not None and cur_raw is not None:
+                 raw_drop = prev_raw_qty - cur_raw
+                 if raw_drop > 0:
+                     qty_drop_d = raw_drop
+@@ -4212,10 +4221,9 @@
+                 # the old window cap MAX_DAILY_SALES_PER_SKU*days becomes the
+                 # equivalent-or-tighter per-day clamp.
+                 vd = last_valid_qty - cur_valid
+-                if vd > 0:
+-                    units_qty_d = min(vd, MAX_DAILY_SALES_PER_SKU)
+-            if cur_valid is not None:
+-                last_valid_qty = cur_valid
++                if 0 < vd <= min(MAX_QTY_DELTA_PER_INTERVAL, MAX_DAILY_SALES_PER_SKU):
++                    units_qty_d = vd
++            last_valid_qty = cur_valid
+             prev_sold, prev_raw_qty = cur_sold, cur_raw
+ 
+             if units_sold_d or units_qty_d or qty_drop_d:
+@@ -6110,7 +6118,8 @@
+                     "market_avg": round(avg_price, 2),
+                     "gap_pct": gap_pct, "units_sold": _units_row,
+                     "units_basis": _units_basis, "market_sold": _market_units,
+-                    "revenue_uplift": uplift, "badge": badge,
++                    "revenue_uplift": uplift, "badge": badge,  # deprecated alias
++                    "price_gap_exposure": uplift, "forecast_revenue_uplift": None,
+                     "num_sellers": len(sellers), "sellers": sellers[:20],
+                     "in_stock": _my_in_stock, "qty": _my_qty,
+                 })
+@@ -6142,7 +6151,9 @@
+             "total_uplift": round(total_uplift, 2),
+             "zero_sales_overpriced": zero_sales_overpriced,
+             "overpriced_count": total_overpriced,
+-            "total_uplift_sar": round(total_uplift, 2),
++            "total_uplift_sar": round(total_uplift, 2),  # deprecated alias
++            "total_price_gap_exposure_sar": round(total_uplift, 2),
++            "uplift_is_forecast": False,
+             # iter77 — competitors priced above the market low. Kept out of the
+             # headline counts (which are about OUR store) and rendered in their
+             # own section.
+@@ -7323,30 +7334,16 @@
+ 
+ 
+ def _ranking_revenue_value(row):
+-    """(value, basis) on the unified revenue axis the ranking now sorts by.
+-
+-    iter62 — the client ranks stores by sales, so all three revenue tiers have
+-    to reduce to ONE comparable number. Precedence is by evidence quality, not
+-    by size: an exact ledger figure is preferred to a bucketed sold-badge diff,
+-    which is preferred to a ±50% category-velocity projection.
+-
+-    Returns None when the store has no revenue figure of any kind. That is
+-    deliberately NOT 0.0 — zero is a measurement ("this store sold nothing"),
+-    absence is not, and conflating them would rank an unmeasurable store last
+-    as though we had looked and found no sales.
+-
+-    A genuine measured 0 (an active Zid ledger with no orders in the window)
+-    keeps its 0.0 and therefore still outranks a store with no figure at all.
+-    """
++    """Keep revenue proxies explicitly estimated unless an order basis is supplied."""
+     rev = row.get("revenue_30d")
+     if isinstance(rev, (int, float)) and not isinstance(rev, bool):
+-        return float(rev), "exact"
++        basis = "exact" if row.get("revenue_basis") == "orders_exact" else "estimated"
++        return float(rev), basis
+     ap = row.get("revenue_approx") or {}
+     ap_rev = ap.get("revenue")
+     if ap.get("usable") and isinstance(ap_rev, (int, float)) and ap_rev > 0:
+         return float(ap_rev), "measured_approx"
+-    est = row.get("revenue_est_salla") or {}
+-    est_rev = est.get("revenue_est")
++    est_rev = (row.get("revenue_est_salla") or {}).get("revenue_est")
+     if isinstance(est_rev, (int, float)) and est_rev > 0:
+         return float(est_rev), "estimated"
+     return None, "none"
+@@ -11132,14 +11129,14 @@
+             {"id": market_share.SRC_COUNTER, "label": "Measured (approx.)",
+              "what": "Difference between two crawls of a store's published cumulative units-sold counter",
+              "applies_to": "Stores that publish a sold counter (Salla's sold badge, Zid sold_count)",
+-             "caveat": "The badge is bucketed and capped by the platform, so it is an approximation of real sales — never an estimate of them"},
++             "caveat": "A public counter is a sales proxy. Bucketing, caps, resets and collection gaps limit the estimate."},
+             {"id": market_share.SRC_STOCK, "label": "Measured (approx.)",
+              "what": "Stock level dropping between two crawls",
+              "applies_to": "Stores that publish stock quantities",
+-             "caveat": "A floor, not a total: a sale followed by a restock inside one crawl interval is invisible"},
+-            {"id": market_share.SRC_ZERO, "label": "Measured zero",
+-             "what": "The store publishes a signal, was crawled at least twice, and this product never moved",
+-             "applies_to": "All stores with a signal"},
++             "caveat": "Stock corrections, transfers and restocking can make this sales estimate too high or too low."},
++            {"id": market_share.SRC_ZERO, "label": "Unverified legacy zero",
++             "what": "A legacy classification without sufficient product-level evidence; refresh rebuilt caches",
++             "applies_to": "Historical cached responses only"},
+             {"id": market_share.SRC_NONE, "label": "Unavailable",
+              "what": "The store publishes no sales signal, or was crawled fewer than twice in the window",
+              "applies_to": "Reported with a reason on every affected row — never shown as zero"},
+@@ -11153,7 +11150,7 @@
+         "formulas": {
+             "unit_share_pct": "my units ÷ total units of the SAME canonical product across every seller with sales data",
+             "revenue_share_pct": "my revenue ÷ total revenue of the same canonical product across every seller with sales data",
+-            "market_revenue": "Σ (units × the price observed when they sold) per seller",
++            "market_revenue": "Estimated units × observed shelf prices per seller; observed prices are not transaction prices",
+             "trend": "same metric over the previous equal-length window",
+             "opportunity_score": "0.5×measured revenue + 0.3×measured units + 0.2×seller count, each scaled to the largest row — a ranking heuristic, not a forecast",
+             "price_rank": "my price's position among comparable sellers, cheapest first",
+@@ -11167,7 +11164,7 @@
+             "match_strength": market_share.MATCH_STRENGTH,
+         },
+         "confidence": {
+-            "high": "Exact identity match on every seller, sales data for all of them, my units invoiced, prices ≤7 days old",
++            "high": "Strong identity on every seller, order-backed sales for every seller, and known price timestamps ≤7 days old",
+             "medium": "Sales data for at least half the sellers and a strong identity match",
+             "low": "Sales data for fewer than half the sellers, the weakest identity match is below 88%, or the sellers' prices differ by 3× or more (one listing may be a different pack size)",
+             "unavailable": "No seller of this product publishes sales data — the number is withheld, not zeroed",
+@@ -11188,8 +11185,8 @@
+     src = {
+         market_share.SRC_ORDERS: "my units are exact invoices from the Zid orders ledger",
+         market_share.SRC_COUNTER: "my units come from the store's published sold-counter difference between two crawls",
+-        market_share.SRC_STOCK: "my units come from stock depletion between two crawls (a floor)",
+-        market_share.SRC_ZERO: "my units measured as zero — signal present, product never moved",
++        market_share.SRC_STOCK: "my units are estimated from stock decreases, which may include non-sales adjustments",
++        market_share.SRC_ZERO: "legacy zero without product-level evidence",
+         market_share.SRC_NONE: "my units unavailable",
+     }.get(r.get("my_units_source"), "my units unavailable")
+     return (f"share = my revenue ÷ Σ revenue of the {r.get('sellers_with_sales')} of "
+--- /dev/null
++++ b/backend/tests/test_audit_containment.py
+@@ -0,0 +1,185 @@
++"""Offline regression tests: no application startup, network, or live database.
++
++Run: python -m unittest discover -s backend/tests -p test_audit_containment.py -v
++AST extraction isolates the actual monolith functions from startup side effects.
++"""
++import ast
++import asyncio
++import copy
++from datetime import datetime, timedelta, timezone
++import logging
++import os
++from pathlib import Path
++import random
++import sys
++import unittest
++from unittest.mock import patch
++import uuid
++
++BACKEND = Path(__file__).resolve().parents[1]
++sys.path.insert(0, str(BACKEND))
++from core.utils import _estimate_sales_from_snapshots as estimate
++from core.utils import (PLACEHOLDER_QTY_VALUES, MAX_QTY_DELTA_PER_INTERVAL,
++                        MAX_DAILY_SALES_PER_SKU, MAX_SOLD_COUNT_DELTA_PER_INTERVAL,
++                        MIN_AGGREGATION_CONFIDENCE)
++import market_share as ms
++
++def extract(names):
++    ns = dict(datetime=datetime, timedelta=timedelta, timezone=timezone,
++              logger=logging.getLogger('offline-tests'), random=random,
++              os=os, uuid=uuid, PLACEHOLDER_QTY_VALUES=PLACEHOLDER_QTY_VALUES,
++              MAX_QTY_DELTA_PER_INTERVAL=MAX_QTY_DELTA_PER_INTERVAL,
++              MAX_DAILY_SALES_PER_SKU=MAX_DAILY_SALES_PER_SKU,
++              MAX_SOLD_COUNT_DELTA_PER_INTERVAL=MAX_SOLD_COUNT_DELTA_PER_INTERVAL,
++              MIN_AGGREGATION_CONFIDENCE=MIN_AGGREGATION_CONFIDENCE)
++    nodes = []
++    for n in ast.parse((BACKEND/'server.py').read_text(encoding='utf-8')).body:
++        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names:
++            n.decorator_list = []
++            nodes.append(n)
++        elif isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in n.targets):
++            nodes.append(n)
++    exec(compile(ast.Module(body=nodes, type_ignores=[]), 'server.py', 'exec'), ns)
++    return ns
++
++def matches(row, q):
++    for k, v in q.items():
++        value = row.get(k)
++        if isinstance(v, dict):
++            for op, bound in v.items():
++                if op == '$gte' and not (value is not None and value >= bound): return False
++                if op == '$lt' and not (value is not None and value < bound): return False
++        elif value != v:
++            return False
++    return True
++
++class Cursor:
++    def __init__(self, rows): self.rows = rows
++    def batch_size(self, _): return self
++    def __aiter__(self): self.it = iter(self.rows); return self
++    async def __anext__(self):
++        try: return next(self.it)
++        except StopIteration: raise StopAsyncIteration
++    async def to_list(self, n=None): return self.rows[:n]
++
++class Collection:
++    def __init__(self): self.rows = []
++    def find(self, q=None, projection=None): return Cursor([r for r in self.rows if matches(r, q or {})])
++    async def count_documents(self, q): return sum(matches(r, q) for r in self.rows)
++    async def insert_one(self, r): self.rows.append(copy.deepcopy(r))
++    async def insert_many(self, rows): self.rows.extend(copy.deepcopy(rows))
++    async def delete_many(self, q): self.rows = [r for r in self.rows if not matches(r, q)]
++    async def create_index(self, *a, **kw): pass
++
++class DB:
++    def __init__(self): self.cols = {}
++    def __getattr__(self, k): return self.cols.setdefault(k, Collection())
++
++def snap(qty, sold=None, day=1, **extra):
++    return dict(sku='SKU', store_id='store', qty_available=qty, sold_count=sold,
++                price=10, confidence_score=99, source_tier=1, in_stock=True,
++                crawled_at=datetime(2026,10,day,6,tzinfo=timezone.utc), **extra)
++
++class SignalTests(unittest.TestCase):
++    def test_missing_quantity_is_not_depletion(self):
++        self.assertEqual(estimate([snap(20), snap(None)], 30)[:2], (0, 0.0))
++    def test_missing_counter_is_not_a_reset_to_zero(self):
++        self.assertEqual(estimate([snap(10,100),snap(10,None),snap(10,100)],30)[:2], (0,0.0))
++    def test_missing_stock_breaks_interval(self):
++        self.assertEqual(estimate([snap(8),snap(None),snap(3)],30)[0],0)
++    def test_placeholder_breaks_interval(self):
++        self.assertEqual(estimate([snap(8),snap(999),snap(3)],30)[0],0)
++    def test_real_zero_quantity_is_usable(self):
++        self.assertEqual(estimate([snap(8),snap(0)],30)[:2],(8,80.0))
++    def test_usable_stock_drop_is_preserved(self):
++        self.assertEqual(estimate([snap(8),snap(3)],30)[:2],(5,50.0))
++    def test_large_stock_drop_is_withheld_not_capped(self):
++        self.assertEqual(estimate([snap(40),snap(0)],30)[0],0)
++    def test_counter_gap_is_withheld_not_capped(self):
++        self.assertEqual(estimate([snap(None,100),snap(None,900)],30)[0],0)
++    def test_counter_change_is_preserved(self):
++        self.assertEqual(estimate([snap(None,100),snap(None,105)],30)[:2],(5,50.0))
++    def test_flat_observed_counter_does_not_switch_methods(self):
++        self.assertEqual(estimate([snap(20,100),snap(10,100)],30), (0,0.0,'sold_count_diff'))
++    def test_nan_is_not_an_observation(self):
++        self.assertEqual(estimate([snap(8),snap(float('nan'))],30)[0],0)
++    def test_capped_counter_not_used(self):
++        self.assertEqual(estimate([snap(None,100),snap(None,120,sold_count_capped=True)],30)[0],0)
++
++class ServerTests(unittest.TestCase):
++    def seed(self, env):
++        ns=extract({'seed_database','STORES_SEED','PRODUCTS_SEED','EXTRA_PRODUCT_TEMPLATES'})
++        db=DB(); ns['db']=db
++        with patch.dict(os.environ, env, clear=True): asyncio.run(ns['seed_database']())
++        return db
++    def test_seed_off_by_default(self):
++        self.assertEqual(self.seed({}).product_snapshots.rows, [])
++    def test_seed_cannot_opt_in_in_production(self):
++        self.assertEqual(self.seed({'SEED_DEMO_DATA':'true','APP_ENV':'production'}).product_snapshots.rows,[])
++    def test_explicit_development_seed_marked_synthetic(self):
++        rows=self.seed({'SEED_DEMO_DATA':'true','APP_ENV':'development'}).product_snapshots.rows
++        self.assertGreater(len(rows), 0)
++        self.assertTrue(all(r.get('is_synthetic') and r.get('data_origin')=='demo_seed' for r in rows))
++    def rollup(self, rows):
++        ns=extract({'_recompute_store_metrics','_metric_day_str'})
++        db=DB(); db.product_snapshots.rows=rows
++        asyncio.run(ns['_recompute_store_metrics'](db,'store'))
++        return db.sku_sales_daily.rows
++    def test_daily_rollup_missing_stock_not_sales(self):
++        self.assertEqual(self.rollup([snap(20, day=1),snap(None,day=2)]),[])
++    def test_daily_rollup_missing_counter_not_sales(self):
++        self.assertEqual(self.rollup([snap(None,100,1),snap(None,None,2),snap(None,100,3)]),[])
++    def test_daily_rollup_does_not_bridge_missing_stock(self):
++        self.assertEqual(self.rollup([snap(8,day=1),snap(None,day=2),snap(3,day=3)]),[])
++    def test_daily_rollup_real_depletion_preserved(self):
++        rows=self.rollup([snap(8,day=1),snap(3,day=2)])
++        self.assertEqual(sum(r['units_qty'] for r in rows),5)
++    def test_proxy_revenue_not_exact(self):
++        f=extract({'_ranking_revenue_value'})['_ranking_revenue_value']
++        self.assertEqual(f({'revenue_30d':200}), (200.0,'estimated'))
++        self.assertEqual(f({'revenue_30d':200,'revenue_basis':'orders_exact'}), (200.0,'exact'))
++    def test_legacy_share_withheld_instead_of_200_percent(self):
++        tree=ast.parse((BACKEND/'server.py').read_text(encoding='utf-8'))
++        fn=next(n for n in tree.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='_my_products_dataset')
++        block=next(n for n in fn.body if isinstance(n,ast.For) and isinstance(n.target,ast.Name) and n.target.id=='r')
++        ns={'result':[dict(qty_sold_est=10,my_units_sold=20,num_priced_competitors=1)]}
++        exec(compile(ast.Module(body=[block],type_ignores=[]),'server.py','exec'),ns)
++        self.assertIsNone(ns['result'][0]['market_share_pct'])
++        self.assertFalse(ns['result'][0]['has_market_share'])
++
++class ShareTests(unittest.TestCase):
++    def test_store_capability_does_not_invent_product_zero(self):
++        self.assertEqual(ms._resolve_units(('A','missing'),{}, {'A':{'days_observed':30,'signal':'stock'}},False,None)[:3],(None,None,'unavailable'))
++    def test_order_backed_zero_preserved(self):
++        self.assertEqual(ms._resolve_units(('A','SKU'),{}, {},True, {'units':0,'revenue':0})[:3],(0,0,'orders_exact'))
++    def test_competitor_unknown_sales_is_not_sole_seller(self):
++        self.assertEqual(ms._seller_coverage(5,[{'units':None}]),{'contested':False,'sole_seller':False})
++    def test_two_competitors_without_own_sales_not_comparable(self):
++        self.assertFalse(ms._seller_coverage(None,[{'units':5},{'units':7}])['contested'])
++    def test_no_tracked_competitor(self):
++        self.assertTrue(ms._seller_coverage(None,[])['sole_seller'])
++    def test_own_exact_does_not_make_estimated_denominator_high_confidence(self):
++        now=datetime.now(timezone.utc)
++        sellers=[dict(units=10,is_own=True,units_source='orders_exact',last_crawl_at=now),
++                 dict(units=10,is_own=False,match_strength=99,units_source='stock_depletion',last_crawl_at=now)]
++        self.assertNotEqual(ms._row_confidence(sellers,'orders_exact',now=now)[0],'high')
++    def test_missing_timestamp_not_high_confidence(self):
++        sellers=[dict(units=10,is_own=True,units_source='orders_exact'),
++                 dict(units=10,is_own=False,match_strength=99,units_source='orders_exact')]
++        self.assertNotEqual(ms._row_confidence(sellers,'orders_exact')[0],'high')
++    def test_headline_uses_same_cohort_for_both_sides(self):
++        base=dict(contested=True,sole_seller=False,competitor_count=1,my_units_source='stock_depletion',sellers=[])
++        rows=[dict(base,market_revenue=110,my_revenue=10,market_units=11,my_units=1),
++              dict(base,market_revenue=300,my_revenue=None,market_units=30,my_units=None)]
++        k=ms.summarize(rows,[],[],catalog_total=2,orders_connected=False)
++        self.assertEqual(k['my_revenue_share_pct'],9.09)
++        self.assertEqual(k['market_revenue'],110)
++        self.assertEqual(k['share_source'],'estimated_share')
++    def test_missing_numerator_stays_unknown(self):
++        rows=[dict(contested=True,sole_seller=False,competitor_count=1,my_units_source='unavailable',
++                   market_revenue=100,my_revenue=None,market_units=10,my_units=None)]
++        k=ms.summarize(rows,[],[],catalog_total=1,orders_connected=False)
++        self.assertIsNone(k['my_revenue_share_pct'])
++        self.assertIsNone(k['market_revenue'])
++
++if __name__=='__main__': unittest.main()
+--- a/frontend/src/components/marketShare/Methodology.jsx
++++ b/frontend/src/components/marketShare/Methodology.jsx
+@@ -118,7 +118,7 @@
+           <li>• A store that publishes neither a sold counter nor stock levels cannot have its sales measured at all —
+             it still appears as a seller, with its price and stock status.</li>
+           <li>• My own exact units need the Zid orders ledger. Without it my figures fall back to stock depletion,
+-            which is a floor rather than a total.</li>
++            which can overstate or understate sales because stock also changes for other reasons.</li>
+           <li>• A withheld number is never rendered as 0: a zero would claim "sold nothing", which is a different fact.</li>
+         </ul>
+         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+--- a/frontend/src/components/marketShare/ShareOverview.jsx
++++ b/frontend/src/components/marketShare/ShareOverview.jsx
+@@ -31,7 +31,7 @@
+       <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-white/[0.03] border border-white/10">
+         <Database className="w-4 h-4 text-[#1E988E] mt-0.5 shrink-0" />
+         <p className="text-[11px] text-[#A1E4DB]" data-testid="ms-tracked-market-note">
+-          Market share is based on tracked measured data inside Daleel, not the total Saudi
++          Estimated share uses available signals inside Daleel, not the total Saudi
+           market ({d.window?.date_from} → {d.window?.date_to}).{" "}
+           {d.filtered && (
+             <span className="text-[#5FD3C7]" data-testid="ms-overview-filtered">
+@@ -42,8 +42,8 @@
+           publish data we can measure sales from. Share percentages count only the{" "}
+           <span className="text-white">{fmtNum(k.products_contested)}</span> product(s) where at
+           least one other tracked seller's sales are measurable — the{" "}
+-          <span className="text-white">{fmtNum(k.products_sole_seller)}</span> product(s) only we
+-          sell are reported separately so they cannot inflate the headline.
++          <span className="text-white">{fmtNum(k.products_sole_seller)}</span> product(s) with no tracked competitor
++          are reported separately. This does not establish exclusivity across Saudi Arabia.
+         </p>
+       </div>
+ 
+@@ -64,9 +64,9 @@
+       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+         {[
+           ["My revenue share", k.my_revenue_share_pct === null || k.my_revenue_share_pct === undefined
+-            ? "Unavailable" : fmtPct(k.my_revenue_share_pct), k.my_units_source, "ms-kpi-revenue-share"],
++            ? "Unavailable" : fmtPct(k.my_revenue_share_pct), k.share_source || "estimated_share", "ms-kpi-revenue-share"],
+           ["My unit share", k.my_unit_share_pct === null || k.my_unit_share_pct === undefined
+-            ? "Unavailable" : fmtPct(k.my_unit_share_pct), k.my_units_source, "ms-kpi-unit-share"],
++            ? "Unavailable" : fmtPct(k.my_unit_share_pct), k.share_source || "estimated_share", "ms-kpi-unit-share"],
+           ["Tracked market revenue", k.market_revenue === null || k.market_revenue === undefined
+             ? "Unavailable" : fmtMoney(k.market_revenue), null, "ms-kpi-market-revenue"],
+           ["My measured revenue", k.my_revenue === null || k.my_revenue === undefined
+@@ -87,7 +87,7 @@
+           ["Products in my catalog", fmtNum(k.my_catalog_products), "ms-kpi-catalog"],
+           ["…with a tracked competitor", fmtNum(k.products_with_tracked_competitor), "ms-kpi-with-competitor"],
+           ["…contested (share is comparable)", fmtNum(k.products_contested), "ms-kpi-contested"],
+-          ["Only I sell it (excluded from share)", fmtNum(k.products_sole_seller), "ms-kpi-sole"],
++          ["No tracked competitor (excluded from share)", fmtNum(k.products_sole_seller), "ms-kpi-sole"],
+         ].map(([label, value, tid]) => (
+           <div key={label} className="kpi-card !p-3" data-testid={tid}>
+             <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{label}</p>
+--- a/frontend/src/components/marketShare/SourceChip.jsx
++++ b/frontend/src/components/marketShare/SourceChip.jsx
+@@ -6,25 +6,30 @@
+ // "Measured (approx.)" for the counter and stock-depletion diffs, which are
+ // real observations but not exact unit counts.
+ export const SOURCE_META = {
++  estimated_share: {
++    label: "Estimated share", icon: Activity,
++    cls: "bg-[#F59E0B]/12 text-[#F59E0B] border-[#F59E0B]/25",
++    tip: "Share of available signals among tracked sellers. Estimated or missing competitor sales prevent an actual market-share claim.",
++  },
+   orders_exact: {
+     label: "Actual", icon: Receipt,
+     cls: "bg-[#10B981]/12 text-[#10B981] border-[#10B981]/25",
+     tip: "My own Zid orders ledger — real invoices",
+   },
+   sold_counter_diff: {
+-    label: "Measured (approx.)", icon: Activity,
++    label: "Estimated", icon: Activity,
+     cls: "bg-[#1E988E]/12 text-[#5FD3C7] border-[#1E988E]/25",
+     tip: "Difference between two crawls of the store's published units-sold counter. The platform buckets and caps that badge, so it approximates real sales",
+   },
+   stock_depletion: {
+-    label: "Measured (approx.)", icon: Activity,
++    label: "Estimated", icon: Activity,
+     cls: "bg-[#1E988E]/12 text-[#5FD3C7] border-[#1E988E]/25",
+-    tip: "Stock level dropping between two crawls — a floor, since a sale followed by a restock inside one interval is invisible",
++    tip: "Stock decreases are a sales proxy. Transfers, corrections and restocking can make this overstate or understate sales.",
+   },
+   measured_zero: {
+-    label: "Measured zero", icon: MinusCircle,
++    label: "Unverified zero", icon: MinusCircle,
+     cls: "bg-white/5 text-[#A1E4DB] border-white/15",
+-    tip: "The store publishes a signal and was crawled at least twice — this product genuinely did not move",
++    tip: "Legacy zero without product-level sales evidence. Refresh after rebuilding the data cache; this does not prove zero sales.",
+   },
+   unavailable: {
+     label: "Unavailable", icon: HelpCircle,
+@@ -34,6 +39,7 @@
+ };
+ 
+ export const REASON_TEXT = {
++  no_product_level_sales_evidence: "No usable sales observation for this product in the window",
+   store_publishes_no_sales_signal: "This store publishes neither a sold counter nor stock levels",
+   fewer_than_two_crawls_in_window: "Only one crawl in this window — a change needs two",
+   no_seller_in_this_market_has_sales_data: "No seller of this product publishes sales data",
+--- a/frontend/src/pages/MarketSharePage.jsx
++++ b/frontend/src/pages/MarketSharePage.jsx
+@@ -98,7 +98,7 @@
+             <PieChart className="w-5 h-5 text-[#1E988E]" /> Market Share
+           </h1>
+           <p className="text-sm text-[#A1E4DB] mt-0.5">
+-            My position against the same products in tracked Saudi stores — measured, never guessed
++            My position in tracked Saudi stores — sales estimates and data gaps are labelled
+           </p>
+         </div>
+         <div className="flex items-center gap-2">
+--- a/frontend/src/pages/MyProductsPage.jsx
++++ b/frontend/src/pages/MyProductsPage.jsx
+@@ -205,7 +205,7 @@
+           // Real ledger data (Zid Orders API) drops the "(Est.)" suffix and
+           // shows the order count; the estimation fallback keeps the old label.
+           { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", tipKey: "kpi_my_revenue_tip", val: `${(kpis.my_revenue ?? 0).toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : null, icon: TrendingUp, accent: "#10B981" },
+-          { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: `${kpis.avg_market_share ?? 0}%`, sub: kpis.share_sample_size != null ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : null, icon: TrendingDown, accent: "#F59E0B" },
++          { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: kpis.avg_market_share == null ? (isRTL ? "غير متاح" : "Unavailable") : `${kpis.avg_market_share}%`, sub: kpis.share_sample_size ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} ${isRTL ? "منتج" : "products"}` : (isRTL ? "بيانات المبيعات غير مكتملة" : "Sales denominator not reconciled"), icon: TrendingDown, accent: "#F59E0B" },
+           { key: "kpi_market_coverage", tipKey: "kpi_market_coverage_tip", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
+         ].map((k, i) => (
+           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
+--- a/frontend/src/pages/ScannerPage.jsx
++++ b/frontend/src/pages/ScannerPage.jsx
+@@ -73,7 +73,7 @@
+       <div className="flex items-center justify-between">
+         <div>
+           <h1 className="text-2xl font-bold tracking-tight text-white">Price Opportunity Scanner</h1>
+-          <p className="text-sm text-[#A1E4DB] mt-0.5">Find revenue you're leaving on the table</p>
++          <p className="text-sm text-[#A1E4DB] mt-0.5">Review price gaps across tracked competitor listings</p>
+         </div>
+         <div className="flex gap-2 items-center">
+           <div className="flex gap-1" data-testid="scanner-range">
+@@ -99,21 +99,21 @@
+           <p className="text-[10px] text-[#A1E4DB] mt-0.5">my products above the market low</p>
+         </div>
+         <div className="kpi-card border-s-4 border-s-green-500">
+-          <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Potential Revenue Uplift</p>
++          <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Price gap exposure</p>
+           <p className="text-2xl font-bold text-green-600 mt-1">{summary.total_uplift_sar.toLocaleString()} ﷼</p>
+-          <p className="text-[10px] text-[#A1E4DB] mt-0.5">price gap × units I sold in {days}d</p>
++          <p className="text-[10px] text-[#A1E4DB] mt-0.5">price gap × reported units in {days}d; not a sales forecast</p>
+         </div>
+         <div className="kpi-card border-s-4 border-s-yellow-500">
+-          <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Zero Sales + Overpriced</p>
++          <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">No reported sales signal + high price</p>
+           <p className="text-2xl font-bold text-yellow-600 mt-1">{summary.zero_sales_overpriced}</p>
+-          <p className="text-[10px] text-[#A1E4DB] mt-0.5">overpriced with no sales in {days}d</p>
++          <p className="text-[10px] text-[#A1E4DB] mt-0.5">no positive signal in {days}d; actual sales may be unknown</p>
+         </div>
+       </div>
+ 
+       {/* Opportunities Table */}
+       <div className="glass-card rounded-md overflow-hidden">
+         <div className="px-4 py-3 border-b border-white/10 bg-[#0A2728]/80/5">
+-          <h3 className="text-sm font-semibold text-white">My Overpriced Products — Sorted by Revenue Uplift</h3>
++          <h3 className="text-sm font-semibold text-white">My Overpriced Products — Sorted by price gap exposure</h3>
+           <p className="text-[10px] text-[#A1E4DB] mt-0.5">My shelf price vs the cheapest competitor carrying the same product</p>
+         </div>
+         <Table className="dense-table">
+@@ -125,7 +125,7 @@
+               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Market Low</TableHead>
+               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Gap %</TableHead>
+               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]" title={summary.sales_window ? `Sales cover complete KSA days ${summary.sales_window.start_ksa_date} → ${summary.sales_window.end_ksa_date} (${summary.sales_window.sealed_days}/${summary.sales_window.expected_days} sealed)` : ""}>Sales ({days}d)</TableHead>
+-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Revenue Uplift</TableHead>
++              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Price gap exposure</TableHead>
+               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Badge</TableHead>
+             </TableRow>
+           </TableHeader>
+@@ -281,10 +281,10 @@
+                 <div className="kpi-card !p-3"><p className="text-[9px] uppercase text-[#A1E4DB]">Market Average</p><p className="text-lg font-bold text-[#1E988E]" data-testid="opp-detail-avg">{selectedOpp.market_avg} ﷼</p><p className="text-[9px] text-[#A1E4DB] mt-0.5">{selectedOpp.num_sellers} sellers</p></div>
+               </div>
+               <div className="bg-[#0A2728]/80/5 rounded-md p-3 space-y-2 text-xs">
+-                <p>Lower to <span className="font-bold text-green-600">{selectedOpp.market_lowest} ﷼</span> to beat <span className="font-semibold text-white">{selectedOpp.lowest_store_name}</span> and become the cheapest seller</p>
+-                <p>Lower to <span className="font-bold text-[#1E988E]">{selectedOpp.market_avg} ﷼</span> to match market average</p>
+-                <p>Estimated uplift: <span className="font-bold text-green-600" dir="ltr">{selectedOpp.revenue_uplift.toLocaleString()} ﷼</span></p>
+-                <p className="text-[10px] text-[#A1E4DB]" dir="ltr">{selectedOpp.gap_pct}% gap × {selectedOpp.units_sold} unit(s) you sold in {days}d</p>
++                <p>Observed competitor low: <span className="font-bold text-green-600">{selectedOpp.market_lowest} ﷼</span> at <span className="font-semibold text-white">{selectedOpp.lowest_store_name}</span>. Verify variant, stock and freshness before changing prices.</p>
++                <p>Observed market average: <span className="font-bold text-[#1E988E]">{selectedOpp.market_avg} ﷼</span></p>
++                <p>Price gap exposure: <span className="font-bold text-[#A1E4DB]" dir="ltr">{selectedOpp.revenue_uplift.toLocaleString()} ﷼</span></p>
++                <p className="text-[10px] text-[#A1E4DB]" dir="ltr">SAR price difference × {selectedOpp.units_sold} reported unit(s) in {days}d. At unchanged volume, lowering price reduces revenue by this amount; future demand is unknown.</p>
+               </div>
+               {/* All sellers — who is cheapest, who is dearest, where we sit */}
+               {sellerRows.length > 0 && (

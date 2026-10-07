@@ -1,0 +1,74 @@
+{
+  "summary": "Executed focused backend+frontend verification against investigation findings using new v2 regression tests, live auth/RBAC tests, and browser automation on preview URL. Most contract checks passed; two critical issues remain (mobile layout overflow and market-share KPI withholding edge case). Also identified legacy regression tests that now encode pre-fix semantics and should be updated, not used to revert v2 behavior.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/market-share/* (summary aggregation path)",
+        "issue": "When contested row has market_revenue present but my_revenue missing, summarize() can return market_revenue=0 instead of withholding (None). This can present denominator as known while numerator is unknown.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "/api/crawler/ingest",
+        "issue": "Old test expectation for reserved-domain refusal now receives 422 first because run_id/observed_at are required (new replay-safe contract). Test must be adapted to supply required fields before asserting reserved-domain behavior." 
+      },
+      {
+        "endpoint": "legacy test suite /app/backend/tests/test_iter79_market_share.py",
+        "issue": "18+ assertions fail because they expect pre-containment semantics (measured_zero inference, looser confidence, older matching assumptions). These should be updated to v2 contract rather than treated as product regressions."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "App layout / Sidebar",
+        "issue": "Severe horizontal overflow on mobile width 390px: sidebar fixed at 240px and main content keeps margin-left 240px.",
+        "selector": "[data-testid='sidebar-nav'], main (class includes ms-[240px])",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Mobile Market Share (390x844)",
+        "issues": [
+          "documentElement.scrollWidth=1012 > clientWidth=390",
+          "main_margin_left=240px on mobile causes clipped primary content"
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_findings_v2_regression.py",
+    "/app/backend/tests/test_findings_auth_live.py",
+    "/app/test_reports/pytest/iteration_36_findings.xml",
+    "/app/test_reports/pytest/iteration_36_findings_custom.xml",
+    "/app/test_reports/pytest/iteration_36_auth_live.xml"
+  ],
+  "action_items": [
+    "Fix mobile responsive layout: remove hardcoded main margin for small breakpoints and make sidebar collapsible/overlay on mobile.",
+    "Patch market_share.summarize() to keep market_revenue/market_units as None when numerator cohort is unknown/ineligible.",
+    "Update legacy iter79/iter80 tests to align with v2 findings (do not revert product behavior to satisfy old semantics).",
+    "Add a reserved-domain ingest test path with valid run_id/observed_at to verify both F11 contract and reserved-domain gate together."
+  ],
+  "critical_code_review_comments": [
+    "frontend/src/App.js uses static `ms-[240px]` on main; this breaks all mobile widths and reproduces the known overflow bug immediately.",
+    "backend/market_share.py summarize() still has a denominator edge-case representation mismatch (0 vs withheld None).",
+    "Several old regression tests now conflict with contained semantics; keep them from driving accidental rollback."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_findings_v2_regression.py",
+    "/app/backend/tests/test_findings_auth_live.py",
+    "/app/test_reports/iteration_36.json"
+  ],
+  "success_rate": {
+    "backend": "89%",
+    "frontend": "75%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "New test coverage added for F01/F03/F04/F06/F09/F10/F12/F13/F14/F15 contracts and live auth checks. test_findings_v2_regression currently has 23 pass / 1 fail (summary withholding edge case). Live auth suite passes 6/6. UI navigation for My Products/Scanner/Market Share works on desktop. Mobile overflow still present and quantified (390px viewport => scrollWidth 1012). Legacy iter79_market_share failures are mostly contract-drift (old semantics), not evidence to rollback v2.",
+  "rca of the issue": "RCA-1 (mobile overflow): AppLayout keeps fixed main left margin (240px) regardless of viewport while sidebar is fixed 240px; at 390px width this guarantees horizontal overflow and clipped content. Mitigation: breakpoint-based margin reset and mobile drawer pattern. RCA-2 (summary withholding): summarize() computes `market_revenue` from contested rows while `my_measured` can be empty; representation falls back to numeric 0 instead of withheld None, creating misleading certainty. Mitigation: gate denominator output on same eligibility cohort as numerator or explicitly emit unavailable reason."
+}

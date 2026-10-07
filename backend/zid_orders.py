@@ -52,6 +52,13 @@ _BUNDLE_CHILD_MARKERS = ("parent_id", "parent_product_id", "parent_order_product
 
 
 def _coerce_money(val):
+    from observation_contract import money
+    if isinstance(val, dict) and "amount" not in val:
+        val = val.get("value", val.get("total"))
+    return money(val)
+
+
+def _retired_coerce_money(val):
     """Coerce Zid money shapes (12.5 | "12.50" | "1,234.50 SAR" | {"value": ...}) to float."""
     if val is None:
         return None
@@ -178,8 +185,9 @@ def normalize_zid_order(raw: dict):
         "status": status,
         "excluded": excluded,
         "created_at": created_at,
-        "currency": str(raw.get("currency_code") or raw.get("currency") or "SAR"),
-        "total": total if total is not None else 0.0,
+        "currency": str(raw.get("currency_code") or raw.get("currency") or "unknown"),
+        "total": total,
+        "financials_complete": total is not None and all(i["line_total"] is not None for i in items),
         "units": units,
         "items": items,
         "source": "zid_orders_api",
@@ -196,7 +204,7 @@ def aggregate_orders(order_docs):
     revenue, units, count = 0.0, 0, 0
     by_sku = {}
     for o in order_docs:
-        if o.get("excluded"):
+        if o.get("excluded") or o.get("financials_complete") is False or o.get("currency") not in (None, "SAR"):
             continue
         count += 1
         revenue += float(o.get("total") or 0)
@@ -278,6 +286,8 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
     refresh_floor = datetime.now(timezone.utc) - timedelta(days=INCREMENTAL_REFRESH_DAYS)
     upserted, skipped, pages = 0, 0, 0
     oldest_seen = None
+    now = datetime.now(timezone.utc)
+    complete, seen_orders = False, set()
 
     try:
         async with httpx.AsyncClient(timeout=45.0) as http:
@@ -303,8 +313,11 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
                                     + str(store_id) + ")"}
                 resp.raise_for_status()
                 payload = resp.json()
-                rows = payload.get("orders") or payload.get("results") or payload.get("data") or []
-                if not isinstance(rows, list) or not rows:
+                rows = payload.get("orders", payload.get("results", payload.get("data")))
+                if not isinstance(rows, list):
+                    break
+                if not rows:
+                    complete = True
                     break
                 pages += 1
 
@@ -319,6 +332,10 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
                         skipped += 1
                         logger.warning(f"[Orders] order {doc['order_id']} has no parseable date — skipped")
                         continue
+                    if not doc.get("financials_complete") or doc.get("currency") != "SAR" or doc["order_id"] in seen_orders:
+                        skipped += 1
+                        continue
+                    seen_orders.add(doc["order_id"])
                     doc["synced_at"] = datetime.now(timezone.utc)
                     await db.own_store_orders.update_one(
                         {"order_id": doc["order_id"]}, {"$set": doc}, upsert=True
@@ -330,6 +347,7 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
                         page_all_old = False
 
                 if not full_backfill and page_all_old:
+                    complete = True
                     break  # incremental: everything on this page predates the refresh window
                 await asyncio.sleep(0.15)
     except httpx.HTTPError as e:
@@ -340,6 +358,13 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
 
     logger.info(f"[Orders] synced {upserted} orders across {pages} page(s) "
                 f"(full_backfill={full_backfill}, auth={auth_source}, oldest={oldest_seen})")
-    return {"status": "ok", "upserted": upserted, "skipped": skipped, "pages": pages,
+    from observation_contract import stable_id
+    complete = complete and skipped == 0
+    await db.orders_sync_coverage.update_one({"_id": stable_id("orders", now.isoformat())}, {"$setOnInsert": {
+        "status": "complete" if complete else "partial", "window_start": datetime(1970, 1, 1, tzinfo=timezone.utc) if full_backfill else refresh_floor,
+        "window_end": now, "synced_at": datetime.now(timezone.utc), "pages": pages,
+        "orders_seen": upserted, "invalid_rows": skipped, "full_backfill": full_backfill,
+    }}, upsert=True)
+    return {"status": "ok" if complete else "partial", "complete": complete, "upserted": upserted, "skipped": skipped, "pages": pages,
             "auth_source": auth_source,
             "oldest_seen": oldest_seen.isoformat() if oldest_seen else None}

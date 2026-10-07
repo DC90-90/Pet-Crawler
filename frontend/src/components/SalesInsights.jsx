@@ -90,9 +90,9 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
       {/* Summary KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="sales-insights-kpis">
         {[
-          { key: "total_units",   label: t("si_kpi_total_units"),   val: (kpis.total_units_sold || 0).toLocaleString() },
-          { key: "total_revenue", label: t("si_kpi_total_revenue"), val: `${fmtSar(kpis.total_revenue || 0)} ${t("sar")}` },
-          { key: "avg_revenue",   label: t("si_kpi_avg_revenue"),   val: `${fmtSar(kpis.avg_revenue_per_product || 0)} ${t("sar")}` },
+          { key: "total_units",   label: t("si_kpi_total_units"),   val: kpis.total_units_sold?.toLocaleString() ?? "—" },
+          { key: "total_revenue", label: t("si_kpi_total_revenue"), val: `${fmtSar(kpis.total_revenue)} ${t("sar")}` },
+          { key: "avg_revenue",   label: t("si_kpi_avg_revenue"),   val: `${fmtSar(kpis.avg_revenue_per_product)} ${t("sar")}` },
           { key: "top_brand",     label: t("si_kpi_top_brand"),     val: kpis.top_brand || "—" },
         ].map((k) => (
           <div key={k.key} className="kpi-card" data-testid={`si-kpi-${k.key}`}>
@@ -207,7 +207,7 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
                         <SkuLine sku={p.sku} />
                       </TableCell>
                       <TableCell className="text-sm text-[#A1E4DB]" data-testid={`si-product-brand-${i}`}>{p.brand || "—"}</TableCell>
-                      <TableCell className="text-sm text-white font-mono text-end" data-testid={`si-product-sales-${i}`}>{(p.qty_sold_est || 0).toLocaleString()}</TableCell>
+                      <TableCell className="text-sm text-white font-mono text-end" data-testid={`si-product-sales-${i}`}>{p.qty_sold_est?.toLocaleString() ?? "—"}</TableCell>
                       <TableCell className="text-sm text-white font-mono text-end" data-testid={`si-product-revenue-${i}`}>{fmtSar(p.revenue_est)} {t("sar")}</TableCell>
                       <TableCell className="text-sm text-white font-mono text-end">{(p.avg_price || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
                       <TableCell className="text-sm text-[#A1E4DB] font-mono text-center">{p.num_sellers || 0}</TableCell>

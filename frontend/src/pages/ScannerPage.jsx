@@ -55,10 +55,11 @@ export default function ScannerPage() {
   const compTotal = summary.competitors_overpriced ?? competitorsOverpriced.length;
   // iter78 — the pack guard reports every price it took out of the market low
   const excludedRows = [
+    ...(summary.excluded_offer_sample || []),
     ...(summary.slug_pack_mismatch_sample || []),
     ...(summary.low_outliers_excluded_sample || []),
   ];
-  const excludedTotal = (summary.slug_pack_mismatch || 0) + (summary.low_outliers_excluded || 0);
+  const excludedTotal = summary.excluded_offers ?? ((summary.slug_pack_mismatch || 0) + (summary.low_outliers_excluded || 0));
 
   // iter77 — every comparable seller for the selected product, straight from the
   // endpoint. This used to filter the opportunities list and plot `my_price`
@@ -73,13 +74,13 @@ export default function ScannerPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">Price Opportunity Scanner</h1>
-          <p className="text-sm text-[#A1E4DB] mt-0.5">Find revenue you're leaving on the table</p>
+          <p className="text-sm text-[#A1E4DB] mt-0.5" data-testid="scanner-evidence-note">Current, in-stock offers for the same product</p>
         </div>
         <div className="flex gap-2 items-center">
           <div className="flex gap-1" data-testid="scanner-range">
             {RANGE_OPTIONS.map((d) => (
               <Button key={d} size="sm" variant={days === d ? "default" : "outline"}
-                onClick={() => setDays(d)}
+                onClick={() => setDays(d)} data-testid={`scanner-range-${d}`}
                 className={`text-xs rounded-md h-7 px-3 ${days === d ? "bg-[#1E988E] text-white" : ""}`}>{d}D</Button>
             ))}
           </div>
@@ -99,9 +100,9 @@ export default function ScannerPage() {
           <p className="text-[10px] text-[#A1E4DB] mt-0.5">my products above the market low</p>
         </div>
         <div className="kpi-card border-s-4 border-s-green-500">
-          <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Potential Revenue Uplift</p>
-          <p className="text-2xl font-bold text-green-600 mt-1">{summary.total_uplift_sar.toLocaleString()} ﷼</p>
-          <p className="text-[10px] text-[#A1E4DB] mt-0.5">price gap × units I sold in {days}d</p>
+          <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Price-gap exposure</p>
+          <p className="text-2xl font-bold text-green-600 mt-1" data-testid="scanner-price-gap-exposure">{summary.total_price_gap_exposure_sar?.toLocaleString() ?? "—"} ﷼</p>
+          <p className="text-[10px] text-[#A1E4DB] mt-0.5" data-testid="scanner-not-forecast">Historical gap × observed units · not a revenue forecast</p>
         </div>
         <div className="kpi-card border-s-4 border-s-yellow-500">
           <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Zero Sales + Overpriced</p>
@@ -113,7 +114,7 @@ export default function ScannerPage() {
       {/* Opportunities Table */}
       <div className="glass-card rounded-md overflow-hidden">
         <div className="px-4 py-3 border-b border-white/10 bg-[#0A2728]/80/5">
-          <h3 className="text-sm font-semibold text-white">My Overpriced Products — Sorted by Revenue Uplift</h3>
+          <h3 className="text-sm font-semibold text-white">My Overpriced Products — Price-gap Exposure</h3>
           <p className="text-[10px] text-[#A1E4DB] mt-0.5">My shelf price vs the cheapest competitor carrying the same product</p>
         </div>
         <Table className="dense-table">
@@ -125,13 +126,13 @@ export default function ScannerPage() {
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Market Low</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Gap %</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]" title={summary.sales_window ? `Sales cover complete KSA days ${summary.sales_window.start_ksa_date} → ${summary.sales_window.end_ksa_date} (${summary.sales_window.sealed_days}/${summary.sales_window.expected_days} sealed)` : ""}>Sales ({days}d)</TableHead>
-              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Revenue Uplift</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Price-gap Exposure</TableHead>
               <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Badge</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {opportunities.length === 0 ? (
-              <TableRow><TableCell colSpan={8} className="text-center py-12"><Shield className="w-8 h-8 text-green-400 mx-auto mb-2" /><p className="text-sm text-green-600 font-medium">All products well-positioned!</p></TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} className="text-center py-12"><Shield className="w-8 h-8 text-green-400 mx-auto mb-2" /><p className="text-sm text-[#A1E4DB] font-medium" data-testid="scanner-empty-state">No actionable price gaps in verified offers</p></TableCell></TableRow>
             ) : opportunities.map((o, i) => {
               const bcfg = BADGE_CFG[o.badge] || BADGE_CFG.overpriced;
               const BIcon = bcfg.icon;
@@ -142,8 +143,8 @@ export default function ScannerPage() {
                   <TableCell><span className="text-sm font-semibold text-red-500">{o.my_price} ﷼</span></TableCell>
                   <TableCell><span className="text-sm font-semibold text-green-600">{o.market_lowest} ﷼</span></TableCell>
                   <TableCell><span className="text-xs font-bold text-red-500">+{o.gap_pct}%</span></TableCell>
-                  <TableCell><span className="text-xs">{o.units_sold}{o.market_sold > o.units_sold ? <span className="text-[10px] text-[#A1E4DB] ms-1">/ {o.market_sold}</span> : null}</span></TableCell>
-                  <TableCell><span className="text-sm font-bold text-green-600">{o.revenue_uplift.toLocaleString()} ﷼</span></TableCell>
+                  <TableCell><span className="text-xs" data-testid={`opp-units-${i}`}>{o.units_sold ?? "—"}</span></TableCell>
+                  <TableCell><span className="text-sm font-bold text-green-600" data-testid={`opp-exposure-${i}`}>{o.price_gap_exposure?.toLocaleString() ?? "—"} ﷼</span></TableCell>
                   <TableCell><Badge variant="outline" className={`text-[9px] gap-1 ${bcfg.cls}`}><BIcon className="w-2.5 h-2.5" />{bcfg.label}</Badge></TableCell>
                 </TableRow>
               );
@@ -283,7 +284,7 @@ export default function ScannerPage() {
               <div className="bg-[#0A2728]/80/5 rounded-md p-3 space-y-2 text-xs">
                 <p>Lower to <span className="font-bold text-green-600">{selectedOpp.market_lowest} ﷼</span> to beat <span className="font-semibold text-white">{selectedOpp.lowest_store_name}</span> and become the cheapest seller</p>
                 <p>Lower to <span className="font-bold text-[#1E988E]">{selectedOpp.market_avg} ﷼</span> to match market average</p>
-                <p>Estimated uplift: <span className="font-bold text-green-600" dir="ltr">{selectedOpp.revenue_uplift.toLocaleString()} ﷼</span></p>
+                <p data-testid="scanner-selected-exposure">Price-gap exposure: <span className="font-bold text-green-600" dir="ltr">{selectedOpp.price_gap_exposure?.toLocaleString() ?? "—"} ﷼</span></p>
                 <p className="text-[10px] text-[#A1E4DB]" dir="ltr">{selectedOpp.gap_pct}% gap × {selectedOpp.units_sold} unit(s) you sold in {days}d</p>
               </div>
               {/* All sellers — who is cheapest, who is dearest, where we sit */}

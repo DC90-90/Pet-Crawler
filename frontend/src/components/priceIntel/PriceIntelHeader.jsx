@@ -26,7 +26,7 @@ export function PriceIntelKpiRow({ summary }) {
 
 export function ConfidenceDistribution({ distribution, isRTL, showGuide, onToggleGuide }) {
   if (!distribution) return null;
-  const total = Object.values(distribution).reduce((a, b) => a + b, 0) || 1;
+  const total = Object.values(distribution).reduce((a, b) => a + b, 0);
   const segments = [
     { key: "confirmed_100", label: "Confirmed", count: distribution.confirmed_100, color: "#10B981" },
     { key: "barcode_99", label: "Barcode", count: distribution.barcode_99, color: "#059669" },
@@ -123,7 +123,7 @@ function ScoreBar({ value, color = "#1E988E" }) {
 function RevenueCell({ row, isRTL }) {
   // MEASURED revenue — unchanged, solid teal, no tag.
   if (row.revenue_30d != null) {
-    return <span className="metric-number text-[#6AC1B5]">{row.revenue_30d.toLocaleString()} SAR</span>;
+    return <span className="metric-number text-[#6AC1B5]">{row.revenue_30d.toLocaleString()} SAR <small>{row.revenue_basis === "orders_exact" ? "orders" : "inventory proxy"}</small></span>;
   }
 
   // iter59 — TIER 2: MEASURED (APPROX.) from the Salla sold badge. This is a
@@ -238,21 +238,21 @@ export function StoreRankingCard({ ranking, computedAt, isRTL }) {
     <div className="glass-card p-5" data-testid="store-ranking-card">
       <div className="flex items-center gap-2 mb-1">
         <Trophy className="w-5 h-5 text-[#F59E0B]" />
-        <h3 className="text-sm font-semibold text-white">{isRTL ? "ترتيب قوة السوق" : "Market Strength Ranking"}</h3>
+        <h3 className="text-sm font-semibold text-white">{isRTL ? "تغطية العروض الموثقة" : "Verified Offer Coverage"}</h3>
       </div>
       {/* iter62 — rank is by REVENUE now, not by the strength score. Saying so
           on the card matters: the rows still show a strength bar, and without
           this line a reader would reasonably assume the bar produced the order. */}
       <p className="text-[10px] text-[#A1E4DB] mb-2" data-testid="ranking-sort-note">
-        {isRTL ? "مرتَّب حسب الإيرادات (الأعلى أولاً) · درجة القوة معروضة كمعلومة ثانوية"
-               : "Ranked by revenue (highest first) · strength score shown as secondary info"}
+        {isRTL ? "مرتَّب حسب العروض المتاحة الموثقة · تقديرات المخزون ليست إيرادات مؤكدة"
+               : "Ranked by verified in-stock offers · inventory proxies are not comparable to invoiced revenue"}
       </p>
-      {own && (
+      {own?.rank != null && (
         <div className="flex items-end gap-2 mb-1" data-testid="own-rank-headline">
           <span className="text-4xl font-bold text-[#1E988E] metric-number">#{own.rank}</span>
           <span className="text-[#A1E4DB] text-sm mb-1">
-            {isRTL ? `من ${ranking.total_stores} متجراً حسب الإيرادات · قوة السوق ${own.score}`
-                   : `of ${ranking.total_stores} stores by revenue · Market Strength ${own.score}`}
+            {isRTL ? `من ${ranking.total_stores} متجراً حسب التغطية الموثقة`
+                   : `of ${ranking.total_stores} stores by verified coverage`}
           </span>
         </div>
       )}
@@ -287,7 +287,7 @@ export function StoreRankingCard({ ranking, computedAt, isRTL }) {
               data-revenue-basis={r.revenue_rank_basis}
               data-revenue-rank-value={r.revenue_rank_value ?? ""}
             >
-              <span className="text-[#A1E4DB] w-6 text-center metric-number">#{r.rank}</span>
+              <span className="text-[#A1E4DB] w-6 text-center metric-number">{r.rank == null ? "—" : `#${r.rank}`}</span>
               <span className={`flex-1 truncate ${r.is_own_store ? "text-[#1E988E] font-semibold" : "text-white"}`}>
                 {r.name}
                 <span className="text-[8px] ms-1.5 px-1 py-0.5 rounded bg-white/10 text-[#A1E4DB] uppercase">{r.platform}</span>
@@ -299,15 +299,14 @@ export function StoreRankingCard({ ranking, computedAt, isRTL }) {
               </span>
               {/* iter62 — the strength score is no longer the sort key, but it
                   stays on every row (bar + number) as secondary information. */}
-              <span title={isRTL ? `قوة السوق ${r.score} (معلومة ثانوية — الترتيب حسب الإيرادات)`
-                                 : `Market Strength ${r.score} (secondary — ranking is by revenue)`}>
-                <ScoreBar value={r.score} color={r.is_own_store ? "#1E988E" : "#6AC1B5"} />
+              <span title="Verified in-stock offers" data-testid={`ranking-offer-count-${r.store_id}`}>
+                {r.products ?? "—"}
               </span>
               <span className="w-28 text-end hidden sm:inline-block"><RevenueCell row={r} isRTL={isRTL} /></span>
             </button>
             {expanded === r.store_id && (
               <div className="mx-2 mb-1 px-3 py-2 rounded-lg bg-black/20 border border-white/5 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5" data-testid={`ranking-breakdown-${r.store_id}`}>
-                {compMeta.map((cm) => (
+                {ranking.sorted_by === "verified_offer_coverage_desc" ? <p className="text-xs text-[#A1E4DB] sm:col-span-2" data-testid={`ranking-basis-${r.store_id}`}>{r.products} verified in-stock offers · {r.revenue_basis.replaceAll("_", " ")}</p> : compMeta.map((cm) => (
                   <div key={cm.key} className="flex items-center gap-2 text-[10px]">
                     <span className="text-[#A1E4DB] w-32 shrink-0">{cm.label} <span className="opacity-60">({cm.w}%)</span></span>
                     <span className="flex-1 h-1 rounded-full bg-white/10 overflow-hidden">
