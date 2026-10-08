@@ -13,7 +13,7 @@ import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
 SUPER_EMAIL = "a.disi@taqueen.sa"
-SUPER_PWD = "Ahmaddc90@"
+SUPER_PWD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 
 # ---------- shared fixtures ----------

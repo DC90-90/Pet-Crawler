@@ -18,7 +18,7 @@
   "critical_code_review_comments": [],
   "updated_files": ["/app/backend/tests/test_iter78_live.py"],
   "success_rate": {"backend": "100%", "frontend": "100%"},
-  "test_credentials": "a.disi@taqueen.sa / Ahmaddc90@ (super_admin)",
+  "test_credentials": "a.disi@taqueen.sa / [redacted; supply DALEEL_TEST_PASSWORD through the environment] (super_admin)",
   "seed_data_creation": "None — used existing preview data.",
   "retest_needed": false,
   "main_agent_can_self_test": true,

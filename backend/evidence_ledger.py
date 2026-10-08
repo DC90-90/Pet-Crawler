@@ -12,18 +12,19 @@ async def record(db, snapshot):
     prior = await db.observation_events.find_one(
         {"offer_id": event["offer_id"], "observed_at": {"$lt": event["observed_at"]}}, {"_id": 0}, sort=[("observed_at", -1)])
     inserted = await db.observation_events.update_one({"_id": event_id}, {"$setOnInsert": event}, upsert=True)
+    if not inserted.upserted_id:
+        event = await db.observation_events.find_one({'_id': event_id}, {'_id': 0})
     newer = await db.observation_events.find_one({"offer_id": event["offer_id"], "observed_at": {"$gt": event["observed_at"]}}, {"_id": 0, "event_id": 1})
     if newer:
         await db.late_observations.update_one({"_id": event_id}, {"$setOnInsert": {"event_id": event_id, "reason": "out_of_order_requires_explicit_rebuild"}}, upsert=True)
         return
-    if not inserted.upserted_id or not prior:
+    if not prior:
         if inserted.upserted_id:
             await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}, "$max": {"observed_at": event["observed_at"]}}, upsert=True)
         return
-    await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}, "$max": {"observed_at": event["observed_at"]}}, upsert=True)
     units, value, method = interval(prior, event)
     fact_id = stable_id(VERSION, prior["event_id"], event_id)
-    await db.sales_facts_v2.update_one({"_id": fact_id}, {"$setOnInsert": {
+    fact = await db.sales_facts_v2.update_one({"_id": fact_id}, {"$setOnInsert": {
         "store_id": event["store_id"], "sku": event["sku"], "offer_id": event["offer_id"],
         "date": ksa_day_str(event["observed_at"]), "observed_at": event["observed_at"],
         "from_event_id": prior["event_id"], "to_event_id": event_id,
@@ -31,6 +32,8 @@ async def record(db, snapshot):
         "availability": "observed" if units is not None else "unavailable",
         "value_basis": "shelf_price_proxy", "created_at": datetime.now(timezone.utc),
     }}, upsert=True)
+    if inserted.upserted_id or fact.upserted_id:
+        await db.data_versions.update_one({'_id': 'observations'}, {'$inc': {'revision': 1}, '$max': {'observed_at': event['observed_at']}}, upsert=True)
 
 
 async def sales_map(db, start, end, sealed=True):

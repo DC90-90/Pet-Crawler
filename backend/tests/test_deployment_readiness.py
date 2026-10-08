@@ -16,7 +16,7 @@ BASE_URL_EXTERNAL = os.environ.get('REACT_APP_BACKEND_URL', 'https://daleel-pric
 # The old admin@daleelpets.com account was removed long ago, which is why the
 # auth-flow checks below used to fail with 401.
 ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL", "a.disi@taqueen.sa")
-ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Ahmaddc90@")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", os.environ.get("DALEEL_TEST_PASSWORD", ""))
 
 
 class TestHealthEndpoint:

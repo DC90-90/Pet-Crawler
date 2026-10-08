@@ -22,7 +22,7 @@ def _load_backend_url():
 
 BASE_URL = _load_backend_url()
 EMAIL = "a.disi@taqueen.sa"
-PASSWORD = "Ahmaddc90@"
+PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 
 @pytest.fixture(scope="module")

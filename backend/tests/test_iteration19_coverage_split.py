@@ -32,7 +32,7 @@ from _auth import live_db_name   # backend/.env, not the polluted env var
 DB_NAME = live_db_name()
 
 EMAIL = "a.disi@taqueen.sa"
-PASSWORD = "Ahmaddc90@"
+PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 
 # ---- fixtures ----------------------------------------------------------------

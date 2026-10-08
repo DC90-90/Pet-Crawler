@@ -24,7 +24,12 @@ def decimal_number(value):
 
 def money(value):
     number = decimal_number(value)
-    return float(number.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)) if number is not None else None
+    if number is None or number > Decimal('1000000000000'):
+        return None
+    try:
+        return float(number.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    except InvalidOperation:
+        return None
 
 
 def observed_int(value):
@@ -50,13 +55,16 @@ def expand_variants(raw):
     """Never inherit parent inventory, price, barcode, or SKU into a child offer."""
     variants = raw.get("skus") or raw.get("variants")
     if not isinstance(variants, list) or not variants:
-        yield {**raw, "_listing_id": str(raw.get("id") or raw.get("sku") or ""), "_variant_id": "root"}
+        yield {**raw,
+               "_listing_id": str(raw.get('_listing_id') or raw.get('listing_id') or raw.get("id") or raw.get("sku") or ""),
+               "_variant_id": str(raw.get('_variant_id') or raw.get('variant_id') or 'root')}
         return
     for variant in variants:
         if not isinstance(variant, dict):
             continue
-        vid = str(variant.get("id") or variant.get("sku") or variant.get("barcode") or stable_id(variant))
         attrs = variant.get("attributes") or variant.get("options") or []
+        vid = str(variant.get("id") or variant.get('variant_id') or
+                  stable_id(variant.get('sku'), variant.get('barcode'), attrs))
         row = {k: raw[k] for k in ("name", "title", "images", "image", "urls", "url", "html_url", "product_url", "categories", "brand", "currency", "_currency", "_price_basis") if k in raw}
         row.update(variant)
         row.update(_listing_id=str(raw.get("id") or raw.get("sku") or stable_id(raw.get("name"))), _variant_id=vid, attributes=attrs)

@@ -29,14 +29,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # pytest session as any module that imports `server` (which calls
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
-os.environ["DB_NAME"] = "test_ledger_p1"
+from reviewed_test_support import mongo_url, database_name, drop_database
+import pytest
+_TEST_DB = database_name("ledger_p1")
+os.environ["DB_NAME"] = _TEST_DB
 # Snapshot: sibling test modules reassign DB_NAME at import, so a
 # call-time read of the env var can point at ANOTHER suite's database.
-_TEST_DB = "test_ledger_p1"
 import ledger  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
-MONGO = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
+MONGO = mongo_url()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def disposable_database_cleanup():
+    yield
+    drop_database(_TEST_DB)
 
 # 12:00 UTC = 15:00 KSA — safely mid-day on both calendars
 T0 = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
@@ -279,16 +287,18 @@ def test_all_three_persistence_paths_write_the_ledger():
     import server
     crawl_src = inspect.getsource(crawlers.process_crawled_products)
     assert "ledger.record_observations" in crawl_src
-    own_src = inspect.getsource(crawlers.sync_own_store_prices)
+    own_src = inspect.getsource(crawlers._sync_own_store_prices_locked)
     assert "ledger.record_observations" in own_src
-    ingest_src = inspect.getsource(server.crawler_ingest)
-    assert "ledger.record_observations" in ingest_src
+    import ingest_v2
+    ingest_src = inspect.getsource(ingest_v2.ingest)
+    assert "process_crawled_products" in ingest_src
     # Phase 1 is ALONGSIDE: the rollup writer is untouched and never
     # references the ledger
     rollup_src = inspect.getsource(server._recompute_store_metrics)
     assert "ledger" not in rollup_src
     # and the seal job is scheduled at 21:30 UTC = 00:30 KSA
-    assert "ledger_day_seal" in Path(server.__file__).read_text()
+    manifest = Path(server.__file__).parents[1] / ".emergent/crons.yml"
+    assert 'cron: "30 21 * * *"' in manifest.read_text()
 
 
 if __name__ == "__main__":

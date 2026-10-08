@@ -420,7 +420,7 @@ export default function MyProductsPage() {
                   </TableCell>
                   <TableCell>
                     <div>
-                      <span className="text-sm font-semibold text-white metric-number">{p.price} {t("sar")}</span>
+                      <span className="text-sm font-semibold text-white metric-number" data-testid={`product-current-price-${p.sku}`}>{p.price ?? "—"} {t("sar")}</span>
                       {p.competitor_min_price != null && p.competitor_max_price != null && p.competitor_min_price !== p.competitor_max_price && (
                         <p className="text-[10px] text-[#A1E4DB]" title={isRTL ? "نطاق سعر المنافسين" : "Competitor price range"}>
                           {isRTL ? "السوق" : "Mkt"}: {p.competitor_min_price}–{p.competitor_max_price}

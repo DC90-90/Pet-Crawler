@@ -32,7 +32,7 @@
     "/app/backend/tests/test_iter27_live.py (NEW — 36 live-preview HTTP tests)"
   ],
   "success_rate": {"backend": "100% (10/10 in-process + 36/36 live)", "frontend": "100% (Insights + Price Intel pages)"},
-  "test_credentials": {"super_admin_email": "a.disi@taqueen.sa", "super_admin_password": "Ahmaddc90@"},
+  "test_credentials": {"super_admin_email": "a.disi@taqueen.sa", "super_admin_password": "[redacted; supply DALEEL_TEST_PASSWORD through the environment]"},
   "seed_data_creation": "None on production DB. In-process tests seed their own isolated DB (test_iter27_insights_cache / test_dashboard_cache).",
   "retest_needed": false,
   "should_main_agent_self_test": false,

@@ -11,7 +11,9 @@
     "design_issues": [
       {
         "screen": "Price Intel Detail Sheet",
-        "issues": ["Recharts console warning about chart dimensions (-1x-1) when price history chart container not fully visible - non-critical"]
+        "issues": [
+          "Recharts console warning about chart dimensions (-1x-1) when price history chart container not fully visible - non-critical"
+        ]
       }
     ]
   },
@@ -64,8 +66,8 @@
   },
   "test_credentials": {
     "admin_email": "admin@daleelpets.com",
-    "admin_password": "BGv8ZcRYrBTPlJFHHhZQ3Q",
-    "crawler_token": "zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO"
+    "admin_password": "[REDACTED — use isolated test environment]",
+    "crawler_token": "[REDACTED — use isolated test environment]"
   },
   "seed_data_creation": "None - using existing seed data",
   "retest_needed": false,
@@ -78,13 +80,33 @@
   "refactor_verification": {
     "backend_models_extracted": {
       "file": "/app/backend/models/schemas.py",
-      "models": ["AuthIn", "StoreIn", "StoreUpdate", "AlertIn", "SavedFilterIn", "Tier4CredentialsIn", "OtpSubmitIn", "MatchActionIn", "IngestPayload"],
+      "models": [
+        "AuthIn",
+        "StoreIn",
+        "StoreUpdate",
+        "AlertIn",
+        "SavedFilterIn",
+        "Tier4CredentialsIn",
+        "OtpSubmitIn",
+        "MatchActionIn",
+        "IngestPayload"
+      ],
       "status": "WORKING"
     },
     "backend_utils_extracted": {
       "file": "/app/backend/core/utils.py",
-      "functions": ["get_stock_signal", "_coerce_num", "_coerce_int", "_estimate_sales_from_snapshots", "compute_product_metrics"],
-      "constants": ["PLACEHOLDER_QTY_VALUES", "MAX_QTY_DELTA_PER_INTERVAL", "MAX_DAILY_SALES_PER_SKU"],
+      "functions": [
+        "get_stock_signal",
+        "_coerce_num",
+        "_coerce_int",
+        "_estimate_sales_from_snapshots",
+        "compute_product_metrics"
+      ],
+      "constants": [
+        "PLACEHOLDER_QTY_VALUES",
+        "MAX_QTY_DELTA_PER_INTERVAL",
+        "MAX_DAILY_SALES_PER_SKU"
+      ],
       "status": "WORKING"
     },
     "frontend_priceIntel_split": {

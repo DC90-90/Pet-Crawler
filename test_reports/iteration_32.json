@@ -23,7 +23,7 @@
   ],
   "updated_files": ["/app/backend/tests/test_iter76_review.py"],
   "success_rate": {"backend": "100% (14/14)", "frontend": "100% on covered flows"},
-  "test_credentials": "super_admin a.disi@taqueen.sa / Ahmaddc90@ (from /app/memory/test_credentials.md)",
+  "test_credentials": "super_admin a.disi@taqueen.sa / [redacted; supply DALEEL_TEST_PASSWORD through the environment] (from /app/memory/test_credentials.md)",
   "seed_data_creation": "None. POST /api/stores acceptance test creates a store and immediately deletes it in the same test.",
   "retest_needed": false,
   "should_main_agent_self_test": false,

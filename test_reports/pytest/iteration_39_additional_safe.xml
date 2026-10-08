@@ -1,0 +1,138 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="11" skipped="0" tests="36" time="1.487" timestamp="2026-10-08T05:46:07.857443+00:00" hostname="agent-env-24867ce7-9497-42ab-89a5-067b1dc88c54"><testcase classname="backend.tests.test_pack_count_guard" name="test_count_first_pack_descriptors_are_parsed" time="0.000" /><testcase classname="backend.tests.test_pack_count_guard" name="test_singles_and_non_pack_names_are_untouched" time="0.000" /><testcase classname="backend.tests.test_pack_count_guard" name="test_carton_does_not_match_single_but_carton_matches_carton" time="0.000" /><testcase classname="backend.tests.test_pack_count_guard" name="test_barcode_path_respects_pack_count" time="0.001"><failure message="AssertionError: []&#10;assert (0 == 1)&#10; +  where 0 = len([])">backend/tests/test_pack_count_guard.py:143: in test_barcode_path_respects_pack_count
+    assert len(out) == 1 and out[0]["match_method"] == "barcode", out
+E   AssertionError: []
+E   assert (0 == 1)
+E    +  where 0 = len([])</failure></testcase><testcase classname="backend.tests.test_pack_count_guard" name="test_sku_path_respects_pack_count" time="0.001"><failure message="AssertionError: []&#10;assert (0 == 1)&#10; +  where 0 = len([])">backend/tests/test_pack_count_guard.py:161: in test_sku_path_respects_pack_count
+    assert len(out) == 1 and out[0]["match_method"] == "sku", out
+E   AssertionError: []
+E   assert (0 == 1)
+E    +  where 0 = len([])</failure></testcase><testcase classname="backend.tests.test_pack_count_guard" name="test_products_without_pack_descriptors_still_match_normally" time="0.000"><failure message="assert (0 == 1)&#10; +  where 0 = len([])">backend/tests/test_pack_count_guard.py:172: in test_products_without_pack_descriptors_still_match_normally
+    assert len(out) == 1 and out[0]["match_method"] == "barcode"
+E   assert (0 == 1)
+E    +  where 0 = len([])</failure></testcase><testcase classname="backend.tests.test_pack_count_guard" name="test_scanner_drops_the_three_live_skus_when_catalogue_holds_the_single_name" time="0.024"><failure message="AttributeError: '_Agg' object has no attribute 'batch_size'">backend/tests/test_pack_count_guard.py:300: in test_scanner_drops_the_three_live_skus_when_catalogue_holds_the_single_name
+    asyncio.run(main())
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_pack_count_guard.py:283: in main
+    out = await _scan()
+          ^^^^^^^^^^^^^
+backend/tests/test_pack_count_guard.py:269: in _scan
+    return await fn(days=14, user=USER)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/server.py:5902: in price_opportunities
+    return await comparison_views.scanner(db, int(days), _effective_own_price, _own_orders_aggregate, _sales_pairs_from_rollups)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/comparison_views.py:66: in scanner
+    own, products, cohorts = await context(db, own_price_fn)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/comparison_views.py:10: in context
+    cohorts = await build_cohorts(db, products, own.get("id"), own_price_fn)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/price_cohort.py:130: in build_cohorts
+    ], allowDiskUse=True).batch_size(2000)
+                          ^^^^^^^^^^
+E   AttributeError: '_Agg' object has no attribute 'batch_size'</failure></testcase><testcase classname="backend.tests.test_pack_count_guard" name="test_scanner_unaffected_when_pack_counts_agree" time="0.009"><failure message="AttributeError: '_Agg' object has no attribute 'batch_size'">backend/tests/test_pack_count_guard.py:323: in test_scanner_unaffected_when_pack_counts_agree
+    asyncio.run(main())
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_pack_count_guard.py:308: in main
+    out = await _scan()
+          ^^^^^^^^^^^^^
+backend/tests/test_pack_count_guard.py:269: in _scan
+    return await fn(days=14, user=USER)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/server.py:5902: in price_opportunities
+    return await comparison_views.scanner(db, int(days), _effective_own_price, _own_orders_aggregate, _sales_pairs_from_rollups)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/comparison_views.py:66: in scanner
+    own, products, cohorts = await context(db, own_price_fn)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/comparison_views.py:10: in context
+    cohorts = await build_cohorts(db, products, own.get("id"), own_price_fn)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/price_cohort.py:130: in build_cohorts
+    ], allowDiskUse=True).batch_size(2000)
+                          ^^^^^^^^^^
+E   AttributeError: '_Agg' object has no attribute 'batch_size'</failure></testcase><testcase classname="backend.tests.test_ledger_phase1" name="test_ksa_boundary_for_utc_timestamps_near_midnight" time="0.000" /><testcase classname="backend.tests.test_ledger_phase1" name="test_intraday_upsert_latest_wins_and_counts_observations" time="0.023" /><testcase classname="backend.tests.test_ledger_phase1" name="test_two_stores_and_two_days_never_collide" time="0.011" /><testcase classname="backend.tests.test_ledger_phase1" name="test_sold_count_cumulative_is_stored_as_the_level" time="0.009" /><testcase classname="backend.tests.test_ledger_phase1" name="test_seal_sets_sealed_at_and_later_writes_are_rejected" time="0.012" /><testcase classname="backend.tests.test_ledger_phase1" name="test_row_level_seal_rejection_without_store_day_gate" time="0.009" /><testcase classname="backend.tests.test_ledger_phase1" name="test_seal_writes_no_data_rows_for_silent_active_stores" time="0.010" /><testcase classname="backend.tests.test_ledger_phase1" name="test_seal_marks_thin_days_partial_and_counts_absentees" time="0.011" /><testcase classname="backend.tests.test_ledger_phase1" name="test_first_day_flag_comes_from_prior_coverage" time="0.008" /><testcase classname="backend.tests.test_ledger_phase1" name="test_unobserved_fields_stay_none_never_fabricated" time="0.007" /><testcase classname="backend.tests.test_ledger_phase1" name="test_all_three_persistence_paths_write_the_ledger" time="0.004"><failure message="assert 'ledger.record_observations' in 'async def sync_own_store_prices(db, store=None):\n    import job_control\n    store = store or await db.stores.find_one({&quot;is_own_store&quot;: True}, {&quot;_id&quot;: 0})\n    if not store:\n        return {&quot;status&quot;: &quot;error&quot;, &quot;error&quot;: &quot;no_own_store_flagged&quot;}\n    owner = str(uuid.uuid4())\n    if not await job_control.acquire(db, f&quot;store:{store[\'id\']}&quot;, owner):\n        return {&quot;status&quot;: &quot;deferred&quot;, &quot;error&quot;: &quot;store_job_already_running&quot;}\n    try:\n        return await asyncio.wait_for(_sync_own_store_prices_locked(db, store), timeout=2.5*3600)\n    finally:\n        await job_control.release(db, f&quot;store:{store[\'id\']}&quot;, owner)\n'">backend/tests/test_ledger_phase1.py:283: in test_all_three_persistence_paths_write_the_ledger
+    assert "ledger.record_observations" in own_src
+E   assert 'ledger.record_observations' in 'async def sync_own_store_prices(db, store=None):\n    import job_control\n    store = store or await db.stores.find_one({"is_own_store": True}, {"_id": 0})\n    if not store:\n        return {"status": "error", "error": "no_own_store_flagged"}\n    owner = str(uuid.uuid4())\n    if not await job_control.acquire(db, f"store:{store[\'id\']}", owner):\n        return {"status": "deferred", "error": "store_job_already_running"}\n    try:\n        return await asyncio.wait_for(_sync_own_store_prices_locked(db, store), timeout=2.5*3600)\n    finally:\n        await job_control.release(db, f"store:{store[\'id\']}", owner)\n'</failure></testcase><testcase classname="backend.tests.test_ledger_phase2" name="test_sealed_window_ends_at_ksa_midnight_today" time="0.000" /><testcase classname="backend.tests.test_ledger_phase2" name="test_sealed_window_spans_exactly_days_of_ksa_time" time="0.000" /><testcase classname="backend.tests.test_ledger_phase2" name="test_sealed_window_stable_across_all_clock_times_within_same_ksa_day" time="0.000" /><testcase classname="backend.tests.test_ledger_phase2" name="test_sealed_window_advances_at_ksa_midnight" time="0.000" /><testcase classname="backend.tests.test_ledger_phase2" name="test_sealed_window_days_parameter_controls_span" time="0.000" /><testcase classname="backend.tests.test_ledger_phase2" name="test_sealed_days_counts_distinct_sealed_days" time="0.000" /><testcase classname="backend.tests.test_ledger_phase2" name="test_sealed_days_never_raises_when_db_broken" time="0.000" /><testcase classname="backend.tests.test_ledger_phase2" name="test_server_uses_sealed_window_in_store_ranking" time="0.001"><failure message="AssertionError: _store_ranking_compute must resolve its window via ledger.sealed_ksa_window&#10;assert 'ledger.sealed_ksa_window' in 'async def _store_ranking_compute(db):\n    from store_views import ranking\n    return await ranking(db, _own_orders_aggregate)\n\n'">backend/tests/test_ledger_phase2.py:158: in test_server_uses_sealed_window_in_store_ranking
+    assert "ledger.sealed_ksa_window" in body, \
+E   AssertionError: _store_ranking_compute must resolve its window via ledger.sealed_ksa_window
+E   assert 'ledger.sealed_ksa_window' in 'async def _store_ranking_compute(db):\n    from store_views import ranking\n    return await ranking(db, _own_orders_aggregate)\n\n'</failure></testcase><testcase classname="backend.tests.test_ledger_phase2" name="test_server_uses_sealed_window_in_scanner" time="0.001" /><testcase classname="backend.tests.test_ledger_phase2" name="test_sales_pairs_helper_signature_accepts_until" time="0.001" /><testcase classname="backend.tests.test_own_store_vat_basis" name="test_resolve_own_price_covers_all_four_bases" time="0.001"><failure message="AssertionError: assert (30.0, None, ..._unknown_tax') == (34.5, None, ...umed_inc_vat')&#10;  &#10;  At index 0 diff: 30.0 != 34.5&#10;  &#10;  Full diff:&#10;    (&#10;  -     34.5,&#10;  ?      ^ ^...&#10;  &#10;  ...Full output truncated (10 lines hidden), use '-vv' to show">backend/tests/test_own_store_vat_basis.py:140: in test_resolve_own_price_covers_all_four_bases
+    assert R(None, merchant_price=30, is_taxable=None) == (
+E   AssertionError: assert (30.0, None, ..._unknown_tax') == (34.5, None, ...umed_inc_vat')
+E     
+E     At index 0 diff: 30.0 != 34.5
+E     
+E     Full diff:
+E       (
+E     -     34.5,
+E     ?      ^ ^...
+E     
+E     ...Full output truncated (10 lines hidden), use '-vv' to show</failure></testcase><testcase classname="backend.tests.test_own_store_vat_basis" name="test_is_taxable_is_a_tristate" time="0.000" /><testcase classname="backend.tests.test_own_store_vat_basis" name="test_sync_applies_two_tier_basis" time="0.094"><failure message="AssertionError: assert 'merchant_computed_inc_vat' == 'merchant_hid...front_inc_vat'&#10;  &#10;  - merchant_hidden_from_storefront_inc_vat&#10;  + merchant_computed_inc_vat">backend/tests/test_own_store_vat_basis.py:210: in test_sync_applies_two_tier_basis
+    asyncio.run(main())
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_own_store_vat_basis.py:187: in main
+    assert only["price_basis"] == "merchant_hidden_from_storefront_inc_vat"
+E   AssertionError: assert 'merchant_computed_inc_vat' == 'merchant_hid...front_inc_vat'
+E     
+E     - merchant_hidden_from_storefront_inc_vat
+E     + merchant_computed_inc_vat</failure></testcase><testcase classname="backend.tests.test_own_store_vat_basis" name="test_sync_survives_storefront_outage_via_taxable_fallback" time="0.042"><failure message="assert 30.0 == 34.5">backend/tests/test_own_store_vat_basis.py:235: in test_sync_survives_storefront_outage_via_taxable_fallback
+    asyncio.run(main())
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_own_store_vat_basis.py:231: in main
+    assert rows["UNK-1"]["price"] == 34.5                 # 30 × 1.15
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   assert 30.0 == 34.5</failure></testcase><testcase classname="backend.tests.test_own_store_vat_basis" name="test_backfill_reports_bases_and_applies_them" time="0.008"><failure message="AssertionError: assert {'merchant_co...t_inc_vat': 3} == {'merchant_hi...t_inc_vat': 3}&#10;  &#10;  Omitting 1 identical items, use -vv to show&#10;  Left contains 3 more items:&#10;  {'merchant_computed_inc_vat': 1,&#10;   'merchant_non_taxable': 1,&#10;   'merchant_unknown_tax': 1}&#10;  Right contains 2 more items:...&#10;  &#10;  ...Full output truncated (12 lines hidden), use '-vv' to show">backend/tests/test_own_store_vat_basis.py:279: in test_backfill_reports_bases_and_applies_them
+    asyncio.run(main())
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_own_store_vat_basis.py:250: in main
+    assert dry["price_basis_counts"] == {
+E   AssertionError: assert {'merchant_co...t_inc_vat': 3} == {'merchant_hi...t_inc_vat': 3}
+E     
+E     Omitting 1 identical items, use -vv to show
+E     Left contains 3 more items:
+E     {'merchant_computed_inc_vat': 1,
+E      'merchant_non_taxable': 1,
+E      'merchant_unknown_tax': 1}
+E     Right contains 2 more items:...
+E     
+E     ...Full output truncated (12 lines hidden), use '-vv' to show</failure></testcase><testcase classname="backend.tests.test_own_store_vat_basis" name="test_backfill_flags_stale_rows_and_never_prices_them" time="0.008" /><testcase classname="backend.tests.test_own_store_vat_basis" name="test_backfill_refuses_on_storefront_failure_and_requires_super_admin" time="0.006" /></testsuite></testsuites>

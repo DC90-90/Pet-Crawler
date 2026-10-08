@@ -1,0 +1,86 @@
+{
+  "summary": "Executed focused acceptance run from brief: reviewed 19-gate regression suites, added isolated auth suite, added real-source Beso evidence tests, and performed readonly preview UI verification on desktop/mobile. Core reviewed suites passed after setting disposable test Mongo URL; isolated auth exposed seed_super_admin password-update defect; optional safe pack/ledger/tax suites show multiple regressions.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "seed_super_admin()",
+        "issue": "Existing super admin password is not updated when SUPER_ADMIN_PASSWORD changes (isolated auth test fails: check_pw(new_password, stored_hash) == False).",
+        "priority": "HIGH/CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "comparison_views.scanner / price_cohort.build_cohorts",
+        "issue": "Pack/scanner tests fail due aggregate cursor contract mismatch: '_Agg' missing batch_size in test double path."
+      },
+      {
+        "endpoint": "crawlers.sync_own_store_prices / resolve_own_price / own_store_vat_backfill",
+        "issue": "VAT basis behavior diverges from expected hidden-from-storefront and unknown-tax gross-up paths in safe regression tests."
+      },
+      {
+        "endpoint": "_store_ranking_compute",
+        "issue": "Safe ledger phase-2 test expects sealed_ksa_window usage but current implementation delegates directly to store_views.ranking()."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "My Products detail panel (SKU 8699245859829)",
+        "issue": "Detail sheet shows 'Price Range - SAR' and empty 'Market Avg SAR' (no numeric value); own-price specific intel testid not present in rendered panel.",
+        "selector": "[data-testid='product-detail-panel']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Market Share selected competitor filter",
+        "issue": "PASS: selecting Aleef emits API request with store_id query param.",
+        "affected_selectors": [
+          "[data-testid='ms-filter-store']",
+          "[data-testid='nav-nav_market_share']"
+        ]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Price Scanner desktop/mobile",
+        "issues": [
+          "No blocking layout/contrast defects found in sampled screens; mobile 390x844 and desktop 1920x800 render without overflow blockers in tested views."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_findings_auth_isolated.py",
+    "/app/backend/tests/test_iteration39_real_source_evidence.py",
+    "/app/test_reports/pytest/iteration_39_core_rerun.xml",
+    "/app/test_reports/pytest/iteration_39_auth_isolated.xml",
+    "/app/test_reports/pytest/iteration_39_real_source.xml",
+    "/app/test_reports/pytest/iteration_39_additional_safe.xml"
+  ],
+  "action_items": [
+    "Fix seed_super_admin to rotate password hash for existing super admin when SUPER_ADMIN_PASSWORD changes.",
+    "Investigate stale/null own price rendering for Beso SKU detail panel where '- SAR' appears instead of numeric own/market values.",
+    "Address regressions flagged by safe suites: pack guard matching, scanner aggregate cursor contract, ledger window expectation, VAT hidden/unknown basis paths."
+  ],
+  "critical_code_review_comments": [
+    "seed_super_admin pops password_hash from update payload on existing users, preventing password rotation by env change.",
+    "Auth controls validated in isolated suite: bcrypt '$2b$' hashes, httpOnly auth cookie, explicit-origin CORS with credentials, and brute-force lockout after 5 failures are working.",
+    "Real-source evidence from captured files confirms Beso values used in tests: own 79.35 (SKU 8699245859829), Zarafa 83.95, Petsy 87.0."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_findings_auth_isolated.py",
+    "/app/backend/tests/test_iteration39_real_source_evidence.py",
+    "/app/test_reports/iteration_39.json"
+  ],
+  "success_rate": {
+    "backend": "88%",
+    "frontend": "80%"
+  },
+  "seed_data_creation": "Created disposable isolated auth users and disposable DB names during test execution only; auto-dropped at teardown.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Core reviewed regression files passed when DALEEL_TEST_MONGO_URL is set to mongodb://127.0.0.1:27017. Isolated auth suite is in test_findings_auth_isolated.py and currently fails only seed_super_admin password-rotation assertion. Preview UI evidence: My Products search for 8699245859829 works; detail panel shows '- SAR'; Market Share selected competitor sends store_id API param; Scanner evidence/empty-state visible on desktop and mobile.",
+  "rca of the issue": "RCA (seed_super_admin): existing admin path removes password_hash from update payload, so env password changes never re-hash/update persisted password; reproduction in isolated suite inserts legacy hash then runs seed_super_admin, stored hash remains old. Mitigation: compare existing hash with SUPER_ADMIN_PASSWORD using check_pw and set password_hash=hash_pw(...) when mismatch."
+}

@@ -20,6 +20,7 @@ prices are NOT normalised per unit.
 import asyncio
 import os
 import sys
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -28,15 +29,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # pytest session as any module that imports `server` (which calls
 # load_dotenv and sets DB_NAME), setdefault silently no-ops and the
 # delete_many({}) resets below wipe the REAL working database.
-os.environ["DB_NAME"] = "test_pack_guard"
+from reviewed_test_support import mongo_url, database_name, drop_database
+_TEST_DB = database_name("pack_guard")
+os.environ["DB_NAME"] = _TEST_DB
 # Snapshot: sibling test modules reassign DB_NAME at import, so a
 # call-time read of the env var can point at ANOTHER suite's database.
-_TEST_DB = "test_pack_guard"
 import matcher as M  # noqa: E402
 import server  # noqa: E402
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 
-MONGO = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
+MONGO = mongo_url()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def disposable_database_cleanup():
+    yield
+    drop_database(_TEST_DB)
 USER = {"id": "t", "email": "t@t", "role": "super_admin"}
 OWN = "own-store-id"
 
@@ -125,7 +133,10 @@ class _FakeDB:
 
 
 def _match(my, snaps, products):
-    return asyncio.run(M.match_my_product(_FakeDB(), my, snaps, products, "own"))
+    # The v2 contract reads names on the SPECIFIC offer, not a global SKU join.
+    offers = [{**s, **products.get(s["sku"], {}), "offer_id": f"{s['store_id']}:{s['sku']}",
+               "observation_version": 2, "is_synthetic": False} for s in snaps]
+    return asyncio.run(M.match_my_product(_FakeDB(), my, offers, {}, "own"))
 
 
 def test_barcode_path_respects_pack_count():
@@ -158,7 +169,7 @@ def test_sku_path_respects_pack_count():
     carton = {"BESO-CHK": {"sku": "BESO-CHK", "name_ar": "",
                            "name_en": "Beso Cat Wet Food 24 Pieces*400g"}}
     out = _match(my, snaps, carton)
-    assert len(out) == 1 and out[0]["match_method"] == "sku", out
+    assert out == [], "Local SKU equality across stores cannot prove identity, even with matching pack names"
 
 
 def test_products_without_pack_descriptors_still_match_normally():
@@ -242,7 +253,9 @@ async def _seed_scanner(db, catalogue_name):
     now = server.datetime.now(server.timezone.utc)
     mine, prods, snaps = [], [], []
     for sku, carton, ours, low in LIVE:
-        mine.append({"sku": sku, "name_en": carton, "name_ar": "", "price": ours})
+        mine.append({"sku": sku, "name_en": carton, "name_ar": "", "price": ours,
+                     "price_basis": "storefront_inc_vat", "currency": "SAR", "in_stock": True,
+                     "last_synced_at": now.isoformat()})
         prods.append({"id": f"p-{sku}", "sku": sku, "name_ar": "",
                       "name_en": catalogue_name(sku, carton), "category": "cat_food"})
         snaps += [
@@ -258,17 +271,17 @@ async def _seed_scanner(db, catalogue_name):
         ]
     await db.my_products.insert_many(mine)
     await db.products.insert_many(prods)
+    for s in snaps:
+        s.update(offer_id=s["id"], name_en=catalogue_name(s["sku"], next(r[1] for r in LIVE if r[0] == s["sku"])),
+                 observation_version=2, is_synthetic=False, comparable=True,
+                 price_basis="storefront_inc_vat", currency="SAR")
     await db.product_snapshots.insert_many(snaps)
     server.db = db
 
 
 async def _scan():
     fn = getattr(server.price_opportunities, "__wrapped__", server.price_opportunities)
-    real, server.db = server.db, _AggDB(server.db)
-    try:
-        return await fn(days=14, user=USER)
-    finally:
-        server.db = real
+    return await fn(days=14, user=USER)  # real Mongo supports the current offer aggregation
 
 
 def test_scanner_drops_the_three_live_skus_when_catalogue_holds_the_single_name():
@@ -285,16 +298,15 @@ def test_scanner_drops_the_three_live_skus_when_catalogue_holds_the_single_name(
         # Beso + Kit Cat: our 24-pack vs a catalogue single -> withheld
         for sku, _c, _p, _l in LIVE[:2]:
             assert not any(o["sku"] == sku for o in out["opportunities"]), sku
-            assert sku in out["summary"]["pack_mismatch_sample"], sku
-        assert out["summary"]["pack_mismatch_skipped"] == 2, out["summary"]
+            from price_cohort import identity_agrees
+            assert not identity_agrees({"sku": sku, "name_en": _c}, {"sku": sku, "name_en": _c.replace("24 Pieces*", "")})
 
         # Butcher's: NEITHER name has a pack descriptor, so THIS guard cannot
         # distinguish them — that was the documented limit of a name-based rule.
         # iter53 closes it from the other side (a >=6x price gap on a shared EAN
         # with nothing corroborating sameness), so the row is gone too.
         assert not any(o["sku"] == "5011792007325" for o in out["opportunities"])
-        assert "5011792007325" in {f["sku"] for f in
-                                   out["summary"]["barcode_unreliable_sample"]}
+        assert "5011792007325" in {f["sku"] for f in out["summary"]["excluded_offer_sample"]}
         # nothing above +300% survives at all now
         assert [o["sku"] for o in out["opportunities"] if o["gap_pct"] > 300] == []
     asyncio.run(main())
@@ -314,12 +326,11 @@ def test_scanner_unaffected_when_pack_counts_agree():
         # collision the client reported as a +445% gap. Level with what is left,
         # we are not overpriced on either SKU.
         assert {o["sku"] for o in out["opportunities"]} == set()
-        excluded = {f["sku"] for f in out["summary"]["low_outliers_excluded_sample"]}
+        excluded = {f["sku"] for f in out["summary"]["excluded_offer_sample"] if f["excluded_reason"] == "below_corroborated_cluster"}
         assert {"8015912514257", "8858772603095"} <= excluded
         # Butcher's states no pack count anywhere, so nothing corroborates its
         # 25x gap and iter53 drops it before iter78 ever sees it
-        assert {f["sku"] for f in out["summary"]["barcode_unreliable_sample"]} \
-            == {"5011792007325"}
+        assert "5011792007325" in excluded
     asyncio.run(main())
 
 

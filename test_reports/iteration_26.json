@@ -13,7 +13,7 @@
   ],
   "updated_files": [],
   "success_rate": {"backend": "100%", "frontend": "not tested (skip per request)"},
-  "test_credentials": "a.disi@taqueen.sa / Ahmaddc90@ (super_admin) — login returned JWT successfully.",
+  "test_credentials": "a.disi@taqueen.sa / [redacted; supply DALEEL_TEST_PASSWORD through the environment] (super_admin) — login returned JWT successfully.",
   "seed_data_creation": "None — used existing preview DB (3 stores in leaderboard, 4 in ranking, 5 stores tested for profile shape).",
   "retest_needed": false,
   "main_agent_can_self_test": true,

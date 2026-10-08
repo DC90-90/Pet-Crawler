@@ -28,7 +28,7 @@ def _resolve_base_url():
 BASE_URL = _resolve_base_url()
 
 EMAIL = "a.disi@taqueen.sa"
-PASSWORD = "Ahmaddc90@"
+PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 BAD_TOKENS = ("NaN", "undefined", "null [", "[object Object]", "-Infinity", "$NaN", "0.NaN")
 

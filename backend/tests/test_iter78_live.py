@@ -13,7 +13,7 @@ import requests
 
 BASE = "https://price-intel-dev.preview.emergentagent.com"
 EMAIL = "a.disi@taqueen.sa"
-PASSWORD = "Ahmaddc90@"
+PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 DAY = "2026-08-25"
 
 

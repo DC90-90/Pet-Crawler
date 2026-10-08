@@ -1,0 +1,75 @@
+{
+  "summary": "Reproduced and executed the claimed 58-test pack (24+9+19+6) and ran preview UI/API validation for Beso stale-data behavior, selected competitor filter UX, and core navigation on desktop/mobile. Automated suites passed, but manual/API checks found two contract-level issues around unavailable-price representation and CORS credential policy.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/price-intel/product/{sku}",
+        "issue": "For stale/unavailable own-price scenarios (Beso SKUs), market_summary.my_price is returned as 0.0 instead of null/unavailable. This turns withheld data into a numeric value and violates 'unavailable remains unavailable'. Reproduced on SKU 8699245859829.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "CORS preflight for /api/auth/login",
+        "issue": "Preflight returns Access-Control-Allow-Origin: * and no Access-Control-Allow-Credentials. This fails the auth playbook requirement for explicit origins with credentials/httpOnly cookie support.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "/api/market-share/* with store_id filter",
+        "issue": "Selected-competitor filter behavior could not be strongly validated from current preview data because share/sales fields are null-heavy and row counts remained unchanged in sampled checks."
+      },
+      {
+        "endpoint": "/app/backend/tests/test_findings_auth_live.py",
+        "issue": "Auth6 suite still targets live preview endpoints/sessions instead of an isolated TestClient/ephemeral HTTP harness as requested by the test plan constraints."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Beso product detail in Price Intel",
+        "issue": "Backend returns my_price=0.0 for stale own data; frontend can surface this as actionable numeric instead of withheld state.",
+        "affected_selectors": []
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_findings_v2_regression.py",
+    "/app/backend/tests/test_iteration37_integration_real_mongo.py",
+    "/app/backend/tests/test_codex_review_gates.py",
+    "/app/backend/tests/test_findings_auth_live.py",
+    "/app/test_reports/pytest/iteration_38_findings_v2.xml",
+    "/app/test_reports/pytest/iteration_38_iter37.xml",
+    "/app/test_reports/pytest/iteration_38_codex.xml",
+    "/app/test_reports/pytest/iteration_38_auth_live.xml",
+    "/tmp/daleel-reviewed-samples/iteration38_sources/own_beso_20kg.html",
+    "/tmp/daleel-reviewed-samples/iteration38_sources/own_beso_dry_food_hair_skin.html",
+    "/tmp/daleel-reviewed-samples/iteration38_sources/comp_zarafa_beso_20kg.html",
+    "/tmp/daleel-reviewed-samples/iteration38_sources/comp_petsysa_beso_20kg.html"
+  ],
+  "action_items": [
+    "In /api/price-intel/product response building, return null (not 0) for market_summary.lowest_price/highest_price/my_price when live own/competitor prices are unavailable/stale.",
+    "Update CORS env/config to explicit allowed origins and allow_credentials=true for auth cookie compatibility; avoid wildcard origin for credentialed flows.",
+    "Add an isolated auth regression harness (TestClient + patched DB + local requests adapter) and migrate Auth6 checks away from live preview session mutation.",
+    "Re-verify selected competitor store filter with a fixture or a preview interval containing measurable (non-null) share rows."
+  ],
+  "critical_code_review_comments": [
+    "server.py lines ~8463-8467 default market_summary prices to 0 when live_prices is empty; this masks unavailable data.",
+    "CORS middleware setup falls back to wildcard origin and disables credentials when CORS_ORIGINS is unset ('*').",
+    "Brute-force protection behavior is correct in probe run (401 then 429 after threshold)."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_38.json"
+  ],
+  "success_rate": {
+    "backend": "96%",
+    "frontend": "93%"
+  },
+  "seed_data_creation": "None. Disposable DB names were used for mutable suites; no preview catalog mutations were performed.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Automated claimed suite currently passes 58/58 with disposable DB setup for mutable tests. Beso stale behavior validated on preview: My Products and Market Share correctly keep key values null/dash; Scanner shows zero opportunities for the stale Beso set. Remaining gap: Price Intel product-detail summary returns my_price=0.0 instead of null on stale own data, and CORS credential policy is not playbook-compliant.",
+  "rca of the issue": "RCA-1: In price-intel detail response construction, empty live competitor set is converted to numeric 0 for summary values and own stale price path yields 0.0, causing unavailable values to appear numeric. RCA-2: CORS config toggles to wildcard/non-credential mode when CORS_ORIGINS='*', so credentialed auth preflight cannot satisfy explicit-origin + credentials requirements."
+}

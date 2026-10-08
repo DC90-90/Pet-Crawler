@@ -1,0 +1,786 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="11" failures="11" skipped="0" tests="52" time="667.629" timestamp="2026-10-08T05:37:15.556243+00:00" hostname="agent-env-24867ce7-9497-42ab-89a5-067b1dc88c54"><testcase classname="backend.tests.test_findings_v2_regression" name="test_expand_variants_keeps_child_identity_and_price_fields" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_gtin_validation_and_leading_zero_handling" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_decimal_money_rejects_nonfinite_negative_and_parses_arabic_digits" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_normalize_offer_rejects_unresolved_parent_variants_and_unknown_tax_basis" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides0-synthetic_observation]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides1-legacy_or_unverified_offer]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides2-legacy_or_unverified_offer]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides3-currency_or_tax_unverified]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides4-price_unavailable]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides5-low_source_confidence]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides6-hidden_listing]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides7-out_of_stock]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_price_cohort_exclusion_reasons[overrides8-stock_unknown]" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_sales_map_excludes_unsealed_and_late_after_seal_cutoff" time="0.001" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_resolve_units_does_not_infer_product_zero_from_store_capability" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_share_summary_withholds_when_numerator_missing" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_scanner_payload_exposes_price_gap_not_forecast_alias_only" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_paginate_uses_metadata_not_short_page_heuristic" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_ingest_requires_run_id_and_observed_at" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_access_policy_denies_zero_page_user_reads_and_writes" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_access_policy_allows_reader_only_for_authorized_family" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_brand_extractor_does_not_accept_generic_leading_tokens" time="0.000" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_cron_manifest_has_authenticated_endpoint_placeholders" time="0.011" /><testcase classname="backend.tests.test_findings_v2_regression" name="test_job_control_uses_persisted_leases_and_deferred_status_structurally" time="0.000" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_process_crawled_products_keeps_variant_prices_and_store_isolation" time="0.142" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_shared_cohort_is_consistent_across_adapters_and_exclusions_are_explicit" time="0.041" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_ledger_idempotency_quarantine_and_sealed_cutoff" time="0.029" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_ingest_v2_concurrent_same_run_has_single_writer" time="0.030" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_own_orders_aggregate_requires_complete_coverage_and_normalizes_invalid_orders" time="0.020" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_store_views_use_same_observed_window_without_extrapolation" time="0.019" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_discount_offer_identity_and_legacy_quarantine" time="0.013" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_job_control_lease_queue_and_execute_status" time="0.006" /><testcase classname="backend.tests.test_iteration37_integration_real_mongo" name="test_cron_dispatch_auth_payload_and_duplicate_queue" time="0.013" /><testcase classname="backend.tests.test_codex_review_gates" name="test_startup_preserves_store_scoped_duplicate_skus" time="30.026"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c0c7cbea5a3e20fd46c, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:67: in test_startup_preserves_store_scoped_duplicate_skus
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:60: in go
+    await integrity_indexes.ensure(db)
+backend/integrity_indexes.py:3: in ensure
+    indexes = await db.products.index_information()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:2349: in index_information
+    cursor = self.list_indexes(session=session, comment=comment)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:2311: in list_indexes
+    with self.__database.client._tmp_session(session, False) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c0c7cbea5a3e20fd46c, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_startup_preserves_store_scoped_duplicate_skus" time="30.411"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c0c7cbea5a3e20fd46c, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c0c7cbea5a3e20fd46c, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_external_variants_survive_ingestion" time="30.026"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c497cbea5a3e20fd46d, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:79: in test_external_variants_survive_ingestion
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:71: in go
+    s=store(); await db.stores.insert_one(s)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:671: in insert_one
+    self._insert_one(
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:611: in _insert_one
+    self.__database.client._retryable_write(acknowledged, _insert_command, session)
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1567: in _retryable_write
+    with self._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c497cbea5a3e20fd46d, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_external_variants_survive_ingestion" time="30.430"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c497cbea5a3e20fd46d, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c497cbea5a3e20fd46d, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_empty_page_with_more_pages_is_incomplete" time="0.000" /><testcase classname="backend.tests.test_codex_review_gates" name="test_tier1_supplement_reaches_snapshot_identity" time="30.070"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c857cbea5a3e20fd46f, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:104: in test_tier1_supplement_reaches_snapshot_identity
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:101: in go
+    await crawlers.crawl_salla_tier1(db,store())
+backend/crawlers.py:1356: in crawl_salla_tier1
+    await db.crawl_checkpoints.update_one({"_id": f"{crawl_log['id']}:{offset}"}, {"$setOnInsert": {"store_id": store["id"], "observed_at": now, "rows": all_raw[offset:offset+50], "pagination": winning_endpoint.get("_pagination")}}, upsert=True)
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:1088: in update_one
+    self._update_retryable(
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:883: in _update_retryable
+    return self.__database.client._retryable_write(
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1567: in _retryable_write
+    with self._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c857cbea5a3e20fd46f, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_tier1_supplement_reaches_snapshot_identity" time="30.375"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c857cbea5a3e20fd46f, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72c857cbea5a3e20fd46f, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_replay_repairs_interrupted_evidence_write" time="30.028"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72cc27cbea5a3e20fd470, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:114: in test_replay_repairs_interrupted_evidence_write
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:111: in go
+    await crawlers.process_crawled_products(db,store(),[raw()],now)
+backend/crawlers.py:1050: in process_crawled_products
+    existing = await db.products.find_one({"offer_id": offer_id}, {"_id": 0})
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:1508: in find_one
+    for result in cursor.limit(-1):
+/root/.venv/lib/python3.11/site-packages/pymongo/cursor.py:1262: in next
+    if len(self.__data) or self._refresh():
+                           ^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/cursor.py:1153: in _refresh
+    self.__session = self.__collection.database.client._ensure_session()
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72cc27cbea5a3e20fd470, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_replay_repairs_interrupted_evidence_write" time="30.389"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72cc27cbea5a3e20fd470, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72cc27cbea5a3e20fd470, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_conflicting_explicit_barcodes_override_numeric_local_sku" time="0.000" /><testcase classname="backend.tests.test_codex_review_gates" name="test_group_shares_do_not_mix_denominators_or_invent_zero" time="0.000" /><testcase classname="backend.tests.test_codex_review_gates" name="test_missing_current_trend_does_not_crash" time="0.000" /><testcase classname="backend.tests.test_codex_review_gates" name="test_stale_own_price_is_withheld" time="0.000" /><testcase classname="backend.tests.test_codex_review_gates" name="test_own_sync_rejects_foreign_currency" time="30.026"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72cfe7cbea5a3e20fd471, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:152: in test_own_sync_rejects_foreign_currency
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:141: in go
+    s=store('own',True); await db.stores.insert_one(s)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:671: in insert_one
+    self._insert_one(
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:611: in _insert_one
+    self.__database.client._retryable_write(acknowledged, _insert_command, session)
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1567: in _retryable_write
+    with self._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72cfe7cbea5a3e20fd471, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_own_sync_rejects_foreign_currency" time="30.441"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72cfe7cbea5a3e20fd471, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72cfe7cbea5a3e20fd471, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_own_variants_do_not_overwrite_sibling" time="30.026"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72d3b7cbea5a3e20fd473, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:167: in test_own_variants_do_not_overwrite_sibling
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:156: in go
+    s=store('own',True); await db.stores.insert_one(s)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:671: in insert_one
+    self._insert_one(
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:611: in _insert_one
+    self.__database.client._retryable_write(acknowledged, _insert_command, session)
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1567: in _retryable_write
+    with self._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72d3b7cbea5a3e20fd473, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_own_variants_do_not_overwrite_sibling" time="30.440"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72d3b7cbea5a3e20fd473, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72d3b7cbea5a3e20fd473, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_store_profile_redacts_credentials" time="30.026"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72d787cbea5a3e20fd475, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:174: in test_store_profile_redacts_credentials
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:171: in go
+    s=store(); s['tier4_password']='AUDIT_SENTINEL_ENCRYPTED'; await db.stores.insert_one(s)
+                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:671: in insert_one
+    self._insert_one(
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:611: in _insert_one
+    self.__database.client._retryable_write(acknowledged, _insert_command, session)
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1567: in _retryable_write
+    with self._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72d787cbea5a3e20fd475, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_store_profile_redacts_credentials" time="30.440"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72d787cbea5a3e20fd475, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72d787cbea5a3e20fd475, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_compose_supplies_required_encryption_config" time="0.005" /><testcase classname="backend.tests.test_codex_review_gates" name="test_stock_rate_includes_out_of_stock_offers" time="30.025"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72db47cbea5a3e20fd477, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:187: in test_stock_rate_includes_out_of_stock_offers
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:183: in go
+    await db.stores.insert_one(store())
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:671: in insert_one
+    self._insert_one(
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:611: in _insert_one
+    self.__database.client._retryable_write(acknowledged, _insert_command, session)
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1567: in _retryable_write
+    with self._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72db47cbea5a3e20fd477, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_stock_rate_includes_out_of_stock_offers" time="30.439"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72db47cbea5a3e20fd477, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72db47cbea5a3e20fd477, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_out_of_range_money_is_quarantined_without_exception" time="0.000" /><testcase classname="backend.tests.test_codex_review_gates" name="test_failed_crawl_job_does_not_report_completed" time="30.033"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72df17cbea5a3e20fd479, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:204: in test_failed_crawl_job_does_not_report_completed
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:194: in go
+    await db.stores.insert_one(store())
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:671: in insert_one
+    self._insert_one(
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:611: in _insert_one
+    self.__database.client._retryable_write(acknowledged, _insert_command, session)
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1567: in _retryable_write
+    with self._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72df17cbea5a3e20fd479, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_failed_crawl_job_does_not_report_completed" time="30.173"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72df17cbea5a3e20fd479, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72df17cbea5a3e20fd479, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_reviewed_offer_brand_affects_comparison" time="30.053"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72e2d7cbea5a3e20fd47b, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:218: in test_reviewed_offer_brand_affects_comparison
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:208: in go
+    await db.stores.insert_many([store('own',True),store('comp')])
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:757: in insert_many
+    blk.execute(write_concern, session=session)
+/root/.venv/lib/python3.11/site-packages/pymongo/bulk.py:580: in execute
+    return self.execute_command(generator, write_concern, session)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/bulk.py:446: in execute_command
+    with client._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72e2d7cbea5a3e20fd47b, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_reviewed_offer_brand_affects_comparison" time="30.407"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72e2d7cbea5a3e20fd47b, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72e2d7cbea5a3e20fd47b, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_market_share_price_rank_uses_same_eligible_offers" time="30.026"><failure message="pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72e6a7cbea5a3e20fd47e, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;">backend/tests/test_codex_review_gates.py:235: in test_market_share_price_rank_uses_same_eligible_offers
+    run(go())
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_codex_review_gates.py:223: in go
+    await db.stores.insert_many([store('own',True),store('comp'),store('oos')])
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/collection.py:757: in insert_many
+    blk.execute(write_concern, session=session)
+/root/.venv/lib/python3.11/site-packages/pymongo/bulk.py:580: in execute
+    return self.execute_command(generator, write_concern, session)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/bulk.py:446: in execute_command
+    with client._tmp_session(session) as s:
+/usr/local/lib/python3.11/contextlib.py:137: in __enter__
+    return next(self.gen)
+           ^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1885: in _tmp_session
+    s = self._ensure_session(session)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1868: in _ensure_session
+    return self.__start_session(True, causal_consistency=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1811: in __start_session
+    self._topology._check_implicit_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:583: in _check_implicit_session_support
+    self._check_session_support()
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:599: in _check_session_support
+    self._select_servers_loop(
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72e6a7cbea5a3e20fd47e, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</failure></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_market_share_price_rank_uses_same_eligible_offers" time="30.413"><error message="failed on teardown with &quot;pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72e6a7cbea5a3e20fd47e, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;&quot;">backend/tests/test_codex_review_gates.py:43: in db
+    run(client.drop_database(name))
+backend/tests/test_codex_review_gates.py:30: in run
+    return LOOP.run_until_complete(coro)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/concurrent/futures/thread.py:58: in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/_csot.py:108: in csot_wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:2041: in drop_database
+    with self._conn_for_writes(session) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1307: in _conn_for_writes
+    server = self._select_server(writable_server_selector, session)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/mongo_client.py:1297: in _select_server
+    server = topology.select_server(server_selector)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:312: in select_server
+    server = self._select_server(selector, server_selection_timeout, address)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:296: in _select_server
+    servers = self.select_servers(selector, server_selection_timeout, address)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:247: in select_servers
+    server_descriptions = self._select_servers_loop(selector, server_timeout, address)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/pymongo/topology.py:269: in _select_servers_loop
+    raise ServerSelectionTimeoutError(
+E   pymongo.errors.ServerSelectionTimeoutError: 127.0.0.1:27087: [Errno 111] Connection refused, Timeout: 30s, Topology Description: &lt;TopologyDescription id: 6ac72e6a7cbea5a3e20fd47e, topology_type: Unknown, servers: [&lt;ServerDescription ('127.0.0.1', 27087) server_type: Unknown, rtt: None, error=AutoReconnect('127.0.0.1:27087: [Errno 111] Connection refused')&gt;]&gt;</error></testcase><testcase classname="backend.tests.test_codex_review_gates" name="test_methodology_does_not_call_inventory_changes_sales_floor" time="0.002" /></testsuite></testsuites>

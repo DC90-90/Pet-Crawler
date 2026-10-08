@@ -9,7 +9,7 @@ import requests
 
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 EMAIL = "a.disi@taqueen.sa"
-PASSWORD = "Ahmaddc90@"
+PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 
 @pytest.fixture(scope="module")

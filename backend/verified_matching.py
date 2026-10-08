@@ -1,5 +1,5 @@
 """Only observed offer identities can enter product_matches v2."""
-from price_cohort import identity_agrees
+from price_cohort import identity_agrees, reviewed_brand_map, apply_brand_review
 
 
 async def match(db, own, snapshots=None, own_store_id=None):
@@ -12,8 +12,10 @@ async def match(db, own, snapshots=None, own_store_id=None):
     blocked = [r async for r in db.match_blacklist.find({"my_sku": own.get("sku")}, {"_id": 0})]
     confirmed = [r async for r in db.product_matches.find({"my_sku": own.get("sku"), "manually_confirmed": True, "identity_version": 2}, {"_id": 0})]
     out = []
+    reviews = await reviewed_brand_map(db)
     from matcher import _build_match
     for offer in snapshots:
+        offer = apply_brand_review(offer, reviews)
         if offer.get("store_id") == own_store_id or offer.get("observation_version") != 2 or not offer.get("offer_id") or offer.get("is_synthetic"):
             continue
         if any(b.get("competitor_store_id") == offer["store_id"] and

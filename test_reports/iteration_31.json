@@ -15,7 +15,7 @@
     "/app/backend/tests/test_iter73y_e2e.py (new)"
   ],
   "success_rate": {"backend": "100% (13/13)", "frontend": "100% (all iter73y scenarios pass)"},
-  "test_credentials": "super_admin a.disi@taqueen.sa / Ahmaddc90@ ; created test user test_iter73y_normal@example.com / NormalUser#123 (role=user, allowed_pages=[my_products])",
+  "test_credentials": "super_admin a.disi@taqueen.sa / [redacted; supply DALEEL_TEST_PASSWORD through the environment] ; created test user test_iter73y_normal@example.com / NormalUser#123 (role=user, allowed_pages=[my_products])",
   "seed_data_creation": "Ran tools_iter73y_e2e_probe.py to seed SKU IT73Y-PROBE-052742024363 (60 snapshots x 3 stores: exact-SKU / primary-barcode / variant_barcodes only). Cleaned up with `python3 tools_iter73y_e2e_probe.py clean` after tests (cleaned snapshots=60 products=1).",
   "retest_needed": false,
   "main_agent_can_self_test": true,

@@ -15,7 +15,7 @@ BASE_URL = os.environ.get(
     "REACT_APP_BACKEND_URL", "https://daleel-price-intel.preview.emergentagent.com"
 ).rstrip("/")
 SUPER_ADMIN_EMAIL = "a.disi@taqueen.sa"
-SUPER_ADMIN_PASSWORD = "Ahmaddc90@"
+SUPER_ADMIN_PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 
 @pytest.fixture(scope="module")

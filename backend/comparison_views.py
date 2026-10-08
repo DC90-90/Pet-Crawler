@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from price_cohort import build_cohorts, POLICY_VERSION
 from core.utils import compute_market_position
+from observation_contract import gtin
 
 
 async def context(db, own_price_fn):
@@ -28,7 +29,8 @@ async def intel(db, own_price_fn):
         sellers = c["sellers"]
         low = sellers[0] if sellers else {}
         gap = round((price-low["price"])/low["price"]*100, 1) if low and price else None
-        row = dict(my_sku=sku, my_barcode=mp.get("barcode"), my_name_ar=mp.get("name_ar"), my_name_en=mp.get("name_en"),
+        barcode = mp.get("barcode") if gtin(mp.get("barcode")) else sku if gtin(sku) else None
+        row = dict(my_sku=sku, my_barcode=barcode, my_name_ar=mp.get("name_ar"), my_name_en=mp.get("name_en"),
                    my_price=price or None, my_qty=mp.get("quantity"), sellers=len(sellers), image_url=mp.get("image_url"),
                    cheapest_competitor=low.get("store_name", ""), cheapest_price=low.get("price"), diff_pct=gap,
                    price_status="live" if low else "unavailable", confidence=99 if low else 0, match_method="verified_offer",

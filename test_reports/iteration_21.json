@@ -43,7 +43,7 @@
   "success_rate": {"backend": "100% (24/24)", "frontend": "N/A (backend-only per request)"},
   "test_credentials": {
     "super_admin_email": "a.disi@taqueen.sa",
-    "super_admin_password": "Ahmaddc90@"
+    "super_admin_password": "[redacted; supply DALEEL_TEST_PASSWORD through the environment]"
   },
   "seed_data_creation": "None. Tests are read-only against the live preview endpoint and MongoDB. Matcher heal was NOT triggered (already run before this iteration).",
   "retest_needed": false,

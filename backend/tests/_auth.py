@@ -17,7 +17,7 @@ import pytest
 import requests
 
 SUPER_EMAIL = "a.disi@taqueen.sa"
-SUPER_PASSWORD = "Ahmaddc90@"
+SUPER_PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 _CACHE_FILE = Path(os.environ.get("DALEEL_TEST_TOKEN_CACHE", "/tmp/daleel_test_tokens.json"))
 _CACHE_MAX_AGE = 6 * 3600          # server tokens live 24h — refresh well before expiry

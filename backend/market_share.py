@@ -99,7 +99,7 @@ def _pct(part, whole):
 
 
 def _delta_pct(now_v, prev_v):
-    if prev_v in (None, 0):
+    if now_v is None or prev_v in (None, 0):
         return None
     return round((now_v - prev_v) / prev_v * 100, 1)
 
@@ -373,12 +373,16 @@ def aggregate_groups(my_rows, missing_rows, key):
             "products": 0, "my_products": 0, "measured_products": 0,
             "top_products": [], "stores": {}, "prev_units": 0, "prev_revenue": 0.0,
             "missing_products": 0, "missing_value": 0.0,
+            "my_observed": 0, "units_observed": 0, "bases": set(),
+            "share_my_units": 0, "share_units": 0, "share_my_revenue": 0.0,
+            "share_revenue": 0.0, "share_products": 0,
         })
         b["products"] += 1
         if mine_flag:
             b["my_products"] += 1
         if row.get("market_revenue") is not None:
             b["measured_products"] += 1
+            b['bases'].add(row.get('market_value_basis', 'unknown'))
             b["units"] += row.get("market_units") or 0
             b["revenue"] += row.get("market_revenue") or 0
             b["prev_units"] += (row.get("trend") or {}).get("prev_units") or 0
@@ -390,6 +394,13 @@ def aggregate_groups(my_rows, missing_rows, key):
         if mine_flag:
             b["my_units"] += row.get("my_units") or 0
             b["my_revenue"] += row.get("my_revenue") or 0
+            b['my_observed'] += row.get('my_units') is not None
+            if row.get('share_comparable') and all(row.get(k) is not None for k in ('my_units', 'my_revenue', 'market_units', 'market_revenue')):
+                b['share_products'] += 1
+                b['share_my_units'] += row['my_units']
+                b['share_units'] += row['market_units']
+                b['share_my_revenue'] += row['my_revenue']
+                b['share_revenue'] += row['market_revenue']
         else:
             b["missing_products"] += 1
             b["missing_value"] += row.get("market_revenue") or 0
@@ -409,16 +420,21 @@ def aggregate_groups(my_rows, missing_rows, key):
 
     total_rev = sum(v["revenue"] for v in bucket.values())
     total_units = sum(v["units"] for v in bucket.values())
+    bases = set().union(*(v['bases'] for v in bucket.values())) if bucket else set()
+    common_basis = len(bases) == 1 and 'unknown' not in bases
     out = []
     for name, v in bucket.items():
         out.append({
             key: name,
-            "units": v["units"], "revenue": round(v["revenue"], 2),
-            "revenue_share_pct": _pct(v["revenue"], total_rev),
-            "unit_share_pct": _pct(v["units"], total_units),
-            "my_units": v["my_units"], "my_revenue": round(v["my_revenue"], 2),
-            "my_revenue_share_pct": None,
-            "my_unit_share_pct": _pct(v["my_units"], v["units"]),
+            "units": v["units"] if v['measured_products'] else None,
+            "revenue": round(v["revenue"], 2) if v['measured_products'] and len(v['bases']) == 1 else None,
+            "revenue_share_pct": _pct(v["revenue"], total_rev) if v['measured_products'] and common_basis else None,
+            "unit_share_pct": _pct(v["units"], total_units) if v['measured_products'] and common_basis else None,
+            "my_units": v["my_units"] if v['my_observed'] else None,
+            "my_revenue": round(v["my_revenue"], 2) if v['my_observed'] else None,
+            "my_revenue_share_pct": _pct(v['share_my_revenue'], v['share_revenue']) if v['share_products'] else None,
+            "my_unit_share_pct": _pct(v['share_my_units'], v['share_units']) if v['share_products'] else None,
+            "share_products": v['share_products'],
             "products": v["products"], "my_products_count": v["my_products"],
             "measured_products": v["measured_products"],
             "missing_products": v["missing_products"],
@@ -520,9 +536,14 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "price": 1,
              "sale_price": 1, "original_price": 1, "price_basis": 1,
              "quantity": 1, "in_stock": 1, "brand": 1, "category": 1,
-             "barcode": 1, "brand_source": 1, "category_source": 1}).to_list(50000)
+             "barcode": 1, "brand_source": 1, "category_source": 1,
+             "last_synced_at": 1, "present_on_store": 1, "currency": 1, "offer_id": 1}).to_list(50000)
     my_by_sku = {r["sku"]: r for r in my_rows if r.get("sku")}
     cohorts = await build_cohorts(db, my_rows, own_store_id, own_price_fn, now=now)
+    cohort_links = {}
+    for own_sku, cohort in cohorts.items():
+        for offer in cohort['sellers'] + cohort['excluded']:
+            cohort_links.setdefault((offer['store_id'], offer.get('offer_id')), set()).add(own_sku)
 
     # ── identity: every key that resolves to one of OUR products ────────────
     own_key_index = {}          # normalized key -> (my_sku, key_class)
@@ -583,8 +604,12 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
                 if hit:
                     my_sku, klass = hit[0], vl[1]
                     strength = MATCH_STRENGTH.get(vl[1], 88)
-        if my_sku and not is_own and not identity_agrees(my_by_sku[my_sku], s):
-            my_sku = None
+        if not is_own:
+            # Reuse the shared identity decisions, including scoped manual
+            # reviews and blacklists. Local-SKU aliases are not authority.
+            candidates = cohort_links.get((sid, s.get('offer_id')), set())
+            my_sku = next(iter(candidates)) if len(candidates) == 1 else None
+            klass, strength = ('verified_offer', 99) if my_sku else (None, None)
         seller = {
             "store_id": sid,
             "store_name": s.get("store_name") or (stores.get(sid) or {}).get("name") or sid,
@@ -671,9 +696,8 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         share_comparable = (my_units is not None and len(with_sales) == len(kept) and len(with_sales) >= 2
                             and all(s["units_source"] == SRC_ORDERS for s in with_sales))
 
-        ranked_price = sorted([s for s in kept if (s.get("price") or 0) > 0],
-                             key=lambda s: s["price"])
-        price_rank = next((i + 1 for i, s in enumerate(ranked_price) if s["is_own"]), None)
+        ranked_price = sorted(cohort['sellers'] + ([{'price': my_price, 'is_own': True}] if my_price > 0 else []), key=lambda s: s['price'])
+        price_rank = next((i + 1 for i, s in enumerate(ranked_price) if s.get('is_own')), None) if cohort['sellers'] else None
         ranked_units = sorted(with_sales, key=lambda s: -(s["units"] or 0))
         units_rank = (next((i + 1 for i, s in enumerate(ranked_units) if s["is_own"]), None)
                       if my_units is not None else None)

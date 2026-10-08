@@ -21,6 +21,8 @@ async def profile(db, store_id, orders_fn):
     store = await db.stores.find_one({"id": store_id, "is_active": {"$ne": False}}, {"_id": 0})
     if not store:
         raise HTTPException(404, "Store not found")
+    for secret_field in ('tier4_email', 'tier4_password', 'tier4_phone', 'tier4_session_cookies'):
+        store.pop(secret_field, None)
     start, end = ledger.sealed_ksa_window(30)
     sales = {oid: v for (sid, oid), v in (await sales_map(db, start, end)).items() if sid == store_id}
     observations = await latest(db, store_id)
@@ -86,20 +88,26 @@ async def ranking(db, orders_fn):
     for store in stores:
         sid = store["id"]
         obs = [s for s in valid if s["store_id"] == sid]
+        # Coverage ranks use eligible offers. Availability needs all recent
+        # observations with known stock, including out-of-stock offers.
+        known_stock = [s for s in all_offers if s['store_id'] == sid
+                       and exclusion({**s, 'in_stock': True}) is None
+                       and isinstance(s.get('in_stock'), bool)]
+        stock_pct = round(100 * sum(s['in_stock'] for s in known_stock) / len(known_stock), 1) if known_stock else None
         signals = [v for (store_key, _), v in sales.items() if store_key == sid]
         orders = await orders_fn(db, start, end) if store.get("is_own_store") else None
         revenue = orders["revenue"] if orders is not None else round(sum(r["revenue"] for r in signals), 2) if signals else None
         n = len(obs)
         basis = "orders_exact" if orders is not None else "inventory_proxy" if signals else "unavailable"
         rows.append({"store_id": sid, "name": store["name"], "domain": store.get("domain"), "platform": store.get("platform"),
-                     "is_own_store": bool(store.get("is_own_store")), "products": n, "in_stock_pct": 100 if n else None,
+                     "is_own_store": bool(store.get("is_own_store")), "products": n, "in_stock_pct": stock_pct,
                      "revenue_30d": revenue, "revenue_status": "ledger" if orders is not None else "computed" if signals else "not_measurable",
                      "revenue_basis": basis, "revenue_tier": "exact" if orders is not None else "estimated" if signals else "unavailable",
                      "revenue_rank_value": None, "revenue_rank_basis": "none", "sales_status": basis, "sales_sample": len(signals),
                      "overlap": 0, "strength_score": None, "revenue_approx": None, "revenue_est_salla": None,
                      "rank_basis": "verified_offer_coverage", "components": {
                          "breadth": {"score": 0, "products": n}, "price": {"score": 0, "avg_percentile": None, "shared_products": 0},
-                         "stock": {"score": 1 if n else 0, "pct": 100 if n else None},
+                         "stock": {"score": stock_pct / 100 if stock_pct is not None else None, "pct": stock_pct},
                          "freshness": {"score": 1 if n else 0, "pct": 100 if n else None}}})
     # Orders and depletion proxies do not share a revenue leaderboard denominator.
     rows.sort(key=lambda r: (-r["products"], r["name"]))

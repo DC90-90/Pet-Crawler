@@ -1,5 +1,7 @@
 # Daleel investigation — implementation and verification record
 
+**Superseded acceptance status (2026-10-08):** The independent review reproduced 19 additional failures after this earlier record. Its fixes and acceptance follow-ups are applied to preview. See `memory/REVIEWED_FIXES_ACCEPTANCE.md` and `test_reports/reviewed_fixes_final.json` for the final **104-test** results and the still-pending Git/production work. Earlier counts/claims below are historical, not the current verification statement.
+
 Date: 2026-10-07. Source: user-uploaded Daleel-findings.json (15 findings), investigation HTML and engineering handoff ZIP. User authorized fixing all findings; production changes still require separate authorization. This is NOT a statement that the existing production deployment has been repaired.
 
 ## Implemented controls

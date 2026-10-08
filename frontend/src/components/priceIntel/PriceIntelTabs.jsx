@@ -5,6 +5,9 @@ import { ConfidenceBadge, FlagBadges } from "./PriceIntelShared";
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
 import { MarketPositionBadge } from "@/components/MarketPosition";
+import { useState } from "react";
+import { Input } from "@/components/ui/input";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 function ActionRequiredTable({ rows, onOpen }) {
   return (
@@ -69,8 +72,22 @@ function MyAdvantagesTable({ rows, onOpen }) {
 }
 
 function FullComparisonTable({ rows, onOpen }) {
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const query = search.trim().toLocaleLowerCase();
+  const filtered = rows.filter(r => !query || [r.my_sku, r.my_barcode, r.my_name_ar, r.my_name_en].some(v => String(v || "").toLocaleLowerCase().includes(query)));
+  const lastPage = Math.max(0, Math.ceil(filtered.length / 100) - 1);
+  const currentPage = Math.min(page, lastPage);
   return (
-    <div className="glass-card overflow-hidden">
+    <div className="glass-card overflow-hidden" data-testid="full-comparison-table">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-3">
+        <Input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} placeholder="Product name, SKU or barcode" aria-label="Search full comparison" className="max-w-sm bg-white/5 border-white/10 text-white" data-testid="full-comparison-search" />
+        <div className="flex items-center gap-2 text-xs text-[#A1E4DB]">
+          <span data-testid="full-comparison-page-count">{filtered.length} products · {currentPage + 1}/{lastPage + 1}</span>
+          <Button size="icon" variant="ghost" title="Previous products" aria-label="Previous products" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} data-testid="full-comparison-previous"><ChevronLeft className="h-4 w-4" /></Button>
+          <Button size="icon" variant="ghost" title="Next products" aria-label="Next products" disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)} data-testid="full-comparison-next"><ChevronRight className="h-4 w-4" /></Button>
+        </div>
+      </div>
       <Table className="dense-table">
         <TableHeader><TableRow>
           <TableHead className="text-[10px] uppercase text-[#A1E4DB]">My Product</TableHead>
@@ -83,12 +100,12 @@ function FullComparisonTable({ rows, onOpen }) {
           <TableHead className="text-[10px] uppercase text-[#A1E4DB]">Flags</TableHead>
         </TableRow></TableHeader>
         <TableBody>
-          {rows.length === 0 ? (
+          {filtered.length === 0 ? (
             <TableRow><TableCell colSpan={8} className="text-center py-12 text-[#A1E4DB]">No matches found. Import products and run matching first.</TableCell></TableRow>
-          ) : rows.slice(0, 100).map((r) => (
-            <TableRow key={r.my_sku} className="cursor-pointer" onClick={() => onOpen(r.my_sku)}>
+          ) : filtered.slice(currentPage * 100, (currentPage + 1) * 100).map((r) => (
+            <TableRow key={r.my_sku} className="cursor-pointer" onClick={() => onOpen(r.my_sku)} data-testid={`full-comparison-product-${r.my_sku}`}>
               <TableCell><p className="text-sm text-white font-medium truncate max-w-[200px] inline-flex items-center gap-1.5"><MineBadge sku={r.my_sku} />{r.my_name_en || r.my_name_ar}</p><SkuLine sku={r.my_sku} barcode={r.my_barcode} /></TableCell>
-              <TableCell><span className="text-sm font-semibold text-white metric-number">{r.my_price} SAR</span></TableCell>
+              <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`full-comparison-price-${r.my_sku}`}>{r.my_price ?? "—"} SAR</span></TableCell>
               <TableCell><span className="text-xs text-[#A1E4DB]">{r.cheapest_competitor}</span></TableCell>
               {/* iter71 — a matched row with no live in-window price shows a
                   stale chip; the frozen match-time price is never rendered. */}

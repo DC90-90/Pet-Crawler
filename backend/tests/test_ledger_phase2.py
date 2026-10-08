@@ -155,11 +155,15 @@ def test_server_uses_sealed_window_in_store_ranking():
     a = src.index("async def _store_ranking_compute")
     b = src.index("\nasync def ", a + 1)
     body = src[a:b]
+    assert "store_views import ranking" in body
+    import inspect
+    from store_views import ranking
+    body = inspect.getsource(ranking)
     assert "ledger.sealed_ksa_window" in body, \
         "_store_ranking_compute must resolve its window via ledger.sealed_ksa_window"
-    assert "_own_orders_aggregate(db, sealed_start_utc" in body, \
+    assert "orders_fn(db, start, end)" in body, \
         "own-store revenue must read the sealed window"
-    assert "_sales_pairs_from_rollups(db, sealed_start_utc" in body, \
+    assert "sales_map(db, start, end)" in body, \
         "competitor sales must read the sealed window"
 
 

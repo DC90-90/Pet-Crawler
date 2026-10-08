@@ -71,8 +71,15 @@ async def paginate(http, ep, initial, fetch, max_pages=200):
                 if not lists_present:
                     meta["stop_reason"] = "malformed_empty_page"
                     break
-                expected = meta["expected_count"]
-                meta.update(complete=expected is None or len(rows) >= expected, stop_reason="empty_page")
+                empty_pages, empty_total, empty_next = _sf_page_meta(body)
+                expected = empty_total if empty_total is not None else meta["expected_count"]
+                meta['expected_count'] = expected
+                cursor = body.get('cursor') if isinstance(body, dict) else None
+                more = (empty_next is True or (empty_pages is not None and page + 1 < empty_pages)
+                        or (isinstance(cursor, dict) and bool(cursor.get('next')))
+                        or (total_pages is not None and page + 1 < total_pages))
+                meta.update(complete=not more and (expected is None or len(rows) >= expected),
+                            stop_reason='contradictory_empty_page' if more else 'empty_page')
                 break
             if not add(items):
                 meta["stop_reason"] = "duplicate_page"

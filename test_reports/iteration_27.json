@@ -16,7 +16,7 @@
     "/app/backend/tests/test_iter73g_live_discounts.py (created — live regression suite)"
   ],
   "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
-  "test_credentials": "a.disi@taqueen.sa / Ahmaddc90@ (from /app/memory/test_credentials.md)",
+  "test_credentials": "a.disi@taqueen.sa / [redacted; supply DALEEL_TEST_PASSWORD through the environment] (from /app/memory/test_credentials.md)",
   "seed_data_creation": "None",
   "retest_needed": false,
   "should_main_agent_self_test": true,

@@ -13,7 +13,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 assert BASE_URL, "REACT_APP_BACKEND_URL must be set"
 
 SUPER_EMAIL = "a.disi@taqueen.sa"
-SUPER_PASSWORD = "Ahmaddc90@"
+SUPER_PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 PROBE_SKU = "IT73Y-PROBE-052742024363"
 

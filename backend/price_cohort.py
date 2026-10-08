@@ -20,7 +20,20 @@ def aware(value):
 
 
 def identity_keys(row):
-    return {k for k in (gtin(row.get("barcode")), gtin(row.get("sku"))) if k}
+    # An explicit GTIN is stronger evidence than a merchant's numeric local SKU.
+    code = gtin(row.get('barcode')) or gtin(row.get('sku'))
+    return {code} if code else set()
+
+
+async def reviewed_brand_map(db):
+    return {(p.get('store_id'), p['offer_id']): p.get('brand') async for p in db.products.find(
+        {'brand_source': 'reviewed', 'offer_id': {'$type': 'string'}},
+        {'_id': 0, 'store_id': 1, 'offer_id': 1, 'brand': 1})}
+
+
+def apply_brand_review(offer, reviews):
+    key = (offer.get('store_id'), offer.get('offer_id'))
+    return {**offer, 'brand': reviews[key], 'brand_source': 'reviewed'} if key in reviews else offer
 
 
 def identity_agrees(own, offer, manual=False):
@@ -33,6 +46,12 @@ def identity_agrees(own, offer, manual=False):
         if canonical_brand(own["brand"]) != canonical_brand(offer["brand"]):
             return False
     name = f"{own.get('name_ar') or ''} {own.get('name_en') or ''}"
+    observed_name = " ".join(str(offer.get(k) or "") for k in ("name_ar", "name_en"))
+    # A reused EAN is not proof that a named carton is the same as a single.
+    # Use source names here (not lossy URL slugs); unresolved packs stay out.
+    from matcher import _pack_compatible
+    if name.strip() and observed_name.strip() and not _pack_compatible(name, observed_name):
+        return False
     descriptor = " ".join(str(offer.get(k) or "") for k in ("name_ar", "name_en")) + " " + slug_descriptor(offer.get("product_url"))
     reject, _ = slug_pack_reject(name, stated_weight_grams(name), descriptor)
     return not reject and (bool(ours & theirs) or manual)
@@ -102,6 +121,7 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None):
     async for m in db.match_blacklist.find({}, {"_id": 0}):
         blocked.add((m.get("my_sku"), m.get("competitor_store_id"), m.get("competitor_offer_id")))
     grouped, history = {}, {}
+    reviewed = await reviewed_brand_map(db)
     # Latest offer first, BEFORE eligibility: an OOS reading must not resurrect an older in-stock price.
     seen = set()
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
@@ -118,6 +138,7 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None):
     for sku, sid, oid in manual:
         manual_by_offer.setdefault((sid, oid), set()).add(sku)
     async for row in cursor:
+        row = apply_brand_review(row, reviewed)
         candidates = set(manual_by_offer.get((row["store_id"], row.get("offer_id")), ()))
         for key in identity_keys(row):
             candidates.update(by_key.get(key, ()))

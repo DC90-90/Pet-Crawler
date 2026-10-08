@@ -1,4 +1,7 @@
 # Authentication regression checklist
+- Reviewed overlay follow-up: explicit `CORS_ORIGINS` is required; no wildcard. Cookie requests allow credentials only for those origins; unknown browser origins cannot mutate authenticated sessions.
+- Run all six existing auth regression assertions through an isolated FastAPI TestClient and disposable UUID Mongo database, not preview sessions. Test allowed and denied preflights plus cross-origin cookie mutation rejection. Keep credentials in environment or generated transient fixtures, never tracked source.
+- Preserve existing hashing/JWT/password behavior and rate limits. Do not rotate credentials or run application startup against production while validating CORS.
 - Use the existing cached test-token helper and credentials in memory/test_credentials.md.
 - Verify bcrypt hashes and unique email index; never print hashes or tokens.
 - Test login, /auth/me, logout revocation, expired tokens and password-change revocation.

@@ -5,6 +5,11 @@ import ledger
 from comparison_views import context, position
 from core.utils import get_stock_signal
 from evidence_ledger import sales_map
+from observation_contract import gtin
+
+
+def verified_barcode(product):
+    return str(product.get("barcode")) if gtin(product.get("barcode")) else str(product.get("sku")) if gtin(product.get("sku")) else None
 
 
 async def dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only, price_fn, orders_fn):
@@ -33,9 +38,10 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
         evidence = orders["by_sku"].get(sku, {"units": 0, "revenue": 0}) if orders is not None else sales.get((own.get("id"), mp.get("offer_id") or sku))
         units, value = (evidence.get("units"), evidence.get("revenue")) if evidence else (None, None)
         row = {**mp, "sku": sku, "price": price or None, "market_price": c["avg"], "is_my_product": True,
+               "barcode": verified_barcode(mp),
                "category_candidate": mp.get("category"), "category": mp.get("category") if mp.get("category_source") in ("reviewed", "store_supplied", "import_file") else None,
                "my_quantity": mp.get("quantity"), "my_units_sold": units, "my_revenue_est": value,
-               "qty_sold_est": units, "revenue_est": value, "my_stock_signal": get_stock_signal(mp.get("quantity"), mp.get("in_stock")),
+               "qty_sold_est": units, "revenue_est": value, "my_stock_signal": get_stock_signal(mp.get("quantity"), mp.get("in_stock")) if price else "UNKNOWN",
                "my_stock_status": "not_listed" if mp.get("present_on_store") is False else "own_catalog",
                "num_competitors": len({s["store_id"] for s in c["sellers"]+c["excluded"]}), "num_priced_competitors": len(c["sellers"]),
                "num_sellers": len(c["sellers"]), "competitor_min_price": c["min"], "competitor_max_price": c["max"],
@@ -72,7 +78,8 @@ async def detail(db, sku, days, price_fn):
                         "historical_price": row.get("price") if excluded else None,
                         "price_status": "excluded" if excluded else "live", "is_stale": excluded,
                         "last_crawl_at": row.get("crawled_at"), "days_since_crawl": None,
-                        "tier4_status": None, "is_own_store": False, "stock_signal": get_stock_signal(row.get("qty_available"), row.get("in_stock"))})
+                        "tier4_status": None, "is_own_store": False,
+                        "stock_signal": "UNKNOWN" if excluded and row.get("excluded_reason") != "out_of_stock" else get_stock_signal(row.get("qty_available"), row.get("in_stock"))})
     if price:
         sellers.append({"sku": sku, "store_id": own.get("id"), "store_name": own.get("name"), "price": price,
                         "in_stock": mp.get("in_stock"), "qty_available": mp.get("quantity"), "is_own_store": True,
@@ -82,7 +89,11 @@ async def detail(db, sku, days, price_fn):
     offer_ids = [s.get("offer_id") for s in c["sellers"] if s.get("offer_id")]
     async for snap in db.product_snapshots.find({"offer_id": {"$in": offer_ids}, "crawled_at": {"$gte": since}, "observation_version": 2, "comparable": True}, {"_id": 0}).sort("crawled_at", 1):
         history.setdefault(snap["store_name"], []).append({"date": snap["crawled_at"].isoformat(), "price": snap["price"], "qty": snap.get("qty_available")})
-    return {**mp, "is_my_product": True, "store_prices": sellers, "seller_count": len(c["sellers"]),
+    return {**mp, "price": price or None, "sale_price": mp.get("sale_price") if price else None,
+            "barcode": verified_barcode(mp), "source_tier": 0 if price else None, "confidence_score": 99 if price else None,
+            "historical_price": mp.get("price") if not price else None,
+            "price_status": "live" if price else "unavailable",
+            "is_my_product": True, "store_prices": sellers, "seller_count": len(c["sellers"]),
             "seller_summary": {"live": len(c["sellers"]), "stale": len(c["excluded"]), "oos": sum(s.get("in_stock") is False for s in c["excluded"])},
             "price_range": {"min": c["min"], "max": c["max"], "avg": c["avg"]} if c["min"] else {},
             "total_volume": None, "market_position": position(own, mp, price, c), "cohort_id": c["cohort_id"],
@@ -96,12 +107,15 @@ async def intel_detail(db, sku, price_fn):
                     "competitor_sku": r.get("sku"), "competitor_offer_id": r.get("offer_id"),
                     "competitor_price": r.get("price"), "competitor_url": r.get("product_url"),
                     "diff_pct": round((price_fn(result)-r["price"])/r["price"]*100, 1) if price_fn(result) and r.get("price") else None,
-                    "confidence": 99, "match_method": "verified_offer", "flags": [], "excluded_reason": r.get("excluded_reason")}
+                    "confidence": 99 if r.get("price_status") == "live" else None,
+                    "match_method": "verified_offer" if r.get("price_status") == "live" else "unverified",
+                    "flags": [], "excluded_reason": r.get("excluded_reason")}
                    for r in result["store_prices"] if not r.get("is_own_store")]
     for row in competitors:
         row.update(competitor_name=row.get("name_ar"), competitor_barcode=row.get("barcode"),
-                   competitor_in_stock=row.get("in_stock"), last_crawled_at=row.get("crawled_at"),
+                   competitor_in_stock=row.get("in_stock") if row.get("price_status") == "live" or row.get("excluded_reason") == "out_of_stock" else None,
+                   last_crawled_at=row.get("crawled_at"),
                    diff_sar=round(price_fn(result)-row["competitor_price"], 2) if price_fn(result) and row.get("competitor_price") else None)
     return {"my_product": {**result, "is_own_store": True}, "competitors": competitors, "own_store_id": own.get("id"), "cohort_id": result["cohort_id"],
             "market_summary": {"lowest_price": result["price_range"].get("min"), "highest_price": result["price_range"].get("max"),
-                               "sellers_count": result["seller_count"], "matched_count": len(competitors), "my_price": price_fn(result)}}
+                               "sellers_count": result["seller_count"], "matched_count": len(competitors), "my_price": result["price"]}}

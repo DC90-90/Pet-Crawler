@@ -108,7 +108,7 @@ def test_super_admin_credentials_come_from_the_environment():
     assert 'SUPER_ADMIN_EMAIL = os.environ.get("SUPER_ADMIN_EMAIL", "")' in SRC
     assert 'SUPER_ADMIN_PASSWORD = os.environ.get("SUPER_ADMIN_PASSWORD", "")' in SRC
     # no literal credential left anywhere in the module
-    assert "Ahmaddc90@" not in SRC, "the super-admin password must not be in source"
+    assert os.environ.get("DALEEL_TEST_PASSWORD", "") not in SRC, "the super-admin password must not be in source"
     assert not re.search(r'SUPER_ADMIN_EMAIL\s*=\s*"[^"]*@', SRC), \
         "the super-admin email must not be a literal"
     assert server.SUPER_ADMIN_EMAIL and server.SUPER_ADMIN_PASSWORD, \

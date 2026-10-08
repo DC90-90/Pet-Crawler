@@ -1362,7 +1362,7 @@ INDEX_SPECS = [
     ("match_blacklist", [("my_sku", 1), ("competitor_sku", 1)], {}),
     ("my_products", [("sku", 1)], {"unique": True}),
     ("my_products", [("barcode", 1)], {}),
-    ("products", [("sku", 1)], {"unique": True}),
+    ("products", [("sku", 1)], {}),
     ("products", [("category", 1)], {}),
     ("proxy_usage", [("crawled_at", 1)], {}),
     ("own_store_orders", [("order_id", 1)], {"unique": True}),
@@ -1695,7 +1695,7 @@ async def scheduled_crawl_job(store_id: str):
         return
     platform = store.get("platform", "").lower()
     logger.info(f"[Scheduler] Cron fired: {store.get('domain')} at {datetime.now(timezone.utc).isoformat()}")
-    await crawl_store_waterfall(db, store)
+    result = await crawl_store_waterfall(db, store)
     # Perf sprint Feb 2026 — invalidate insights/discounts TTL cache so the new
     # snapshots show up immediately on the dashboard instead of waiting up to 60s.
     cache_clear()
@@ -1711,6 +1711,7 @@ async def scheduled_crawl_job(store_id: str):
     await maybe_recompute_dashboard_cache(db)
     # iter26 — refresh the Insights / Price-Intel page caches (same debounce).
     await maybe_recompute_page_caches(db)
+    return result
 
 # ── Daily cron schedule (Feb 2026) ──────────────────────────
 # All active stores crawl ONCE per day at 04:00–04:55 KSA time (UTC+3 → 01:00–01:55 UTC),
@@ -7397,13 +7398,14 @@ async def _run_sync_and_match(kind: str):
     if kind != "manual_match_only":
         try:
             res = await sync_own_store_prices(db)
-            run["sync_status"] = "ok"
+            run["sync_status"] = 'error' if res.get('error') or res.get('status') in ('error', 'failed', 'deferred') else 'degraded' if res.get('catalog_complete') is False else 'ok'
+            run['sync_error'] = res.get('error')
             run["sync_updated"] = int(res.get("updated") or 0)
             run["sync_discovered"] = int(res.get("discovered") or 0)
             run["sync_archived"] = int(res.get("archived") or 0)
             run["sync_source"] = res.get("source")
             run["sync_warning"] = res.get("warning")
-            if run["sync_warning"]:
+            if run["sync_warning"] and run['sync_status'] != 'error':
                 # Degraded, not ok: the sync "worked" but via public crawl while
                 # Zid creds are configured — own sales KPIs are stalling.
                 run["sync_status"] = "degraded"
@@ -8055,9 +8057,17 @@ def _effective_own_price(mp):
     """Shopper-facing effective price for a my_products row (float, ≥0)."""
     if not mp:
         return 0.0
+    observed = price_cohort.aware(mp.get('last_synced_at'))
+    now = datetime.now(timezone.utc)
+    if (observed is None or observed > now + timedelta(minutes=5)
+            or now - observed >= timedelta(days=7) or mp.get('present_on_store') is False):
+        return 0.0
     basis = mp.get("price_basis") or ""
     if basis not in {"storefront_inc_vat", "merchant_computed_inc_vat", "merchant_non_taxable"}:
         return 0.0  # unavailable, not a zero-priced offer
+    from observation_contract import money
+    if mp.get('currency') not in (None, 'SAR') or money(mp.get('price')) is None:
+        return 0.0
     try:
         price_v = float(mp.get("price") or 0)
     except (TypeError, ValueError):
@@ -8465,6 +8475,8 @@ async def confirm_match(data: MatchActionIn, user=Depends(get_user)):
         raise HTTPException(422, "A specific competitor_offer_id is required")
     own = await db.my_products.find_one({"sku": data.my_sku}, {"_id": 0})
     offer = await db.product_snapshots.find_one({"store_id": data.competitor_store_id, "offer_id": data.competitor_offer_id, "observation_version": 2}, {"_id": 0}, sort=[("crawled_at", -1)])
+    if offer:
+        offer = price_cohort.apply_brand_review(offer, await price_cohort.reviewed_brand_map(db))
     if not own or not offer or not price_cohort.identity_agrees(own, offer, manual=True):
         raise HTTPException(409, "Contradictory or unverified product identity")
     result = await db.product_matches.update_one(
@@ -11309,17 +11321,17 @@ async def market_share_methodology(days: int = Query(30),
              "applies_to": "My store only",
              "available": bool(zid.get("connected")),
              "unavailable_reason": None if zid.get("connected") else zid.get("action_required")},
-            {"id": market_share.SRC_COUNTER, "label": "Measured (approx.)",
+            {"id": market_share.SRC_COUNTER, "label": "Counter proxy",
              "what": "Difference between two crawls of a store's published cumulative units-sold counter",
              "applies_to": "Stores that publish a sold counter (Salla's sold badge, Zid sold_count)",
-             "caveat": "The badge is bucketed and capped by the platform, so it is an approximation of real sales — never an estimate of them"},
-            {"id": market_share.SRC_STOCK, "label": "Measured (approx.)",
+             "caveat": "Only uncapped valid intervals are used. Counter changes are observations, not verified invoices."},
+            {"id": market_share.SRC_STOCK, "label": "Inventory proxy",
              "what": "Stock level dropping between two crawls",
              "applies_to": "Stores that publish stock quantities",
-             "caveat": "A floor, not a total: a sale followed by a restock inside one crawl interval is invisible"},
-            {"id": market_share.SRC_ZERO, "label": "Measured zero",
-             "what": "The store publishes a signal, was crawled at least twice, and this product never moved",
-             "applies_to": "All stores with a signal"},
+             "caveat": "Transfers, corrections, reservations and restocks can make inventory changes overstate or understate sales."},
+            {"id": market_share.SRC_ZERO, "label": "Observed zero movement",
+             "what": "Valid observations of this specific offer showed no net signal change; this does not prove zero sales",
+             "applies_to": "Specific offers with repeated valid evidence"},
             {"id": market_share.SRC_NONE, "label": "Unavailable",
              "what": "The store publishes no sales signal, or was crawled fewer than twice in the window",
              "applies_to": "Reported with a reason on every affected row — never shown as zero"},
@@ -11327,23 +11339,19 @@ async def market_share_methodology(days: int = Query(30),
         "not_used": [
             {"id": "salla_category_velocity_estimate",
              "why": "The ±50% store-revenue model (back-tested at ~±48% median error) cannot "
-                    "produce a trustworthy per-product share. It stays on the Market Strength "
-                    "ranking where it is labelled Estimated."},
+                    "produce a trustworthy per-product share. It is excluded from the active sales and ranking views."},
         ],
         "formulas": {
-            "unit_share_pct": "my units ÷ total units of the SAME canonical product across every seller with sales data",
-            "revenue_share_pct": "my revenue ÷ total revenue of the same canonical product across every seller with sales data",
-            "market_revenue": "Σ (units × the price observed when they sold) per seller",
+            "unit_share_pct": "Own units divided by units for the same product and window; withheld without compatible exact evidence for every seller",
+            "revenue_share_pct": "Own invoiced value divided by total invoiced value in that same complete cohort",
+            "market_revenue": "For proxies: signal change multiplied by the observed shelf price; actual transaction value is unknown",
             "trend": "same metric over the previous equal-length window",
             "opportunity_score": "0.5×measured revenue + 0.3×measured units + 0.2×seller count, each scaled to the largest row — a ranking heuristic, not a forecast",
             "price_rank": "my price's position among comparable sellers, cheapest first",
         },
         "identity": {
-            "order": ["GTIN / barcode (canonical GTIN-14)", "identical SKU string",
-                      "our GTIN inside the seller's variant array", "matcher row (product_matches)"],
-            "note": ("Own-store SKUs are EANs, so a numeric SKU is treated as a GTIN. "
-                     "Pack-size guards (iter78) drop a seller whose own product URL states a "
-                     "different pack size, and a price the rest of the market contradicts."),
+            "order": ["Validated explicit GTIN on the specific offer", "Validated numeric SKU only when an explicit GTIN is absent", "Manual approval scoped to one store and offer, subject to identity checks"],
+            "note": "Contradictory barcodes, brands and pack evidence prevent comparison. A parent's variant list cannot supply a child's price.",
             "match_strength": market_share.MATCH_STRENGTH,
         },
         "confidence": {
@@ -11576,9 +11584,12 @@ async def cron_dispatch(kind: str, request: Request, background: BackgroundTasks
         config = await db.runtime_settings.find_one({"_id": "crawls"}) or {}
         if config.get("paused"):
             return {"status": "paused"}
+        outcomes = []
         async for store in db.stores.find({"is_active": True, "is_own_store": {"$ne": True}}, {"_id": 0}):
-            await scheduled_crawl_job(store["id"])
-        return {"status": "complete"}
+            result = await scheduled_crawl_job(store["id"])
+            outcomes.append({'store_id': store['id'], 'status': (result or {}).get('status', 'unknown')})
+        success = sum(r['status'] == 'complete' for r in outcomes)
+        return {'status': 'complete' if outcomes and success == len(outcomes) else 'degraded' if success else 'failed', 'stores': outcomes}
     actions = {"crawl": crawl_all, "own-sync": lambda: _run_sync_and_match("scheduled"),
                "seal": lambda: ledger.seal_ksa_day(db), "archive": scheduled_archive, "digest": generate_market_digest}
     if kind not in actions:
@@ -11591,19 +11602,15 @@ async def cron_dispatch(kind: str, request: Request, background: BackgroundTasks
 
 app.include_router(router)
 
-cors_origins = os.environ.get('CORS_ORIGINS', '*')
-if cors_origins == '*':
-    cors_origins_list = ["*"]
-    allow_creds = False
-else:
-    cors_origins_list = [o.strip() for o in cors_origins.split(',')]
-    allow_creds = True
+from cors_policy import allowed_origins, CookieOriginMiddleware
+cors_origins_list = allowed_origins(os.environ['CORS_ORIGINS'])
 
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(SlowAPIMiddleware)
+app.add_middleware(CookieOriginMiddleware, origins=cors_origins_list)
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=allow_creds,
+    allow_credentials=True,
     allow_origins=cors_origins_list,
     allow_methods=["*"],
     allow_headers=["*"],

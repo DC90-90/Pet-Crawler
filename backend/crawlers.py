@@ -1041,9 +1041,9 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                       "qty_available": norm.get("qty"), "confidence_score": confidence,
                       "quarantined": True, "source_tier": tier}
             inserted = await db.product_snapshots.update_one({"event_id": marker["event_id"]}, {"$setOnInsert": marker}, upsert=True)
-            if inserted.upserted_id:
-                from evidence_ledger import record
-                await record(db, marker)
+            from evidence_ledger import record
+            persisted = marker if inserted.upserted_id else await db.product_snapshots.find_one({'event_id': marker['event_id']}, {'_id': 0})
+            await record(db, persisted)
             continue
         product_url = _absolutize_url(norm.get("product_url"), store_domain)
 
@@ -1143,8 +1143,9 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
         }
         result = await db.product_snapshots.update_one({"event_id": snapshot["event_id"]}, {"$setOnInsert": snapshot}, upsert=True)
         from evidence_ledger import record
+        persisted = snapshot if result.upserted_id else await db.product_snapshots.find_one({'event_id': snapshot['event_id']}, {'_id': 0})
+        await record(db, persisted)
         if result.upserted_id:
-            await record(db, snapshot)
             ledger_obs.append(ledger.crawl_observation(norm))
         snap_count += 1
 
@@ -1366,12 +1367,14 @@ async def crawl_salla_tier1(db, store):
             crawl_log["http_status"] = 200
             crawl_log["endpoint_used"] = winning_endpoint["tag"]
             crawl_log["products_found"] = len(all_raw)
-            await process_crawled_products(db, store, all_raw, now, tier=1, confidence=95)
             await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
             # iter64 — barcode detail supplement for Salla stores, BEFORE persistence
             # (it mutates the raw items). No-op with a logged "skipped" entry when it
             # cannot or should not run; nothing for non-Salla platforms.
-            await _maybe_salla_detail_supplement(db, store, all_raw, crawl_log)
+            try:
+                await _maybe_salla_detail_supplement(db, store, all_raw, crawl_log)
+            except Exception:
+                logger.exception('Optional barcode supplement failed; retaining collected observations')
             new_count, snap_count = await process_crawled_products(db, store, all_raw, now)
             crawl_log["products_new"] = new_count
             crawl_log["products_updated"] = len(all_raw) - new_count
@@ -3390,6 +3393,38 @@ async def _sync_own_store_prices_locked(db, store=None):
     if sync_source_label == "public_crawl":
         all_raw = [v for row in all_raw for v in expand_variants({**row, "_currency": "SAR", "_price_basis": "storefront_inc_vat"})]
 
+    # Own catalog APIs still identify rows and invoice lines by SKU. Never
+    # assign one sibling's price or orders to another when that key is ambiguous.
+    # Preserve the raw offers for explicit reconciliation rather than guessing.
+    from collections import Counter
+    sku_counts = Counter(str(r.get('sku') or '').strip() for r in all_raw)
+    duplicate_skus = {sku for sku, count in sku_counts.items() if sku and count > 1}
+    quarantined_own = 0
+    accepted_own_raw = []
+    for candidate in all_raw:
+        candidate_sku = str(candidate.get('sku') or '').strip()
+        reason = 'ambiguous_own_sku' if candidate_sku in duplicate_skus else None
+        if sync_source_label == 'public_crawl' and not reason:
+            contract = _normalize_raw_product(candidate, store['name'])
+            if not contract.get('comparable'):
+                reason = ','.join(contract.get('quarantine_reasons') or ['invalid_own_offer'])
+        if reason:
+            quarantined_own += 1
+            await db.observation_quarantine.update_one(
+                {'event_id': stable_id(own_store_id, sync_ts, candidate)},
+                {'$setOnInsert': {'store_id': own_store_id, 'observed_at': started_at,
+                    'data_origin': 'own_sync', 'quarantine_reasons': [reason], 'raw_offer': candidate}}, upsert=True)
+            await db.my_products.update_many({'sku': candidate_sku}, {'$set': {
+                'price': None, 'sale_price': None, 'price_basis': 'quarantined',
+                'price_unavailable_reason': reason}})
+        else:
+            accepted_own_raw.append(candidate)
+    all_raw = accepted_own_raw
+    if quarantined_own:
+        catalog_complete = False
+        crawl_log['complete'] = False
+        crawl_log['quarantined_offers'] = quarantined_own
+
     for raw in all_raw:
         # Zid API rows arrive pre-normalised (see _fetch_zid_api_catalog); the
         # public-crawl path needs _normalize_raw_product to reshape Salla/Zid
@@ -3507,6 +3542,7 @@ async def _sync_own_store_prices_locked(db, store=None):
                 "last_synced_at": sync_ts,
                 "sync_source": f"{sync_source_label}_auto_discovery",
                 "price_basis": price_basis,
+                "currency": "SAR",
                 "discovered_via": sync_source_label,
             }
             await db.my_products.update_one(
@@ -3534,6 +3570,7 @@ async def _sync_own_store_prices_locked(db, store=None):
             "last_synced_at": sync_ts,
             "sync_source": sync_source_label,
             "price_basis": price_basis,
+            "currency": "SAR",
             "present_on_store": True,
             "last_seen_on_store": sync_ts,
         }
@@ -3778,7 +3815,9 @@ async def _sync_own_store_prices_locked(db, store=None):
         "domain": store.get("domain"),
         "source": sync_source_label,
         "zid_status": zid_status,
-        "warning": sync_warning,
+        "warning": sync_warning or (f'{quarantined_own} own offers quarantined for identity or money evidence' if quarantined_own else None),
+        "quarantined": quarantined_own,
+        "catalog_complete": catalog_complete,
         "crawled": crawled,
         "updated": updated,
         "discovered": discovered,

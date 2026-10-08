@@ -14,7 +14,7 @@ BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/") or pytest.ski
     "REACT_APP_BACKEND_URL missing", allow_module_level=True
 )
 SUPER_EMAIL = "a.disi@taqueen.sa"
-SUPER_PASS = "Ahmaddc90@"
+SUPER_PASS = os.environ.get("DALEEL_TEST_PASSWORD", "")
 
 
 @pytest.fixture(scope="session")

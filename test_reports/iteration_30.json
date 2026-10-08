@@ -15,7 +15,7 @@
   ],
   "updated_files": [],
   "success_rate": {"backend": "n/a (skipped per request)", "frontend": "100% (all acceptance criteria passing)"},
-  "test_credentials": "super_admin a.disi@taqueen.sa / Ahmaddc90@ (from /app/memory/test_credentials.md)",
+  "test_credentials": "super_admin a.disi@taqueen.sa / [redacted; supply DALEEL_TEST_PASSWORD through the environment] (from /app/memory/test_credentials.md)",
   "seed_data_creation": "None. Preview DB retained.",
   "retest_needed": false,
   "main_agent_can_self_test": true,

@@ -63,7 +63,7 @@
   },
   "test_credentials": {
     "super_admin_email": "a.disi@taqueen.sa",
-    "super_admin_password": "Ahmaddc90@"
+    "super_admin_password": "[redacted; supply DALEEL_TEST_PASSWORD through the environment]"
   },
   "seed_data_creation": "None — used existing seeded data",
   "retest_needed": false,

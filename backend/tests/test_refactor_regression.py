@@ -21,9 +21,8 @@ if not BASE_URL:
 
 # Test credentials
 ADMIN_EMAIL = "a.disi@taqueen.sa"
-ADMIN_PASSWORD = "Ahmaddc90@"
-CRAWLER_TOKEN = "zj7n4vATDYACt-FswvDd_EITEwti5WciV2yZt3I2IgHbDi7XKP9myrd2xSFYZGjO"
-
+ADMIN_PASSWORD = os.environ.get("DALEEL_TEST_PASSWORD", "")
+CRAWLER_TOKEN = os.environ.get("DALEEL_TEST_CRAWLER_TOKEN", "")
 # Global session to avoid rate limiting
 _session = None
 _token = None

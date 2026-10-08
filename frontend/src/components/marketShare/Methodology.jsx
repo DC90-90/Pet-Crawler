@@ -117,9 +117,10 @@ export default function Methodology({ days, includeToday }) {
           <li>• Units are a DIFFERENCE between two crawls. One crawl in the window means no change can exist yet.</li>
           <li>• A store that publishes neither a sold counter nor stock levels cannot have its sales measured at all —
             it still appears as a seller, with its price and stock status.</li>
-          <li>• My own exact units need the Zid orders ledger. Without it my figures fall back to stock depletion,
-            which is a floor rather than a total.</li>
-          <li>• A withheld number is never rendered as 0: a zero would claim "sold nothing", which is a different fact.</li>
+          <li>• Exact own sales need complete Zid order coverage. Inventory changes are proxies: transfers,
+            corrections, reservations and restocks can make them overstate or understate sales.</li>
+          <li>• Unknown stays unavailable. Zero inventory movement only means no net change was observed;
+            it does not prove there were no sales.</li>
         </ul>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
           {Object.entries(d.data_quality || {}).map(([k, v]) => (

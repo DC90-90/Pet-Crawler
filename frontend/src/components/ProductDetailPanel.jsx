@@ -124,19 +124,24 @@ export default function ProductDetailPanel({ sku, onClose }) {
             </div>
 
             {/* KPIs */}
+            <div className="text-sm" data-testid="product-detail-own-price">
+              <span className="text-[#A1E4DB]">{t("col_price")}: </span>
+              <span className="font-semibold text-white">{product.price ?? "—"} SAR</span>
+              {product.price_status === "unavailable" && <p className="text-xs text-[#A1E4DB] mt-1" data-testid="product-detail-price-unavailable">{t("current_price_unavailable")}</p>}
+            </div>
             {product.price_range && (
               <div className="grid grid-cols-3 gap-3">
                 <div className="kpi-card !p-3">
                   <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("price_range")}</p>
-                  <p className="text-sm font-bold text-white mt-0.5">{product.price_range.min}-{product.price_range.max} SAR</p>
+                  <p className="text-sm font-bold text-white mt-0.5" data-testid="product-detail-price-range">{product.price_range.min == null || product.price_range.max == null ? "—" : `${product.price_range.min}–${product.price_range.max}`} SAR</p>
                 </div>
                 <div className="kpi-card !p-3">
                   <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("market_avg")}</p>
-                  <p className="text-sm font-bold text-white mt-0.5">{product.price_range.avg} SAR</p>
+                  <p className="text-sm font-bold text-white mt-0.5" data-testid="product-detail-market-average">{product.price_range.avg ?? "—"} SAR</p>
                 </div>
                 <div className="kpi-card !p-3">
                   <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("total_volume")}</p>
-                  <p className="text-sm font-bold text-white mt-0.5">{product.total_volume}</p>
+                  <p className="text-sm font-bold text-white mt-0.5" data-testid="product-detail-volume">{product.total_volume ?? "—"}</p>
                 </div>
               </div>
             )}
@@ -154,7 +159,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
             )}
 
             {/* Confidence Badge */}
-            {product.store_prices?.[0] && (
+            {product.store_prices?.[0]?.price_status === "live" && product.store_prices[0].source_tier != null && (
               <div>
                 <TierBadge tier={product.store_prices[0].source_tier} score={product.store_prices[0].confidence_score} />
               </div>
@@ -178,7 +183,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
                 )}
               </div>
               <div className="border border-white/10 rounded-md overflow-hidden">
-                <Table className="dense-table">
+                <Table className="dense-table product-detail-offers" data-testid="product-detail-offer-table">
                   <TableHeader>
                     <TableRow className="bg-[#0A2728]/80/5">
                       <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Store</TableHead>
@@ -206,13 +211,14 @@ export default function ProductDetailPanel({ sku, onClose }) {
                       const stale = sp.is_stale != null ? sp.is_stale : isStale(sp.crawled_at);
                       return (
                       <TableRow key={sp.store_id} style={stale ? { opacity: 0.7 } : undefined} data-stale={stale} data-testid={`store-row-${sp.store_id}`}>
-                        <TableCell className="text-xs font-medium">
+                        <TableCell className="text-xs font-medium" data-label="Store">
                           {sp.product_url ? (
                             <a href={sp.product_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-white hover:text-[#6AC1B5] transition-colors" data-testid={`store-link-${sp.store_id}`} title={sp.product_url}>
                               {sp.store_name}
                               <ExternalLink className="w-3 h-3 opacity-60" />
                             </a>
                           ) : (sp.store_name)}
+                          {sp.excluded_reason && <p className="mt-1 text-[10px] text-amber-400" data-testid={`detail-offer-exclusion-${sp.store_id}`}>{sp.excluded_reason.replaceAll("_", " ")}</p>}
                           {sp.is_own_store && (
                             <span className="ms-1.5 inline-flex items-center text-[8px] font-bold tracking-[0.1em] uppercase px-1 py-0.5 rounded bg-[#1E988E]/15 text-[#1E988E] border border-[#1E988E]/30" data-testid={`my-store-tag-${sp.store_id}`}>My Store</span>
                           )}
@@ -222,8 +228,8 @@ export default function ProductDetailPanel({ sku, onClose }) {
                             </div>
                           )}
                         </TableCell>
-                        <TableCell>
-                          <span className="text-xs font-semibold">{sp.price} SAR</span>
+                        <TableCell data-label="Price" data-testid={`detail-offer-price-${sp.store_id}`}>
+                          <span className="text-xs font-semibold">{sp.price ?? "—"} SAR</span>
                           {stale && sp.price_as_of && (
                             <div className="text-[9px] text-[#FBBF24]/90 mt-0.5" data-testid={`store-price-asof-${sp.store_id}`}>
                               as of {sp.price_as_of}
@@ -237,7 +243,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
                             <Badge variant="outline" className="text-[8px] mt-0.5 bg-red-50 text-red-600 border-red-200">Flash Sale{sp.tier4_flash_price ? ` ${sp.tier4_flash_price} SAR` : ""}</Badge>
                           )}
                         </TableCell>
-                        <TableCell>
+                        <TableCell data-label="30-day trend">
                           {points ? (
                             <div className="inline-flex items-center gap-2" data-testid={`store-trend-${sp.store_id}`}>
                               <svg width="100" height="30" viewBox="0 0 100 30" className="overflow-visible">
@@ -247,14 +253,14 @@ export default function ProductDetailPanel({ sku, onClose }) {
                             </div>
                           ) : (<span className="text-[10px] text-[#A1E4DB]/60">—</span>)}
                         </TableCell>
-                        <TableCell data-stock-status={sp.stock_status}>
+                        <TableCell data-stock-status={sp.stock_status} data-label="Stock" data-testid={`detail-offer-stock-${sp.store_id}`}>
                           <StockBadge signal={sp.stock_signal} />
                           {sp.tier4_qty_exact != null && (
                             <span className="text-[10px] text-emerald-600 ms-1 font-medium">{sp.tier4_qty_exact} exact</span>
                           )}
                         </TableCell>
-                        <TableCell><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${sp.source_tier === 4 ? "bg-emerald-50 text-emerald-700" : `tier-${sp.source_tier}`}`}>T{sp.source_tier}</span></TableCell>
-                        <TableCell><FreshnessBadge crawledAt={sp.crawled_at} testIdPrefix={`store-fresh-${sp.store_id}`} /></TableCell>
+                        <TableCell data-label="Tier"><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${sp.source_tier === 4 ? "bg-emerald-50 text-emerald-700" : `tier-${sp.source_tier}`}`}>{sp.source_tier == null ? "—" : `T${sp.source_tier}`}</span></TableCell>
+                        <TableCell data-label="Last observation"><FreshnessBadge crawledAt={sp.last_crawl_at || sp.crawled_at} testIdPrefix={`store-fresh-${sp.store_id}`} /></TableCell>
                       </TableRow>
                       );
                     })}
