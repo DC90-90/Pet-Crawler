@@ -1,6 +1,12 @@
 # Daleel production-readiness assessment
 
-## Latest native-build repair — 2026-10-09
+## Latest same-origin repair — 2026-10-09
+
+Native build`ded49a10-0b9b-4111-b241-8cd071f4a88b` failed because receipt validation contradicted the API client's legitimate blank-URL same-origin behavior. Code-only receipt/plugin repair now passes **238 cases** and four native-like build configurations (empty/unset/explicit/full-tree-empty), while supplied URLs and strict release invariants stay validated. No Docker, env, lock, backend guard or production changes. Failed setup attempts and incomplete/overwritten historical evidence are explicitly documented, not erased.
+
+**Production NO-GO remains**: native image/source binding, actual runtime consumption, production-consistent effects/egress, deployed identity/scheduler, data freshness, backup restore and ops evidence still required. `/api/ready`503 for unverified builds is intentional. No new native pipeline/deployment was run. Current report: **`memory/SAME_ORIGIN_BUILD_FIX_DED49A10.md`**, **`test_reports/iteration_46.json`**, **`test_reports/same_origin_build_fix/`**. Post-fix static scan **PASS for code-level blockers only**; no broader release approval inferred.
+
+## Historical native-build repair — 2026-10-09
 
 The user-reported native build failed at the application's frontend manifest gate, not MongoDB. **Code-only compatibility repair is implemented and independently tested:205 cases pass**, with successful isolated Git-less frontend-only and full-tree builds. Managed builds emit a truthful unverified frontend receipt, not a fake Git SHA or paired backend release manifest. Strict exported-artifact validation remains enforced. Docker/deploy files, lock, cron configuration and backend runtime guards are unchanged.
 

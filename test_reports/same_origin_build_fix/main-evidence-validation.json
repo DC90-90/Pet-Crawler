@@ -1,0 +1,125 @@
+{
+  "at": "2026-10-09T21:27:16.479134+00:00",
+  "tests": [
+    {
+      "path": "baseline205-attempt-01/xml-copies/four-correctness-final.xml",
+      "passed": 10,
+      "timestamp": "2026-10-09T21:19:04.683495+00:00",
+      "sha256": "b9f261d36ca55fe8baf85674b667c0154c851a22795e44556dbd7a8aad87053a"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/isolated-auth-final.xml",
+      "passed": 10,
+      "timestamp": "2026-10-09T21:18:53.280752+00:00",
+      "sha256": "ea64a597283520e3680ee64a95fda9ff2083d25554b5deef40d619e02095f048"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/iter40_preview_scope_checks.xml",
+      "passed": 7,
+      "timestamp": "2026-10-09T21:19:40.111452+00:00",
+      "sha256": "5ccd7530e69691279e0dbdcf0079d07644da7b71d32e99f0761f66d0d00e3499"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/matcher-parent-pool-final.xml",
+      "passed": 1,
+      "timestamp": "2026-10-09T21:19:07.854510+00:00",
+      "sha256": "f1064a77ad0b3405a2be2fa8917332a8c54db9f5949f241ce546b8dedba45ec5"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/real-source-final.xml",
+      "passed": 6,
+      "timestamp": "2026-10-09T21:18:56.871811+00:00",
+      "sha256": "312c9c4765382b947f1c0a99c3cc641a4e00432a505320dc1674bb39c30fc82b"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/related-contracts-final.xml",
+      "passed": 36,
+      "timestamp": "2026-10-09T21:18:58.878679+00:00",
+      "sha256": "a497dd015bedd40bb4ba99bd623387d0b7735f29c99d2c121a902a4ee1c48b1f"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/release-safety-final.xml",
+      "passed": 19,
+      "timestamp": "2026-10-09T21:19:09.433576+00:00",
+      "sha256": "686e286825a26d141287a551c41c6bba591eedee8f3bd171b1c878d3602bdfb9"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/release_packaging_regression.xml",
+      "passed": 22,
+      "timestamp": "2026-10-09T21:19:16.810576+00:00",
+      "sha256": "847b01f71f930efe4da0e77c6d202ae5571cd5208ef53f2b810ff16f8651bc73"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/reviewed-core-final.xml",
+      "passed": 52,
+      "timestamp": "2026-10-09T21:18:47.574493+00:00",
+      "sha256": "e2bf8d09f8a6e6b593642977c6bc1f5b82012988611abe5d37d2f3ed81be5b44"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/six-acceptance-final.xml",
+      "passed": 22,
+      "timestamp": "2026-10-09T21:19:01.660848+00:00",
+      "sha256": "357222d2f4a83ba3d7f517cef213f33c179bceb1fe1b2fed1270eb881800068f"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/test_managed_frontend_build.xml",
+      "passed": 20,
+      "timestamp": "2026-10-09T21:19:26.908283+00:00",
+      "sha256": "866296cb602a8f601d14de0f7c8f128c0b2cfc49f7d271cd76e84f931518a630"
+    },
+    {
+      "path": "baseline205-attempt-01/xml-copies/test_same_origin_build.xml",
+      "passed": 33,
+      "timestamp": "2026-10-09T21:19:28.322426+00:00",
+      "sha256": "15f4576923e1c38e6cf0e8885fc8323437bc58132c8cff46444aa240f3389e80"
+    }
+  ],
+  "final_unique_passed": 238,
+  "final_failures": 0,
+  "final_errors": 0,
+  "final_skipped": 0,
+  "baseline_cases": 205,
+  "new_cases": 33,
+  "all_four_matrix_builds_passed": true,
+  "still_retained_matrix_artifacts_rehashed": [
+    "case_c_explicit_origin",
+    "case_d_fulltree_empty_dotenv"
+  ],
+  "earlier_matrix_artifact_limit": "A/B output directories were reused by C; their emitted hashes and build logs were captured by the testing agent in result.json, but original A/B asset trees are not independently retained. Same-origin mainJS is identical in A/B/D.",
+  "strict_candidate_status": "passed-candidate-rehearsal",
+  "strict_candidate_release_id": "sha256:944c801c3f91be174ef6b5d40276cf063effadc14ab3b26e199940616e8553f0",
+  "strict_candidate_ready_http": 503,
+  "source_inputs_count": 326,
+  "source_inputs_match_final_export": true,
+  "protected_files_unchanged": true,
+  "failure_history": [
+    {
+      "attempt": "empty/unset-before",
+      "status": "expected-red",
+      "details": "Two pre-fix builds failed with explicit-origin validation error; full before logs retained."
+    },
+    {
+      "attempt": "matrix-attempt-01",
+      "status": "incomplete-evidence",
+      "details": "Install finished and compiler says Compiled successfully; no complete result/exit record retained. Do not count it as a verified full matrix or infer a source failure."
+    },
+    {
+      "attempt": "preview-scope-initial",
+      "status": "reported-setup-failure",
+      "details": "Testing agent reports401 with DALEEL_TEST_PASSWORD unset. Original raw failure log/XML was not retained separately; wrapper overwrote shared filenames. Exact initial failure count unavailable. Final7 passing XML independently verified."
+    },
+    {
+      "attempt": "strict-candidate-attempt-01",
+      "status": "failed",
+      "details": "Frontend build/compile completed; actual app import rejected missing ENCRYPTION_KEY because test wrapper loaded only Mongo URL and frontend origin. Original log/result retained. No key generated/rotated."
+    },
+    {
+      "attempt": "strict-candidate-attempt-02",
+      "status": "passed",
+      "details": "Wrapper loaded existing backend env privately; exact same source passed. Existing preview password configured for API rerun; no app/auth changes or skipped tests."
+    }
+  ],
+  "production_deployed": false,
+  "production_ready": false,
+  "static_scan_status": "pass_code_level_only_not_production_approval"
+}

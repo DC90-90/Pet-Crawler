@@ -188,7 +188,7 @@ def test_required_frontend_inputs_missing_are_rejected(tmp_path: Path):
 @pytest.mark.parametrize(
     "origin",
     [
-        "",
+        "/api",
         "ftp://example.com",
         "https://user:pass@example.com",
         "https://example.com/path",

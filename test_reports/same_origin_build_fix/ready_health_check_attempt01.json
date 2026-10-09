@@ -1,0 +1,58 @@
+{
+  "origin": "https://price-intel-dev.preview.emergentagent.com",
+  "ready_status": 503,
+  "health_status": 200,
+  "ready_body": {
+    "ready": false,
+    "release": {
+      "release_id": "workspace-0c3d88cc5474d193eda36fbb8fd60313de0ea8db282fa9c8b89dbb862ca265d9",
+      "git_commit": null,
+      "source_state": "unstamped-workspace",
+      "manifest_verified": false,
+      "scheduler_protocol": "fenced-platform-cron-v1",
+      "schema_protocol": "offers-v2-ledger-receipts-v2",
+      "mode": "observer",
+      "control_revision": 0,
+      "writer_epoch": 0,
+      "scheduler_owner": null,
+      "scheduler_authority": "platform-cron",
+      "active_writer_count": 0,
+      "drain_complete": false,
+      "capabilities": {
+        "automatic_refresh": false,
+        "manual_refresh": false,
+        "manual_edits": false,
+        "exact_orders": false,
+        "proxy_crawling": false,
+        "email": false,
+        "digests": false,
+        "archive": false,
+        "ledger_sealing": false
+      },
+      "price_comparison_only": true,
+      "price_semantics": "verified_observations_not_live",
+      "maximum_offer_age_days": 7,
+      "unsupported_email_delivery": true,
+      "automatic_refresh_status": "disabled"
+    },
+    "writer_schema": {
+      "ready": true,
+      "missing": []
+    },
+    "boot_status": "done",
+    "reason": "boot_or_release_identity_unverified"
+  },
+  "health_body": {
+    "status": "healthy",
+    "mongodb": "connected",
+    "scheduler_active_jobs": 0,
+    "playwright_available": true,
+    "last_successful_crawl": "2026-10-09T12:17:02.985929+00:00",
+    "uptime_seconds": 394.7,
+    "boot": {
+      "status": "done",
+      "phase": "ready-observer",
+      "errors": []
+    }
+  }
+}

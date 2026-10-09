@@ -1,0 +1,30 @@
+[
+  {
+    "mode": "empty",
+    "at": "2026-10-09T21:05:07.910380+00:00",
+    "root": "/tmp/daleel-origin-before-empty-i752b47r",
+    "command": [
+      "yarn",
+      "build"
+    ],
+    "returncode": 1,
+    "failure_reproduced": true,
+    "source_dotenv_copied": false,
+    "empty_dotenv_fixture": true,
+    "dependencies": "workspace-node_modules-symlink-only-for-red-reproduction"
+  },
+  {
+    "mode": "unset",
+    "at": "2026-10-09T21:05:08.206793+00:00",
+    "root": "/tmp/daleel-origin-before-unset-sh1xrpok",
+    "command": [
+      "yarn",
+      "build"
+    ],
+    "returncode": 1,
+    "failure_reproduced": true,
+    "source_dotenv_copied": false,
+    "empty_dotenv_fixture": false,
+    "dependencies": "workspace-node_modules-symlink-only-for-red-reproduction"
+  }
+]

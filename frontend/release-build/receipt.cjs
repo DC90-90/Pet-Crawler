@@ -12,6 +12,10 @@ function sort(value) {
 }
 function apiOrigin(env) {
   const value = env.REACT_APP_BACKEND_URL;
+  // The API client treats missing/blank configuration as the current origin.
+  // Record that mode rather than inventing a hostname or rejecting a valid build.
+  if (value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
+  if (typeof value !== 'string') throw Error('REACT_APP_BACKEND_URL must be empty or an explicit HTTP(S) origin');
   let url;
   try { url = new URL(value); } catch (_) { throw Error('REACT_APP_BACKEND_URL must be an explicit HTTP(S) origin'); }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/' || value.trim() !== value) {
@@ -41,15 +45,17 @@ function frontendFiles(frontend) {
 }
 function makeReceipt(frontend, env, manifest = null) {
   const files = frontendFiles(frontend);
+  const origin = apiOrigin(env);
   // Do not expose arbitrary environment values in the public artifact.
   const publicEnv = Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('REACT_APP_')));
   const inputs = { frontend_files: files, public_environment_sha256: sha(canonical(publicEnv)),
     build_flags: Object.fromEntries(['NODE_ENV', 'PUBLIC_URL', 'GENERATE_SOURCEMAP', 'ENABLE_HEALTH_CHECK'].map(k => [k, env[k] ?? null])) };
-  return { receipt_schema: 1, kind: 'frontend-build-receipt', scope: 'frontend-only',
+  return { receipt_schema: 2, kind: 'frontend-build-receipt', scope: 'frontend-only',
     source_state: manifest ? manifest.source_state : 'unverified-managed-workspace',
     git_commit: manifest ? manifest.git_commit : null, release_id: manifest ? manifest.release_id : null,
     manifest_verified: Boolean(manifest), production_readiness_verified: false,
-    api_origin: apiOrigin(env), lock_sha256: files['yarn.lock'], node_version: process.version,
+    api_mode: origin === null ? 'same-origin' : 'explicit-origin', api_origin: origin,
+    lock_sha256: files['yarn.lock'], node_version: process.version,
     frontend_content_sha256: sha(canonical(inputs)), ...inputs };
 }
 module.exports = { apiOrigin, frontendFiles, makeReceipt, canonical };

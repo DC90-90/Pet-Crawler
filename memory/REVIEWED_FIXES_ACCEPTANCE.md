@@ -1,6 +1,12 @@
 # Independently reviewed Daleel fixes — preview acceptance
 
-## Latest managed-build repair acceptance — 2026-10-09
+## Latest same-origin repair acceptance — 2026-10-09
+
+**238 final passes =205 baseline +33 same-origin regressions**, zero final failures/errors/skips. Empty/unset/whitespace build configuration now records same-origin/null origin consistently with the unchanged runtime API resolver. Explicit origins remain validated. Four native-like builds pass; strict candidate export still requires paired manifests and returns expected503 for nullSHA. Docker/env/lock/runtime safeguards remain unchanged.
+
+Evidence: `memory/SAME_ORIGIN_BUILD_FIX_DED49A10.md`, `test_reports/iteration_46.json`, `test_reports/same_origin_build_fix/main-evidence-validation.json`. Setup failures/reruns and missing raw initial401 evidence are recorded; no all-first-pass claim. Static scan **PASS for code-level blockers only**, no actual native retry/deployment. **Production NO-GO** and prior evidence gates remain open.
+
+## Historical managed-build repair acceptance — 2026-10-09
 
 **205 passed = existing185 +20 new build regressions**, zero final failures/errors/skips. Original missing-manifest CRACO error was reproduced before repair and retained. Corrected raw Git-less builds pass in frontend-only and full-tree layouts; frontend-only used fresh install, full-tree reused that isolated dependency tree. No fabricated sourceSHA/backend manifest, no readiness/write-guard weakening, no Docker/lock/cron edits. Strict candidate export also passes with expected503 readiness.
 

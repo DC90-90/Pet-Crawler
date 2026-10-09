@@ -1,5 +1,7 @@
 # Native managed frontend build failure — code-only repair
 
+**Historical first-stage repair.** The subsequent native build exposed a separate blank-URL validation regression, now repaired and verified in `memory/SAME_ORIGIN_BUILD_FIX_DED49A10.md`. Earlier claims here that a missing frontend origin must fail are superseded for the managed path: blank/unset legitimately means same-origin, without relaxing nonempty-origin or release/readiness validation.
+
 **2026-10-09 UTC. Build blocker reproduced and repaired in isolation; no redeployment performed. Production-readiness gates remain open.**
 
 ## Confirmed root cause

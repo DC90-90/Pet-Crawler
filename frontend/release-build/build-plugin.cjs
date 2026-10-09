@@ -1,4 +1,4 @@
-const { canonical } = require('./receipt.cjs');
+const { apiOrigin, canonical } = require('./receipt.cjs');
 
 class BuildReceiptPlugin {
   constructor(receipt, revalidate) {
@@ -15,7 +15,12 @@ class BuildReceiptPlugin {
         const values = compiler.options.plugins
           .map(p => p.definitions && p.definitions['process.env'])
           .filter(Boolean).map(d => d.REACT_APP_BACKEND_URL).filter(v => v !== undefined);
-        if (values.length !== 1 || JSON.parse(values[0]) !== this.receipt.api_origin) {
+        // CRA omits an unset variable, but defines an empty one as "". Both
+        // compile to the API client's same-origin fallback and must agree with
+        // the receipt. Duplicate/conflicting definitions still fail closed.
+        const compiledOrigin = values.length === 1
+          ? apiOrigin({ REACT_APP_BACKEND_URL: JSON.parse(values[0]) }) : null;
+        if (values.length > 1 || compiledOrigin !== this.receipt.api_origin) {
           throw Error('Compiled API origin differs from frontend build receipt');
         }
         compilation.emitAsset('build-provenance.json', new compiler.webpack.sources.RawSource(JSON.stringify(this.receipt, null, 2) + '\n'));
