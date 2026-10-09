@@ -3,6 +3,7 @@ import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
 import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X } from "lucide-react";
 import { useState, useEffect } from "react";
+import { useRelease } from "@/contexts/ReleaseContext";
 
 // Feb 2026 — Insights + Price Intel merged into a single "Price & Market Intel"
 // entry. The item shows when the user has EITHER `insights` OR `price_intel`
@@ -19,6 +20,7 @@ const navItems = [
 ];
 
 export default function Sidebar({ mobileOpen = false, onClose, onCollapse }) {
+  const release = useRelease();
   const { logout, user } = useAuth();
   const { t, toggleLang, lang, isRTL } = useI18n();
   const [collapsed, setCollapsed] = useState(false);
@@ -72,6 +74,8 @@ export default function Sidebar({ mobileOpen = false, onClose, onCollapse }) {
       <nav className="flex-1 py-3 px-2 space-y-0.5">
         {navItems
           .filter((item) => {
+            if (item.to === "/alerts" && !release.capabilities.email) return false;
+            if (release.price_comparison_only && !["/", "/insights"].includes(item.to)) return false;
             // Support either a single `pageKey` or a `pageKeys` array (any match).
             if (item.pageKeys) return item.pageKeys.some((k) => canAccessPage(user, k));
             return canAccessPage(user, item.pageKey);
@@ -96,7 +100,7 @@ export default function Sidebar({ mobileOpen = false, onClose, onCollapse }) {
               {!collapsed && <span>{t(item.labelKey)}</span>}
             </NavLink>
           ))}
-        {user?.role === "super_admin" && (
+        {user?.role === "super_admin" && !release.price_comparison_only && (
           <NavLink
             to="/users"
             onClick={onClose}

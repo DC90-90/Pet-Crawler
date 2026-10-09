@@ -239,6 +239,10 @@ async def sync_own_store_orders(db, full_backfill=False, max_pages=400, per_page
     run so late cancellations/refunds correct history. full_backfill walks all
     pages until the API runs out (bounded by max_pages).
     """
+    from release_control import feature, require_permit
+    if not await feature(db, "exact_orders"):
+        return {"status": "skipped", "reason": "exact_orders_disabled", "upserted": 0}
+    await require_permit(db)
     token = os.environ.get("ZID_API_TOKEN")
     store_id = os.environ.get("ZID_STORE_ID")
     if not token or not store_id:

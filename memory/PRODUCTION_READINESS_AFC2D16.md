@@ -1,5 +1,68 @@
 # Daleel production-readiness assessment
 
+## Current decision — release-safety remediation evidence reconciled, 2026-10-09
+
+**Production remains NO-GO.** Preview/disposable-database safety fixes are verified within the scope below; no blocking production gate is declared closed. This update finalizes documentation only. It did **not** deploy, access production, stop production writers, restore a backup, backfill data, rotate credentials, or push to GitHub.
+
+The original assessment of immutable commit `afc2d162a144fd3f4b942b694b072637ae6c645c` is preserved below as **historical evidence**, not a description of the remediated workspace. Documentation-continuation starting HEAD was `642854c` on local `main`; it is not a claimed commit containing the remediation or a remote-save result. Save destination: **`DC90-90/Pet-Crawler` → `conflict_130726_1244`**. Resulting remote SHA is **pending user save and verification**.
+
+### Reconciled checks: 163, not 144 and not 163 additional checks
+
+| Latest saved JUnit group (`test_reports/pytest/`) | Passed | Failures / errors / skipped |
+|---|---:|---:|
+| `reviewed-core-final.xml` | 52 | 0 / 0 / 0 |
+| `isolated-auth-final.xml` | 10 | 0 / 0 / 0 |
+| `real-source-final.xml` | 6 | 0 / 0 / 0 |
+| `related-contracts-final.xml` | 36 | 0 / 0 / 0 |
+| `six-acceptance-final.xml` | 22 | 0 / 0 / 0 |
+| `four-correctness-final.xml` | 10 | 0 / 0 / 0 |
+| `matcher-parent-pool-final.xml` | 1 | 0 / 0 / 0 |
+| `release-safety-final.xml` | 19 | 0 / 0 / 0 |
+| **Isolated subtotal** | **156** | **0 / 0 / 0** |
+| `preview-scope-final.xml` | 7 | 0 / 0 / 0 |
+| **Combined selected checks** | **163** | **0 / 0 / 0** |
+
+The eight isolated XML suites started between **15:53:07 and 15:53:26 UTC** on October 9; the preview suite started **15:53:46 UTC**. Actual testcase counts agree with suite totals. Arithmetic: prior **137 isolated + 7 preview = 144**; add **19** release-safety cases to obtain **156 + 7 = 163**. Builds, UI observations, parameter assertions within a case, and repeated runs are not extra checks. The eight parametrized write-operation cases count as eight pytest cases, not eight additional suites.
+
+`iteration_41.json` independently covers **143** historical checks; `iteration_42.json` independently covers **144**, not 163. Their shared `*-final.xml` paths were subsequently overwritten by the release-safety run. There is **no saved independent 163-check testing-agent report**. The latest claim is supported by the later JUnit files and main-run log, not by relabeling iteration 42. This documentation continuation parsed and cross-checked saved evidence; it did **not rerun application tests/builds**.
+
+Durable reconciliation, hashes and failed-run excerpts: **`test_reports/release_safety_reconciliation.json`**. Detailed acceptance: final release-safety section in **`memory/REVIEWED_FIXES_ACCEPTANCE.md`**.
+
+### Failures and reruns are retained, not hidden by the green total
+
+1. Initial existing-suite run: **136 passed, 1 failed**. `test_cron_dispatch_auth_payload_and_duplicate_queue` raised `RuntimeError: Event loop is closed` after the new runtime path reached a server Mongo client not bound to that fixture. Current fixture explicitly binds `server.db` to its disposable DB. Subsequent existing suites passed. Source log: `/tmp/release-existing-tests.log`.
+2. First expanded run: existing **137 passed**, then release-safety **13 passed, 3 failed** (**150 passed / 3 failed**, 153 cases at that point). The three failures were invalid test references: `_self_heal_playwright`, `zid_orders.get_zid_headers`, and `server.create_token` did not exist at those module locations. Fixture targets were corrected to the retired-boot guard, `zid_oauth.credentials`, and actual `make_token`/Mongo user identities. Source log: `/tmp/release-all-tests.log`.
+3. Final full isolated rerun: **156 passed**, including the corrected cases and three additional manual-write/schema-preparation/uncommitted-readiness regressions, with no failures/errors/skips. Source log: `/tmp/release-all-tests-2.log`; eight final XMLs. Separate latest preview API XML: **7 passed**. No unresolved failure in this selected final set.
+4. Non-fatal warnings remain: FastAPI `on_event`, multipart import and test-client cookie deprecations; frozen frontend install reports peer/workspace warnings. Successful build is not a warning-free dependency certification. The older matcher reproduction failure and transient Mongo disconnect are separately preserved in the historical acceptance section; they are not failures in the 15:53 final set.
+
+### Verified remediation versus gates still open
+
+| Gate | Verified in source / isolated or preview evidence | Outstanding production evidence — still blocking |
+|---|---|---|
+| **B1 Build artifact** | `frontend/yarn.lock` exists and its SHA256 matches the frozen Node **20.20.2** / Yarn **1.22.22** clean frontend build. `release_build/result.json` records success at **15:48:06 UTC** and an unchanged lock. | Lock/new files were not tracked in the inspected starting Git index. Verify inclusion in the resulting saved remote commit; build the exact saved source and record immutable frontend/backend image digests. Saved build explicitly says `uncommitted-candidate`, `production_pipeline_verified=false`, `container_image_verified=false`. |
+| **B2 Startup / maintenance** | Startup read-only test; default-deny business write wrapper; freeze drains admitted writers and rejects new work; crashed permit is not silently expired; maintenance index operation requires frozen ownership, approval and matching plan hash. | No authorized production backup/clone supplied. Production-specific seed/index/registry impact, data binding and maintenance plan remain unverified. The plan lists counts/indexes/stores, not a complete per-document production impact proof. |
+| **B3 Limited-mode isolation** | All five source cron entries `enabled: false`; capability gates block refresh/orders/manual writes; disabled own-sync cron returns `accepted=false` without queueing. Source UI offers observed-price comparison/status pages and disabled unavailable features; email/digests cannot be enabled as if implemented. | Verify exact saved artifact and restricted-customer desktop/mobile flows, all disabled-path egress and actual production capability configuration. The 19 tests cover selected paths, not every integration or route. No retained release-specific desktop/mobile screenshot/log was located in this continuation; older screenshots do not certify the newly changed UI. |
+| **B4 Deployed version / scheduler ownership** | Build identity/status routes and protocol-level release owner/epoch fencing exist. Synthetic A→B→A handoff rejects stale queued jobs; no new in-process scheduling is intended. | Identify deployed Git SHA, deployment ID and image digests for all replicas. Reconcile every actual platform/legacy schedule and worker; prove one authority and no old/new overlap. Historical production health reported **15** in-process jobs. No new production observation was made and no scheduler was stopped. Source OFF flags cannot stop an already deployed legacy writer. |
+| **B5 Data freshness / coverage** | Existing selected-offer/variant/cohort checks pass; stale evidence stays excluded; UI source states observed prices, not live quotes, and a seven-day maximum age. | Approve store/SKU scope and current per-offer source timestamps, eligibility and expiry; prove sufficient comparable coverage at release time. Seven passing preview checks and October 9 targeted source fixtures do not prove whole-catalogue or production freshness. No refresh/re-timestamp/backfill authorized. |
+| **B6 Backup restoration / rollback** | Synthetic protocol handoff/rollback and interrupted-ledger recovery are tested on disposable databases. | **No authorized production backup is available for restoration rehearsal.** Need backup/PITR ID, completeness/retention, successful isolated restore with integrity/index/history comparison, compatible fallback image, supported image rollback rehearsal and signed RPO/RTO. A→B→A identity simulation is not an image rollback or backup restore. |
+| **B7 Operational acceptance** | Uncommitted candidate readiness is deliberately **503/not ready** in the new regression; boot/readiness/capability information is exposed. | Production customer-role, capacity, monitoring/on-call and abort/recovery evidence are absent. Even a future `/api/ready` 200 checks only application conditions; it cannot sign off B1–B7, freshness, backup restoration or external scheduler ownership. |
+
+**Build-provenance limit discovered during reconciliation:** the retained clean build tree has unchanged frontend/deploy sources and the same lockfile as this workspace, but later differences exist in `backend/release_control.py`, `release_runtime.py`, `release_api.py`, `zid_orders.py`, `backend/tests/test_release_safety.py` and `scripts/stamp_release.py`; `backend/release_preflight.py` was also added after that build. Thus the 15:48 frontend build remains valid evidence for those frontend inputs, **not a complete final backend/frontend candidate build or final manifest attestation**. Do not reuse its content ID as the final saved release identity.
+
+**Freeze boundary:** observer mode denies business mutations but deliberately permits narrowly scoped login/logout/refresh security writes. `freezing` drains existing admitted work; `frozen` is not declared until tracked permits drain. The control plane still records authorized transitions/maintenance. This is not a claim of a storage-level read-only database, and it cannot fence old code/direct DB clients that do not use the protocol.
+
+### Current handoff and next decision
+
+Save the preview fixes and evidence using the chat's **Save to GitHub** control, verifying **`DC90-90/Pet-Crawler` / `conflict_130726_1244`** before confirmation. Include the lockfile, new release modules/UI/tests/scripts, source cron disablement and reports; exclude `.env`/secrets. If the destination cannot be matched, stop rather than saving `main` or using a direct push. Verify the remote branch contents and record its resulting SHA. **Saving is not deployment or production approval.**
+
+Next: obtain the missing gate evidence under separately authorized scope. Zid exact orders remain unavailable pending partner approval/complete transaction evidence; Webshare 402/broad coverage is unresolved; email remains **MOCKED/unavailable**. Optional alerts, watchlists, new-store expansion and broad `server.py` refactor remain deferred. Suggested later enhancement: export a timestamped per-offer evidence packet for comparison acceptance.
+
+---
+
+## Historical baseline assessment — immutable `afc2d16`, before remediation
+
+The sections below record what was true during the earlier read-only assessment. Missing-controls/build-input statements here are **baseline findings**, not claims that no remediation now exists; current gate status is above. Production observations retain their original dates and were not repeated for this update.
+
 **Assessed commit:** `afc2d162a144fd3f4b942b694b072637ae6c645c`  
 **Assessment date:** 2026-10-09 UTC  
 **Recommendation:** **NO-GO for this release as-is, including a customer-facing limited price-comparison release today.**  

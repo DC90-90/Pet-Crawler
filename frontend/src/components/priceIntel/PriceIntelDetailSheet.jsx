@@ -9,6 +9,7 @@ import FreshnessBadge, { isStale } from "@/components/FreshnessBadge";
 import { useEffect, useState } from "react";
 import { RequestError } from "@/components/RequestError";
 import { HistoricalQuantity } from "@/components/HistoricalQuantity";
+import { ObservedAt } from "@/components/ObservedAt";
 
 function ProductImage({ src, name }) {
   const [failed, setFailed] = useState(false);
@@ -18,7 +19,7 @@ function ProductImage({ src, name }) {
     : <div className="w-16 h-16 shrink-0 flex items-center justify-center rounded-md bg-white/5 p-2 text-center text-[10px] text-[#A1E4DB]" data-testid="intel-detail-image-unavailable">Image unavailable</div>;
 }
 
-export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm, onReject, error, onRetry }) {
+export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm, onReject, error, onRetry, readOnly = false }) {
   const ownStoreId = detail?.own_store_id;
   const myProduct = detail?.my_product;
   const isVerifiedMine = !!myProduct && myProduct.is_own_store === true;
@@ -54,6 +55,7 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
                   <p className="text-lg font-bold text-[#1E988E] metric-number mt-1" data-testid="intel-detail-own-price">{detail.market_summary.my_price ?? "—"} SAR</p>
                   {myProduct.price_status === "unavailable" && <p className="text-xs text-[#A1E4DB]" data-testid="intel-detail-own-price-unavailable">Current price unavailable</p>}
                   <HistoricalQuantity quantity={myProduct.historical_quantity} observedAt={myProduct.historical_quantity_at} id="intel-own-historical-quantity" />
+                  <ObservedAt value={myProduct.price_observed_at || myProduct.last_synced_at} id="intel-detail-own-observed-at" />
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3 mt-3 text-xs">
@@ -104,6 +106,7 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
                   <HistoricalQuantity quantity={c.historical_quantity} observedAt={c.historical_quantity_at} id={`intel-historical-quantity-${c.competitor_store_id}-${c.competitor_offer_id}`} />
                 </div>
                 {c.price_history?.length > 1 && (
+                  <>
                   <div className="h-24 mt-2">
                     <ResponsiveContainer width="100%" height="100%">
                       <LineChart data={c.price_history}>
@@ -116,13 +119,15 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
                     </ResponsiveContainer>
                     <p className="text-[9px] text-[#A1E4DB] text-center mt-0.5">Trend: <span className={`font-semibold ${c.price_trend === "rising" ? "text-[#EF4444]" : c.price_trend === "falling" ? "text-[#10B981]" : "text-[#A1E4DB]"}`}>{c.price_trend}</span></p>
                   </div>
+                  </>
                 )}
+                <ObservedAt value={c.last_crawled_at} id={`intel-detail-observed-${c.competitor_store_id}-${c.competitor_offer_id}`} />
                 <div className="flex gap-2 mt-3 pt-3 border-t border-white/5">
-                  <Button disabled={stale || !c.competitor_offer_id} size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); onConfirm({ ...c, my_sku: myProduct.sku }); }}
+                  <Button disabled={readOnly || stale || !c.competitor_offer_id} size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); onConfirm({ ...c, my_sku: myProduct.sku }); }}
                     className="text-[10px] text-[#10B981] hover:bg-[#10B981]/10 gap-1 h-7" data-testid={`confirm-${c.competitor_store_id}-${c.competitor_offer_id || c.competitor_sku}`}>
                     <CheckCircle2 className="w-3 h-3" />Confirm
                   </Button>
-                  <Button disabled={!c.competitor_offer_id} size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); onReject({ ...c, my_sku: myProduct.sku }); }}
+                  <Button disabled={readOnly || !c.competitor_offer_id} size="sm" variant="ghost" onClick={(e) => { e.stopPropagation(); onReject({ ...c, my_sku: myProduct.sku }); }}
                     className="text-[10px] text-[#EF4444] hover:bg-[#EF4444]/10 gap-1 h-7" data-testid={`reject-${c.competitor_store_id}-${c.competitor_offer_id || c.competitor_sku}`}>
                     <XCircle className="w-3 h-3" />Reject
                   </Button>

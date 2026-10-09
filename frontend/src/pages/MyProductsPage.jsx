@@ -1,5 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { HistoricalQuantity } from "@/components/HistoricalQuantity";
+import { ObservedAt } from "@/components/ObservedAt";
+import { useRelease } from "@/contexts/ReleaseContext";
 import { RequestError } from "@/components/RequestError";
 import { useI18n, catLabel } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
@@ -71,6 +73,7 @@ function KpiInfoTooltip({ content, label }) {
 }
 
 export default function MyProductsPage() {
+  const release = useRelease();
   const { t, isRTL } = useI18n();
   const [data, setData] = useState({ kpis: {}, products: [], total: 0 });
   const [loading, setLoading] = useState(true);
@@ -193,10 +196,10 @@ export default function MyProductsPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleSyncFromStore}
-            disabled={syncing}
+            disabled={syncing || !release.capabilities.manual_refresh}
             className="rounded-full bg-transparent border border-[#1E988E]/40 text-[#6AC1B5] hover:bg-[#1E988E]/10 disabled:opacity-50 disabled:cursor-not-allowed transition-all px-4 py-2 text-xs font-medium flex items-center gap-1.5"
             data-testid="sync-from-store-btn"
-            title={isRTL ? "سحب فوري لقائمة منتجاتك من متجرك على Zid" : "Pull your current product list from your Zid store"}
+            title={!release.capabilities.manual_refresh ? "Refresh disabled in this release" : "Request an approved source refresh"}
           >
             <RefreshCw className={`w-3.5 h-3.5 ${syncing ? "animate-spin" : ""}`} />
             {syncing ? (isRTL ? "تتم المزامنة..." : "Syncing…") : (isRTL ? "مزامنة من المتجر" : "Sync from Store")}
@@ -239,11 +242,11 @@ export default function MyProductsPage() {
           { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", tipKey: "kpi_my_revenue_tip", val: kpis.my_revenue == null ? "—" : `${kpis.my_revenue.toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : (kpis.my_revenue_source === "inventory_proxy" ? "Inventory-value proxy" : "Unavailable"), icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: kpis.avg_market_share == null ? "—" : `${kpis.avg_market_share}%`, sub: kpis.share_sample_size ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} products` : (isRTL ? "أدلة غير كافية" : "Insufficient sales evidence"), icon: TrendingDown, accent: "#F59E0B" },
           { key: "kpi_market_coverage", tipKey: "kpi_market_coverage_tip", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
-        ].map((k, i) => (
+        ].filter(k => !release.price_comparison_only || ["kpi_products", "kpi_market_coverage"].includes(k.key)).map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
             <div className="flex items-center justify-between mb-2">
               <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB] inline-flex items-center gap-1">
-                {t(k.key)}
+                {release.price_comparison_only && k.key === "kpi_market_coverage" ? "Tracked offer coverage" : t(k.key)}
                 {k.tipKey && <KpiInfoTooltip content={t(k.tipKey)} label={t("kpi_info_label")} />}
               </p>
               <k.icon className="w-4 h-4" style={{ color: k.accent }} />
@@ -317,7 +320,7 @@ export default function MyProductsPage() {
                 { key: "num_competitors", label: "col_sellers", sortable: true },
                 { key: "my_stock_signal", label: "col_stock", sortable: false },
                 { key: "confidence_score", label: "col_confidence", sortable: true },
-              ].map((col) => (
+              ].filter(col => !release.price_comparison_only || !["qty_sold_est", "revenue_est"].includes(col.key)).map((col) => (
                 <TableHead key={col.key}
                   className={`text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB] ${col.sortable ? "cursor-pointer select-none hover:text-white" : ""}`}
                   onClick={() => col.sortable && handleSort(col.key)}>
@@ -428,6 +431,7 @@ export default function MyProductsPage() {
                   <TableCell>
                     <div>
                       <span className="text-sm font-semibold text-white metric-number" data-testid={`product-current-price-${p.sku}`}>{p.price ?? "—"} {t("sar")}</span>
+                      <ObservedAt value={p.price_observed_at || p.last_synced_at} id={`product-observed-at-${p.sku}`} />
                       {p.competitor_min_price != null && p.competitor_max_price != null && p.competitor_min_price !== p.competitor_max_price && (
                         <p className="text-[10px] text-[#A1E4DB]" title={isRTL ? "نطاق سعر المنافسين" : "Competitor price range"}>
                           {isRTL ? "السوق" : "Mkt"}: {p.competitor_min_price}–{p.competitor_max_price}
@@ -453,8 +457,8 @@ export default function MyProductsPage() {
                       </span>
                     )}
                   </TableCell>
-                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-units-${p.sku}`} title={p.sales_basis}>{p.qty_sold_est?.toLocaleString() ?? "—"}</span></TableCell>
-                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-value-${p.sku}`} title={p.sales_basis}>{p.revenue_est?.toLocaleString() ?? "—"} {t("sar")}</span></TableCell>
+                  {!release.price_comparison_only && <><TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-units-${p.sku}`} title={p.sales_basis}>{p.qty_sold_est?.toLocaleString() ?? "—"}</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-value-${p.sku}`} title={p.sales_basis}>{p.revenue_est?.toLocaleString() ?? "—"} {t("sar")}</span></TableCell></>}
                   <TableCell>
                     <Badge
                       className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]"

@@ -37,6 +37,8 @@ async def intel(db, own_price_fn, competitor_store_ids=None):
         stock = own_stock(mp)
         row = dict(my_sku=sku, my_barcode=barcode, my_name_ar=mp.get("name_ar"), my_name_en=mp.get("name_en"),
                    my_price=price or None, my_qty=stock["quantity"], sellers=len(sellers), image_url=mp.get("image_url"),
+                   my_observed_at=mp.get("price_observed_at") or mp.get("last_synced_at"),
+                   cheapest_observed_at=low.get("crawled_at"),
                    cheapest_competitor=low.get("store_name", ""), cheapest_price=low.get("price"), diff_pct=gap,
                    price_status="live" if low else "unavailable", confidence=99 if low else 0, match_method="verified_offer",
                    flags=[], market_position=position(own, mp, price, c), cohort_id=c["cohort_id"],

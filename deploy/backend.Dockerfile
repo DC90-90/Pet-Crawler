@@ -29,13 +29,14 @@ RUN playwright install chromium && playwright install-deps chromium
 
 # Copy application code
 COPY backend/ ./
+RUN python -c "from release_identity import identity; assert identity()['manifest_verified'], 'Stamp the approved source with scripts/stamp_release.py before building'"
 
 # Expose port
 EXPOSE 8001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8001/api/health || exit 1
+    CMD curl -f http://localhost:8001/api/ready || exit 1
 
 # Run with uvicorn
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

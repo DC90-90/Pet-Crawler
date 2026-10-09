@@ -11,6 +11,8 @@
  * or last month's snapshot.
  */
 import { useEffect, useState } from "react";
+import { useRelease } from "@/contexts/ReleaseContext";
+import { ObservationNotice } from "@/components/ReleaseBoundary";
 import { ChevronDown, ChevronUp, Clock, RefreshCw, AlertTriangle, CheckCircle2 } from "lucide-react";
 import api from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
@@ -85,6 +87,11 @@ const MESSAGE = {
 };
 
 export default function DataFreshnessBanner({ className = "" }) {
+  const release = useRelease();
+  return release?.price_comparison_only ? <ObservationNotice /> : <LegacyFreshnessBanner className={className} />;
+}
+
+function LegacyFreshnessBanner({ className = "" }) {
   const { isRTL } = useI18n();
   const [data, setData] = useState(null);
   const [expanded, setExpanded] = useState(false);

@@ -23,13 +23,38 @@ async def release(db, key, owner):
 async def queue(db, kind, key=None):
     run_id = key or str(uuid.uuid4())
     now = datetime.now(timezone.utc)
+    from release_control import guarded, state
+    from release_identity import identity
+    fence = {}
+    if guarded(db):
+        control = await state(db)
+        fence = {"release_id": identity()["release_id"], "writer_epoch": control["epoch"]}
     result = await db.job_runs.update_one({"_id": run_id}, {"$setOnInsert": {
-        "id": run_id, "kind": kind, "status": "queued", "created_at": now,
+        "id": run_id, "kind": kind, "status": "queued", "created_at": now, **fence,
     }}, upsert=True)
     return run_id, bool(result.upserted_id)
 
 
 async def execute(db, run_id, kind, action):
+    from release_control import guarded, state, permit, writer, ReleaseBlocked
+    from release_identity import identity
+    from release_runtime import JOB_CAPABILITIES
+    if not guarded(db):
+        return await _execute_claimed(db, run_id, kind, action)
+    # Do not inherit a finished HTTP request's permit into a detached job.
+    token = permit.set(None)
+    try:
+        control = await state(db)
+        row = await db.job_runs.find_one({"_id": run_id}, {"_id": 0})
+        if not row or row.get("release_id") != identity()["release_id"] or row.get("writer_epoch") != control["epoch"]:
+            raise ReleaseBlocked("queued_job_release_fence_changed")
+        async with writer(db, "job:"+kind, JOB_CAPABILITIES.get(kind, "manual_refresh")):
+            return await _execute_claimed(db, run_id, kind, action)
+    finally:
+        permit.reset(token)
+
+
+async def _execute_claimed(db, run_id, kind, action):
     owner = str(uuid.uuid4())
     if not await acquire(db, f"job:{kind}", owner):
         await db.job_runs.update_one({"_id": run_id, "status": "queued"}, {"$set": {"status": "deferred", "reason": "job_already_running"}})

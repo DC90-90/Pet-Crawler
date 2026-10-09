@@ -8,6 +8,7 @@ import { MarketPositionBadge } from "@/components/MarketPosition";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ObservedAt } from "@/components/ObservedAt";
 
 function ActionRequiredTable({ rows, onOpen }) {
   return (
@@ -105,18 +106,18 @@ function FullComparisonTable({ rows, onOpen }) {
           ) : filtered.slice(currentPage * 100, (currentPage + 1) * 100).map((r) => (
             <TableRow key={r.my_sku} className="cursor-pointer" onClick={() => onOpen(r.my_sku)} data-testid={`full-comparison-product-${r.my_sku}`}>
               <TableCell><p className="text-sm text-white font-medium truncate max-w-[200px] inline-flex items-center gap-1.5"><MineBadge sku={r.my_sku} />{r.my_name_en || r.my_name_ar}</p><SkuLine sku={r.my_sku} barcode={r.my_barcode} /></TableCell>
-              <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`full-comparison-price-${r.my_sku}`}>{r.my_price ?? "—"} SAR</span></TableCell>
+              <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`full-comparison-price-${r.my_sku}`}>{r.my_price ?? "—"} SAR</span><ObservedAt value={r.my_observed_at} id={`intel-own-observed-${r.my_sku}`} /></TableCell>
               <TableCell><span className="text-xs text-[#A1E4DB]">{r.cheapest_competitor}</span></TableCell>
               {/* iter71 — a matched row with no live in-window price shows a
                   stale chip; the frozen match-time price is never rendered. */}
               {r.cheapest_price == null ? (
                 <TableCell colSpan={2}>
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#F59E0B]/10 text-[#F59E0B]" data-testid={`pi-stale-${r.my_sku}`}>
-                    ⓘ no live price in window
+                    ⓘ no eligible observed price
                   </span>
                 </TableCell>
               ) : (<>
-              <TableCell><span className="text-sm font-semibold metric-number" style={{ color: r.diff_pct > 0 ? "#EF4444" : "#10B981" }}>{r.cheapest_price} SAR</span></TableCell>
+              <TableCell><span className="text-sm font-semibold metric-number" style={{ color: r.diff_pct > 0 ? "#EF4444" : "#10B981" }}>{r.cheapest_price} SAR</span><ObservedAt value={r.cheapest_observed_at} id={`intel-competitor-observed-${r.my_sku}`} /></TableCell>
               <TableCell><span className={`text-sm font-bold ${r.diff_pct > 5 ? "text-[#EF4444]" : r.diff_pct < -5 ? "text-[#10B981]" : "text-[#A1E4DB]"}`}>{r.diff_pct > 0 ? "+" : ""}{r.diff_pct}%</span></TableCell>
               </>)}
               <TableCell><Badge className="bg-white/10 border-0 text-[#A1E4DB] text-xs">{r.sellers}</Badge></TableCell>

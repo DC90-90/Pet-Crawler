@@ -6,6 +6,9 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@/lib/i18n";
 import { MySkusProvider } from "@/lib/mySkus";
 import api from "@/lib/api";
+import { ReleaseProvider, useRelease } from "@/contexts/ReleaseContext";
+import { ReleaseBoundary } from "@/components/ReleaseBoundary";
+import ReleaseStatusPage from "@/pages/ReleaseStatusPage";
 import Sidebar from "@/components/Sidebar";
 import LoginPage from "@/pages/LoginPage";
 import NotificationBell from "@/components/NotificationBell";
@@ -149,6 +152,7 @@ function NoAccessPage() {
 
 function AppLayout() {
   const { user, checking } = useAuth();
+  const release = useRelease();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
   useEffect(() => {
@@ -165,10 +169,10 @@ function AppLayout() {
       <main className={`app-main flex-1 min-w-0 min-h-screen flex flex-col ms-0 ${navCollapsed ? "md:ms-[68px]" : "md:ms-[240px]"}`}>
         <div className="flex items-center justify-between md:justify-end px-4 md:px-6 py-3 border-b border-white/5">
           <button className="md:hidden p-2 text-[#A1E4DB]" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-expanded={mobileNavOpen} data-testid="mobile-nav-open"><Menu className="w-5 h-5" /></button>
-          {canAccessPage(user, "alerts") && <NotificationBell />}
+          {release.capabilities.email && canAccessPage(user, "alerts") && <NotificationBell />}
         </div>
         <div className="flex-1 min-w-0">
-        <Routes>
+        <ReleaseBoundary><Routes>
           <Route path="/" element={<ProtectedRoute pageKey="my_products"><MyProductsPage /></ProtectedRoute>} />
           <Route path="/insights" element={<ProtectedRoute pageKey="insights"><IntelPage /></ProtectedRoute>} />
           <Route path="/alerts" element={<ProtectedRoute pageKey="alerts"><AlertsPage /></ProtectedRoute>} />
@@ -177,7 +181,7 @@ function AppLayout() {
           <Route path="/market-share" element={<ProtectedRoute pageKey="market_share"><MarketSharePage /></ProtectedRoute>} />
           <Route path="/stores" element={<ProtectedRoute pageKey="stores"><StoreRegistryPage /></ProtectedRoute>} />
           <Route path="/stores/:storeId" element={<ProtectedRoute pageKey="stores"><CompetitorProfilePage /></ProtectedRoute>} />
-          <Route path="/settings" element={<ProtectedRoute pageKey="settings"><SettingsPage /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute pageKey="settings"><ReleaseSettings /></ProtectedRoute>} />
           <Route path="/settings/coverage" element={<ProtectedRoute pageKey="settings"><CoverageReportPage /></ProtectedRoute>} />
           <Route path="/import" element={<ProtectedRoute pageKey="import"><ImportPage /></ProtectedRoute>} />
           {/* Backward compat: `/price-intel` bookmarks land on the same merged page.
@@ -186,7 +190,7 @@ function AppLayout() {
           <Route path="/price-intel" element={<ProtectedRoute pageKey="price_intel"><IntelPage /></ProtectedRoute>} />
           <Route path="/users" element={<SuperAdminRoute><UsersPage /></SuperAdminRoute>} />
           <Route path="/no-access" element={<ProtectedRoute><NoAccessPage /></ProtectedRoute>} />
-        </Routes>
+        </Routes></ReleaseBoundary>
         </div>
       </main>
     </div>
@@ -198,6 +202,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <AuthProvider>
+          <ReleaseProvider>
           <MySkusProvider>
             <BrowserRouter>
               <Routes>
@@ -207,6 +212,7 @@ function App() {
               <Toaster position="top-right" />
             </BrowserRouter>
           </MySkusProvider>
+          </ReleaseProvider>
         </AuthProvider>
       </I18nProvider>
     </QueryClientProvider>
@@ -214,3 +220,7 @@ function App() {
 }
 
 export default App;
+
+function ReleaseSettings() {
+  return <ReleaseStatusPage />;
+}

@@ -1,10 +1,29 @@
 # Daleel gated deployment and rollback runbook
 
 **Baseline assessed:** `afc2d162a144fd3f4b942b694b072637ae6c645c`  
-**Status:** Future procedure only. **Current NO-GO. Nothing below was executed.**  
+**Status:** Future production procedure only. **Current NO-GO. No production step below was executed.** Isolated protocol rehearsals are recorded separately and do not constitute production restoration or image rollback.  
 **Companion assessment:** `PRODUCTION_READINESS_AFC2D16.md`.
 
 This runbook deliberately favors an approved maintenance window over an unproven zero-downtime/mixed-writer rollout. Do not assume traffic splitting, image pinning, database restore or scheduler suspension is available in the current platform UI; confirm the supported mechanism before the window.
+
+## Remediation update — 2026-10-09; documentation only
+
+- Reconciled saved checks: **156 isolated +7 preview API =163 passed**, zero final failures/errors/skips. Previous attempts had one cron-fixture closed-loop failure, then three incorrect safety-fixture targets; full final rerun passed. See `test_reports/release_safety_reconciliation.json` and the latest acceptance section. No new application run or production operation was performed to finalize these docs.
+- Source now includes observer/default-deny business writes, drain-to-freeze control, explicit maintenance operations, release/epoch job fencing, identity/readiness routes, unavailable-feature UI boundaries, and **all five source cron entries OFF**. Code-level controls do not prove deployed-state ownership or stop old unfenced code.
+- Clean Node20 frontend build/unchanged lock is saved, **not** an image build or final saved-commit attestation. Backend/control/stamping files changed after that build; final exact-source artifact verification remains required.
+- **No authorized production backup was supplied; no restore or production-consistent clone rehearsal occurred.** A synthetic A→B→A protocol test is not an image rollback. Deployed identity, actual scheduler authority, current eligible-offer freshness, restricted-customer acceptance and B1–B7 closure remain required.
+- Requested next action is only **Save to GitHub → `DC90-90/Pet-Crawler` → `conflict_130726_1244`**. Verify inclusion of new files/lock/evidence and record the remote SHA afterward. No direct Git push, production writer shutdown or deployment is authorized.
+
+### Control protocol for a separately authorized future rehearsal
+
+1. Read `/api/release` and authenticated `/api/admin/release-control`; compare manifest/commit with the saved build and actual running images. A declared `scheduler_authority=platform-cron` is not an inventory of real schedules.
+2. Under separate authorization, freeze uses `/api/admin/release-control` with `action=freeze`, the observed `expected_revision` and an approval reference. `freezing` permits already admitted work to finish; wait for `frozen` and zero tracked writers. Do not expire/erase a crashed permit to force a green state. Confirm external and old processes separately.
+3. Observer mode blocks business writes but permits scoped auth-security writes. Frozen mode and maintenance still allow the authorized control plane. Do not call this a Mongo-wide read-only account or a complete production writer stop.
+4. Named maintenance requires frozen/drained state, matching release ownership (`claim-maintenance`), explicit approval and a fresh plan hash from `/api/admin/maintenance/plan/{operation}` before `/api/admin/maintenance/apply`. The current plan summarizes stores/counts/indexes; obtain an additional exact impact assessment for production. No migration/backfill is implicitly approved.
+5. Observer/active ownership transitions require a frozen/drained state, expected release and revision; capability activation also requires a verified committed build and prepared integrity indexes. Epoch changes invalidate old queued work even on a compatible-code rollback. Keep unavailable capabilities OFF; email/digests cannot be enabled.
+6. `/api/ready` deliberately rejects uncommitted candidate identity. A future200 is not proof of backup restoration, current data coverage, deployed image provenance or exclusive scheduler authority; release-owner B1–B7 signoff is still mandatory.
+
+These descriptions are **not commands to execute now**. None of these control-plane mutations were called during this documentation continuation.
 
 ## A. Named owners and change record — mandatory before scheduling
 
@@ -24,7 +43,7 @@ Assign release owner, app engineer, platform operator, data owner and incident l
 
 1. Resolve B1: include the reviewed `frontend/yarn.lock` in the release inputs and verify it is actually in the saved release commit. Do not rely on the local untracked copy or opportunistic dependency re-resolution.
 2. Build from a clean source tree with approved frozen dependencies and production-like configuration **without production credentials**. Record immutable image digests. Do not treat previous workspace `yarn build` as this proof.
-3. Run existing144 checks and targeted tests for any release-control changes, plus clean container/import checks and desktop/mobile customer-role flows.
+3. Run the current selected **163 checks (156 isolated +7 preview API)** against the exact saved candidate in isolated/preview scope, plus any new regressions, clean container/import checks and desktop/mobile restricted-customer flows. Preserve separate failed-run and final artifacts; do not relabel the historical144-check independent report as163.
 4. Implement or prove the limited-mode boundaries from the assessment: disable unsupported UI controls and API/job paths; prevent orders calls; preserve explicit unavailable data states; prove comparisons do not need mocked integrations.
 5. On a production-consistent isolated clone, boot the candidate and measure every seed/index/registry/classification/rollup side effect. Approve each required change or gate it OFF. Preserve historical observations and sealed rows. Do not insert migration markers just to make boot appear ready.
 6. Exercise read-only comparisons with the proposed restricted user permissions. In particular verify the merged Price Intel background requests, not only a super-admin session. No hidden403 storms or unavailable integrations presented as active.
@@ -76,7 +95,7 @@ Large aggregations should be reviewed for production cost and run off-peak/on an
 
 Additionally collect:
 - Scope-specific eligible-offer evidence and comparison responses with observation timestamps and exclusions.
-- Exact deployed build and per-replica health evidence. `/api/health` must have Mongo connected, `boot.status=done`, `boot.errors=[]`; also verify indexes and background work separately. It does not report a Git SHA.
+- Exact deployed build and per-replica health evidence. `/api/health` must have Mongo connected, `boot.status=done`, `boot.errors=[]`; also verify indexes and background work separately. The historically observed build did not report a Git SHA. Candidate `/api/release` and `/api/ready` add manifest/commit information; corroborate this with actual deployment/image identifiers rather than assuming those routes are live.
 - Explain the observed15 in-process jobs and prove which scheduler will be authoritative after rollout. Export platform schedule state as well; `scheduler_active_jobs=0` alone cannot prove platform crons are disabled or working.
 - Verify required configuration by reference/presence: Mongo binding, `DB_NAME`, stable `JWT_SECRET` and `ENCRYPTION_KEY`, intended admin identity, exact allowed HTTPS origins, frontend API origin and cron secret when crons are enabled. **Do not rotate or replace existing values as part of this rollout.**
 - Confirm backup restore includes catalogue, stores/settings, observations/quarantine/parent identities, matches/blacklists, all ledger/receipt state, orders/evidence, migrations/index definitions, auth users/session revocation state and job/checkpoint state. Keep encryption-key references available to both current and fallback images.
@@ -90,7 +109,7 @@ Future actions in this section require explicit deployment/operations authorizat
 1. Announce the maintenance/read-only window; block customer/operator mutation routes at an approved control boundary, while retaining safe health/maintenance visibility.
 2. Suspend **every** scheduler and manual ingestion path: legacy in-process jobs, platform `crawl-stores`, `own-catalog`, `seal-ledger`, `archive-prices`, `weekly-digest`, external ingest/imports, explicit matching, admin repair/backfill and ongoing tasks.
 3. Do **not** rely on `/api/scheduler/toggle-pause`: it is a toggle, is not a global writer stop and the persisted pause only gates the crawl cron. Do not call it blindly in an automated runbook.
-4. Platform cron manifest supports `enabled: false`; deployment reconciles the manifest. Prepare that in the approved successor release, but confirm how **already active production schedules** will be suspended before cutover. Old rendered configuration may persist until reconciliation. If a safe suspension mechanism is unavailable, stop and obtain platform-operator assistance.
+4. All five candidate manifest entries now have `enabled: false`; verify these reach the saved release and confirm how **already active production schedules** will be suspended before cutover. Old rendered configuration may persist until reconciliation. The new application fence covers only participating code; it does not stop the previously observed legacy scheduler. If a safe suspension mechanism is unavailable, stop and obtain platform-operator assistance.
 5. Let in-flight work finish or document interruption and captured checkpoint state. Terminate old writer processes using the approved platform operation, not an assumed UI undeploy/reset. Do not erase active leases or mark checkpoints complete by hand.
 6. Confirm no old/new writers can overlap. Ledger-day leases last5 minutes and generic job leases3 hours; expiration is not proof an old process stopped. Known unapplied sealed/legacy recoveries stay explicitly unresolved.
 7. Record stable counts/checksums and latest timestamps for immutable evidence, matches, ledger receipts/seals and checkpoints. Take the approved consistent backup/PITR checkpoint and verify accessibility and manifest.

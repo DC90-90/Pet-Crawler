@@ -499,6 +499,9 @@ def test_job_control_lease_queue_and_execute_status(db):
 
 # modules/features: cron route auth/envelope validation and duplicate webhook dedupe
 def test_cron_dispatch_auth_payload_and_duplicate_queue(db, monkeypatch):
+    # Keep this protocol test on its disposable DB; runtime capability behavior
+    # is exercised separately through GuardedDatabase deployment-safety tests.
+    monkeypatch.setattr(server, "db", db)
     prev_secret = os.environ.get("WEBHOOK_CRON_SECRET")
     os.environ["WEBHOOK_CRON_SECRET"] = "iter37-secret"
 

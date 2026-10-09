@@ -1,0 +1,228 @@
+{
+  "record_type": "saved_evidence_reconciliation_not_new_application_test_run",
+  "reconciled_date_utc": "2026-10-09",
+  "decision": "NO-GO for production; documentation and user-operated GitHub handoff only",
+  "original_assessed_commit": "afc2d162a144fd3f4b942b694b072637ae6c645c",
+  "documentation_continuation_starting_checkpoint": "642854c",
+  "local_branch_at_inspection": "main",
+  "requested_remote_repository": "DC90-90/Pet-Crawler",
+  "requested_remote_branch": "conflict_130726_1244",
+  "resulting_remote_commit": null,
+  "remote_save_status": "pending_user_save_and_remote_verification",
+  "application_tests_rerun_during_documentation": false,
+  "build_rerun_during_documentation": false,
+  "production_access_during_documentation": false,
+  "direct_git_writes_performed": false,
+  "documentation_validation": {
+    "status": "passed_after_correction",
+    "scope": "Offline artifact/document checks only, not additional application tests",
+    "checks": [
+      "All9 JUnit file hashes/timestamps, testcase counts and unique case identities match;156 isolated plus7 preview; zero final failures/errors/skips",
+      "All3 source-log hashes, preserved error/result excerpts and run totals match",
+      "Build-result and lock hashes match; bidirectional clean-tree comparison confirms unchanged frontend/deploy inputs,6 changed and1 added backend/test/stamping file",
+      "Documentation and JSON retain NO-GO/B1-B7 open, historical144 evidence, pending remote SHA, and PRD below700 lines"
+    ],
+    "initial_validation_failure": "Bidirectional clean-tree comparison found backend/release_preflight.py was added after the build but omitted from the initial six-file difference list",
+    "correction": "Added release_preflight.py to build-provenance records in both reports and this JSON; reran all offline validation checks successfully",
+    "network_or_database_access": false
+  },
+  "latest_selected_results": {
+    "isolated_passed": 156,
+    "preview_api_passed": 7,
+    "combined_passed": 163,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "calculation": "52+10+6+36+22+10+1+19=156; 156+7=163; previous144+19=163",
+    "count_policy": "Count pytest testcase elements once, including parametrized cases; do not add builds, UI observations, repeated runs, or assertions within a testcase",
+    "isolated_command": "python scripts/run_reviewed_tests.py",
+    "preview_command": "python -m pytest -q backend/tests/test_iter40_preview_scope_checks.py --junitxml=test_reports/pytest/preview-scope-final.xml",
+    "latest_independent_163_check_report_available": false,
+    "scope": "Disposable loopback Mongo mutation tests and existing-data preview API checks; not production acceptance or full historical suite"
+  },
+  "junit_artifacts": [
+    {
+      "path": "test_reports/pytest/reviewed-core-final.xml",
+      "scope": "isolated",
+      "passed": 52,
+      "timestamp": "2026-10-09T15:53:07.456244+00:00",
+      "sha256": "5bab9ddb2631cd282ca9e6410d4ce0b3c2a52162eacd27140efa0944ecf7448f"
+    },
+    {
+      "path": "test_reports/pytest/isolated-auth-final.xml",
+      "scope": "isolated",
+      "passed": 10,
+      "timestamp": "2026-10-09T15:53:11.811717+00:00",
+      "sha256": "bb788fea456fb6a2dba1bdaa2235a104f56a7378b2781ea5389fe68c9e56db11"
+    },
+    {
+      "path": "test_reports/pytest/real-source-final.xml",
+      "scope": "isolated",
+      "passed": 6,
+      "timestamp": "2026-10-09T15:53:15.140307+00:00",
+      "sha256": "99cc8e15a3dd650335db76c0aaa32fec9b9a82a01c4d5c8a4909f362a7618c49"
+    },
+    {
+      "path": "test_reports/pytest/related-contracts-final.xml",
+      "scope": "isolated",
+      "passed": 36,
+      "timestamp": "2026-10-09T15:53:16.907482+00:00",
+      "sha256": "205551378b41dc6ef6c35145bd48504a51f51500ce54bcd7464343381a2f1ef0"
+    },
+    {
+      "path": "test_reports/pytest/six-acceptance-final.xml",
+      "scope": "isolated",
+      "passed": 22,
+      "timestamp": "2026-10-09T15:53:19.058790+00:00",
+      "sha256": "b2e186ac81c9ff588b186fcb7c15d5deeb1392aea366b1e3b88fa347343f64e4"
+    },
+    {
+      "path": "test_reports/pytest/four-correctness-final.xml",
+      "scope": "isolated",
+      "passed": 10,
+      "timestamp": "2026-10-09T15:53:21.857265+00:00",
+      "sha256": "f2b01d0546a390abb733b474a4afc1cc8fb214b7d03fb5c3332c8b6db20941dc"
+    },
+    {
+      "path": "test_reports/pytest/matcher-parent-pool-final.xml",
+      "scope": "isolated",
+      "passed": 1,
+      "timestamp": "2026-10-09T15:53:24.713077+00:00",
+      "sha256": "5f4fe6ffc0f0219cedc877ee4a54274b62c31d29ab4617cbcbd26fbd01fce906"
+    },
+    {
+      "path": "test_reports/pytest/release-safety-final.xml",
+      "scope": "isolated",
+      "passed": 19,
+      "timestamp": "2026-10-09T15:53:26.208499+00:00",
+      "sha256": "878286afb936aef85cea817479899e497d943a797c772e3be2c206aa43c85cc4"
+    },
+    {
+      "path": "test_reports/pytest/preview-scope-final.xml",
+      "scope": "preview_api",
+      "passed": 7,
+      "timestamp": "2026-10-09T15:53:46.951958+00:00",
+      "sha256": "dfffe6f3faf7dba8f446090ed66738a1e1ff6b5f2377e33571fb2d6389d4ffe6"
+    }
+  ],
+  "historical_independent_reports": [
+    {"path": "test_reports/iteration_41.json", "isolated": 136, "preview_api": 7, "total": 143},
+    {"path": "test_reports/iteration_42.json", "isolated": 137, "preview_api": 7, "total": 144}
+  ],
+  "historical_report_caveat": "Shared *-final.xml paths now contain the later15:53 release-safety run; historical independent reports cannot be used to claim independent verification of163 cases",
+  "failed_attempts_and_reruns": [
+    {
+      "source_log": "/tmp/release-existing-tests.log",
+      "sha256": "30bdeebf1db155c541cda2e435828c2931225c104358adcb1d5c9904d4ba71d6",
+      "passed": 136,
+      "failed": 1,
+      "retained_excerpts": [
+        "FAILED backend/tests/test_iteration37_integration_real_mongo.py::test_cron_dispatch_auth_payload_and_duplicate_queue",
+        "E           RuntimeError: Event loop is closed",
+        "1 failed, 51 passed, 5 warnings in 4.76s",
+        "Failed test groups: reviewed-core"
+      ],
+      "other_group_passes": [10, 6, 36, 22, 10, 1],
+      "correction_evidence": "Current test explicitly monkeypatches server.db to its disposable fixture, preventing this protocol test from using the server-level client on a closed loop; later core52 pass",
+      "status": "superseded_by_complete_passing_rerun"
+    },
+    {
+      "source_log": "/tmp/release-all-tests.log",
+      "sha256": "52e21f1ea8dbb60ad021206d03486b6e50dc30204df8ea7662599d3e3ccc4465",
+      "passed": 150,
+      "failed": 3,
+      "existing_passed": 137,
+      "then_safety_passed": 13,
+      "then_safety_total": 16,
+      "retained_excerpts": [
+        "E           AttributeError: <module 'server' from '/app/backend/server.py'> has no attribute '_self_heal_playwright'",
+        "E       AttributeError: <module 'zid_orders' from '/app/backend/zid_orders.py'> has no attribute 'get_zid_headers'",
+        "E       AttributeError: module 'server' has no attribute 'create_token'",
+        "3 failed, 13 passed, 5 warnings in 1.82s",
+        "Failed test groups: release-safety"
+      ],
+      "failed_tests": [
+        "test_startup_is_read_only_no_seed_migration_or_integration_probe",
+        "test_unavailable_orders_and_refresh_helpers_exit_before_integration_calls",
+        "test_http_auth_control_plane_and_disabled_cron_without_queued_work"
+      ],
+      "correction_evidence": "Current fixtures target the retired boot sequence guard, zid_oauth.credentials and server.make_token with Mongo user IDs; then three manual-write/schema/readiness regressions were added",
+      "status": "superseded_by_corrected_and_expanded_complete_passing_rerun"
+    },
+    {
+      "source_log": "/tmp/release-all-tests-2.log",
+      "sha256": "d15109d7fde9badaf7780870f1cbebd3b162e53174a1a301a56c19c45ea3d4ad",
+      "passed": 156,
+      "failed": 0,
+      "group_passes": [52, 10, 6, 36, 22, 10, 1, 19],
+      "retained_excerpts": [
+        "19 passed, 5 warnings in 2.28s",
+        "All selected test groups passed; no production or catalogue backfill operations executed."
+      ],
+      "status": "latest_isolated_pass; separate_preview_xml_adds7"
+    }
+  ],
+  "raw_log_retention": "Temporary source logs may not survive a fork; result/error excerpts and hashes above are preserved in this repository evidence file. No claim of additional unavailable run history.",
+  "build_evidence": {
+    "path": "test_reports/release_build/result.json",
+    "sha256": "75476bfa9542bccbe2b21fe12c3b2b6572a8697b782d6233c0874e36284c9b8c",
+    "started_at": "2026-10-09T15:46:59.765067+00:00",
+    "finished_at": "2026-10-09T15:48:06.192520+00:00",
+    "source": "uncommitted-candidate",
+    "node": "v20.20.2",
+    "yarn": "1.22.22",
+    "frontend_clean_build": "passed",
+    "frozen_lock_unchanged": true,
+    "lock_sha256": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+    "production_pipeline_verified": false,
+    "container_image_verified": false,
+    "frontend_deploy_inputs_match_retained_clean_tree": true,
+    "later_changed_files": [
+      "backend/release_control.py",
+      "backend/release_runtime.py",
+      "backend/zid_orders.py",
+      "backend/release_api.py",
+      "backend/release_preflight.py",
+      "backend/tests/test_release_safety.py",
+      "scripts/stamp_release.py"
+    ],
+    "added_after_build": ["backend/release_preflight.py"],
+    "limitation": "Frontend build success does not attest final combined candidate, saved commit, managed pipeline or image; restamp/rebuild exact saved source under separate approval. No failed clean-build result was located."
+  },
+  "ui_evidence": {
+    "limited_mode_controls_source_verified": true,
+    "release_specific_desktop_mobile_artifact_located": false,
+    "limitation": "Inherited handoff reported UI validation; no matching retained release-specific browser log/screenshot was found. Older artifacts certify earlier UI only. No new browser test run for this documentation task."
+  },
+  "warnings": [
+    "FastAPI on_event deprecation",
+    "Multipart import deprecation",
+    "Test-client per-request cookie deprecation",
+    "Frontend frozen install peer dependency and workspace warnings"
+  ],
+  "blocking_production_gates": [
+    {"id": "B1", "status": "open", "needs": "Exact saved-source and lock inclusion, final clean artifact and immutable image provenance"},
+    {"id": "B2", "status": "open", "needs": "Production-consistent isolated startup and exact maintenance/data-impact evidence"},
+    {"id": "B3", "status": "open", "needs": "Restricted-customer desktop/mobile acceptance and full disabled-path/API/egress verification for exact artifact"},
+    {"id": "B4", "status": "open", "needs": "Deployed SHA/deployment ID/image digests and actual single scheduler/worker authority; legacy15-job discrepancy unresolved"},
+    {"id": "B5", "status": "open", "needs": "Approved current per-offer production provenance, eligible coverage, timestamps and expiry"},
+    {"id": "B6", "status": "open", "needs": "Authorized backup/PITR, successful isolated restore and integrity comparison, compatible fallback image and real rollback rehearsal, agreed RPO/RTO"},
+    {"id": "B7", "status": "open", "needs": "Capacity, monitored customer/readiness acceptance, on-call and abort/recovery ownership"}
+  ],
+  "backup_supplied": false,
+  "backup_restore_performed": false,
+  "image_rollback_performed": false,
+  "protocol_rollback_scope": "Synthetic release identity A-to-B-to-A test in a disposable local database; not actual image rollback or production restore",
+  "freeze_limits": "Observer allows scoped auth-security writes; frozen control/maintenance writes are explicit exceptions. Protocol cannot stop legacy/unfenced code or direct database clients.",
+  "external_limitations": [
+    "Zid exact orders unavailable pending partner approval and complete coverage; no successful end-to-end provider proof",
+    "Webshare402/broad coverage unresolved",
+    "Email MOCKED/unavailable; no delivery claim"
+  ],
+  "documents": [
+    "memory/PRODUCTION_READINESS_AFC2D16.md",
+    "memory/REVIEWED_FIXES_ACCEPTANCE.md",
+    "memory/DEPLOYMENT_ROLLBACK_RUNBOOK_AFC2D16.md",
+    "memory/PRD.md"
+  ]
+}

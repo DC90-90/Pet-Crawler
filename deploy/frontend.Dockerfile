@@ -11,6 +11,7 @@ COPY frontend/package.json frontend/yarn.lock ./
 RUN yarn install --frozen-lockfile --production=false
 
 COPY frontend/ .
+RUN test -s public/release.json
 
 # Build-time env var — replaced at container start via entrypoint
 ARG REACT_APP_BACKEND_URL

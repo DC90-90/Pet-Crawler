@@ -695,6 +695,8 @@ async def _retired_build_competitor_lookups(db, own_store_id):
 
 async def run_matching_for_all(db, progress_callback=None, only_skus=None):
     """Run matching engine for ALL my_products. Returns summary stats."""
+    from release_control import require_permit
+    await require_permit(db)
     # Hardening (Feb 2026): only run matching for items explicitly tagged as own-store.
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
     own_store_id = own_store["id"] if own_store else None

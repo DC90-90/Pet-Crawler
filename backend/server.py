@@ -118,7 +118,10 @@ mongo_url = os.environ['MONGO_URL']
 # Atlas-friendly timeouts (workspace sync): fail server selection fast instead
 # of blocking requests, bound connect, and cap any single socket op at 45s.
 client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=10000, socketTimeoutMS=45000)
-db = client[os.environ['DB_NAME']]
+from release_database import GuardedDatabase
+import release_control
+import release_runtime
+db = GuardedDatabase(client[os.environ['DB_NAME']])
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
 CRAWLER_TOKEN = os.environ.get("CRAWLER_TOKEN", "")   # iter80 — was hardcoded in this file;
@@ -232,6 +235,7 @@ async def get_user(request: Request):
         if revoked_before and p.get("iat", 0) <= _as_aware(revoked_before).timestamp():
             raise HTTPException(401, "Session revoked; sign in again")
         enforce_access(u, request.url.path, request.method)
+        await release_runtime.authorize_request(db, request, str(u["_id"]))
         # super_admin always has access to every page (implicit)
         allowed = ALL_PAGES if role == "super_admin" else list(u.get("allowed_pages", []) or [])
         return {
@@ -2712,6 +2716,8 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
     miss / unparseable / stale-beyond-24h → compute live + best-effort refresh.
     Never raises from the cache layer (only `compute` may)."""
     now = datetime.now(timezone.utc)
+    if release_control.guarded(db):
+        return await compute(), {"source": "observation_compute", "computed_at": now.isoformat(), "age_seconds": 0, "stale": False}
     if not cacheable:
         return await compute(), {"source": "live_uncacheable", "computed_at": None, "age_seconds": None, "stale": False}
     doc = None
@@ -2815,6 +2821,8 @@ async def _own_orders_aggregate(db, o_start, o_end=None):
     metric can never show two different values again. Returns
     aggregate_orders() output, or None when no non-excluded orders fall in the
     window (callers fall back / show 'accumulating')."""
+    if not await release_control.feature(db, "exact_orders"):
+        return None
     o_end = o_end or datetime.now(timezone.utc)
     coverage = await db.orders_sync_coverage.find_one({"status": "complete", "window_start": {"$lte": o_start}, "window_end": {"$gte": o_end}}, {"_id": 0})
     if not coverage:
@@ -6336,6 +6344,8 @@ ALERT_TYPES = ["price_drop", "price_increase", "out_of_stock", "back_in_stock", 
 
 def send_alert_notification(alert, event, channel="console"):
     """Send alert notification. Currently logs to console. Swap for Resend with one-line change."""
+    if release_control.guarded(db):
+        return {"status": "disabled", "reason": "outbound_delivery_not_implemented"}
     msg = f"[ALERT] {event.get('alert_type','')}: SKU={event.get('sku','')} at {event.get('store_name','')}: {event.get('old_value','')} -> {event.get('new_value','')} (threshold: {alert.get('threshold','')})"
     logger.info(msg)  # Replace with: await resend.emails.send(...) for real email
 
@@ -7327,8 +7337,8 @@ async def trigger_own_store_sync(background: BackgroundTasks, user=Depends(get_u
     if not own:
         raise HTTPException(400, "No store flagged is_own_store=True. Set the flag on your store first.")
 
-    run_id, _ = await job_control.queue(db, "own-sync")
-    background.add_task(job_control.execute, db, run_id, "own-sync", lambda: _run_sync_and_match("manual"))
+    run_id, _ = await job_control.queue(db, "manual-own-sync")
+    background.add_task(job_control.execute, db, run_id, "manual-own-sync", lambda: _run_sync_and_match("manual"))
     return {"message": "Sync queued", "status": "queued", "run_id": run_id, "store": own.get("name"), "domain": own.get("domain")}
 
 
@@ -7430,7 +7440,7 @@ async def _run_sync_and_match(kind: str):
     # cancellations/refunds correct history on every run.
     if kind != "manual_match_only":
         try:
-            ores = await sync_own_store_orders(db)
+            ores = await sync_own_store_orders(db) if await release_control.feature(db, "exact_orders") else {"status": "skipped", "reason": "exact_orders_disabled"}
             run["orders_status"] = ores.get("status", "unknown")
             run["orders_upserted"] = int(ores.get("upserted") or 0)
             logger.info(f"[SyncMatch/{kind}] orders {run['orders_status']}: upserted={run['orders_upserted']}")
@@ -10079,6 +10089,7 @@ async def crawler_ingest(request: Request, payload: IngestPayload):
         raise HTTPException(500, "CRAWLER_TOKEN not configured")
     if not auth_header.startswith("Bearer ") or not secrets.compare_digest(auth_header[7:], CRAWLER_TOKEN):
         raise HTTPException(401, "Invalid or missing crawler token")
+    await release_runtime.begin_request(db, "manual:ingest", "manual_refresh")
     from ingest_v2 import ingest
     return await ingest(db, payload)
 
@@ -11579,6 +11590,9 @@ async def job_status(run_id: str, user=Depends(get_user)):
     row = await db.job_runs.find_one({"id": run_id}, {"_id": 0})
     if not row:
         raise HTTPException(404, "Run not found")
+    if release_control.guarded(db) and row.get("status") in {"queued", "running"}:
+        policy = await release_runtime.public_status(db)
+        row["release_admission"] = "blocked" if policy["mode"] != "active" or row.get("release_id") != policy["scheduler_owner"] or row.get("writer_epoch") != policy["writer_epoch"] else "eligible"
     return row
 
 
@@ -11642,17 +11656,24 @@ async def cron_dispatch(kind: str, request: Request, background: BackgroundTasks
                "seal": lambda: ledger.seal_ksa_day(db), "archive": scheduled_archive, "digest": generate_market_digest}
     if kind not in actions:
         raise HTTPException(404, "Unknown schedule")
+    capability = release_runtime.JOB_CAPABILITIES[kind]
+    if not await release_control.feature(db, capability):
+        return {"accepted": False, "status": "disabled", "reason": capability+"_disabled", "run_id": run_id}
+    await release_runtime.begin_request(db, "cron:"+kind, capability)
     run_id, fresh = await job_control.queue(db, kind, run_id)
     if fresh:
         background.add_task(job_control.execute, db, run_id, kind, actions[kind])
     return {"accepted": True, "duplicate": not fresh, "run_id": run_id}
 
 
+from release_api import install_release_routes
+install_release_routes(router, lambda: db, require_super_admin, lambda: BOOT_STATE)
 app.include_router(router)
 
 from cors_policy import allowed_origins, CookieOriginMiddleware
 cors_origins_list = allowed_origins(os.environ['CORS_ORIGINS'])
 
+app.add_middleware(release_runtime.ReleaseRequestContext)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(SlowAPIMiddleware)
 app.add_middleware(CookieOriginMiddleware, origins=cors_origins_list)
@@ -11717,6 +11738,17 @@ async def _boot():
 
 
 async def _boot_sequence():
+    """Read-only startup; data/index changes are approved maintenance operations."""
+    if not await _wait_for_mongo():
+        return
+    BOOT_STATE["phase"] = "release-controls"
+    await release_runtime.public_status(db)
+    BOOT_STATE["phase"] = "ready-observer"
+    logger.info("Read-only boot complete: no seeds, migrations, index changes, backfills, browser installs or integration probes")
+
+
+async def _retired_uncontrolled_boot_sequence():
+    raise RuntimeError("Uncontrolled boot disabled; use explicit maintenance plan/apply")
     if not await _wait_for_mongo():
         return
     for label, phase in (("seed_database", seed_database),

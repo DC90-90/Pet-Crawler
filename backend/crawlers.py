@@ -3256,6 +3256,8 @@ async def fetch_own_storefront_catalog_raw(store, max_pages=OWN_SF_MAX_PAGES):
 
 
 async def sync_own_store_prices(db, store=None, *, targeted_rows=None, observed_at=None):
+    from release_control import require_permit
+    await require_permit(db)
     import job_control
     store = store or await db.stores.find_one({"is_own_store": True}, {"_id": 0})
     if not store:
@@ -3855,6 +3857,10 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
 
 # ── Waterfall Orchestrator ───────────────────────────────────
 async def crawl_store_waterfall(db, store):
+    from release_control import require_permit, feature
+    await require_permit(db)
+    if store.get("use_proxy") and not await feature(db, "proxy_crawling"):
+        return {"status": "disabled", "reason": "proxy_crawling_disabled", "snapshots_count": 0}
     if store.get("is_own_store"):
         return await sync_own_store_prices(db, store)
     import job_control

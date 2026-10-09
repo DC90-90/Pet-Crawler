@@ -1,4 +1,7 @@
 {
+  "record_scope": "Historical afc2d16 assessment only; preserve original observations, do not treat its 144-check total or missing-controls findings as latest workspace status",
+  "latest_remediation_evidence": "test_reports/release_safety_reconciliation.json",
+  "latest_decision": "NO-GO: preview safety fixes do not close unverified production gates B1-B7",
   "assessment_date": "2026-10-09",
   "commit": "afc2d162a144fd3f4b942b694b072637ae6c645c",
   "mode": "read-only assessment; documentation-only authored changes",

@@ -178,7 +178,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
                 </h4>
                 {product.seller_summary && (
                   <span className="text-[10px] text-[#A1E4DB]/70" data-testid="seller-summary">
-                    {product.seller_summary.live} live
+                    {product.seller_summary.live} eligible observations
                     {product.seller_summary.stale > 0 && ` · ${product.seller_summary.stale} stale`}
                     {product.seller_summary.oos > 0 && ` · ${product.seller_summary.oos} OOS`}
                   </span>

@@ -19,6 +19,8 @@
  * Backward compat: `/insights` and `/price-intel` both mount this page.
  */
 import { useState, useEffect, useRef } from "react";
+import { useRelease } from "@/contexts/ReleaseContext";
+import PriceComparisonPage from "@/pages/PriceComparisonPage";
 import { ComparisonScope, useComparisonScope } from "@/components/ComparisonScope";
 import { RequestError } from "@/components/RequestError";
 import { useNavigate } from "react-router-dom";
@@ -64,6 +66,11 @@ const fetchIntel = (path, params) => async () => {
 };
 
 export default function IntelPage() {
+  const release = useRelease();
+  return release?.price_comparison_only ? <PriceComparisonPage /> : <FullIntelPage />;
+}
+
+function FullIntelPage() {
   const scope = useComparisonScope();
   const [detailError, setDetailError] = useState(false);
   const detailRequest = useRef(0);

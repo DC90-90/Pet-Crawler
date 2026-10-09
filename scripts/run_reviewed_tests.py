@@ -36,6 +36,7 @@ groups = {
     "six-acceptance": ["test_acceptance_six_regressions"],
     "four-correctness": ["test_four_correctness_regressions"],
     "matcher-parent-pool": ["test_matcher_parent_pool_regression"],
+    "release-safety": ["test_release_safety"],
 }
 report_dir = ROOT / "test_reports/pytest"
 report_dir.mkdir(parents=True, exist_ok=True)
