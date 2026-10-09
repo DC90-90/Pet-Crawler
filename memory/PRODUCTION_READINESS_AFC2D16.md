@@ -1,5 +1,11 @@
 # Daleel production-readiness assessment
 
+## Deployment status update — CORS configuration corrected
+
+The deployment agent reports successful user-initiated run **`0107107d-2d21-47fb-8ee5-836d2779725f`**, backend boot without the prior CORS error, and HTTP200 serving the real app at **https://saudi-pets-monitor.emergent.host**. Active-run secret comparison confirms **CORS_ORIGINS=`https://daleel.hrm-sa.com`**, exactly the user-approved single origin. This resolves the wildcard-CORS boot blocker; no code weakening or new source/manifest change was needed for that retry.
+
+**Deployment success is not blanket readiness approval.** Backup restoration, exact source/image binding and deployed identity, actual scheduler ownership, current data freshness/quality and operational acceptance remain open. This report does not newly verify live`/api/ready`, custom-domain availability or signed-in user flows. Earlier NO-GO statements concern unresolved release-approval evidence, not a claim that the newly reported deployment failed. No further production action is authorized by this status update.
+
 ## Latest same-origin repair — 2026-10-09
 
 Native build`ded49a10-0b9b-4111-b241-8cd071f4a88b` failed because receipt validation contradicted the API client's legitimate blank-URL same-origin behavior. Code-only receipt/plugin repair now passes **238 cases** and four native-like build configurations (empty/unset/explicit/full-tree-empty), while supplied URLs and strict release invariants stay validated. No Docker, env, lock, backend guard or production changes. Failed setup attempts and incomplete/overwritten historical evidence are explicitly documented, not erased.
