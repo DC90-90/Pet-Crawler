@@ -1,0 +1,70 @@
+{
+  "assessment_date": "2026-10-09",
+  "commit": "afc2d162a144fd3f4b942b694b072637ae6c645c",
+  "mode": "read-only assessment; documentation-only authored changes",
+  "recommendation": "NO-GO as-is; limited price-comparison release conditionally viable after blocking gates",
+  "recorded_test_evidence": {
+    "rerun_during_assessment": false,
+    "passed": 144,
+    "failures": 0,
+    "isolated": 137,
+    "preview_api": 7,
+    "report": "test_reports/iteration_42.json",
+    "scope_warning": "Preview/disposable Mongo tests are not production acceptance or a clean source-only image build"
+  },
+  "new_read_only_checks": {
+    "python_ast_files": 165,
+    "python_ast_errors": 0,
+    "committed_crons": 5,
+    "frontend_yarn_lock_in_commit": false,
+    "frontend_yarn_lock_local_exists": true,
+    "frontend_package_lock_in_commit": false,
+    "application_source_diff_from_tested_parent_5c1f891": [],
+    "preexisting_generated_workspace_differences": [".emergent/cron/applied.hash", ".emergent/cron/webhook-crons"]
+  },
+  "public_production_observations": [
+    {
+      "captured_at_utc": "2026-10-09T14:57:09.389397+00:00",
+      "url": "https://saudi-pets-monitor.emergent.host/api/health",
+      "method": "GET",
+      "authenticated": false,
+      "http_status": 200,
+      "tls_verification": true,
+      "reported_status": "healthy",
+      "reported_mongodb": "connected",
+      "reported_scheduler_active_jobs": 0,
+      "reported_playwright_available": true,
+      "reported_uptime_seconds": 92.0,
+      "reported_last_successful_crawl": "2026-10-09T08:58:46.686967+00:00",
+      "reported_boot": {"status": "running", "phase": "indexes", "error_count": 0}
+    },
+    {
+      "captured_at_utc": "2026-10-09T14:58:00.395642+00:00",
+      "url": "https://saudi-pets-monitor.emergent.host/api/health",
+      "method": "GET",
+      "authenticated": false,
+      "http_status": 200,
+      "tls_verification": true,
+      "reported_status": "healthy",
+      "reported_mongodb": "connected",
+      "reported_scheduler_active_jobs": 15,
+      "reported_playwright_available": true,
+      "reported_uptime_seconds": 142.7,
+      "reported_last_successful_crawl": "2026-10-09T08:58:46.686967+00:00",
+      "reported_boot": {"status": "done", "phase": "scheduler", "error_count": 0}
+    }
+  ],
+  "production_unverified": [
+    "deployed commit and image digest / canonical deployment binding",
+    "platform cron registrations and old in-process scheduler authority",
+    "secret configuration and continuity",
+    "database binding, data quality, index and migration state",
+    "backup/PITR identity, restore path and rehearsal",
+    "customer-role flows, resource capacity and operational SLOs",
+    "actual integration availability/disablement"
+  ],
+  "blocking_gates": ["B1 committed build inputs", "B2 startup/data effects", "B3 limited-mode isolation", "B4 production/scheduler identity", "B5 eligible production data", "B6 recoverability", "B7 operational acceptance"],
+  "actions_not_performed": ["deployment", "rollback", "code or configuration changes", "credential rotation", "production authentication", "production database connection", "live refresh", "historical backfill", "mutation endpoints", "tests or builds that write data"],
+  "documents": ["memory/PRODUCTION_READINESS_AFC2D16.md", "memory/DEPLOYMENT_ROLLBACK_RUNBOOK_AFC2D16.md"],
+  "limitations": "The public health observations cannot attest the candidate build, fleet state, production backups or offer correctness. Generic static configuration PASS is not overall production readiness. Full security audit and load/restore tests were not performed."
+}

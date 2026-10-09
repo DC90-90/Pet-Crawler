@@ -1,5 +1,14 @@
 # Daleel — دليل | PRD & Progress Log
 
+## Latest decision — read-only production-readiness assessment, 2026-10-09
+- Assessed saved commit `afc2d162a144fd3f4b942b694b072637ae6c645c`. **NO-GO as-is**, including a limited customer price-comparison release today. A limited release is conditionally viable after build, startup/isolation, production identity/data and recovery gates close; unavailable integrations need not be restored if genuinely disabled.
+- Documentation: `memory/PRODUCTION_READINESS_AFC2D16.md`, `memory/DEPLOYMENT_ROLLBACK_RUNBOOK_AFC2D16.md`, `memory/PRODUCTION_READINESS_EVIDENCE_AFC2D16.json`.
+- Confirmed blocker: `frontend/yarn.lock` is local but absent from assessed Git tree; committed Dockerfile requires it. Historical workspace builds do not prove reproducible release artifacts.
+- Source shows startup index/data changes and possible classifier/rollup backfills; crawl pause is not a global job stop. Limited-mode controls and customer-role behavior require proof, not missing-token failures.
+- Public production GET-only evidence: health200/healthy/Mongo connected, boot running at14:57:09Z then done at14:58:00Z. Second response reports **15 in-process jobs**, inconsistent with the candidate's platform-only scheduler. Deployed SHA/digest and actual schedule authority remain unverified. No deployment was initiated by this assessment.
+- Existing144 passing checks verified from committed reports, **not rerun**. New non-mutating AST check:165 Python files parsed; cron/source/build inputs inspected. No code, config, production data, credentials or deployment changed; assessment documentation only.
+- **Next:** explicit authorization for narrow remediation or supply missing operator evidence. Backup/restore and compatible rollback artifact must be proven before any future rollout. Optional integrations/refactoring/performance stay deferred; email remains **MOCKED**. Potential enhancement: a visible release/capability status panel.
+
 ## Latest status — matcher guard correction, 2026-10-09
 - Preview-only reference: `aa2c44225430e65650deaf37608789c22d117503`; preserve newer code. Shared parent-aware candidate preparation now runs before the batch empty-pool safeguard and the same prepared pool is used for actual matching.
 - New root-only regression reproduced the failure before correction and now proves exact RuntimeError, untouched unrelated automatic matches/history, and failed durable job status without success stats.
