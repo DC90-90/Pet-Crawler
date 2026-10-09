@@ -1,0 +1,60 @@
+{
+  "scope": "Read-only lockfile/index/remote inclusion verification; no packaging changes or builds",
+  "status": "blocked_staging_not_executed_in_agent_workflow",
+  "user_authorized_staging_only": true,
+  "requested_staging_command": "git add -f -- frontend/yarn.lock",
+  "staging_command_attempted": false,
+  "actual_staging_command_error": null,
+  "technical_platform_or_os_staging_denial_established": false,
+  "explanation": "This agent workflow routes Git writes through Save to GitHub instead of direct Git staging. No staging command was executed, so no Git/OS error or command-level prohibition has been demonstrated. Support's architectural wording is not execution evidence.",
+  "reference_commit": "9ea13abddd98fc09cde3b28cd91bb4483869fb14",
+  "local_head_at_inspection": "9ea13abddd98fc09cde3b28cd91bb4483869fb14",
+  "local_branch": "main",
+  "repository": "DC90-90/Pet-Crawler",
+  "target_branch": "conflict_130726_1244",
+  "local_lock": {
+    "path": "frontend/yarn.lock",
+    "bytes": 518152,
+    "approved_sha256": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+    "actual_sha256": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+    "approved_hash_matches": true,
+    "inside_git_workspace": true,
+    "ignored_by_git": false,
+    "index_entry_present": false
+  },
+  "before": {
+    "checked_at": "2026-10-09T17:22:39.437914+00:00",
+    "index_sha256": "6154e9d27b0d64a6acf2fe301fdc4ef8886729c1f5235ef3f257eeb9dcc30da6",
+    "git_ls_files_stage_exit": 0,
+    "git_ls_files_stage_stdout": "",
+    "git_diff_index_cached_exit": 0,
+    "git_diff_index_cached_stdout": ""
+  },
+  "after_read_only_checks_not_after_a_save": {
+    "checked_at": "2026-10-09T17:24:01.338879+00:00",
+    "index_sha256": "6154e9d27b0d64a6acf2fe301fdc4ef8886729c1f5235ef3f257eeb9dcc30da6",
+    "index_unchanged": true,
+    "git_ls_files_stage_stdout": "",
+    "git_diff_index_cached_stdout": "",
+    "unrelated_staged_changes_modified": false
+  },
+  "actual_remote_evidence": {
+    "ls_remote_branch_sha": "9ea13abddd98fc09cde3b28cd91bb4483869fb14",
+    "tree_http_status": 200,
+    "tree_truncated": false,
+    "lock_entry": null,
+    "remote_lock_bytes_available": false,
+    "remote_lock_sha256": null,
+    "omission_of_a_previously_staged_lockfile_proven": false
+  },
+  "no_new_save_or_staging_occurred": true,
+  "same_ignore_or_save_workaround_repeated": false,
+  "direct_commit_push_reset_performed": false,
+  "application_or_packaging_code_changed": false,
+  "packaging_verifier_run": false,
+  "artifact_readiness_run": false,
+  "local_lock_overlaid_into_saved_source": false,
+  "production_actions": false,
+  "production_decision": "NO-GO; all existing production-readiness gates remain open",
+  "next_step": "Resolve a supported staging/file-inclusion path before asking for another unchanged save. Then Save to GitHub to the exact target, verify actual saved remote lock bytes/hash, and only then run the existing exact-source verifier/readiness. If a genuinely staged file is omitted, preserve that before/after evidence and report the limitation without another workaround."
+}
