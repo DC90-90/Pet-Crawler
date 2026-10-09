@@ -1,6 +1,12 @@
 # Independently reviewed Daleel fixes — preview acceptance
 
-## Latest packaging acceptance — 2026-10-09
+## Latest exact-source acceptance — 2026-10-09
+
+Remote commit **`2faa51c3ac21ef1d7fae97558bf666a7674bbd7e`** now has verified approved lock bytes and a successful **exact-source** build. **185/185 passed** (156 isolated +22 packaging +7 existing preview API checks), zero failures/errors/skips; no failed-build/test reruns. Generated identity **`sha256:7c6d8146f2c7c9000d8e5df11ba7172d8caec105e81642e683aaeb8229789adc`** agrees across backend/public/compiled manifests. Actual exported ASGI `/api/ready` is **200**, not a mocked identity check. The compiled API origin remains the preview URL; seven preview API cases are not exported-image E2E.
+
+**Production remains NO-GO**: container/clean dependency/actual managed-pipeline proof, backup restoration, production deployed identity and scheduler ownership, data quality/freshness and remaining operational acceptance are unverified. All320 exported inputs were unchanged after tests; newer workspace source inputs preserved. No repairs/overlays/config changes/deployment/production actions. Current report **`memory/EXACT_SOURCE_VERIFICATION_2FAA51C.md`** and **`test_reports/exact_source_2faa51c/main-evidence-validation.json`** supersede older pending-lock/build conclusions. Historical evidence below is retained.
+
+## Historical packaging acceptance — 2026-10-09
 
 **Candidate verified; production NO-GO; corrected remote/exact-source proof pending.** Final **185 checks = original163 +22 packaging** pass with zero failures/errors/skips; core reviewed application changes are preserved. Detailed commands, hashes, generated candidate identity, failed remote-lock reproduction and open gates are in `memory/PACKAGING_CORRECTIONS_DC22D72.md`.
 

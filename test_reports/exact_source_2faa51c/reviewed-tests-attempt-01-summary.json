@@ -1,0 +1,15 @@
+{
+  "returncode": 0,
+  "copied_xml": [
+    "four-correctness-final.xml",
+    "isolated-auth-final.xml",
+    "matcher-parent-pool-final.xml",
+    "preview-scope-final.xml",
+    "real-source-final.xml",
+    "related-contracts-final.xml",
+    "release-safety-final.xml",
+    "reviewed-core-final.xml",
+    "six-acceptance-final.xml"
+  ],
+  "export_root": "/tmp/daleel-packaging-gduk3tv6"
+}
