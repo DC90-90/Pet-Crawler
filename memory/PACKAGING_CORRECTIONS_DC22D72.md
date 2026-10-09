@@ -1,5 +1,7 @@
 # Release packaging corrections — isolated handoff
 
+**Historical handoff; superseded on2026-10-09 by `memory/EXACT_SOURCE_VERIFICATION_2FAA51C.md`.** Remote lock inclusion, exact-source build and committed-artifact readiness are now verified for`2faa51c3ac21ef1d7fae97558bf666a7674bbd7e`;185 checks passed. The candidate/null-SHA and pending-save statements below describe the earlier phase. Image/managed-pipeline and production gates remain open; no production action authorized.
+
 **Date:** 2026-10-09 UTC. **Status: candidate verified; corrected remote save/exact-source build pending. Production NO-GO.**
 
 User reference: `dc22d72a51f6d35dd40e4ee469c22f57f5d3d9dc`. Authorized destination: **`DC90-90/Pet-Crawler` → `conflict_130726_1244`**. No direct Git add/commit/push, branch switch/reset, production deployment/access/write/backfill/writer shutdown, or credential rotation was performed. All DB mutation tests used disposable loopback databases; preview API checks used existing data/credentials.

@@ -1,6 +1,14 @@
 # Daleel production-readiness assessment
 
-## Latest packaging continuation — 2026-10-09
+## Latest exact-source verification — 2026-10-09
+
+**Production remains NO-GO**, but remote lock inclusion and exact saved-source build/manifest/readiness subgates are now verified for **`2faa51c3ac21ef1d7fae97558bf666a7674bbd7e`**. **185/185 current checks passed**, with no failures/errors/skips or failed-run reruns. Real isolated exported-app `/api/ready` returned **200**, verified identity/boot, all capabilitiesOFF, zero DB collections created. The seven preview API cases remain preview checks, not exported-image E2E.
+
+Generated release identity: **`sha256:7c6d8146f2c7c9000d8e5df11ba7172d8caec105e81642e683aaeb8229789adc`**. Actual remote lock bytes matched the approved hash without regeneration; all320 export inputs and43 compiled assets verified. Compiled origin is the current **preview** origin. No source overlays, checkout replacement, app/config edits or production actions occurred.
+
+Full current evidence and per-gate closure requirements: **`memory/EXACT_SOURCE_VERIFICATION_2FAA51C.md`**, **`test_reports/iteration_44.json`**, **`test_reports/exact_source_2faa51c/`**. B1 still needs actual images/clean backend dependency install/managed consumption/approved build context; B2–B7 retain production-consistent maintenance, restricted-user/egress, deployed identity/scheduler, data freshness, backup restoration/rollback and ops evidence gaps. Docker/Podman is unavailable; no image or production readiness is inferred. **Next: exact-SHA image-only verification on an isolated container-capable runner, not deployment.**
+
+## Historical packaging continuation — 2026-10-09
 
 **NO-GO remains.** Packaging corrections against `dc22d72a51f6d35dd40e4ee469c22f57f5d3d9dc` and final **185 checks (163 existing +22 packaging)** passed in isolated/preview scope. Full evidence: **`memory/PACKAGING_CORRECTIONS_DC22D72.md`**; reproducible workflow: **`deploy/RELEASE_PACKAGING.md`**.
 

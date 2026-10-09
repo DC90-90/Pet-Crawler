@@ -1,0 +1,133 @@
+{
+  "checked_at": "2026-10-09T18:25:01.092005+00:00",
+  "source_sha": "2faa51c3ac21ef1d7fae97558bf666a7674bbd7e",
+  "release_id": "sha256:7c6d8146f2c7c9000d8e5df11ba7172d8caec105e81642e683aaeb8229789adc",
+  "lock_sha256": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+  "manifest_agreement": true,
+  "compiled_api_origin": "https://price-intel-dev.preview.emergentagent.com",
+  "frontend_asset_count_verified": 43,
+  "export_input_count": 320,
+  "workspace_input_count": 321,
+  "workspace_source_inputs_unchanged": true,
+  "workspace_head_unchanged": true,
+  "workspace_staged_changes": "",
+  "exported_backend_matches_preview_workspace_bytes": true,
+  "workspace_index_observation": {
+    "main_initial_sha256": "97e746f0e29fcdc35d93e56040c81983344bcb263457579b56a58e2a9ad928f8",
+    "testing_agent_interval_before": "e67187883cd5ae85afdd20b47018ae5dea79e8442992fbcb6349887fc8d64146",
+    "main_final_sha256": "9b3574e03af04d22818bd88a081eea773395c005826b49c171f06e7201c4b0a0",
+    "scope_note": "Raw index file checksums vary across the broader session. Agent interval before/after matches, but byte-identical index preservation for the entire session is NOT claimed. HEAD/tree and staged content remain unchanged; metadata-change cause not established."
+  },
+  "artifact_hashes": {
+    "retained-artifacts/backend-release-manifest.json": "c9bcd194ececfcc72ae331b6c784fc5a3ac47eb040f3fccc8dfa62754f8e8bee",
+    "retained-artifacts/frontend-public-manifest.json": "c9bcd194ececfcc72ae331b6c784fc5a3ac47eb040f3fccc8dfa62754f8e8bee",
+    "retained-artifacts/frontend-compiled-manifest.json": "c9bcd194ececfcc72ae331b6c784fc5a3ac47eb040f3fccc8dfa62754f8e8bee",
+    "retained-artifacts/frontend-asset-manifest.json": "b0c47ebea32d6c37cff902eeb0154373888d7811b2d2d6685bbe3c5b8662e956",
+    "retained-artifacts/release-build-receipt.json": "91af9564ed4db5873cc2909f9b597aa55a81df689597e46663f52ce21e66f8a4",
+    "build-attempt-01/result.json": "580b55a861a85bd615f06fc36db339eccbf6331b52bd95b187d551e4ce83d583",
+    "build-attempt-01/source-receipt.json": "97522e4f2429fdc89c17930e9df5a09fb7b281f20b202ef0e3dc009be4fcba20",
+    "build-attempt-01/build-evidence.json": "91af9564ed4db5873cc2909f9b597aa55a81df689597e46663f52ce21e66f8a4",
+    "build-attempt-01/artifact-ready.json": "5b69f3dfe59012f108f2ca4f2e9216b45f4acc76d8f6c9d51ab520f052dbcb39",
+    "compiled/static/js/main.272217b9.js": "fe07a3102b513f9171da7f46e2e2ecebc45118bb76dfcb0a6fb5f97e1234052e",
+    "verification-summary.json": "14865c8f7e81a505e81796d18f516fbcc938ebf05a081d27852a3a7fa55e16ab"
+  },
+  "test_results": [
+    {
+      "file": "reviewed-tests-attempt-01/reviewed-core-final.xml",
+      "passed": 52,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:25.168417+00:00",
+      "sha256": "d5d28b1041ee16c650d8a7459edd55e876cdf1c166262e5e26ec4c98f1ca8f62"
+    },
+    {
+      "file": "reviewed-tests-attempt-01/isolated-auth-final.xml",
+      "passed": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:29.944723+00:00",
+      "sha256": "8685e2383c9184acb9edc2251149326bd3a15789a003d01f8ce79313ed7fa177"
+    },
+    {
+      "file": "reviewed-tests-attempt-01/real-source-final.xml",
+      "passed": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:33.274865+00:00",
+      "sha256": "cfd9eea9fc3064b1b7b47af3c080b27e9dcf5ac56cb7a92e7ff60069028c988e"
+    },
+    {
+      "file": "reviewed-tests-attempt-01/related-contracts-final.xml",
+      "passed": 36,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:35.072901+00:00",
+      "sha256": "5c354006dbf8869ac77d3f961eb07d8ce262d4983330268588c87984de906ba7"
+    },
+    {
+      "file": "reviewed-tests-attempt-01/six-acceptance-final.xml",
+      "passed": 22,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:37.217722+00:00",
+      "sha256": "7dd1b017c094c24d7dde3058afe35419f1a405a03f727037d90979996752cec4"
+    },
+    {
+      "file": "reviewed-tests-attempt-01/four-correctness-final.xml",
+      "passed": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:40.157114+00:00",
+      "sha256": "82fd7492db615e09f35996d0fee0193bb821fd9c7def5e085fd767a4653fede2"
+    },
+    {
+      "file": "reviewed-tests-attempt-01/matcher-parent-pool-final.xml",
+      "passed": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:43.052025+00:00",
+      "sha256": "48801e07dbd82fe4363c01ceb377322d11be90546e8adf44b9f8f6c8db3e9aff"
+    },
+    {
+      "file": "reviewed-tests-attempt-01/release-safety-final.xml",
+      "passed": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:44.547903+00:00",
+      "sha256": "5316abcd020b258360389bdaff0645e74f904d53d8d86abeee0b6e7f139965ce"
+    },
+    {
+      "file": "packaging-attempt-01.xml",
+      "passed": 22,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:52.877951+00:00",
+      "sha256": "1914cea77d7bebfefc987354083971307523e5d2b194858f50c24d4d588786a0"
+    },
+    {
+      "file": "preview-scope-attempt-01.xml",
+      "passed": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "timestamp": "2026-10-09T18:19:59.124376+00:00",
+      "sha256": "84378055ffa389434fb420b7d15c73671803adf2299c41b6efea528271d74600"
+    }
+  ],
+  "total_passed": 185,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "failed_test_reruns": 0,
+  "build_attempts": 1,
+  "scope_note": "156 isolated+22 packaging from saved export;7 tests defined in saved export target existing live preview, not exported-artifact E2E. Actual exported artifact readiness200 is separate non-mocked ASGI evidence."
+}

@@ -1,0 +1,75 @@
+{
+  "summary": "Verification-only exact-source release checks completed against remote commit 2faa51c3ac21ef1d7fae97558bf666a7674bbd7e with isolated export/build/test flow; no app source changes were made.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "N/A",
+        "issue": "Container/image verification remains unverified because Docker/Podman is unavailable in this environment."
+      },
+      {
+        "endpoint": "N/A",
+        "issue": "Managed-pipeline artifact consumption is still unverified in this scope."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/exact_source_2faa51c/verify_clean_release_attempt01.log",
+    "/app/test_reports/exact_source_2faa51c/build-attempt-01/result.json",
+    "/app/test_reports/exact_source_2faa51c/build-attempt-01/build-evidence.json",
+    "/app/test_reports/exact_source_2faa51c/build-attempt-01/artifact-ready.json",
+    "/app/test_reports/exact_source_2faa51c/reviewed-tests-attempt-01/run_reviewed_tests.log",
+    "/app/test_reports/exact_source_2faa51c/packaging-attempt-01.xml",
+    "/app/test_reports/exact_source_2faa51c/preview-scope-attempt-01.xml",
+    "/app/test_reports/exact_source_2faa51c/remote-lock-evidence.json",
+    "/app/test_reports/exact_source_2faa51c/workspace-preservation-compare.json"
+  ],
+  "action_items": [
+    "B1 remains open: run image build/runtime verification in an environment with Docker/Podman and capture immutable image evidence.",
+    "B2 remains open: verify startup behavior in production-consistent runtime, beyond isolated ASGI readiness check.",
+    "B3 remains open: validate restricted-customer and egress behavior in authorized production-like path.",
+    "B4 remains open: verify production deployed identity/scheduler ownership evidence.",
+    "B5 remains open: verify data freshness/quality gates in authorized production checks.",
+    "B6 remains open: perform authorized restore/PITR validation and evidence capture.",
+    "B7 remains open: complete ops/runbook/recovery gate evidence in managed environment."
+  ],
+  "critical_code_review_comments": [
+    "No source edits were performed (verification-only scope).",
+    "run_reviewed_tests.py writes JUnit files into export/test_reports/pytest which may include pre-existing carried XML names; count only the expected reviewed group set for total assertions."
+  ],
+  "updated_files": [
+    "/app/test_reports/exact_source_2faa51c/workspace-baseline-before.json",
+    "/app/test_reports/exact_source_2faa51c/verify_clean_release_attempt01.log",
+    "/app/test_reports/exact_source_2faa51c/build-attempt-01/result.json",
+    "/app/test_reports/exact_source_2faa51c/build-attempt-01/build-evidence.json",
+    "/app/test_reports/exact_source_2faa51c/build-attempt-01/artifact-ready.json",
+    "/app/test_reports/exact_source_2faa51c/reviewed-tests-attempt-01/run_reviewed_tests.log",
+    "/app/test_reports/exact_source_2faa51c/reviewed-tests-attempt-01-summary.json",
+    "/app/test_reports/exact_source_2faa51c/packaging-attempt-01.log",
+    "/app/test_reports/exact_source_2faa51c/packaging-attempt-01.xml",
+    "/app/test_reports/exact_source_2faa51c/preview-scope-attempt-01.log",
+    "/app/test_reports/exact_source_2faa51c/preview-scope-attempt-01.xml",
+    "/app/test_reports/exact_source_2faa51c/verify-release-artifact-after-tests.log",
+    "/app/test_reports/exact_source_2faa51c/remote-lock-yarn.lock",
+    "/app/test_reports/exact_source_2faa51c/remote-lock-evidence.json",
+    "/app/test_reports/exact_source_2faa51c/workspace-baseline-after.json",
+    "/app/test_reports/exact_source_2faa51c/workspace-preservation-compare.json",
+    "/app/test_reports/exact_source_2faa51c/export-source-integrity-after-tests.json",
+    "/app/test_reports/exact_source_2faa51c/verification-summary.json",
+    "/app/test_reports/iteration_44.json"
+  ],
+  "success_rate": {
+    "backend": "100% for executed checks (185/185)",
+    "frontend": "N/A (skipped by request)"
+  },
+  "seed_data_creation": "None. Disposable loopback DBs only; no production/preview seed mutation performed by this verification task.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Exact-commit export path was /tmp/daleel-packaging-gduk3tv6. Remote lock raw bytes matched 518152 and SHA256 2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0, blob 603e2c6d1a8ee82be74311c3672d832fc8f389a3. Workspace preservation compare shows HEAD/branch/index/source hash unchanged before vs after.",
+  "rca of the issue": "No build/test failure occurred. A counting pitfall exists: export/test_reports/pytest may include carried XML (e.g., preview-scope-final.xml), which can inflate totals if globbed broadly. Correct reviewed total comes from the 8 groups run by scripts/run_reviewed_tests.py = 156; then +22 packaging +7 preview-scope = 185."
+}
