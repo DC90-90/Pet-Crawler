@@ -271,3 +271,12 @@ reports/
 frontend/node_modules/.cache/default-development/18.pack
 frontend/node_modules/.cache/default-development/24.pack
 frontend/node_modules/.cache/default-development/25.pack
+
+# Required release input; never replace with an install-time dependency resolution.
+!/frontend/yarn.lock
+
+# Generated ONLY in an isolated source export, never saved as source manifests.
+/backend/release_build.json
+/frontend/public/release.json
+/artifacts/
+**/yarn-cache/

@@ -4,7 +4,8 @@
 #
 # Usage:
 #   cp .env.example .env    # Fill in your values
-#   docker compose up -d --build
+#   Use only from a verified saved-source export with generated artifacts.
+#   See RELEASE_PACKAGING.md; raw working-tree builds deliberately fail.
 #   docker compose logs -f
 #
 # Architecture:
@@ -65,7 +66,7 @@ services:
       - 8.8.8.8
       - 1.1.1.1
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/ready"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -75,8 +76,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/frontend.Dockerfile
-      args:
-        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:?REACT_APP_BACKEND_URL required}
     container_name: daleel-frontend
     restart: unless-stopped
     depends_on:

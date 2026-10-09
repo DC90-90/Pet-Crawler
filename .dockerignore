@@ -2,10 +2,12 @@
 **/.env
 **/.env.*
 **/node_modules
+**/yarn-cache
 **/__pycache__
 **/.pytest_cache
 **/test_credentials.md
 investigation
 test_reports
-frontend/build
+# frontend/build and artifacts/release-build.json are verified packaging outputs.
+# Container recipes consume the prepared export, not an arbitrary working tree.
 memory

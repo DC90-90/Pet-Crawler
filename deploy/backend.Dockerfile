@@ -2,6 +2,11 @@
 # Daleel Pets — Backend Dockerfile
 # FastAPI + Playwright + Chromium
 ##############################################
+FROM python:3.11-slim AS verified
+WORKDIR /source
+COPY . .
+RUN python scripts/verify_release_artifact.py --require-committed
+
 FROM python:3.11-slim
 
 # System deps for Playwright Chromium
@@ -20,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Install Python dependencies
-COPY backend/requirements.txt .
+COPY --from=verified /source/backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install Playwright browsers (Chromium only)
@@ -28,8 +33,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/pw-browsers
 RUN playwright install chromium && playwright install-deps chromium
 
 # Copy application code
-COPY backend/ ./
-RUN python -c "from release_identity import identity; assert identity()['manifest_verified'], 'Stamp the approved source with scripts/stamp_release.py before building'"
+COPY --from=verified /source/backend/ ./
+RUN python -c "from release_identity import identity; r=identity(); assert r['manifest_verified'] and r['git_commit'], 'Verified committed runtime manifest required'"
 
 # Expose port
 EXPOSE 8001

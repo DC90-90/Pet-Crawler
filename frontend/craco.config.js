@@ -6,6 +6,9 @@ require("dotenv").config();
 // Craco sets NODE_ENV=development for start, NODE_ENV=production for build
 const isDevServer = process.env.NODE_ENV !== "production";
 
+// Fail closed on raw/stale workspace manifests. Generated only by isolated exporter.
+if (!isDevServer) require("./release-build/verify.cjs").verify();
+
 // Environment variable overrides
 const config = {
   enableHealthCheck: process.env.ENABLE_HEALTH_CHECK === "true",

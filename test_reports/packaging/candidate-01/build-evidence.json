@@ -1,0 +1,93 @@
+{
+  "release_id": "sha256:2511e38f102218420b41a10d69cb3608fbc31c000d3529301e5ae89dde1b59a3",
+  "git_commit": null,
+  "lock_sha256": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+  "build_context": {
+    "REACT_APP_BACKEND_URL": "https://price-intel-dev.preview.emergentagent.com",
+    "REACT_APP_ALLOW_PUBLIC_REGISTRATION": "false",
+    "NODE_ENV": "production",
+    "GENERATE_SOURCEMAP": "false",
+    "ENABLE_HEALTH_CHECK": "false",
+    "CI": "false"
+  },
+  "source_state": "uncommitted-candidate",
+  "versions": {
+    "node": "v20.20.2",
+    "yarn": "1.22.22",
+    "python": "Python 3.11.17"
+  },
+  "commands": [
+    [
+      "yarn",
+      "install",
+      "--frozen-lockfile",
+      "--non-interactive",
+      "--production=false",
+      "--cache-folder",
+      "/app/test_reports/packaging/candidate-01/yarn-cache"
+    ],
+    [
+      "yarn",
+      "build"
+    ],
+    [
+      "/root/.venv/bin/python",
+      "-m",
+      "compileall",
+      "-q",
+      "backend",
+      "scripts"
+    ]
+  ],
+  "frontend_assets": {
+    "asset-manifest.json": "b0c47ebea32d6c37cff902eeb0154373888d7811b2d2d6685bbe3c5b8662e956",
+    "index.html": "9c75bc7d37dacdcb70faa38024b33427f6f2b414cab1bf06119c936b01918093",
+    "release.json": "02637f8d8c2dac41d6a150654aa6fb8beb75a253e25e529d6d62b23538118456",
+    "static/css/main.a041f305.css": "2346cc388a692c0a252b3f70bcaefbe4b09ba04b77f57c8d1b6bc2f8c19fb59b",
+    "static/js/121.149becf2.chunk.js": "f46d1fdba269f7f6ab906de8c52b68da158d09524e1755f2c9de27ebcdfa88bc",
+    "static/js/175.056c94b9.chunk.js": "614eab67319683241079099eee73d83e456730b5d516333cbc13b5f223236f6b",
+    "static/js/175.056c94b9.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/199.ae0d0ebe.chunk.js": "074bae6441e9702bd9ca38c56b68969a4a9185e4269bd3e5f8681e0508244987",
+    "static/js/199.ae0d0ebe.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/200.44100c0b.chunk.js": "1647401f0f94b49106b7aafdaed07d9bdaf560a1b310659e5cfd4788348a6af3",
+    "static/js/200.44100c0b.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/246.67744d17.chunk.js": "e8d98c0ad90ebf6bbb939094767c7b041f1f190558aaad56655c49628ed32c85",
+    "static/js/246.67744d17.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/378.6025ca2f.chunk.js": "6c972d3f2bf1e7f1694d41adaf8741d6cd15092862cd74cfc20c462cae6c6eb5",
+    "static/js/378.6025ca2f.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/428.d99de6af.chunk.js": "963addf469e92d5ea6bc24b8bb42f28b88abe5bc2fb2d901cee909de2011916e",
+    "static/js/493.ef2d333b.chunk.js": "8032a2990a9e9e3eb99d0f9d1a674104c5e8c4d7201a84e599b14a76234856c6",
+    "static/js/493.ef2d333b.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/515.368fbb21.chunk.js": "4cea5c5aa9ac1d21324bcb9831807fdc7875cd042dc379e6215f5131b92cd5a7",
+    "static/js/515.368fbb21.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/555.2ba1c52a.chunk.js": "68538dd0eaf4ba2d7c40cf145ca107854e29d07a86648377aa14b6b676047876",
+    "static/js/555.2ba1c52a.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/56.380b394c.chunk.js": "c38446c9cf63e2077467618f8a099cd728be889f065275afec43b22db1d0ac82",
+    "static/js/56.380b394c.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/565.12ad8185.chunk.js": "59ea4ba6e05fd6e5e68ed64f1bd61890cb6e3b0dcc9d0e125f14a16f4293408a",
+    "static/js/565.12ad8185.chunk.js.LICENSE.txt": "86cd164c4f6a9f5e60b82dec4a75aa89326ec6c721ff26650c8817e42e1d0a37",
+    "static/js/579.23793a42.chunk.js": "359bc7c6caf26fd125cc784615ec1cba23a16a8acc3d14c79057569985c5e54d",
+    "static/js/613.bacc750c.chunk.js": "81226bd344eee817d78ea9e360d7c6f6a418e96c2f620a874cc07c3314ef4c20",
+    "static/js/613.bacc750c.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/635.f69b4bef.chunk.js": "9007e281f20daea8bdf918f4461096dfe9ea2b3f2123562090e704d66bfc7149",
+    "static/js/635.f69b4bef.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/643.c96dca83.chunk.js": "0ac71dc74b8b6d0b5bbf644aa5062b8baa54d4951a1f07ed3f348aae95b70c9d",
+    "static/js/667.fc9ca7e0.chunk.js": "c885464e01f19ec2c5cff27cd85729b171733650f274f3c223fe120d6e5a6afe",
+    "static/js/668.bf3b5046.chunk.js": "e43e9839860e970698032b9711164f60fb1f7bd2e10d38cebc0902d8225de533",
+    "static/js/668.bf3b5046.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/695.70d52f47.chunk.js": "a41c15753492ec23a1c192b07002a76437e86ae1061e9c451cea560b6f357914",
+    "static/js/699.e3ed3c4c.chunk.js": "67dae248e154ff7de18e0998bf5e8acad4655e2fad02bca583a5100a9d0456db",
+    "static/js/806.81e35863.chunk.js": "379842c2a6fc49737c357a0ca7abdb4d95b8c69ea30a082441c4179472b57141",
+    "static/js/861.59369456.chunk.js": "f3b9e2a6002584a8882e9bcc5d99f40559862b983b454483156d3bbf29697679",
+    "static/js/861.59369456.chunk.js.LICENSE.txt": "43bda659786568123f0730b27b4b85862200ec1cf825a242e6964b2edf1c832c",
+    "static/js/940.35d31f80.chunk.js": "1b4a689a3830f8b633a720da03f89bfa9ee674eb9d52a1276383d328d22d01c3",
+    "static/js/main.272217b9.js": "fe07a3102b513f9171da7f46e2e2ecebc45118bb76dfcb0a6fb5f97e1234052e",
+    "static/js/main.272217b9.js.LICENSE.txt": "a2d41a5058f5984ee87f6f7e6cec7b5a6f67699c265746fbfa33834ccc5af380"
+  },
+  "compiled_api_origin_files": [
+    "static/js/main.272217b9.js"
+  ],
+  "frontend_manifest_equal": true,
+  "backend_dependency_install_verified": false,
+  "backend_runtime": "existing-preview-Python-not-a-new-image"
+}

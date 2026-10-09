@@ -1,0 +1,68 @@
+{
+  "summary": "Backend-only release-packaging verification completed: reviewed suites passed (156+7), new packaging regressions passed (17), candidate isolated artifact build passed with expected /api/ready=503 for null-SHA candidate, and remote saved-SHA check correctly failed on missing frontend/yarn.lock.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "Remote saved commit gate (DC90-90/Pet-Crawler@conflict_130726_1244:dc22d72a51f6d35dd40e4ee469c22f57f5d3d9dc)",
+        "issue": "Actual remote commit omits frontend/yarn.lock, so saved-source packaging cannot proceed and remote lock hash cannot be proven.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "Container verification",
+        "issue": "Container/image checks remain unverified (no docker/podman engine in environment)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_release_packaging.py",
+    "/app/test_reports/pytest/release_packaging_regression.xml",
+    "/app/test_reports/pytest/release-safety-final.xml",
+    "/app/test_reports/pytest/iter43_preview_scope_checks.xml",
+    "/app/test_reports/packaging/run_reviewed_tests.log",
+    "/app/test_reports/packaging/release_packaging_regression.log",
+    "/app/test_reports/packaging/candidate-01/result.json",
+    "/app/test_reports/packaging/candidate-01/build-evidence.json",
+    "/app/test_reports/packaging/candidate-01/artifact-ready.json",
+    "/app/test_reports/packaging/reference-remote-01/result.json",
+    "/app/test_reports/packaging/reference-remote-01.log"
+  ],
+  "action_items": [
+    "User must run Save to GitHub so frontend/yarn.lock is included in remote commit; then rerun saved-source verify_clean_release against that exact SHA.",
+    "After remote lock inclusion, collect lock blob/hash evidence from actual remote commit and complete committed-export build + /api/ready=200 proof.",
+    "Keep backup/restore, production identity, scheduler ownership and data-quality gates open until independent evidence is supplied."
+  ],
+  "critical_code_review_comments": [
+    "Packaging gate behavior is correct: remote export refuses missing lockfile before build, preventing local overlay of lock/manifests.",
+    "Candidate build flow is correctly constrained: git_commit null, source_state uncommitted-candidate, and /api/ready remains 503.",
+    "No direct git write operations detected in packaging scripts under test scope."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_release_packaging.py",
+    "/app/test_reports/pytest/release_packaging_regression.xml",
+    "/app/test_reports/pytest/iter43_preview_scope_checks.xml",
+    "/app/test_reports/packaging/run_reviewed_tests.log",
+    "/app/test_reports/packaging/iter40_preview_scope_checks.log",
+    "/app/test_reports/packaging/release_packaging_regression.log",
+    "/app/test_reports/packaging/candidate-01/result.json",
+    "/app/test_reports/packaging/candidate-01/build-evidence.json",
+    "/app/test_reports/packaging/candidate-01/artifact-ready.json",
+    "/app/test_reports/packaging/reference-remote-01/result.json",
+    "/app/test_reports/iteration_43.json"
+  ],
+  "success_rate": {
+    "backend": "94%",
+    "frontend": "N/A (backend-only scope)"
+  },
+  "seed_data_creation": "None persisted. Reviewed suite used disposable UUID DBs and candidate readiness used disposable loopback DB.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Executed commands: python scripts/run_reviewed_tests.py (156 passed), pytest -q backend/tests/test_iter40_preview_scope_checks.py (7 passed), pytest -q backend/tests/test_release_packaging.py (17 passed), python scripts/verify_clean_release.py --candidate --containers --output /app/test_reports/packaging/candidate-01 (passed-candidate-rehearsal, ready 503 expected), python scripts/verify_clean_release.py --commit dc22d72a51f6d35dd40e4ee469c22f57f5d3d9dc --repository DC90-90/Pet-Crawler --branch conflict_130726_1244 --output /app/test_reports/packaging/reference-remote-01 (expected failure: missing frontend/yarn.lock). Candidate lock hash: 2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0. Candidate release_id: sha256:2511e38f102218420b41a10d69cb3608fbc31c000d3529301e5ae89dde1b59a3. Source SHA remains null for candidate.",
+  "rca of the issue": "Root cause: Save-to-GitHub path did not include frontend/yarn.lock in the saved remote commit dc22d72a51f6d35dd40e4ee469c22f57f5d3d9dc. Reproduction: run verify_clean_release.py with --repository/--branch/--commit against that remote SHA; export_remote reads remote tree and fails immediately with 'Actual remote commit omits frontend/yarn.lock'. Mitigation: re-save source via platform so lock is present in remote tree/blob, then rerun committed-export packaging verification to prove lock hash and committed /api/ready=200 evidence."
+}

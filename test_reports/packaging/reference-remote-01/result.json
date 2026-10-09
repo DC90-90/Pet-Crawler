@@ -1,0 +1,11 @@
+{
+  "started_at": "2026-10-09T16:35:50.646702+00:00",
+  "clean_root": "/tmp/daleel-packaging-_a7qwp8q",
+  "production_pipeline_verified": false,
+  "container_image_verified": false,
+  "requested_commit": "dc22d72a51f6d35dd40e4ee469c22f57f5d3d9dc",
+  "candidate": false,
+  "status": "failed",
+  "error": "Actual remote commit omits frontend/yarn.lock; Save to GitHub inclusion gate FAILED",
+  "finished_at": "2026-10-09T16:35:51.594602+00:00"
+}

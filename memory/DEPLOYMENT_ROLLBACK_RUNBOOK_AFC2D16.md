@@ -1,5 +1,7 @@
 # Daleel gated deployment and rollback runbook
 
+**Latest packaging prerequisite (2026-10-09):** see `deploy/RELEASE_PACKAGING.md` and `memory/PACKAGING_CORRECTIONS_DC22D72.md`. Candidate packaging and185 checks pass, but actual reference remote lacks the lock; corrected remote save/exact-source build/committed readiness remain pending. Repository container consumers require generated verified exports. Managed-pipeline/image consumption, backup restoration, deployed identity, actual scheduler ownership and data quality remain unverified. **No step here is authorized for production execution.**
+
 **Baseline assessed:** `afc2d162a144fd3f4b942b694b072637ae6c645c`  
 **Status:** Future production procedure only. **Current NO-GO. No production step below was executed.** Isolated protocol rehearsals are recorded separately and do not constitute production restoration or image rollback.  
 **Companion assessment:** `PRODUCTION_READINESS_AFC2D16.md`.

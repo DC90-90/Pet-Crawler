@@ -1,36 +1,12 @@
-##############################################
-# Daleel Pets — Frontend Dockerfile
-# React build → Nginx static serve
-##############################################
+# Prepared-artifact consumer, NOT a workspace manifest copier or implicit build.
+# First run scripts/verify_clean_release.py against the exact saved source SHA.
+FROM python:3.11-slim AS verified
+WORKDIR /source
+COPY . .
+RUN python scripts/verify_release_artifact.py --require-committed
 
-# Stage 1: Build
-FROM node:20-alpine AS builder
-WORKDIR /app
-
-COPY frontend/package.json frontend/yarn.lock ./
-RUN yarn install --frozen-lockfile --production=false
-
-COPY frontend/ .
-RUN test -s public/release.json
-
-# Build-time env var — replaced at container start via entrypoint
-ARG REACT_APP_BACKEND_URL
-ENV REACT_APP_BACKEND_URL=$REACT_APP_BACKEND_URL
-
-RUN yarn build
-
-# Stage 2: Serve
 FROM nginx:1.25-alpine
-
-# Copy built assets
-COPY --from=builder /app/build /usr/share/nginx/html
-
-# Copy nginx config
-COPY deploy/nginx-frontend.conf /etc/nginx/conf.d/default.conf
-
-# SPA fallback — all routes serve index.html
-RUN echo 'server { listen 3000; root /usr/share/nginx/html; index index.html; location / { try_files $uri $uri/ /index.html; } }' > /etc/nginx/conf.d/default.conf
-
+COPY --from=verified /source/frontend/build /usr/share/nginx/html
+COPY --from=verified /source/deploy/nginx-frontend.conf /etc/nginx/conf.d/default.conf
 EXPOSE 3000
-
 CMD ["nginx", "-g", "daemon off;"]

@@ -1,6 +1,14 @@
 # Independently reviewed Daleel fixes — preview acceptance
 
-Updated: **2026-10-09**. Latest scope: **release-safety remediation documentation and evidence reconciliation**. The final release-safety section below is authoritative: **163 saved passing checks = 156 isolated + 7 preview API checks**. Earlier 104/133/143/144 totals and their Git checkpoints are historical. **Production remains NO-GO** while B1–B7 evidence is incomplete. This documentation continuation made no application/configuration changes, ran no new application tests/builds, and performed no production access, refresh, backfill, credential rotation, direct Git write, or deployment.
+## Latest packaging acceptance — 2026-10-09
+
+**Candidate verified; production NO-GO; corrected remote/exact-source proof pending.** Final **185 checks = original163 +22 packaging** pass with zero failures/errors/skips; core reviewed application changes are preserved. Detailed commands, hashes, generated candidate identity, failed remote-lock reproduction and open gates are in `memory/PACKAGING_CORRECTIONS_DC22D72.md`.
+
+Independent `iteration_43.json` covers initial163+17 and candidate01; final main rerun covers163+22 and candidate02 (`test_reports/packaging/final-verification/`, `candidate-02/`). The real remote reference still lacks `frontend/yarn.lock`, so there is **no successful corrected saved-source build** yet. Candidate manifests/compiled origin verify; real isolated ASGI readiness returns expected503 for null sourceSHA. Docker/managed-pipeline consumption remains unverified. Next action is user Save to GitHub → `DC90-90/Pet-Crawler` → `conflict_130726_1244`, followed by actual remote blob/commit/export/build/readiness verification. No direct push or production action.
+
+The sections below are earlier acceptance history, not a claim that their totals/hashes represent the newest packaging rerun.
+
+Historical update: **2026-10-09**, before the packaging continuation above. Scope at that time: **release-safety remediation documentation and evidence reconciliation**. Its final release-safety section records **163 saved passing checks = 156 isolated + 7 preview API checks**. Earlier 104/133/143/144 totals and their Git checkpoints are historical. **Production remains NO-GO** while B1–B7 evidence is incomplete. That documentation-only continuation made no application/configuration changes, ran no new application tests/builds, and performed no production access, refresh, backfill, credential rotation, direct Git write, or deployment.
 
 ## Historical checkout and Git handoff — matcher continuation
 - Requested repository: `DC90-90/Pet-Crawler`.

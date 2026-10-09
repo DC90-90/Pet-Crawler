@@ -1,6 +1,14 @@
 # Daleel production-readiness assessment
 
-## Current decision — release-safety remediation evidence reconciled, 2026-10-09
+## Latest packaging continuation — 2026-10-09
+
+**NO-GO remains.** Packaging corrections against `dc22d72a51f6d35dd40e4ee469c22f57f5d3d9dc` and final **185 checks (163 existing +22 packaging)** passed in isolated/preview scope. Full evidence: **`memory/PACKAGING_CORRECTIONS_DC22D72.md`**; reproducible workflow: **`deploy/RELEASE_PACKAGING.md`**.
+
+The actual remote reference omits the lockfile; its underlying save-omission mechanism remains unknown. Explicit inclusion rules and fail-closed export/build checks are implemented, but **corrected remote lock inclusion, saved source SHA/build and committed-artifact readiness remain pending user Save to GitHub**. Candidate02 generates matching manifests for all320 declared inputs and the preview API origin; its SHA is deliberately null and `/api/ready`503 is expected. This is not a positive saved-source release test.
+
+Repository Dockerfiles now verify/consume prepared artifacts, but **actual managed-pipeline consumption, image builds/digests and clean backend dependency installation are unverified**. Existing core fixes were byte-preserved; no production action or credential change occurred. All B1–B7 require separate closure evidence, particularly backup restoration, deployed-version identity, actual scheduler ownership and current data quality/freshness. The older sections below retain their original evidence/totals; newer XML files may replace shared historical paths.
+
+## Historical decision — release-safety remediation evidence reconciled, 2026-10-09
 
 **Production remains NO-GO.** Preview/disposable-database safety fixes are verified within the scope below; no blocking production gate is declared closed. This update finalizes documentation only. It did **not** deploy, access production, stop production writers, restore a backup, backfill data, rotate credentials, or push to GitHub.
 

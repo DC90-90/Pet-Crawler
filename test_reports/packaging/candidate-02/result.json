@@ -1,0 +1,49 @@
+{
+  "started_at": "2026-10-09T16:39:43.137911+00:00",
+  "clean_root": "/tmp/daleel-packaging-rdt8txs_",
+  "production_pipeline_verified": false,
+  "container_image_verified": false,
+  "requested_commit": null,
+  "candidate": true,
+  "status": "passed-candidate-rehearsal",
+  "source_sha": null,
+  "source_evidence": {
+    "method": "candidate-copy",
+    "remote_verified": false
+  },
+  "lock_sha256": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+  "release_id": "sha256:0797580df25eb68948713d3bab90bf674affdb88e815f65edcb42de5daded592",
+  "versions": {
+    "node": "v20.20.2",
+    "yarn": "1.22.22",
+    "python": "Python 3.11.17"
+  },
+  "build_context": {
+    "REACT_APP_BACKEND_URL": "https://price-intel-dev.preview.emergentagent.com",
+    "REACT_APP_ALLOW_PUBLIC_REGISTRATION": "false",
+    "NODE_ENV": "production",
+    "GENERATE_SOURCEMAP": "false",
+    "ENABLE_HEALTH_CHECK": "false",
+    "CI": "false"
+  },
+  "source_build": "passed",
+  "ready": {
+    "http_status": 503,
+    "expected_status": 503,
+    "identity": {
+      "release_id": "sha256:0797580df25eb68948713d3bab90bf674affdb88e815f65edcb42de5daded592",
+      "git_commit": null,
+      "source_state": "uncommitted-candidate",
+      "manifest_verified": true,
+      "scheduler_protocol": "fenced-platform-cron-v1",
+      "schema_protocol": "offers-v2-ledger-receipts-v2"
+    },
+    "boot_status": "done",
+    "database_collections_created": 0,
+    "transport": "actual-exported-app-ASGI",
+    "mocked": false,
+    "all_capabilities_off": true
+  },
+  "container_check": "unverified-no-container-engine",
+  "finished_at": "2026-10-09T16:40:46.078507+00:00"
+}

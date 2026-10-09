@@ -1,0 +1,17 @@
+{
+  "http_status": 503,
+  "expected_status": 503,
+  "identity": {
+    "release_id": "sha256:0797580df25eb68948713d3bab90bf674affdb88e815f65edcb42de5daded592",
+    "git_commit": null,
+    "source_state": "uncommitted-candidate",
+    "manifest_verified": true,
+    "scheduler_protocol": "fenced-platform-cron-v1",
+    "schema_protocol": "offers-v2-ledger-receipts-v2"
+  },
+  "boot_status": "done",
+  "database_collections_created": 0,
+  "transport": "actual-exported-app-ASGI",
+  "mocked": false,
+  "all_capabilities_off": true
+}

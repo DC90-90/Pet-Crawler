@@ -1,11 +1,10 @@
-"""Clean-source rehearsal without starting the application or accessing Mongo.
+"""Isolated packaging entrypoint. Remote mode proves actual saved blob inclusion.
 
---commit REF exports EXACT Git contents (and fails if lockfile was not saved).
-Without --commit this verifies an uncommitted candidate, not a Git release.
-Docker/managed pipeline proof is recorded separately, never inferred from yarn.
+No source overlay, Git writes, production calls, or working-tree manifests. A
+candidate rehearsal is explicit and MUST remain null-SHA/not-ready. Container
+checks and managed-pipeline evidence are independent from a clean source build.
 """
 import argparse
-import hashlib
 import json
 import os
 import shutil
@@ -14,72 +13,69 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from stamp_release import stamp
+
+from release_source import export_candidate, export_local, export_remote
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(args):
-    output = ROOT / "test_reports/release_build"
-    output.mkdir(parents=True, exist_ok=True)
-    clean = Path(tempfile.mkdtemp(prefix="daleel-clean-release-"))
-    result = {"started_at": datetime.now(timezone.utc).isoformat(), "source": args.commit or "uncommitted-candidate",
-              "production_pipeline_verified": False, "container_image_verified": False, "clean_root": str(clean)}
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    clean = Path(tempfile.mkdtemp(prefix="daleel-packaging-"))
+    result = {"started_at": datetime.now(timezone.utc).isoformat(), "clean_root": str(clean),
+              "production_pipeline_verified": False, "container_image_verified": False,
+              "requested_commit": args.commit, "candidate": args.candidate, "status": "started"}
     try:
-        if args.commit:
-            sha = subprocess.check_output(["git", "rev-parse", args.commit], cwd=ROOT, text=True).strip()
-            archive = subprocess.Popen(["git", "archive", sha], cwd=ROOT, stdout=subprocess.PIPE)
-            subprocess.run(["tar", "-x", "-C", str(clean)], stdin=archive.stdout, check=True)
-            archive.stdout.close()
-            if archive.wait(): raise RuntimeError("Git archive failed")
-            result["source"] = sha
+        if args.candidate:
+            source = export_candidate(ROOT, clean)
+        elif args.repository:
+            source = export_remote(args.repository, args.branch, args.commit, clean)
         else:
-            for folder in ("backend", "frontend", "deploy", "scripts", ".emergent"):
-                shutil.copytree(ROOT / folder, clean / folder, ignore=shutil.ignore_patterns(
-                    "node_modules", "build", ".env", ".env.*", "__pycache__", ".cache", ".venv", "venv", "*.log", "release_build.json", "release.json", "cron"))
-        if not (clean / "frontend/yarn.lock").is_file():
-            raise RuntimeError("Release source has no frontend/yarn.lock; save it before claiming committed-build proof")
-        manifest = stamp(clean, result["source"] if args.commit else None)
-        result.update({k: manifest[k] for k in ("release_id", "lock_sha256")})
-        result["node"] = subprocess.check_output(["node", "--version"], text=True).strip()
-        result["yarn"] = subprocess.check_output(["yarn", "--version"], text=True).strip()
-        if not result["node"].startswith("v20."):
-            raise RuntimeError("Use Node20, matching deploy/frontend.Dockerfile; refusing different-major proof")
-        env = dict(os.environ)
-        from dotenv import dotenv_values
-        env["REACT_APP_BACKEND_URL"] = dotenv_values(ROOT / "frontend/.env")["REACT_APP_BACKEND_URL"]
-        env.pop("CI", None)  # The committed Docker build does not set CI/Werror.
-        env["NODE_OPTIONS"] = "--max-old-space-size=4096"
-        before = hashlib.sha256((clean / "frontend/yarn.lock").read_bytes()).hexdigest()
-        with (output / "frontend-install.log").open("w") as log:
-            subprocess.run(["yarn", "install", "--frozen-lockfile", "--non-interactive", "--cache-folder", str(clean / "yarn-cache")], cwd=clean / "frontend", env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
-        with (output / "frontend-build.log").open("w") as log:
-            subprocess.run(["yarn", "build"], cwd=clean / "frontend", env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
-        assert before == hashlib.sha256((clean / "frontend/yarn.lock").read_bytes()).hexdigest()
-        artifact = json.loads((clean / "frontend/build/release.json").read_text())
-        assert artifact["release_id"] == manifest["release_id"]
-        result.update(frontend_clean_build="passed", frozen_lock_unchanged=True, frontend_backend_manifest_match=True)
-        engine = shutil.which("docker") or shutil.which("podman")
+            source = export_local(ROOT, args.commit, clean)
+        result.update(source_sha=source.commit, source_evidence=source.evidence, lock_sha256=source.files["frontend/yarn.lock"])
+        receipt = output / "source-receipt.json"
+        receipt.write_text(json.dumps({"commit": source.commit, "files": source.files, "evidence": source.evidence}, indent=2) + "\n")
+        driver = clean / "scripts/build_release.py"
+        if not driver.is_file():
+            raise RuntimeError("Saved commit has no corrected build driver; cannot overlay newer build code onto saved source")
+        # No fallback to workspace build code. Even scripts come from the saved export.
+        with (output / "build-driver.log").open("w") as log:
+            subprocess.run([sys.executable, str(driver), "--receipt", str(receipt), "--output", str(output)], cwd=clean, env=dict(os.environ), stdout=log, stderr=subprocess.STDOUT, check=True)
+        evidence = json.loads((output / "build-evidence.json").read_text())
+        result.update(release_id=evidence["release_id"], versions=evidence["versions"], build_context=evidence["build_context"],
+                      source_build="passed", ready=json.loads((output / "artifact-ready.json").read_text()))
         if args.containers:
-            if not engine: raise RuntimeError("No container engine: production-container gate is unverified")
-            with (output / "container-build.log").open("w") as log:
-                for name in ("backend", "frontend"):
-                    command = [engine, "build", "-f", f"deploy/{name}.Dockerfile", "-t", f"daleel-rehearsal-{name}:{manifest['release_id'][7:19]}"]
-                    if name == "frontend": command += ["--build-arg", "REACT_APP_BACKEND_URL="+env["REACT_APP_BACKEND_URL"]]
-                    subprocess.run(command+["."], cwd=clean, stdout=log, stderr=subprocess.STDOUT, check=True)
-            result["container_image_verified"] = True
-        result["status"] = "passed-clean-source-build"
+            engine = shutil.which("docker") or shutil.which("podman")
+            if not engine:
+                result["container_check"] = "unverified-no-container-engine"
+            elif not source.commit:
+                result["container_check"] = "blocked-uncommitted-candidate"
+            else:
+                with (output / "container-build.log").open("w") as log:
+                    for name in ("backend", "frontend"):
+                        subprocess.run([engine, "build", "--iidfile", str(output / (name + "-image-id.txt")), "-f", "deploy/" + name + ".Dockerfile", "."], cwd=clean, stdout=log, stderr=subprocess.STDOUT, check=True)
+                result["container_image_verified"] = True
+        result["status"] = "passed-candidate-rehearsal" if args.candidate else "passed-saved-source-build"
     except Exception as exc:
         result.update(status="failed", error=str(exc))
         raise
     finally:
         result["finished_at"] = datetime.now(timezone.utc).isoformat()
-        (output / "result.json").write_text(json.dumps(result, indent=2)+"\n")
+        (output / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--commit")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--commit")
+    mode.add_argument("--candidate", action="store_true")
+    parser.add_argument("--repository", help="Public GitHub owner/repo; require exact branch/SHA and blob verification")
+    parser.add_argument("--branch")
+    parser.add_argument("--output", type=Path, required=True, help="New directory, never overwrite earlier failed evidence")
     parser.add_argument("--containers", action="store_true")
-    run(parser.parse_args())
+    args = parser.parse_args()
+    if args.repository and (not args.commit or not args.branch):
+        parser.error("Remote verification requires --commit and --branch")
+    run(args)
