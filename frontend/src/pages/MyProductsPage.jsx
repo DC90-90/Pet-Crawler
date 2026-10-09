@@ -1,4 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { HistoricalQuantity } from "@/components/HistoricalQuantity";
+import { RequestError } from "@/components/RequestError";
 import { useI18n, catLabel } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
 import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw, Info } from "lucide-react";
@@ -72,6 +74,8 @@ export default function MyProductsPage() {
   const { t, isRTL } = useI18n();
   const [data, setData] = useState({ kpis: {}, products: [], total: 0 });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const requestId = useRef(0);
   const [days, setDays] = useState(30);
   const [onDate, setOnDate] = useState("");
   const [search, setSearch] = useState("");
@@ -90,7 +94,9 @@ export default function MyProductsPage() {
   const categories = data.categories || [...new Set(data.products.map((p) => p.category))].sort();
 
   const fetchData = useCallback(() => {
+    const request = ++requestId.current;
     setLoading(true);
+    setError(false);
     const offset = (page - 1) * pageSize;
     const params = {
       search: debouncedSearch || undefined,
@@ -101,9 +107,9 @@ export default function MyProductsPage() {
     if (onDate) params.on_date = onDate;
     else params.days = days;
     api.get("/my-products", { params })
-      .then((r) => setData(r.data))
-      .catch(console.error)
-      .finally(() => setLoading(false));
+      .then((r) => request === requestId.current && setData(r.data))
+      .catch(() => { if (request === requestId.current) { setError(true); setData({ kpis: {}, products: [], total: 0 }); } })
+      .finally(() => request === requestId.current && setLoading(false));
   }, [days, onDate, debouncedSearch, category, sortBy, sortOrder, page, pageSize]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -174,6 +180,7 @@ export default function MyProductsPage() {
   };
 
   const kpis = data.kpis || {};
+  if (error) return <div className="p-6"><RequestError id="my-products-request" onRetry={fetchData} /></div>;
 
   return (
     <div className="p-6 space-y-5" data-testid="my-products-page">
@@ -464,11 +471,12 @@ export default function MyProductsPage() {
                       {p.my_stock_status === "not_in_catalog"
                         ? <NotInCatalogChip isRTL={isRTL} />
                         : <StockBadge signal={p.my_stock_signal} />}
-                      {p.my_quantity != null && (
+                      {p.my_quantity != null && p.in_stock === true && p.present_on_store !== false && (
                         <span className="text-[10px] text-[#A1E4DB] font-mono" data-testid={`my-stock-qty-${p.sku}`}>
                           {p.my_quantity} {isRTL ? "متوفر" : "in stock"}
                         </span>
                       )}
+                      <HistoricalQuantity quantity={p.historical_quantity} observedAt={p.historical_quantity_at} id={`my-historical-qty-${p.sku}`} />
                     </div>
                   </TableCell>
                   <TableCell><ConfBadge tier={p.source_tier} score={p.confidence_score} /></TableCell>

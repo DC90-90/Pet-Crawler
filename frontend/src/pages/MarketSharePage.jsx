@@ -11,6 +11,8 @@ import BrandShare from "@/components/marketShare/BrandShare";
 import CategoryShare from "@/components/marketShare/CategoryShare";
 import Methodology from "@/components/marketShare/Methodology";
 import ProductBreakdown from "@/components/marketShare/ProductBreakdown";
+import { ComparisonScope, useComparisonScope } from "@/components/ComparisonScope";
+import { RequestError } from "@/components/RequestError";
 
 const RANGES = [7, 14, 30, 90];
 const TABS = [
@@ -25,6 +27,8 @@ const TABS = [
 const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c);
 
 export default function MarketSharePage() {
+  const scope = useComparisonScope();
+  const [optionsError, setOptionsError] = useState(false);
   const [days, setDays] = useState(30);
   const [tab, setTab] = useState("overview");
   const [opts, setOpts] = useState({ categories: [], brands: [], stores: [] });
@@ -41,13 +45,14 @@ export default function MarketSharePage() {
   const [contested, setContested] = useState(false);
 
   useEffect(() => {
+    setOptionsError(false);
     api.get("/market-share/overview", { params: { days, include_today: includeToday } })
       .then((r) => setOpts(r.data.filters || { categories: [], brands: [], stores: [] }))
-      .catch(() => {});
+      .catch(() => setOptionsError(true));
   }, [days, nonce, includeToday]);
 
   const filters = useMemo(() => {
-    const f = {};
+    const f = { ...scope.params };
     if (search.trim()) f.search = search.trim();
     if (category) f.category = category;
     if (brand) f.brand = brand;
@@ -57,9 +62,9 @@ export default function MarketSharePage() {
     if (quality) f.quality = quality;
     if (contested) f.contested = true;
     return f;
-  }, [search, category, brand, storeId, catalog, minConfidence, quality, contested]);
+  }, [search, category, brand, storeId, catalog, minConfidence, quality, contested, scope.params]);
 
-  const activeFilters = Object.keys(filters).length;
+  const activeFilters = Object.keys(filters).filter(k => !["comparison_mode", "competitor_ids"].includes(k)).length;
 
   const clearFilters = () => {
     setSearch(""); setCategory(""); setBrand(""); setStoreId("");
@@ -111,7 +116,7 @@ export default function MarketSharePage() {
             ))}
           </div>
           <button onClick={() => setIncludeToday((v) => !v)}
-            title="Sales are derived by comparing crawls. Today's crawl is still accumulating, so including it can make figures move during the day."
+            title="Includes today's partial inventory observations and available order evidence."
             className={`text-[10px] rounded-full px-2.5 h-7 border transition-colors ${includeToday
               ? "bg-[#F59E0B]/15 text-[#F59E0B] border-[#F59E0B]/30"
               : "bg-white/5 text-[#A1E4DB] border-white/10 hover:text-white"}`}
@@ -141,6 +146,8 @@ export default function MarketSharePage() {
         ))}
       </div>
 
+      <ComparisonScope scope={scope} prefix="ms" />
+      {optionsError && <RequestError id="ms-filter-options" onRetry={() => setNonce(n => n + 1)} />}
       {tab !== "methodology" && (
         <div className="glass-card p-3" data-testid="ms-filters">
           <div className="flex flex-wrap items-center gap-2">
@@ -164,9 +171,10 @@ export default function MarketSharePage() {
               {opts.brands.map((b) => <option key={b} value={b} className="bg-[#0B1220]">{b}</option>)}
             </select>
             <select value={storeId} onChange={(e) => setStoreId(e.target.value)}
+              aria-label="Store membership — does not change comparison scope"
               className="bg-white/5 border border-white/10 rounded-md text-xs text-white px-2 py-1.5"
               data-testid="ms-filter-store">
-              <option value="" className="bg-[#0B1220]">Any store carries it</option>
+              <option value="" className="bg-[#0B1220]">Membership: any store</option>
               {opts.stores.map((s) => (
                 <option key={s.store_id} value={s.store_id} className="bg-[#0B1220]">{s.store_name}</option>
               ))}
@@ -195,7 +203,7 @@ export default function MarketSharePage() {
               <option value="low" className="bg-[#0B1220]">Low and up</option>
             </select>
             <button onClick={() => setContested((v) => !v)}
-              title="Only products where another tracked seller's sales are measurable — the rows where a share percentage is a real comparison"
+              title="Products with another tracked seller's observation signal; exact share still requires complete transaction evidence."
               className={`text-[10px] rounded-md px-2.5 py-1.5 border transition-colors ${contested
                 ? "bg-[#1E988E]/20 text-[#5FD3C7] border-[#1E988E]/40"
                 : "bg-white/5 text-[#A1E4DB] border-white/10 hover:text-white"}`}
@@ -237,9 +245,9 @@ export default function MarketSharePage() {
       )}
       {tab === "brands" && <BrandShare days={days} includeToday={includeToday} filters={filters} key={`br-${nonce}-${includeToday}`} />}
       {tab === "categories" && <CategoryShare days={days} includeToday={includeToday} filters={filters} key={`ca-${nonce}-${includeToday}`} />}
-      {tab === "methodology" && <Methodology days={days} includeToday={includeToday} key={`me-${nonce}-${includeToday}`} />}
+      {tab === "methodology" && <Methodology days={days} includeToday={includeToday} scopeParams={scope.params} key={`me-${nonce}-${includeToday}`} />}
 
-      <ProductBreakdown productKey={picked} days={days} includeToday={includeToday}
+      <ProductBreakdown productKey={picked} days={days} includeToday={includeToday} scopeParams={scope.params}
         open={!!picked} onClose={() => setPicked(null)} />
     </div>
   );

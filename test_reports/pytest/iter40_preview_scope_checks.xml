@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="7" time="4.762" timestamp="2026-10-09T06:05:28.080871+00:00" hostname="agent-env-24867ce7-9497-42ab-89a5-067b1dc88c54"><testcase classname="backend.tests.test_iter40_preview_scope_checks" name="test_price_intel_scope_switches_lowest_competitor" time="1.889" /><testcase classname="backend.tests.test_iter40_preview_scope_checks" name="test_price_intel_detail_scope_switches_min_price" time="0.779" /><testcase classname="backend.tests.test_iter40_preview_scope_checks" name="test_scanner_scope_switches_market_lowest" time="0.293"><failure message="AssertionError: assert None == 87.0&#10; +  where None = &lt;function test_scanner_scope_switches_market_lowest.&lt;locals&gt;.low at 0xff3a6c9859e0&gt;('4543d317-32a2-40ec-9328-81d3ed3e7b4c')">headers = {'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2YTA4OThlZTk5ZmViZTI2MmFhNmVhODQiLCJlbWFpbCI...0aF92ZXJzaW9uIjoyLCJqdGkiOiJmNzY2OWJkOWJiNmZlZjk3NmZmNzIyNmU2NzZhM2ZhZiJ9.UpKS3tqzo7Xk-W5aao7BZoIVR6YWHjm0CyVYz05xOS4'}
+competitor_ids = {'own': '1c87378f-5a74-4547-93a4-50cdbb62651a', 'petsy': '4543d317-32a2-40ec-9328-81d3ed3e7b4c', 'zarafa': 'ed27d9f0-a657-4fd7-935f-1fbd248fde9c'}
+
+    def test_scanner_scope_switches_market_lowest(headers, competitor_ids):
+        def low(ids):
+            r = requests.get(
+                f"{BASE}/api/scanner/opportunities",
+                headers=headers,
+                params={"days": 14, "comparison_mode": "selected", "competitor_ids": ids},
+                timeout=90,
+            )
+            assert r.status_code == 200, r.text
+            rows = r.json().get("well_positioned") or r.json().get("opportunities") or []
+            row = next((x for x in rows if x.get("sku") == SKU), None)
+            return row.get("market_lowest") if row else None
+    
+&gt;       assert low(competitor_ids["petsy"]) == 87.0
+E       AssertionError: assert None == 87.0
+E        +  where None = &lt;function test_scanner_scope_switches_market_lowest.&lt;locals&gt;.low at 0xff3a6c9859e0&gt;('4543d317-32a2-40ec-9328-81d3ed3e7b4c')
+
+backend/tests/test_iter40_preview_scope_checks.py:83: AssertionError</failure></testcase><testcase classname="backend.tests.test_iter40_preview_scope_checks" name="test_market_share_scope_consistent_on_my_products_and_detail" time="0.396"><failure message="assert (None)">headers = {'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2YTA4OThlZTk5ZmViZTI2MmFhNmVhODQiLCJlbWFpbCI...0aF92ZXJzaW9uIjoyLCJqdGkiOiJmNzY2OWJkOWJiNmZlZjk3NmZmNzIyNmU2NzZhM2ZhZiJ9.UpKS3tqzo7Xk-W5aao7BZoIVR6YWHjm0CyVYz05xOS4'}
+competitor_ids = {'own': '1c87378f-5a74-4547-93a4-50cdbb62651a', 'petsy': '4543d317-32a2-40ec-9328-81d3ed3e7b4c', 'zarafa': 'ed27d9f0-a657-4fd7-935f-1fbd248fde9c'}
+
+    def test_market_share_scope_consistent_on_my_products_and_detail(headers, competitor_ids):
+        p = requests.get(
+            f"{BASE}/api/market-share/my-products",
+            headers=headers,
+            params={"days": 30, "comparison_mode": "selected", "competitor_ids": competitor_ids["petsy"]},
+            timeout=90,
+        )
+        z = requests.get(
+            f"{BASE}/api/market-share/my-products",
+            headers=headers,
+            params={"days": 30, "comparison_mode": "selected", "competitor_ids": competitor_ids["zarafa"]},
+            timeout=90,
+        )
+        assert p.status_code == 200 and z.status_code == 200
+        p_row = next((x for x in p.json().get("rows", []) if x.get("sku") == SKU), None)
+        z_row = next((x for x in z.json().get("rows", []) if x.get("sku") == SKU), None)
+&gt;       assert p_row and z_row
+E       assert (None)
+
+backend/tests/test_iter40_preview_scope_checks.py:103: AssertionError</failure></testcase><testcase classname="backend.tests.test_iter40_preview_scope_checks" name="test_market_share_export_includes_scope_fields" time="0.233" /><testcase classname="backend.tests.test_iter40_preview_scope_checks" name="test_unknown_or_own_store_ids_rejected_422" time="0.275" /><testcase classname="backend.tests.test_iter40_preview_scope_checks" name="test_my_products_search_contains_refreshed_hair_skin" time="0.790" /></testsuite></testsuites>

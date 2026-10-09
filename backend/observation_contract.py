@@ -51,13 +51,36 @@ def stable_id(*parts):
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
 
+def is_variant_parent(raw):
+    return (any(raw.get(k) in (True, 1, "true", "1") for k in ("has_options", "has_variants", "is_variable", "known_variant_parent"))
+            or bool(raw.get("variants") or raw.get("skus")) or raw.get("type") == "variable")
+
+
+def unresolved_identity(raw):
+    if raw.get("_unresolved_parent"):
+        return True
+    variant = str(raw.get("_variant_id") or raw.get("variant_id") or "root")
+    return is_variant_parent(raw) and variant == "root"
+
+
 def expand_variants(raw):
     """Never inherit parent inventory, price, barcode, or SKU into a child offer."""
     variants = raw.get("skus") or raw.get("variants")
     if not isinstance(variants, list) or not variants:
         yield {**raw,
                "_listing_id": str(raw.get('_listing_id') or raw.get('listing_id') or raw.get("id") or raw.get("sku") or ""),
-               "_variant_id": str(raw.get('_variant_id') or raw.get('variant_id') or 'root')}
+               "_variant_id": str(raw.get('_variant_id') or raw.get('variant_id') or 'root'),
+               "_unresolved_parent": unresolved_identity(raw)}
+        return
+    if any(not isinstance(v, dict) or not (v.get("id") or v.get("variant_id")
+           or (v.get("sku") and v.get("sku") != raw.get("sku")) or gtin(v.get("barcode"))) for v in variants):
+        yield {**raw, "_listing_id": str(raw.get("id") or raw.get("listing_id") or raw.get("sku") or ""),
+               "_variant_id": "root", "_unresolved_parent": True}
+        return
+    identities = [str(v.get("id") or v.get("variant_id") or stable_id(v.get("sku"), v.get("barcode"), v.get("attributes") or v.get("options") or [])) for v in variants]
+    if len(set(identities)) != len(identities):
+        yield {**raw, "_listing_id": str(raw.get("id") or raw.get("listing_id") or raw.get("sku") or ""),
+               "_variant_id": "root", "_unresolved_parent": True}
         return
     for variant in variants:
         if not isinstance(variant, dict):
@@ -67,7 +90,8 @@ def expand_variants(raw):
                   stable_id(variant.get('sku'), variant.get('barcode'), attrs))
         row = {k: raw[k] for k in ("name", "title", "images", "image", "urls", "url", "html_url", "product_url", "categories", "brand", "currency", "_currency", "_price_basis") if k in raw}
         row.update(variant)
-        row.update(_listing_id=str(raw.get("id") or raw.get("sku") or stable_id(raw.get("name"))), _variant_id=vid, attributes=attrs)
+        row.update(_listing_id=str(raw.get("id") or raw.get("listing_id") or raw.get("sku") or stable_id(raw.get("name"))),
+                   _variant_id=vid, attributes=attrs, _parent_sku=raw.get("sku"), _resolved_child=True)
         if not row.get("sku"):
             row["sku"] = f"variant:{row['_listing_id']}:{vid}"
         # Explicit child descriptors take priority. Parent-only names remain evidence, not identity.
@@ -97,7 +121,7 @@ def normalize_offer(raw, store_name):
         reasons.append("currency_unverified_or_unsupported")
     if ambiguous:
         reasons.append("conditional_or_from_price")
-    if raw.get("skus") or raw.get("variants"):
+    if raw.get("skus") or raw.get("variants") or unresolved_identity(raw):
         reasons.append("unresolved_parent_variants")
         price = None
     basis = raw.get("_price_basis") or raw.get("price_basis") or "unknown"
@@ -114,6 +138,8 @@ def normalize_offer(raw, store_name):
         available = False
     elif available is None:
         available = True if unlimited else qty > 0 if qty is not None else None
+    if "unresolved_parent_variants" in reasons:
+        qty, available = None, None
     sold_raw = next((raw[k] for k in ("sold_quantity", "sold_count", "sales_count", "sold_products_count", "total_sold", "orders_count") if raw.get(k) is not None), None)
     sold = observed_int(sold_raw)
     capped = bool(raw.get("sold_count_capped")) or bool(re.search(r"\+|أكثر|اكثر|more than", str(sold_raw), re.I))

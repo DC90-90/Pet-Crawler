@@ -18,7 +18,9 @@
  *
  * Backward compat: `/insights` and `/price-intel` both mount this page.
  */
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
+import { ComparisonScope, useComparisonScope } from "@/components/ComparisonScope";
+import { RequestError } from "@/components/RequestError";
 import { useNavigate } from "react-router-dom";
 import { useQueries } from "@tanstack/react-query";
 import { useI18n, catLabel } from "@/lib/i18n";
@@ -56,12 +58,15 @@ const fetchIntel = (path, params) => async () => {
       if (ca) data._cache_computed_at = ca;
     }
     return data;
-  } catch (_e) {
-    return null;
+  } catch (error) {
+    throw error;
   }
 };
 
 export default function IntelPage() {
+  const scope = useComparisonScope();
+  const [detailError, setDetailError] = useState(false);
+  const detailRequest = useRef(0);
   const { t, isRTL } = useI18n();
   const navigate = useNavigate();
 
@@ -74,6 +79,7 @@ export default function IntelPage() {
   const [selectedSku, setSelectedSku] = useState(null);
   const [detail, setDetail] = useState(null);
   const seasonal = useSeasonalEvents();
+  useEffect(() => { detailRequest.current += 1; setSelectedSku(null); setDetail(null); setDetailError(false); }, [scope.params]);
 
   // All endpoints parallelised — cards render individually as they resolve.
   const results = useQueries({
@@ -85,7 +91,7 @@ export default function IntelPage() {
       { queryKey: ["intel", "gaps"],                   queryFn: fetchIntel("/insights/gaps") },
       { queryKey: ["intel", "price-wars"],             queryFn: fetchIntel("/insights/price-wars") },
       { queryKey: ["intel", "restock"],                queryFn: fetchIntel("/insights/restock-opportunities") },
-      { queryKey: ["intel", "pi-dashboard"],           queryFn: fetchIntel("/price-intel/dashboard") },
+      { queryKey: ["intel", "pi-dashboard", scope.params], queryFn: fetchIntel("/price-intel/dashboard", scope.params), retry: false },
       { queryKey: ["intel", "pi-store-ranking"],       queryFn: fetchIntel("/price-intel/store-ranking") },
       { queryKey: ["intel", "catalog-gaps"],           queryFn: fetchIntel("/baseline/catalog-gaps") },
       { queryKey: ["intel", "my-products", 14],        queryFn: fetchIntel("/my-products", { days: 14, limit: 1 }) },
@@ -126,13 +132,15 @@ export default function IntelPage() {
 
   // ── Operational-tab helpers ──────────────────────────────────────────────
   const openDetail = async (sku) => {
+    const request = ++detailRequest.current;
     setSelectedSku(sku);
+    setDetail(null); setDetailError(false);
     try {
-      const r = await api.get(`/price-intel/product/${sku}`);
-      setDetail(r.data);
-    } catch { toast.error("Failed to load product detail"); }
+      const r = await api.get(`/price-intel/product/${encodeURIComponent(sku)}`, { params: scope.params, timeout: 45000 });
+      if (request === detailRequest.current) setDetail(r.data);
+    } catch { if (request === detailRequest.current) setDetailError(true); }
   };
-  const closeDetail = () => { setSelectedSku(null); setDetail(null); };
+  const closeDetail = () => { detailRequest.current += 1; setSelectedSku(null); setDetail(null); setDetailError(false); };
   const confirmMatch = async (m) => {
     try {
       await api.post("/price-intel/confirm-match", { my_sku: m.my_sku, competitor_sku: m.competitor_sku, competitor_store_id: m.competitor_store_id, competitor_offer_id: m.competitor_offer_id });
@@ -167,8 +175,11 @@ export default function IntelPage() {
     { id: "gaps",       label: isRTL ? "فجوات الكتالوج" : "Catalog Gaps",      count: catalogGaps.length,                    icon: PackageSearch },
   ] : [];
 
+  if (results[7].isError) return <div className="p-6" data-testid="intel-page"><RequestError id="intel-request" onRetry={() => results[7].refetch()} /></div>;
+
   return (
     <div className="p-6 space-y-5" data-testid="intel-page">
+      {results.some(q => q.isError) && <RequestError id="intel-request" onRetry={() => results.filter(q => q.isError).forEach(q => q.refetch())} />}
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -228,6 +239,8 @@ export default function IntelPage() {
         </div>
       </div>
 
+      <ComparisonScope scope={scope} prefix="intel" />
+      <p className="text-xs text-[#A1E4DB]" data-testid="intel-scope-coverage">Comparison scope: Matched, Action Required, My Advantages, Full Comparison and product details. Store-wide insights below remain all tracked stores.</p>
       {/* ── Row 1: KPI band (blended) ────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3" data-testid="intel-kpi-band">
         {kpiTiles.map((k) => (
@@ -550,6 +563,7 @@ export default function IntelPage() {
       {/* Overlays */}
       <DigestModal open={digestOpen} onClose={() => setDigestOpen(false)} />
       <PriceIntelDetailSheet
+        error={detailError} onRetry={() => openDetail(selectedSku)}
         selectedSku={selectedSku}
         detail={detail}
         onClose={closeDetail}

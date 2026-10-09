@@ -8,15 +8,14 @@ What "measurable" means here, in order of strength:
   1. `orders_exact`      — my own store's Zid orders ledger. Real invoices.
   2. `sold_counter_diff` — a store publishes a CUMULATIVE units-sold counter
                            (Salla's "تم بيعه أكثر من N مرة", Zid's sold_count).
-                           A diff between two crawls is a real observation of
-                           real sales, but the badge is bucketed and capped, so
-                           it is reported as measured-APPROX.
+                           Only valid uncapped changes are observation proxies,
+                           not verified transaction evidence.
   3. `stock_depletion`   — a store publishes stock levels; a drop between two
-                           crawls is a sale FLOOR (a sell-then-restock inside
-                           one interval is invisible). Also measured-approx.
+                           crawls is an inventory movement proxy. Adjustments,
+                           transfers and restocks can overstate or understate sales.
   4. `measured_zero`     — the store DOES publish a signal, was crawled at
                            least twice in the window, and this product's
-                           counter/stock never moved. Zero is a fact here.
+                           counter/stock never moved. This does not prove zero sales.
   5. `unavailable`       — the store publishes neither signal, or was crawled
                            fewer than twice. NOT zero. The number is withheld
                            and the reason is carried on the row.
@@ -39,6 +38,8 @@ from core.utils import barcode_keys, canonical_barcode, get_stock_signal
 from ledger import ksa_day_str
 from evidence_ledger import sales_map
 from price_cohort import FIELDS, build_cohorts, identity_agrees
+from stock_evidence import own_stock
+from price_cohort import exclusion
 from pack_guard import (
     slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers,
 )
@@ -190,7 +191,7 @@ async def _store_signals(db, start, end):
 async def _latest_snapshots(db, since, min_confidence):
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}})
     return await db.product_snapshots.aggregate([
-        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False}},
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}, "offer_id": {"$type": "string"}}},
         {"$sort": {"crawled_at": -1}}, {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
         {"$replaceRoot": {"newRoot": "$row"}}, {"$project": FIELDS},
     ], allowDiskUse=True).to_list(200000)
@@ -515,7 +516,7 @@ def summarize(my_rows, missing_rows, store_rows, *, catalog_total, orders_connec
 
 async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
                         category_fn, orders_by_sku, min_confidence,
-                        window_start, window_end, sealed=True, now=None):
+                        window_start, window_end, sealed=True, now=None, competitor_store_ids=None):
     """The whole Market Share dataset for ONE window. Endpoints slice, filter
     and paginate this; it is computed once and page-cached."""
     now = now or datetime.now(timezone.utc)
@@ -526,22 +527,29 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     stores = {s["id"]: s for s in await db.stores.find(
         {"is_active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "is_own_store": 1,
              "is_active": 1, "last_crawl_at": 1, "last_crawl_status": 1}).to_list(200)}
+    if competitor_store_ids is not None:
+        stores = {sid: s for sid, s in stores.items() if sid == own_store_id or sid in competitor_store_ids}
 
     sales = await _read_sales(db, window_start, window_end, sealed=sealed)
     prev_sales = await _read_sales(db, prev_start, prev_end, sealed=sealed)
     signals = await _store_signals(db, window_start, window_end)
-    snaps = await _latest_snapshots(db, snap_since, min_confidence)
+    snaps = [s for s in await _latest_snapshots(db, snap_since, min_confidence) if s.get("store_id") in stores]
 
     my_rows = await db.my_products.find(
         {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "price": 1,
              "sale_price": 1, "original_price": 1, "price_basis": 1,
              "quantity": 1, "in_stock": 1, "brand": 1, "category": 1,
              "barcode": 1, "brand_source": 1, "category_source": 1,
-             "last_synced_at": 1, "present_on_store": 1, "currency": 1, "offer_id": 1}).to_list(50000)
+             "last_synced_at": 1, "present_on_store": 1, "currency": 1, "offer_id": 1,
+             "known_variant_parent": 1, "quarantine_active": 1, "price_unavailable_reason": 1,
+             "historical_quantity": 1, "historical_quantity_at": 1, "quantity_observed_at": 1}).to_list(50000)
     my_by_sku = {r["sku"]: r for r in my_rows if r.get("sku")}
-    cohorts = await build_cohorts(db, my_rows, own_store_id, own_price_fn, now=now)
+    cohorts = await build_cohorts(db, my_rows, own_store_id, own_price_fn, now=now, competitor_store_ids=competitor_store_ids)
     cohort_links = {}
+    cohort_exclusions = {}
     for own_sku, cohort in cohorts.items():
+        for offer in cohort["excluded"]:
+            cohort_exclusions[(own_sku, offer["store_id"], offer.get("offer_id"))] = offer["excluded_reason"]
         for offer in cohort['sellers'] + cohort['excluded']:
             cohort_links.setdefault((offer['store_id'], offer.get('offer_id')), set()).add(own_sku)
 
@@ -620,15 +628,24 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "name_ar": s.get("name_ar"), "name_en": s.get("name_en"),
             "match_source": klass,
             "match_strength": strength,
-            "price": round(float(s.get("price") or 0), 2),
+            "price": round(float(s["price"]), 2) if s.get("price") and exclusion(s, now) is None else None,
+            "price_eligible": exclusion(s, now) is None,
+            "price_excluded_reason": exclusion(s, now),
+            "historical_price": s.get("price") if exclusion(s, now) else None,
             "discount_pct": s.get("discount_pct") or 0,
-            "in_stock": s.get("in_stock"),
-            "stock_signal": get_stock_signal(s.get("qty_available"), s.get("in_stock")),
-            "qty_available": s.get("qty_available"),
+            "in_stock": s.get("in_stock") if exclusion(s, now) in (None, "out_of_stock") else None,
+            "stock_signal": get_stock_signal(s.get("qty_available"), s.get("in_stock")) if exclusion(s, now) in (None, "out_of_stock") else "UNKNOWN",
+            "qty_available": s.get("qty_available") if exclusion(s, now) is None else None,
+            "historical_quantity": s.get("qty_available") if exclusion(s, now) else None,
+            "historical_quantity_at": _aware(s.get("crawled_at")) if exclusion(s, now) else None,
             "product_url": s.get("product_url"),
             "last_crawl_at": _aware(s.get("crawled_at")),
         }
         if my_sku:
+            cohort_reason = cohort_exclusions.get((my_sku, sid, s.get("offer_id")))
+            if cohort_reason:
+                seller.update(price=None, price_eligible=False, price_excluded_reason=cohort_reason,
+                              historical_price=s.get("price"))
             mine.setdefault(my_sku, []).append(seller)
         elif not is_own:
             code = canonical_barcode(s.get("barcode")) or canonical_barcode(sku)
@@ -650,6 +667,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         name_en = mp.get("name_en") or cat_row.get("name_en") or ""
         my_name = f"{name_ar} {name_en}".strip()
         my_price = round(float(own_price_fn(mp) or 0), 2)
+        current_stock = own_stock(mp, now=now)
 
         own_seller = next((s for s in sellers if s.get("is_own")), None)
         if own_seller is None:
@@ -666,6 +684,11 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             }
             sellers = [own_seller] + sellers
         own_seller["price"] = my_price      # catalogue price is the truth for us
+        own_seller.update(price=my_price or None, price_eligible=bool(my_price),
+                          in_stock=current_stock["in_stock"], qty_available=current_stock["quantity"],
+                          stock_signal=get_stock_signal(current_stock["quantity"], current_stock["in_stock"]),
+                          historical_quantity=current_stock["historical_quantity"], historical_quantity_at=current_stock["historical_quantity_at"],
+                          last_crawl_at=_aware(mp.get("last_synced_at")))
 
         kept, excluded = _apply_pack_guard(my_name, sellers, my_price)
         own_units = own_units_map.get(sku, {"units": 0, "revenue": 0.0}) if orders_by_sku is not None else None
@@ -673,6 +696,8 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             u, rev, src, reason = _resolve_units(
                 (s["store_id"], s.get("offer_id") or s["sku_at_store"]), sales, signals, s["is_own"], own_units)
             s["units"], s["revenue"], s["units_source"], s["unavailable_reason"] = u, rev, src, reason
+            if s["is_own"] and mp.get("known_variant_parent"):
+                s.update(units=None, revenue=None, units_source=SRC_NONE, unavailable_reason="unresolved_parent_variants")
             pu = prev_sales.get((s["store_id"], s.get("offer_id") or s["sku_at_store"])) or {}
             s["prev_units"], s["prev_revenue"] = pu.get("units"), pu.get("revenue")
 
@@ -700,7 +725,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         price_rank = next((i + 1 for i, s in enumerate(ranked_price) if s.get('is_own')), None) if cohort['sellers'] else None
         ranked_units = sorted(with_sales, key=lambda s: -(s["units"] or 0))
         units_rank = (next((i + 1 for i, s in enumerate(ranked_units) if s["is_own"]), None)
-                      if my_units is not None else None)
+                      if share_comparable else None)
         top_comp = max([s for s in with_sales if not s["is_own"]],
                        key=lambda s: (s["units"] or 0, s["revenue"] or 0), default=None)
 
@@ -722,7 +747,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "brand": brand, "brand_source": brand_source,
             "category": category, "category_source": category_source,
             "in_catalog": True,
-            "my_price": my_price,
+            "my_price": my_price or None,
             "my_units": my_units,
             "my_revenue": my_revenue,
             "my_units_source": (own or {}).get("units_source"),
@@ -806,7 +831,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "name": name_en or name_ar or sample_sku,
             "brand": brand, "category": category,
             "in_catalog": False,
-            "my_unit_share_pct": 0.0, "my_revenue_share_pct": 0.0,
+            "my_unit_share_pct": None, "my_revenue_share_pct": None,
             "competitor_count": len(sellers),
             "competitors": [s["store_name"] for s in sorted(sellers, key=lambda s: s["store_name"])],
             "sellers_with_sales": len(with_sales),
@@ -836,14 +861,14 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         un = (m["market_units"] or 0) / max_units if max_units else 0
         se = m["competitor_count"] / max_sellers if max_sellers else 0
         m["opportunity_score"] = round(100 * (0.5 * rev + 0.3 * un + 0.2 * se), 1)
-        m["opportunity_formula"] = "0.5×measured revenue + 0.3×measured units + 0.2×sellers, each scaled to the largest row"
+        m["opportunity_formula"] = "0.5×shelf-value proxy + 0.3×observed movement + 0.2×sellers; scaled within this comparison scope, not a sales forecast"
         if not m["sellers_with_sales"]:
-            m["recommended_action"] = "Watch — no seller of this product publishes sales data"
+            m["recommended_action"] = "Watch — no eligible observation intervals in this scope"
         elif m["competitor_count"] >= 3 and (m["market_revenue"] or 0) > 0:
             m["recommended_action"] = (f"Consider stocking — {m['competitor_count']} tracked stores "
-                                       f"sell it, {m['market_revenue']} SAR measured")
+                                       f"list it; {m['market_revenue']} SAR shelf-value proxy, not verified sales")
         elif (m["market_revenue"] or 0) > 0:
-            m["recommended_action"] = "Investigate — measured demand but few sellers"
+            m["recommended_action"] = "Investigate — observed movement, few sellers; demand unverified"
         else:
             m["recommended_action"] = "Low priority — carried but no measured movement"
     missing.sort(key=lambda m: -m["opportunity_score"])

@@ -1,13 +1,13 @@
 # Independently reviewed Daleel fixes — preview acceptance
 
-Date: 2026-10-08. Scope: preview only. This document supersedes the earlier 39-test closure claims for the reviewed work.
+Updated: **2026-10-09**. Scope: **preview only, six final acceptance findings plus Scanner/crawler correctness**. The October 9 section below supersedes earlier stale-data/test-count statements. No production changes, credential rotation, direct Git writes, or deployment occurred.
 
 ## Checkout and Git handoff
 - Requested repository: `DC90-90/Pet-Crawler`.
 - Requested destination branch: `conflict_130726_1244`.
 - Actual local checkout: `/app`, branch **`main`**.
-- Actual current HEAD: **`558861e59fce42a605d909108998a61e7e02f60a`**.
-- That HEAD is the supplied **pre-change base**, NOT a commit containing these fixes. No direct commit/push or branch switch was performed. The user approved completing preview verification before the platform's **Save to GitHub** handoff. A resulting remote fix commit is pending that action; none is invented here.
+- Actual current HEAD verified October 9: **`65f6474399bbb89d37b25cd98a8d8062f804be98`**.
+- That HEAD is this continuation's **starting checkpoint**, NOT a claimed remote commit for today's fixes. No direct commit/push or branch switch was performed. A resulting remote fix commit is pending the user's **Save to GitHub** action; none is invented here.
 - Preview: https://price-intel-dev.preview.emergentagent.com
 
 ## Package application and reconciliation
@@ -53,7 +53,7 @@ Some old tests asserted guessed VAT, storefront absence implying hidden prices, 
 
 Safety: final mutation tests use generated UUID databases on loopback Mongo and delete them afterward. The initial verification agent ran six auth/session tests against preview before the stronger harness was added; the final auth verification uses isolated TestClient/Mongo only. Preview browsing creates ordinary login sessions; catalogue and production data were not changed. No persistent credentials were created or rotated.
 
-## Real-product evidence and UI
+## October 8 evidence and UI (historical; superseded by targeted refresh below)
 - Captured native `window.productObj` for Pets Houses Beso Hair & Skin: **2 kg = SAR 46 / quantity 15**, **4 kg = SAR 85 / quantity 2**, with distinct actual variant IDs/SKUs. Tests retain those exact observed values; parent price is never assigned to both children. The unresolved parent itself remains quarantined.
 - Captured Beso baby-powder 20 kg source values: Pets Houses **SAR 79.35**, Zarafa **SAR 83.95**, Petsy **SAR 87**. The comparison test uses source-specific identity, not only a title or an unrelated marketing number. Captures are evidence fixtures in disposable DBs, not a catalogue refresh or live-price guarantee.
 - Preview still contains legacy/stale observations. Real SKU **8699245859829** therefore correctly shows current own/competitor prices and sales as **unavailable**. No old dates were freshened, no legacy rows promoted, and no historical backfill run.
@@ -63,10 +63,65 @@ Safety: final mutation tests use generated UUID databases on loopback Mongo and 
 
 Tests use **MOCKED provider responses only inside explicitly isolated fixtures** and a TestClient transport for isolated auth. Preview application APIs are not mocked. Existing email simulation remains **MOCKED**; Zid exact orders remain unavailable pending partner approval and complete coverage. Exact competitor sales or Saudi market share are not claimed.
 
-## Remaining work — not executed here
-1. **Save to GitHub** for the requested repository/branch, then record/verify the resulting commit ID. Current HEAD above is not the fix commit.
-2. Production data/provenance reconciliation, live credential rotation/history exposure response, and live build/config verification remain separate authorized work.
-3. Zid partner approval and complete order-window evidence are required before exact own-order totals; competitor transaction evidence is required before exact competitor-sales/share claims.
-4. Existing Webshare billing/config issue and mocked email delivery remain unrelated external limitations. This step neither deployed nor exercised production.
+## October 9 — final six-finding acceptance
 
-Potential follow-up: expose the already-recorded observation provenance in an exportable evidence panel, after the separate reconciliation is approved. Broad `server.py` refactoring remains deferred as requested.
+**Result: verified for the approved preview-only fix scope and ready for the Save to GitHub handoff. This is NOT a production-readiness certification.**
+
+| Finding | Implemented and verified |
+|---|---|
+| 1. Ambiguous parents / variant separation | Empty variants with options, identity-less children, duplicate native child IDs and remembered multi-variant parents remain quarantined. Existing child-only price/stock/identifier inheritance protection remains intact. Native Hair & Skin 2kg and 4kg identities are distinct. Quarantined parent shows no current price or stock. |
+| 2. Historical quantity vs current stock | `own_stock` and comparison adapters withhold unknown, removed, quarantined or stale current quantities. Historical quantities carry their original observation timestamp, not the latest sync time. Real parent displays **Last observed quantity: 17**, October 8 timestamp, **not current stock**, never “17 in stock”. Details and Market Share distinguish unknown from OOS. |
+| 3. Matcher failure + real refreshed evidence | Original October 8 failure was the deliberate zero-current-verified-offers guard, not a matcher crash. Guard retains previous matches. Latest invalid offers cannot resurrect older eligible prices; nullable original price is safe; identity-specific rejection does not reject siblings. Targeted October 9 refresh produced two valid Beso litter matches; no unsupported matches invented for Hair & Skin children. |
+| 4. Market Share semantics | Overview, product tables, breakdown, methodology and CSV identify inventory movement and shelf-value proxies; removed sale-floor/measured-exact claims. Exact share remains withheld without complete compatible transaction evidence. Fresh prices alone do not establish units sold. |
+| 5. Errors vs empty results | Every Market Share data tab, Price Intel dashboard/detail, Scanner and My Products has a visible failure + Retry state. Old product details are cleared and stale responses ignored. Failed Price Intel core requests do not render an empty comparison table. HTTP503 browser injections and restored-transport retries verified. |
+| 6. Membership vs comparison scope | Separate “Membership” filter and “Competitor comparison” control. `all`, selected IDs, and selected-none supported. Scope carried through cohort, Price Intel table/detail, Scanner, Market Share dataset/detail/CSV/cache keys. Membership derives independently from the all-tracked-store evidence. Real UI retained Beso when **membership=Zarafa, comparison=Petsy**, and showed **87–87**, not Zarafa's 83.95. |
+
+### Scanner and crawler correctness included
+- Scanner ranks only current, eligible same-product offers with available own stock. Selected competitors govern minimum, average, gap and offer lists; well-positioned rows now also expose minimum/maximum and cohort identity. Excluded/OOS/hidden/stale/low-confidence offers do not drive recommendations.
+- `crawl_persistence.py` checkpoints raw captures **before** Salla detail enrichment in the successful Tier 1/2/3/bulk persistence paths; enriched evidence is separate from immutable raw evidence. Interrupted captures are replayed before the next store crawl.
+- Original ISO observation timestamp is preserved through BSON's millisecond truncation so replay cannot duplicate events. Snapshot/event/ledger replay is idempotent; a failed daily-ledger write is surfaced, not logged as a full success. Quarantined-only or failed persistence work cannot be marked successful. Job failure is no longer demoted to degraded by a second status condition.
+- Preserved prior 19 review gates and earlier data-integrity fixes. No broad route extraction or optional performance work.
+
+### Preview-only refresh audit
+- Executed `/app/scripts/refresh_preview_beso.py` after a successful capture-only dry run. Guard refuses non-loopback Mongo and requires the exact configured `.preview.emergentagent.com` origin.
+- Database: local preview `daleel_pets`; host `localhost`. No production endpoint, backfill, full-store crawl, or production secret was used.
+- Audit: `/app/test_reports/targeted_preview_refresh.json`, run **53c5cd7b214b4223b3ab3b39e149e6f3**, completed **2026-10-09T05:52:48Z**. Includes public source URLs, SHA256 response hashes, raw allowlisted source captures and real capture timestamps.
+- Only source pages for own Beso litter, own Hair & Skin variants, Petsy litter and Zarafa litter were fetched. Matching restricted to the four approved own identifiers.
+- Fresh source values: own litter **79.35 SAR**, Petsy **87 SAR**, Zarafa **83.95 SAR**. Hair & Skin **2kg/5065023629268 = 46 SAR, quantity 15**; **4kg/5065023629848 = 85 SAR, quantity 2**.
+- Unrelated `my_products`, `product_snapshots`, and `product_matches` fingerprints are identical before/after. Target observations are appended; historical snapshots were not rewritten or re-dated. The preview audit collection records the targeted run separately.
+- The old full-catalogue sync failure/freshness warning is intentionally **not rewritten as a global success**. The targeted match succeeded; other stores/catalogue items were not refreshed under this authorization.
+
+### Verification results
+- **104 original selected tests passed**: reviewed-core 52, isolated auth 10, real-source 6, related contracts 36.
+- **22 new isolated acceptance regressions passed**: quarantine, history, latest-invalid precedence, offer-specific matching, scope parity, durable capture, real interrupted-ledger replay, cancelled enrichment, permissions and parent/child search.
+- **7 live-preview read-only API checks passed**: all/A/B/none scopes; detail and Scanner parity; Market Share filtered product/detail; CSV scope; invalid IDs; refreshed children visible.
+- **Total: 133 passed; 0 failures/errors.** XML results: `test_reports/pytest/*-final.xml`. Runner: `python scripts/run_reviewed_tests.py` (126 isolated checks); live suite: `backend/tests/test_iter40_preview_scope_checks.py` using existing documented credentials.
+- `python -m compileall -q backend scripts`, `python scripts/validate_crons.py`, and `yarn --cwd frontend build` passed. Five existing authenticated schedules validated; none changed.
+- Desktop **1920×800**, mobile **390×844**: actual variants, Market Share membership/comparison, Price Intel selected-offer detail, Scanner scope. Final overflow checks **[]**. Wrapped the wide Market Share table rather than hiding trailing columns.
+- Fault-injection retries verified for all six Market Share data tabs and Price Intel dashboard; testing-agent checks also covered Scanner/My Products, filter-options and detail failures. **MOCKED HTTP failures only in tests**; comparison prices were live source observations, not mocked.
+- Authenticated layout now waits for session verification and only mounts notification polling for alert-authorized users. Follow-up browser navigation produced **no 401 requests**; credentials and JWT validation remain unchanged.
+
+### Testing-agent findings reconciliation
+Initial report `iteration_40.json` is retained as history; see `iteration_40_followup.json` for final closure.
+1. Scanner's live row existed in `well_positioned`, but lacked the test's expected `market_lowest`; added it from the same cohort rather than modifying eligibility.
+2. Market Share test searched only the first 50 unfiltered rows and expected a nonexistent `competitors` root. Corrected test to filter by SKU and assert `product.sellers` / `product.competitor_price_min`. Live scope data was already correct.
+3. Child SKU search worked; English parent search did not include the Arabic-named children. Search now follows explicit parent listing identity without merging children.
+4. Notification polling mounted before auth resolution; authenticated layout gating resolved the observed 401 loop. No password reset, seed rotation or token-validation relaxation.
+
+## Deferred work and readiness impact
+
+| Deferred item | Correctness / readiness impact |
+|---|---|
+| Full-catalogue refresh and production provenance/data hygiene | **Blocks claiming whole-catalogue freshness or production data readiness.** Outside authorized writes. Stale/unverified records remain excluded or unavailable; targeted acceptance does not imply all stores are fresh. Production TEST_Regression_Store/Test Store cleanup was not performed. |
+| Webshare billing/config and broad crawl coverage | Existing external 402 limitation not exercised/resolved. **Blocks reliable full-store coverage**, not correctness of the verified native public-source comparisons. |
+| Zid partner OAuth approval and complete order coverage | **Blocks exact own revenue/units claims**. Exact figures remain unavailable rather than estimated as fact. Competitor transaction evidence is also required for exact market shares. |
+| Email integration, Slack/Telegram alerts, alert history, watchlists | Email remains **MOCKED** pending credentials; these features are not completed by this task. Do not claim working email delivery. Non-blocking for this acceptance scope. |
+| New-store activation | Remains deferred until dashboards/data are clean. More coverage would not repair missing evidence; no activation performed. |
+| Salla supplement time budgets, sitemap discovery, other optional performance improvements | Deferred; raw captures before enrichment are now durable. Slow acquisition can still reduce freshness, so current-offer filters remain essential. No claim of complete crawl throughput or graceful recovery of a response never captured to the database. |
+| Broad `server.py` routes refactor | Deferred **until user gives the final green light**. Maintainability debt, not a failure of the 133 verified checks. |
+| Legacy broad test suites outside the selected gate set | Not a blanket certification of every historic test or feature. Selected gates plus new invariants are the acceptance basis; stale magic-number suites require separate re-baselining. |
+
+## Save to GitHub handoff — pending user action
+Use the chat's **Save to GitHub** control. Verify repository **DC90-90/Pet-Crawler** and intended branch **conflict_130726_1244** against the selected UI destination; local branch is still `main`. Include this acceptance report and final regressions. Record the resulting remote commit ID after save; **none is claimed yet**. No deployment action is authorized.
+
+Potential enhancement: an exportable per-offer evidence panel linking price, timestamp and source would make comparison review faster.

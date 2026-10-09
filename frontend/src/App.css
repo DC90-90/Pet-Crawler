@@ -22,6 +22,24 @@
   .product-detail-offers td:first-child { grid-column: 1 / -1; }
   .product-detail-offers td::before { content: attr(data-label); display: block; color: #A1E4DB; font-size: 10px; margin-bottom: 4px; }
 }
+/* Wide evidence tables wrap columns instead of hiding off-canvas metrics. */
+@media (min-width: 768px) {
+  [data-testid="market-share-page"] table { width: 100%; table-layout: fixed; }
+  [data-testid="market-share-page"] th:first-child { width: 13%; }
+  [data-testid="market-share-page"] th:last-child { width: 11%; }
+  [data-testid="market-share-page"] th,
+  [data-testid="market-share-page"] td,
+  [data-testid="market-share-page"] td * { min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+  [data-testid="market-share-page"] td .inline-flex { flex-wrap: wrap; }
+}
+@media (min-width: 768px) and (max-width: 1399px) {
+  [data-testid="market-share-page"] table thead { display: none; }
+  [data-testid="market-share-page"] table tbody { display: block; }
+  [data-testid="market-share-page"] table tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 12px; }
+  [data-testid="market-share-page"] table td { display: block; width: auto; }
+  [data-testid="market-share-page"] table td:first-child,
+  [data-testid="market-share-page"] table td[colspan] { grid-column: 1 / -1; }
+}
 /* ── Daleel — HRM-SA Brand Identity ─────────────────── */
 :root {
   /* HRM-SA palette (DARK — default) */

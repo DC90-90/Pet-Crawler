@@ -1,0 +1,89 @@
+{
+  "summary": "Executed reviewed 104-suite, added/ran new isolated acceptance regressions, built frontend, compiled backend, and performed live preview UI/API verification with scoped and fault-injected checks.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/scanner/opportunities?comparison_mode=selected&competitor_ids=<petsy|zarafa>",
+        "issue": "SKU 8699245859829 is not returned in well_positioned/opportunities for selected competitors, while /api/price-intel endpoints return it with expected prices (87 / 83.95). Scope cohort inconsistency across adapters.",
+        "priority": "CRITICAL"
+      },
+      {
+        "endpoint": "/api/market-share/my-products and /api/market-share/product/{sku}",
+        "issue": "SKU 8699245859829 is missing under selected competitor scopes (Petsy/Zarafa), despite presence in /api/price-intel for same scope inputs.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "/api/notifications",
+        "issue": "Preview browser console repeatedly logs 401s during normal navigation."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "MyProductsPage",
+        "issue": "Live UI did not show expected Hair & Skin / child SKUs in the tested session despite backend API search containing refreshed rows.",
+        "selector": "[data-testid='my-products-page'], [data-testid='product-search-input']",
+        "priority": "HIGH"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Cross-page scope consistency (Price Intel vs Scanner vs Market Share)",
+        "issue": "Selected competitor scope yields expected results in Price Intel but missing rows in Scanner/Market Share for same SKU and competitors.",
+        "affected_selectors": [
+          "[data-testid='intel-page']",
+          "[data-testid='scanner-page']",
+          "[data-testid='market-share-page']"
+        ]
+      },
+      {
+        "flow": "Transport fault handling",
+        "issue": "MOCKED failure tests verified clear error+Retry for My Products, Scanner, Market Share options, and Intel detail. Intel dashboard-level error was not reliably reproducible due cache/refetch behavior.",
+        "affected_selectors": [
+          "[data-testid='my-products-request-error']",
+          "[data-testid='scanner-request-error']",
+          "[data-testid='ms-filter-options-error']",
+          "[data-testid='intel-detail-error']"
+        ]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_acceptance_six_regressions.py",
+    "/app/backend/tests/test_iter40_preview_scope_checks.py",
+    "/app/test_reports/pytest/iter40_acceptance_six.xml",
+    "/app/test_reports/pytest/iter40_preview_scope_checks.xml",
+    "/app/test_reports/pytest/reviewed-core-final.xml",
+    "/app/test_reports/pytest/isolated-auth-final.xml",
+    "/app/test_reports/pytest/real-source-final.xml",
+    "/app/test_reports/pytest/related-contracts-final.xml"
+  ],
+  "action_items": [
+    "Fix scope-adapter parity so Scanner and Market Share include the same eligible SKU/cohort as Price Intel for identical selected competitors.",
+    "Investigate My Products UI data/render path for refreshed Hair & Skin rows in preview sessions.",
+    "Validate if /api/notifications 401s are expected for authenticated sessions; suppress or authorize appropriately.",
+    "Re-run preview scope/API and desktop/mobile UI regressions after fixes."
+  ],
+  "critical_code_review_comments": [
+    "No production-refresh endpoint was re-run. Targeted refresh audit artifacts show loopback Mongo guard, explicit preview URL guard, source SHA captures, and unchanged unrelated fingerprints.",
+    "Deferred per user scope: optional performance improvements, external integrations, and broad refactors were not tested/fixed. This deferral does not block detecting the correctness issues above."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_acceptance_six_regressions.py",
+    "/app/backend/tests/test_iter40_preview_scope_checks.py",
+    "/app/test_reports/iteration_40.json"
+  ],
+  "success_rate": {
+    "backend": "94%",
+    "frontend": "75%"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Use DALEEL_TEST_PASSWORD from /app/memory/test_credentials.md when running preview API tests in backend/tests/test_iter40_preview_scope_checks.py. Current failures are scoped to Scanner/MarketShare selected-competitor parity and UI visibility of refreshed Hair&Skin rows.",
+  "rca of the issue": "Reproduction: run DALEEL_TEST_PASSWORD='Ahmaddc90@' pytest -q /app/backend/tests/test_iter40_preview_scope_checks.py. Price Intel scope checks pass, but Scanner/MarketShare do not return SKU 8699245859829 for selected Petsy/Zarafa. Likely RCA: mismatch in scope filtering / eligibility exclusion path between adapters (comparison_views.scanner + market_share dataset path vs comparison_views.intel/catalog_views detail path)."
+}

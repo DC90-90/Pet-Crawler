@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-09",
+  "scope": "six final acceptance findings plus Scanner/crawler correctness; preview only",
+  "status": "passed",
+  "original_selected_tests": 104,
+  "new_isolated_regressions": 22,
+  "live_preview_api_checks": 7,
+  "total_passed": 133,
+  "failed": 0,
+  "frontend_build": "passed",
+  "python_compile": "passed",
+  "cron_manifest": "five existing authenticated schedules valid; no schedule changes",
+  "initial_report": "/app/test_reports/iteration_40.json",
+  "issues_closed": [
+    "Scanner well-positioned rows now expose cohort minimum/maximum and identity; row was not absent",
+    "MarketShare test corrected for real pagination and product.sellers response contract; source scope parity passes",
+    "Parent listing identity included in search without merging child SKUs",
+    "Authenticated layout waits for auth check before notification polling; final browser checks recorded zero 401s",
+    "Desktop MarketShare table overflow fixed by wrapping; no columns hidden",
+    "All MarketShare tabs and Intel dashboard error/retry verified; failed core requests do not masquerade as empty comparisons",
+    "Ledger failure no longer silently reported successful; replay preserves exact timestamp and original evidence without duplicate observations"
+  ],
+  "ui_verification": {
+    "desktop": "1920x800",
+    "mobile": "390x844",
+    "horizontal_overflow": [],
+    "real_data": "Hair & Skin parent quantity17 historical/unknown; 2kg46SAR/15 and4kg85SAR/2 separate; Beso membership Zarafa + comparison Petsy gives87SAR",
+    "mocked_failure_tests": "HTTP503 transport fault injections only; overview/my-products/missing/brands/categories/methodology/Intel dashboard plus agent detail, Scanner and MyProducts failures recovered via Retry",
+    "final_browser_logs": [
+      "/root/.emergent/automation_output/20261009_061126/console_20261009_061126.log",
+      "/root/.emergent/automation_output/20261009_061339/console_20261009_061339.log",
+      "/root/.emergent/automation_output/20261009_061508/console_20261009_061508.log"
+    ]
+  },
+  "refresh_audit": "/app/test_reports/targeted_preview_refresh.json",
+  "unrelated_fingerprints_unchanged": true,
+  "production_changes": false,
+  "credential_rotation": false,
+  "deployment": false,
+  "deferred_and_readiness_assessment": "/app/memory/REVIEWED_FIXES_ACCEPTANCE.md",
+  "test_credentials": "Existing memory/test_credentials.md unchanged; no accounts created or credentials modified",
+  "remaining_action": "User Save to GitHub and record remote commit; not a production-readiness certification"
+}

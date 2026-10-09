@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
+import { HistoricalQuantity } from "@/components/HistoricalQuantity";
 import { X, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -128,6 +129,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
               <span className="text-[#A1E4DB]">{t("col_price")}: </span>
               <span className="font-semibold text-white">{product.price ?? "—"} SAR</span>
               {product.price_status === "unavailable" && <p className="text-xs text-[#A1E4DB] mt-1" data-testid="product-detail-price-unavailable">{t("current_price_unavailable")}</p>}
+              <HistoricalQuantity quantity={product.historical_quantity} observedAt={product.historical_quantity_at} id="product-own-historical-quantity" />
             </div>
             {product.price_range && (
               <div className="grid grid-cols-3 gap-3">
@@ -255,6 +257,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
                         </TableCell>
                         <TableCell data-stock-status={sp.stock_status} data-label="Stock" data-testid={`detail-offer-stock-${sp.store_id}`}>
                           <StockBadge signal={sp.stock_signal} />
+                          <HistoricalQuantity quantity={sp.historical_quantity} observedAt={sp.historical_quantity_at} id={`detail-historical-qty-${sp.store_id}-${sp.offer_id || sp.sku}`} />
                           {sp.tier4_qty_exact != null && (
                             <span className="text-[10px] text-emerald-600 ms-1 font-medium">{sp.tier4_qty_exact} exact</span>
                           )}

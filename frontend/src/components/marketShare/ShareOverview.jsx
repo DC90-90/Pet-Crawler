@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { RequestError } from "@/components/RequestError";
 import { CATEGORY_LABELS } from "@/lib/i18n";
 import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, Database, Store as StoreIcon, TrendingUp, PackageX } from "lucide-react";
@@ -10,17 +11,19 @@ const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c || "—");
 export default function ShareOverview({ days, includeToday, filters, onPickProduct, onGoto }) {
   const [d, setD] = useState(null);
   const [err, setErr] = useState(null);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     let live = true;
     setErr(null);
+    setD(null);
     api.get("/market-share/overview", { params: { days, include_today: includeToday, ...(filters || {}) } })
       .then((r) => live && setD(r.data))
       .catch((e) => live && setErr(e.response?.data?.detail || "Failed to load overview"));
     return () => { live = false; };
-  }, [days, includeToday, filters]);
+  }, [days, includeToday, filters, retry]);
 
-  if (err) return <p className="text-sm text-[#EF4444]" data-testid="ms-overview-error">{err}</p>;
+  if (err) return <RequestError id="ms-overview" onRetry={() => setRetry(n => n + 1)} />;
   if (!d) return <p className="text-sm text-[#A1E4DB]">Loading…</p>;
   const k = d.kpis || {};
   const q = d.data_quality || {};
@@ -31,19 +34,15 @@ export default function ShareOverview({ days, includeToday, filters, onPickProdu
       <div className="flex items-start gap-2 px-3 py-2.5 rounded-xl bg-white/[0.03] border border-white/10">
         <Database className="w-4 h-4 text-[#1E988E] mt-0.5 shrink-0" />
         <p className="text-[11px] text-[#A1E4DB]" data-testid="ms-tracked-market-note">
-          Market share is based on tracked measured data inside Daleel, not the total Saudi
-          market ({d.window?.date_from} → {d.window?.date_to}).{" "}
+          Tracked observations inside Daleel, not the total Saudi market ({d.window?.date_from} → {d.window?.date_to}).{" "}
           {d.filtered && (
             <span className="text-[#5FD3C7]" data-testid="ms-overview-filtered">
               These KPIs cover only the filtered selection.{" "}
             </span>
           )}
-          {k.stores_with_sales_data} of {k.tracked_stores} tracked stores currently
-          publish data we can measure sales from. Share percentages count only the{" "}
-          <span className="text-white">{fmtNum(k.products_contested)}</span> product(s) where at
-          least one other tracked seller's sales are measurable — the{" "}
-          <span className="text-white">{fmtNum(k.products_sole_seller)}</span> product(s) only we
-          sell are reported separately so they cannot inflate the headline.
+          {k.stores_with_sales_data} of {k.tracked_stores} tracked stores have observation signals.
+          Inventory movement and shelf-value proxies are not exact sales or revenue.
+          Exact shares require complete compatible transaction evidence from every compared seller.
         </p>
       </div>
 
@@ -52,10 +51,9 @@ export default function ShareOverview({ days, includeToday, filters, onPickProdu
           data-testid="ms-no-sales-banner">
           <AlertTriangle className="w-4 h-4 text-[#F59E0B] mt-0.5 shrink-0" />
           <div className="text-[11px] text-[#F59E0B]">
-            <p className="font-semibold">No measurable sales in this window yet — shares are withheld, not zeroed.</p>
+            <p className="font-semibold">No eligible observation intervals in this window — values are unavailable, not zero.</p>
             <p className="mt-0.5">
-              Units are derived by comparing two crawls of the same product. Every store below shows
-              how many days it was observed; a store needs at least two before any sales figure can exist.
+              Inventory movement needs repeated valid observations of the same offer. Exact own sales require complete order coverage.
             </p>
           </div>
         </div>
@@ -67,9 +65,9 @@ export default function ShareOverview({ days, includeToday, filters, onPickProdu
             ? "Unavailable" : fmtPct(k.my_revenue_share_pct), k.my_units_source, "ms-kpi-revenue-share"],
           ["My unit share", k.my_unit_share_pct === null || k.my_unit_share_pct === undefined
             ? "Unavailable" : fmtPct(k.my_unit_share_pct), k.my_units_source, "ms-kpi-unit-share"],
-          ["Tracked market revenue", k.market_revenue === null || k.market_revenue === undefined
+          ["Tracked shelf-value proxy", k.market_revenue === null || k.market_revenue === undefined
             ? "Unavailable" : fmtMoney(k.market_revenue), null, "ms-kpi-market-revenue"],
-          ["My measured revenue", k.my_revenue === null || k.my_revenue === undefined
+          [k.my_units_source === "orders_exact" ? "My invoiced revenue" : "My shelf-value proxy", k.my_revenue === null || k.my_revenue === undefined
             ? "Unavailable" : fmtMoney(k.my_revenue), k.my_units_source, "ms-kpi-my-revenue"],
         ].map(([label, value, source, tid]) => (
           <div key={label} className="kpi-card" data-testid={tid}>
@@ -86,8 +84,8 @@ export default function ShareOverview({ days, includeToday, filters, onPickProdu
         {[
           ["Products in my catalog", fmtNum(k.my_catalog_products), "ms-kpi-catalog"],
           ["…with a tracked competitor", fmtNum(k.products_with_tracked_competitor), "ms-kpi-with-competitor"],
-          ["…contested (share is comparable)", fmtNum(k.products_contested), "ms-kpi-contested"],
-          ["Only I sell it (excluded from share)", fmtNum(k.products_sole_seller), "ms-kpi-sole"],
+          ["…with competitor observation signals", fmtNum(k.products_contested), "ms-kpi-contested"],
+          ["No competitor signal (share withheld)", fmtNum(k.products_sole_seller), "ms-kpi-sole"],
         ].map(([label, value, tid]) => (
           <div key={label} className="kpi-card !p-3" data-testid={tid}>
             <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{label}</p>

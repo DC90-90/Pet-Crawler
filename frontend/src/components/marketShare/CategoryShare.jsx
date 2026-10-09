@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { RequestError } from "@/components/RequestError";
 import { CATEGORY_LABELS } from "@/lib/i18n";
 import { ConfidenceBadge, TrendCell, fmtMoney, fmtNum, fmtPct } from "./SourceChip";
 
@@ -7,16 +8,21 @@ const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c || "—");
 
 export default function CategoryShare({ days, includeToday, filters }) {
   const [rows, setRows] = useState(null);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     let live = true;
     setRows(null);
+    setError(false);
     api.get("/market-share/categories", { params: { days, include_today: includeToday, ...(filters || {}) } })
-      .then((r) => live && setRows(r.data.rows || []));
+      .then((r) => live && setRows(r.data.rows || []))
+      .catch(() => live && setError(true));
     return () => { live = false; };
-  }, [days, includeToday, filters]);
+  }, [days, includeToday, filters, retry]);
 
-  if (!rows) return <p className="text-sm text-[#A1E4DB]">Loading…</p>;
+  if (error) return <RequestError id="ms-categories" onRetry={() => setRetry(n => n + 1)} />;
+  if (!rows) return <p className="text-sm text-[#A1E4DB]" data-testid="ms-categories-loading">Loading…</p>;
   if (rows.length === 0) return (
     <p className="text-sm text-[#A1E4DB]" data-testid="ms-categories-empty">No category could be resolved yet</p>
   );
@@ -35,8 +41,8 @@ export default function CategoryShare({ days, includeToday, filters }) {
 
           <div className="grid grid-cols-2 gap-3 mb-3">
             {[
-              ["Tracked revenue", fmtMoney(r.revenue)],
-              ["Tracked units", fmtNum(r.units)],
+              ["Tracked observed value / proxy", fmtMoney(r.revenue)],
+              ["Tracked units / movement", fmtNum(r.units)],
               ["My share of category", r.my_revenue_share_pct === null || r.my_revenue_share_pct === undefined
                 ? "Unavailable" : fmtPct(r.my_revenue_share_pct)],
               ["Gap opportunity", fmtMoney(r.missing_opportunity_value)],
@@ -56,7 +62,7 @@ export default function CategoryShare({ days, includeToday, filters }) {
                   {p.in_catalog ? "" : "＋ "}{p.name} · <span dir="ltr" className="text-white">{fmtMoney(p.revenue)}</span>
                 </p>
               ))}
-              {(r.top_products || []).length === 0 && <p className="text-[#A1E4DB]">No measurable sales</p>}
+              {(r.top_products || []).length === 0 && <p className="text-[#A1E4DB]">No eligible observation signals</p>}
             </div>
             <div>
               <p className="text-[9px] uppercase tracking-wide text-[#A1E4DB] mb-1">Top stores</p>

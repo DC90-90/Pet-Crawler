@@ -1,4 +1,6 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { ComparisonScope, useComparisonScope } from "@/components/ComparisonScope";
+import { RequestError } from "@/components/RequestError";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { Zap, RefreshCw, TrendingDown, AlertTriangle, Shield, Trophy, ChevronDown, ChevronRight, Users, Filter } from "lucide-react";
@@ -31,6 +33,9 @@ const explainExclusion = (x) => {
 
 
 export default function ScannerPage() {
+  const scope = useComparisonScope();
+  const [error, setError] = useState(false);
+  const requestId = useRef(0);
   const { t } = useI18n();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -40,16 +45,19 @@ export default function ScannerPage() {
   const [showExcluded, setShowExcluded] = useState(false);
 
   const fetchData = useCallback(() => {
+    const request = ++requestId.current;
     setLoading(true);
-    api.get("/scanner/opportunities", { params: { days } })
-      .then((r) => setData(r.data))
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [days]);
+    setError(false); setData(null); setSelectedOpp(null);
+    api.get("/scanner/opportunities", { params: { days, ...scope.params }, timeout: 45000 })
+      .then((r) => request === requestId.current && setData(r.data))
+      .catch(() => request === requestId.current && setError(true))
+      .finally(() => request === requestId.current && setLoading(false));
+  }, [days, scope.params]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  if (loading || !data) return <div className="p-6 text-sm text-[#A1E4DB]">{t("loading")}</div>;
+  if (error) return <div className="p-6"><RequestError id="scanner-request" onRetry={fetchData} /></div>;
+  if (loading || !data) return <div className="p-6 text-sm text-[#A1E4DB]" data-testid="scanner-loading">{t("loading")}</div>;
   const { summary, opportunities, well_positioned, undercut } = data;
   const competitorsOverpriced = data.competitors_overpriced || [];
   const compTotal = summary.competitors_overpriced ?? competitorsOverpriced.length;
@@ -90,6 +98,7 @@ export default function ScannerPage() {
         </div>
       </div>
 
+      <ComparisonScope scope={scope} prefix="scanner" />
       <DataFreshnessBanner />
 
       {/* Summary Cards */}
@@ -105,9 +114,9 @@ export default function ScannerPage() {
           <p className="text-[10px] text-[#A1E4DB] mt-0.5" data-testid="scanner-not-forecast">Historical gap × observed units · not a revenue forecast</p>
         </div>
         <div className="kpi-card border-s-4 border-s-yellow-500">
-          <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Zero Sales + Overpriced</p>
+          <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">Zero Observed Movement + Overpriced</p>
           <p className="text-2xl font-bold text-yellow-600 mt-1">{summary.zero_sales_overpriced}</p>
-          <p className="text-[10px] text-[#A1E4DB] mt-0.5">overpriced with no sales in {days}d</p>
+          <p className="text-[10px] text-[#A1E4DB] mt-0.5">no observed movement in {days}d · not proof of zero sales</p>
         </div>
       </div>
 

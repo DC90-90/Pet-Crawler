@@ -33,6 +33,7 @@ groups = {
     "isolated-auth": ["test_findings_auth_isolated"],
     "real-source": ["test_iteration39_real_source_evidence"],
     "related-contracts": ["test_pack_count_guard", "test_ledger_phase1", "test_ledger_phase2", "test_own_store_vat_basis"],
+    "six-acceptance": ["test_acceptance_six_regressions"],
 }
 report_dir = ROOT / "test_reports/pytest"
 report_dir.mkdir(parents=True, exist_ok=True)

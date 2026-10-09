@@ -133,9 +133,12 @@ class _FakeDB:
 
 
 def _match(my, snaps, products):
+    from datetime import datetime, timezone
     # The v2 contract reads names on the SPECIFIC offer, not a global SKU join.
     offers = [{**s, **products.get(s["sku"], {}), "offer_id": f"{s['store_id']}:{s['sku']}",
-               "observation_version": 2, "is_synthetic": False} for s in snaps]
+               "observation_version": 2, "is_synthetic": False, "comparable": True,
+               "currency": "SAR", "price_basis": "storefront_inc_vat", "in_stock": True,
+               "confidence_score": 99, "crawled_at": datetime.now(timezone.utc)} for s in snaps]
     return asyncio.run(M.match_my_product(_FakeDB(), my, offers, {}, "own"))
 
 

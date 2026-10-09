@@ -1025,6 +1025,16 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
     })]
     seen_offers = set()
     for raw in expanded:
+        # Once a listing is known to be a parent, later incomplete responses
+        # cannot revive its generic price/quantity as a specific child offer.
+        if raw.get("_variant_id") == "root":
+            listing_id = raw.get("_listing_id")
+            known_child = await db.products.find_one({"store_id": store["id"], "listing_id": listing_id,
+                "variant_id": {"$nin": [None, "root"]}}, {"_id": 0, "offer_id": 1})
+            known_parent = await db.observation_quarantine.find_one({"store_id": store["id"], "listing_id": listing_id,
+                "quarantine_reasons": "unresolved_parent_variants"}, {"_id": 0, "listing_id": 1})
+            if known_child or known_parent:
+                raw = {**raw, "_unresolved_parent": True}
         norm = _normalize_raw_product(raw, store["name"])
         offer_id = stable_id(store["id"], norm["listing_id"], norm["variant_id"])
         if offer_id in seen_offers:
@@ -1145,18 +1155,16 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
         from evidence_ledger import record
         persisted = snapshot if result.upserted_id else await db.product_snapshots.find_one({'event_id': snapshot['event_id']}, {'_id': 0})
         await record(db, persisted)
-        if result.upserted_id:
-            ledger_obs.append(ledger.crawl_observation(norm))
+        # Replay the persisted evidence, not a retry's potentially changed payload.
+        # Daily ledger writes are idempotent; retry must repair a prior interrupted write.
+        ledger_obs.append(ledger.crawl_observation({**persisted, "qty": persisted.get("qty_available")}))
         snap_count += 1
 
-    # iter67 — Phase-1 ledger write, ALONGSIDE the rollups (nothing reads it
-    # yet). Fail-soft: the ledger must never cost a crawl its snapshots.
-    try:
-        await ledger.record_observations(
-            db, store["id"], store["name"], ledger_obs, now,
-            source_tier=tier, confidence=confidence)
-    except Exception:
-        logger.exception("[Ledger] crawl-path write failed for %s — crawl unaffected", store.get("name"))
+    # Snapshots remain durable if the ledger fails. Surface failure so the checkpoint
+    # stays replayable rather than declaring incomplete work successful.
+    await ledger.record_observations(
+        db, store["id"], store["name"], ledger_obs, now,
+        source_tier=tier, confidence=confidence)
 
     return new_count, snap_count
 
@@ -1368,14 +1376,8 @@ async def crawl_salla_tier1(db, store):
             crawl_log["endpoint_used"] = winning_endpoint["tag"]
             crawl_log["products_found"] = len(all_raw)
             await db.stores.update_one({"id": store["id"]}, {"$set": {"working_endpoint": winning_endpoint["tag"]}})
-            # iter64 — barcode detail supplement for Salla stores, BEFORE persistence
-            # (it mutates the raw items). No-op with a logged "skipped" entry when it
-            # cannot or should not run; nothing for non-Salla platforms.
-            try:
-                await _maybe_salla_detail_supplement(db, store, all_raw, crawl_log)
-            except Exception:
-                logger.exception('Optional barcode supplement failed; retaining collected observations')
-            new_count, snap_count = await process_crawled_products(db, store, all_raw, now)
+            from crawl_persistence import persist
+            new_count, snap_count = await persist(db, store, all_raw, now, crawl_log)
             crawl_log["products_new"] = new_count
             crawl_log["products_updated"] = len(all_raw) - new_count
             crawl_log["snapshots_created"] = snap_count
@@ -1557,8 +1559,8 @@ async def crawl_tier2_xhr(db, store):
             # iter64 — supplement before persistence (mutates the raw items). This
             # is the tier that succeeded on Zarafa 2026-07-31 19:09 with 3000
             # products while the supplement's only host path (Tier 2.5) sat blocked.
-            await _maybe_salla_detail_supplement(db, store, captured_products, crawl_log)
-            new_c, snap_c = await process_crawled_products(db, store, captured_products, now, tier=2, confidence=88)
+            from crawl_persistence import persist
+            new_c, snap_c = await persist(db, store, captured_products, now, crawl_log, tier=2, confidence=88)
             crawl_log["products_new"] = new_c
             crawl_log["products_updated"] = len(captured_products) - new_c
             crawl_log["snapshots_created"] = snap_c
@@ -1720,8 +1722,8 @@ async def crawl_tier3_html(db, store):
             # iter64 — supplement before persistence. HTML-extracted items usually
             # carry no Salla numeric id, in which case the wrapper's missing filter
             # finds nothing fetchable and writes a "skipped" entry instead.
-            await _maybe_salla_detail_supplement(db, store, products_extracted, crawl_log)
-            new_c, snap_c = await process_crawled_products(db, store, products_extracted, now, tier=3, confidence=75)
+            from crawl_persistence import persist
+            new_c, snap_c = await persist(db, store, products_extracted, now, crawl_log, tier=3, confidence=75)
             crawl_log["products_new"] = new_c
             crawl_log["products_updated"] = len(products_extracted) - new_c
             crawl_log["snapshots_created"] = snap_c
@@ -2625,9 +2627,7 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
         # already-captured store-identifier. The wrapper writes the "ran" or
         # "skipped" observability entry and never raises. Proxy bytes for the
         # borrowed client are settled inside the wrapper via record_proxy_usage.
-        await _maybe_salla_detail_supplement(
-            db, store, captured, crawl_log,
-            store_identifier=store_identifier, client=client)
+        # Enrichment follows durable capture and the soft-block check below.
 
     now = datetime.now(timezone.utc)
     crawl_log["duration_secs"] = round(time.time() - start_time, 1)
@@ -2641,7 +2641,9 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
             crawl_log["tier_used"] = 2
             crawl_log["http_status"] = 200
             crawl_log["products_found"] = len(captured)
-            new_c, snap_c = await process_crawled_products(db, store, captured, now, tier=2, confidence=88)
+            from crawl_persistence import persist
+            new_c, snap_c = await persist(db, store, captured, now, crawl_log, tier=2, confidence=88,
+                                         store_identifier=store_identifier)
             crawl_log["products_new"] = new_c
             crawl_log["products_updated"] = len(captured) - new_c
             crawl_log["snapshots_created"] = snap_c
@@ -2800,6 +2802,9 @@ async def _fetch_zid_api_catalog(db, store):
                         "qty_available": None if p.get("is_infinite") else observed_int(p.get("quantity")),
                         "in_stock": True if p.get("is_infinite") else (observed_int(p.get("quantity")) > 0 if observed_int(p.get("quantity")) is not None else None),
                         "listing_id": p.get("_listing_id"), "variant_id": p.get("_variant_id"),
+                        "_unresolved_parent": p.get("_unresolved_parent"), "has_options": p.get("has_options"),
+                        "_resolved_child": p.get("_resolved_child"), "_parent_sku": p.get("_parent_sku"),
+                        "attributes": p.get("attributes"), "currency": p.get("currency"),
                         # Cumulative units-sold counter — feeds the estimator's
                         # sold_count_diff method (works even for is_infinite
                         # products whose qty can never show depletion).
@@ -2899,6 +2904,9 @@ def build_key_index(rows, payload_fn):
 def _storefront_price_index(rows):
     """Storefront rows → (shelf_price, list_price) per key. Unpriced rows drop."""
     def _payload(r):
+        from observation_contract import unresolved_identity
+        if unresolved_identity(r):
+            return None
         shelf, list_price = storefront_shelf_price(r)
         return (shelf, list_price) if shelf > 0 else None
     from observation_contract import expand_variants
@@ -3243,7 +3251,7 @@ async def fetch_own_storefront_catalog_raw(store, max_pages=OWN_SF_MAX_PAGES):
                   "attempts": crawl_log.get("attempts")}
 
 
-async def sync_own_store_prices(db, store=None):
+async def sync_own_store_prices(db, store=None, *, targeted_rows=None, observed_at=None):
     import job_control
     store = store or await db.stores.find_one({"is_own_store": True}, {"_id": 0})
     if not store:
@@ -3252,12 +3260,13 @@ async def sync_own_store_prices(db, store=None):
     if not await job_control.acquire(db, f"store:{store['id']}", owner):
         return {"status": "deferred", "error": "store_job_already_running"}
     try:
-        return await asyncio.wait_for(_sync_own_store_prices_locked(db, store), timeout=2.5*3600)
+        task = _sync_own_store_prices_locked(db, store) if targeted_rows is None else _sync_own_store_prices_locked(db, store, targeted_rows=targeted_rows, observed_at=observed_at)
+        return await asyncio.wait_for(task, timeout=2.5*3600)
     finally:
         await job_control.release(db, f"store:{store['id']}", owner)
 
 
-async def _sync_own_store_prices_locked(db, store=None):
+async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, observed_at=None):
     """Sync prices/quantities from the user's own Zid store back into db.my_products.
 
     Strategy:
@@ -3285,16 +3294,20 @@ async def _sync_own_store_prices_locked(db, store=None):
                 "synced_at": datetime.now(timezone.utc).isoformat(),
                 "error": "no_own_store_flagged"}
 
-    started_at = datetime.now(timezone.utc)
+    started_at = observed_at or datetime.now(timezone.utc)
     logger.info(f"[OwnSync] Starting price sync for {store['name']} ({store.get('domain')})")
 
     # ── Try Zid Merchant API first; fall back to public crawl on miss ──
     sync_source_label = None
-    all_raw, zid_status = await _fetch_zid_api_catalog(db, store)
+    all_raw, zid_status = (targeted_rows, "targeted_public") if targeted_rows is not None else await _fetch_zid_api_catalog(db, store)
     winning_endpoint = None
     crawl_log = _make_crawl_log(store, tier_attempted=1)
 
-    if zid_status == "ok" and all_raw:
+    if targeted_rows is not None:
+        sync_source_label = "public_crawl"
+        winning_endpoint = {"tag": "targeted_product_pages", "_pagination": {"complete": False}}
+        crawl_log.update(tier_used=1, endpoint_used="targeted_product_pages", scope="targeted_listings")
+    elif zid_status == "ok" and all_raw:
         sync_source_label = "zid_api"
         winning_endpoint = {"tag": "zid_merchant_api"}
         crawl_log["tier_used"] = 0  # 0 = authenticated API (better than tier 1 public)
@@ -3381,7 +3394,7 @@ async def _sync_own_store_prices_locked(db, store=None):
     # ── Match + update ──
     updated, not_found, discovered = 0, 0, 0
     seen_skus = set()  # SKUs touched by THIS sync — used to mark presence flag
-    sync_ts = datetime.now(timezone.utc).isoformat()
+    sync_ts = started_at.isoformat()
     UPDATE_FIELDS_NEVER_OVERWRITE = {  # noqa: F841 — documentation only
         "sku", "barcode", "name_ar", "name_en", "description_ar", "description_en",
         "categories_ar", "categories_en", "images", "product_page_url",
@@ -3396,30 +3409,8 @@ async def _sync_own_store_prices_locked(db, store=None):
     # Own catalog APIs still identify rows and invoice lines by SKU. Never
     # assign one sibling's price or orders to another when that key is ambiguous.
     # Preserve the raw offers for explicit reconciliation rather than guessing.
-    from collections import Counter
-    sku_counts = Counter(str(r.get('sku') or '').strip() for r in all_raw)
-    duplicate_skus = {sku for sku, count in sku_counts.items() if sku and count > 1}
-    quarantined_own = 0
-    accepted_own_raw = []
-    for candidate in all_raw:
-        candidate_sku = str(candidate.get('sku') or '').strip()
-        reason = 'ambiguous_own_sku' if candidate_sku in duplicate_skus else None
-        if sync_source_label == 'public_crawl' and not reason:
-            contract = _normalize_raw_product(candidate, store['name'])
-            if not contract.get('comparable'):
-                reason = ','.join(contract.get('quarantine_reasons') or ['invalid_own_offer'])
-        if reason:
-            quarantined_own += 1
-            await db.observation_quarantine.update_one(
-                {'event_id': stable_id(own_store_id, sync_ts, candidate)},
-                {'$setOnInsert': {'store_id': own_store_id, 'observed_at': started_at,
-                    'data_origin': 'own_sync', 'quarantine_reasons': [reason], 'raw_offer': candidate}}, upsert=True)
-            await db.my_products.update_many({'sku': candidate_sku}, {'$set': {
-                'price': None, 'sale_price': None, 'price_basis': 'quarantined',
-                'price_unavailable_reason': reason}})
-        else:
-            accepted_own_raw.append(candidate)
-    all_raw = accepted_own_raw
+    from own_quarantine import filter_own_rows
+    all_raw, quarantined_own = await filter_own_rows(db, store, all_raw, sync_source_label, started_at, _normalize_raw_product)
     if quarantined_own:
         catalog_complete = False
         crawl_log['complete'] = False
@@ -3520,6 +3511,9 @@ async def _sync_own_store_prices_locked(db, store=None):
                 "id": str(uuid.uuid4()),
                 "sku": crawled_sku,
                 "offer_id": own_offer_id,
+                "listing_id": raw.get("listing_id") or raw.get("_listing_id") or raw.get("_zid_id"),
+                "variant_id": raw.get("variant_id") or raw.get("_variant_id") or "root",
+                "quantity_observed_at": sync_ts, "quarantine_active": False,
                 "barcode": crawled_barcode or "",
                 "name_ar": norm.get("name_ar", ""),
                 "name_en": norm.get("name_en") or norm.get("name_ar", ""),
@@ -3561,6 +3555,9 @@ async def _sync_own_store_prices_locked(db, store=None):
 
         update_doc = {
             "offer_id": own_offer_id,
+            "listing_id": raw.get("listing_id") or raw.get("_listing_id") or raw.get("_zid_id"),
+            "variant_id": raw.get("variant_id") or raw.get("_variant_id") or "root",
+            "quantity_observed_at": sync_ts, "quarantine_active": False,
             "price": round(norm["price"], 2),
             "sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
             # iter73d — see setOnInsert comment above; must land on updates too.
@@ -3574,7 +3571,7 @@ async def _sync_own_store_prices_locked(db, store=None):
             "present_on_store": True,
             "last_seen_on_store": sync_ts,
         }
-        await db.my_products.update_one({"sku": target_sku}, {"$set": update_doc})
+        await db.my_products.update_one({"sku": target_sku}, {"$set": update_doc, "$unset": {"price_unavailable_reason": ""}})
         seen_skus.add(target_sku)
         updated += 1
 
@@ -3632,7 +3629,7 @@ async def _sync_own_store_prices_locked(db, store=None):
                 continue
             offer_id = stable_id(own_store_id, raw.get("listing_id") or raw.get("_zid_id"), raw.get("variant_id") or "root")
             qty = raw.get("qty_available")
-            in_stock = bool(raw.get("in_stock")) if not raw.get("_zid_is_infinite") else True
+            in_stock = raw.get("in_stock") if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""
             _prev = _todays_latest.get(sku)
             # iter73 — the Zid own-store sync used to always write
@@ -3761,6 +3758,11 @@ async def _sync_own_store_prices_locked(db, store=None):
         except Exception:
             logger.exception("[Ledger] own-sync write failed — sync unaffected")
 
+    if sync_source_label == "public_crawl" and all_raw:
+        before = await db.product_snapshots.count_documents({"store_id": own_store_id, "crawled_at": started_at})
+        await process_crawled_products(db, store, all_raw, started_at, tier=1, confidence=95)
+        snapshots_created = await db.product_snapshots.count_documents({"store_id": own_store_id, "crawled_at": started_at}) - before
+
     # ── Mark every my_products row NOT seen in this crawl as archived ──
     # Soft-archive only: row + history are preserved, but `present_on_store=False`
     # lets the UI badge them as "Removed from store" without filtering them out.
@@ -3779,6 +3781,13 @@ async def _sync_own_store_prices_locked(db, store=None):
     crawl_log["snapshots_deduped"] = snapshots_deduped  # change-only writes (iter24)
     if not all_raw:
         crawl_log["error"] = (crawl_log.get("error") or "") + " | own-store crawl returned 0 items"
+    if targeted_rows is not None:
+        crawl_log.update(completed_at=datetime.now(timezone.utc).isoformat(), status="targeted_completed", complete=False)
+        await db.crawl_logs.insert_one(dict(crawl_log))
+        await db.stores.update_one({"id": store["id"]}, {"$set": {"last_targeted_sync": sync_ts}})
+        return {"status": "targeted_completed", "scope": "targeted_listings", "updated": updated,
+                "discovered": discovered, "archived": 0, "quarantined": quarantined_own,
+                "snapshots_created": snapshots_created, "observed_at": sync_ts, "skus": sorted(seen_skus)}
     await _finalize_crawl_log(db, crawl_log, store["id"])
 
     # Fallback alert (Feb 2026): creds configured but the Zid API path failed —
@@ -3865,6 +3874,8 @@ async def _crawl_store_waterfall_locked(db, store):
     if store.get("is_own_store"):
         return await sync_own_store_prices(db, store=store)
 
+    from crawl_persistence import recover
+    await recover(db, store)
     platform = store.get("platform", "").lower()
     tier1_only = bool(store.get("tier1_only"))
     storefront_strategy = bool(store.get("use_storefront_categories"))

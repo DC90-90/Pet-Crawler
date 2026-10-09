@@ -172,6 +172,7 @@ def test_shared_cohort_is_consistent_across_adapters_and_exclusions_are_explicit
             "price_basis": "storefront_inc_vat",
             "in_stock": True,
             "quantity": 6,
+            "last_synced_at": now.isoformat(),
         })
         await db.products.insert_one({"sku": "OWN-SKU-1", "name_ar": "Cat Food 400g", "category": "cat_food"})
 

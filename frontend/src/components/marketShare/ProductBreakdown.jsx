@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { RequestError } from "@/components/RequestError";
+import { HistoricalQuantity } from "@/components/HistoricalQuantity";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -18,19 +20,20 @@ const packReason = (x) => {
   return x.detail || r;
 };
 
-export default function ProductBreakdown({ productKey, days, includeToday, open, onClose }) {
+export default function ProductBreakdown({ productKey, days, includeToday, open, onClose, scopeParams }) {
   const [row, setRow] = useState(null);
   const [err, setErr] = useState(null);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     if (!open || !productKey) return;
     setRow(null); setErr(null);
     let live = true;
-    api.get(`/market-share/product/${encodeURIComponent(productKey)}`, { params: { days, include_today: includeToday } })
+    api.get(`/market-share/product/${encodeURIComponent(productKey)}`, { params: { days, include_today: includeToday, ...scopeParams } })
       .then((r) => live && setRow(r.data.product))
       .catch((e) => live && setErr(e.response?.data?.detail || "Could not load this product"));
     return () => { live = false; };
-  }, [productKey, days, open, includeToday]);
+  }, [productKey, days, open, includeToday, scopeParams, retry]);
 
   const sellers = row?.sellers || [];
   const chart = sellers.filter((s) => (s.price || 0) > 0).map((s) => ({
@@ -49,7 +52,7 @@ export default function ProductBreakdown({ productKey, days, includeToday, open,
           </SheetTitle>
         </SheetHeader>
 
-        {err && <p className="text-sm text-[#EF4444] mt-4" data-testid="ms-breakdown-error">{err}</p>}
+        {err && <RequestError id="ms-breakdown" onRetry={() => setRetry(n => n + 1)} />}
 
         {row && (
           <div className="space-y-5 mt-4">
@@ -83,9 +86,9 @@ export default function ProductBreakdown({ productKey, days, includeToday, open,
                 ["My price", row.in_catalog ? fmtMoney(row.my_price) : "Not in catalog", null],
                 ["My revenue share", row.revenue_share_pct === null || row.revenue_share_pct === undefined
                   ? "Unavailable" : fmtPct(row.revenue_share_pct), row.my_units_source],
-                ["My units", row.my_units === null || row.my_units === undefined
+                [row.my_units_source === "orders_exact" ? "My invoiced units" : "My movement proxy", row.my_units === null || row.my_units === undefined
                   ? "Unavailable" : fmtNum(row.my_units), row.my_units_source],
-                ["Tracked market revenue", row.market_revenue === null || row.market_revenue === undefined
+                ["Tracked shelf-value proxy", row.market_revenue === null || row.market_revenue === undefined
                   ? "Unavailable" : fmtMoney(row.market_revenue), null],
               ].map(([l, v, src]) => (
                 <div key={l} className="kpi-card !p-3">
@@ -125,7 +128,7 @@ export default function ProductBreakdown({ productKey, days, includeToday, open,
                 <Table>
                   <TableHeader>
                     <TableRow className="border-white/10">
-                      {["Store", "Match", "Price", "Stock", "Units", "Revenue", "Unit share",
+                      {["Store", "Match", "Price", "Stock", "Units / movement", "Value (see source)", "Exact unit share",
                         "Revenue share", "Source", "Last crawl"].map((h) => (
                         <TableHead key={h} className="text-[9px] uppercase tracking-wider text-[#A1E4DB] whitespace-nowrap">{h}</TableHead>
                       ))}
@@ -146,8 +149,9 @@ export default function ProductBreakdown({ productKey, days, includeToday, open,
                         <TableCell className="text-xs text-white whitespace-nowrap" dir="ltr">{fmtMoney(s.price)}</TableCell>
                         <TableCell className="text-[10px] whitespace-nowrap">
                           <span className={s.in_stock ? "text-[#10B981]" : "text-[#EF4444]"}>
-                            {s.in_stock ? s.stock_signal : "OOS"}
+                            {s.in_stock == null ? "Unknown stock" : s.in_stock ? s.stock_signal : "OOS"}
                           </span>
+                          <HistoricalQuantity quantity={s.historical_quantity} observedAt={s.historical_quantity_at} id={`ms-historical-qty-${s.store_id}-${s.offer_id || s.sku_at_store}`} />
                         </TableCell>
                         <TableCell className="text-xs whitespace-nowrap" dir="ltr">
                           {s.units === null || s.units === undefined

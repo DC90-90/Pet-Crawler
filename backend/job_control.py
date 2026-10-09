@@ -45,7 +45,7 @@ async def execute(db, run_id, kind, action):
         if isinstance(result, dict):
             if result.get("sync_status") == "error" or result.get("match_status") == "error":
                 status = "failed"
-            elif result.get('status') in ('partial', 'degraded', 'deferred', 'paused') or result.get("sync_status") == "degraded" or result.get("orders_status") not in (None, "ok", "skipped"):
+            elif status != "failed" and (result.get('status') in ('partial', 'degraded', 'deferred', 'paused') or result.get("sync_status") == "degraded" or result.get("orders_status") not in (None, "ok", "skipped")):
                 status = "degraded"
         from fastapi.encoders import jsonable_encoder
         clean = {k: v for k, v in (result or {}).items() if k != "_id"} if isinstance(result, dict) else {}

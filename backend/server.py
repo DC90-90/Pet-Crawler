@@ -1811,6 +1811,11 @@ async def list_stores(user=Depends(get_user)):
     s_paused = crawl_paused
     return {"stores": stores, "crawl_paused": s_paused}
 
+@router.get("/comparison-stores")
+async def comparison_stores(user=Depends(get_user)):
+    return {"stores": await db.stores.find({"is_active": {"$ne": False}, "is_own_store": {"$ne": True}},
+                                          {"_id": 0, "id": 1, "name": 1}).sort("name", 1).to_list(1000)}
+
 @router.post("/stores")
 async def create_store(data: StoreIn, user=Depends(get_user)):
     platform = data.platform.lower()
@@ -5898,8 +5903,12 @@ async def _detect_pack_variants(db, skus, since):
 
 @router.get("/scanner/opportunities")
 @ttl_cache(60)
-async def price_opportunities(days: int = Query(14), user=Depends(get_user)):
-    return await comparison_views.scanner(db, int(days), _effective_own_price, _own_orders_aggregate, _sales_pairs_from_rollups)
+async def price_opportunities(days: int = Query(14), comparison_mode: str = "all", competitor_ids: Optional[str] = None, user=Depends(get_user)):
+    from comparison_scope import resolve
+    scope = await resolve(db, comparison_mode, competitor_ids)
+    result = await comparison_views.scanner(db, int(days), _effective_own_price, _own_orders_aggregate, _sales_pairs_from_rollups,
+                                          scope["competitor_ids"] if scope["mode"] == "selected" else None)
+    return {**result, "comparison_scope": scope}
 
 
 async def _retired_price_opportunities(days, user=None):
@@ -8057,6 +8066,9 @@ def _effective_own_price(mp):
     """Shopper-facing effective price for a my_products row (float, ≥0)."""
     if not mp:
         return 0.0
+    from observation_contract import unresolved_identity
+    if unresolved_identity(mp) or mp.get("quarantine_active") or mp.get("price_unavailable_reason"):
+        return 0.0
     observed = price_cohort.aware(mp.get('last_synced_at'))
     now = datetime.now(timezone.utc)
     if (observed is None or observed > now + timedelta(minutes=5)
@@ -8351,9 +8363,12 @@ async def _retired_price_intel_dashboard_compute(db):
 
 
 @router.get("/price-intel/product/{sku}")
-async def price_intel_product_detail(sku: str, user=Depends(get_user)):
+async def price_intel_product_detail(sku: str, comparison_mode: str = "all", competitor_ids: Optional[str] = None, user=Depends(get_user)):
     from catalog_views import intel_detail
-    return await intel_detail(db, sku, _effective_own_price)
+    from comparison_scope import resolve
+    scope = await resolve(db, comparison_mode, competitor_ids)
+    result = await intel_detail(db, sku, _effective_own_price, scope["competitor_ids"] if scope["mode"] == "selected" else None)
+    return {**result, "comparison_scope": scope}
 
 
 async def _retired_price_intel_product_detail(sku, user=None):
@@ -8477,7 +8492,7 @@ async def confirm_match(data: MatchActionIn, user=Depends(get_user)):
     offer = await db.product_snapshots.find_one({"store_id": data.competitor_store_id, "offer_id": data.competitor_offer_id, "observation_version": 2}, {"_id": 0}, sort=[("crawled_at", -1)])
     if offer:
         offer = price_cohort.apply_brand_review(offer, await price_cohort.reviewed_brand_map(db))
-    if not own or not offer or not price_cohort.identity_agrees(own, offer, manual=True):
+    if not own or not offer or offer.get("sku") != data.competitor_sku or price_cohort.exclusion(offer) is not None or not price_cohort.identity_agrees(own, offer, manual=True):
         raise HTTPException(409, "Contradictory or unverified product identity")
     result = await db.product_matches.update_one(
         {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id, "competitor_offer_id": data.competitor_offer_id},
@@ -8489,8 +8504,10 @@ async def confirm_match(data: MatchActionIn, user=Depends(get_user)):
 
 @router.post("/price-intel/reject-match")
 async def reject_match(data: MatchActionIn, user=Depends(get_user)):
+    if not data.competitor_offer_id:
+        raise HTTPException(422, "A specific competitor_offer_id is required")
     await db.product_matches.delete_one(
-        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id}
+        {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id, "competitor_offer_id": data.competitor_offer_id}
     )
     await db.match_blacklist.update_one(
         {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id, "competitor_offer_id": data.competitor_offer_id},
@@ -10697,11 +10714,13 @@ async def insights_sales(days: int = Query(30),
 
 
 @router.get("/price-intel/dashboard")
-async def price_intel_dashboard(response: Response = None, user=Depends(get_user)):
-    body, meta = await _serve_page_cache(db, "price-intel/dashboard", None,
-                                         lambda: _price_intel_dashboard_compute(db), True)
+async def price_intel_dashboard(response: Response = None, comparison_mode: str = "all", competitor_ids: Optional[str] = None, user=Depends(get_user)):
+    from comparison_scope import resolve
+    scope = await resolve(db, comparison_mode, competitor_ids)
+    body, meta = await _serve_page_cache(db, "price-intel/dashboard:" + scope["scope_id"], None,
+                                         lambda: comparison_views.intel(db, _effective_own_price, scope["competitor_ids"] if scope["mode"] == "selected" else None), True)
     _apply_cache_headers(response, meta)
-    return body
+    return {**body, "comparison_scope": scope}
 
 
 @router.get("/price-intel/store-ranking")
@@ -10985,7 +11004,7 @@ async def store_ranking_preview(user=Depends(get_user)):
 # diff, or explicitly withheld with a reason — see market_share.py's docstring
 # for the source hierarchy. The ±50% Salla velocity estimate is deliberately
 # not used: a ±50% numerator over a partial denominator is not a share.
-async def _market_share_compute(db, days, include_today=False):
+async def _market_share_compute(db, days, include_today=False, comparison_mode="all", competitor_ids=None):
     own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
     own_id = own["id"] if own else None
     # Sales read the SEALED KSA window (Ledger Phase 2) so the figures are
@@ -10998,7 +11017,9 @@ async def _market_share_compute(db, days, include_today=False):
     else:
         start, end = ledger.sealed_ksa_window(days)
     orders = await _own_orders_aggregate(db, start, end)
-    return await market_share.build_dataset(
+    from comparison_scope import resolve
+    scope = await resolve(db, comparison_mode, competitor_ids)
+    result = await market_share.build_dataset(
         db, days, own_id,
         own_price_fn=_effective_own_price,
         brand_fn=extract_brand_smart,
@@ -11006,7 +11027,19 @@ async def _market_share_compute(db, days, include_today=False):
         orders_by_sku=orders.get("by_sku") if orders is not None else None,
         min_confidence=MIN_AGGREGATION_CONFIDENCE,
         window_start=start, window_end=end, sealed=not include_today,
+        competitor_store_ids=scope["competitor_ids"] if scope["mode"] == "selected" else None,
     )
+    result["comparison_scope"] = scope
+    # Membership is independent of compared sellers, including when none are selected.
+    membership_source = result
+    if scope["mode"] == "selected":
+        membership_source = await _market_share_compute(db, days, include_today, "all", None)
+    memberships = {r.get("sku") or r.get("canonical_key"): [s["store_id"] for s in r.get("sellers", [])]
+                   for section in ("my_products", "missing_products") for r in membership_source.get(section, [])}
+    for section in ("my_products", "missing_products"):
+        for row in result.get(section, []):
+            row["membership_store_ids"] = memberships.get(row.get("sku") or row.get("canonical_key"), [])
+    return result
 
 
 # In-process memo for the partial-day variant. The page cache is only refreshed
@@ -11017,18 +11050,25 @@ _MS_LIVE_TTL = 120
 _MS_LIVE_CACHE = {}
 
 
-async def _market_share_dataset(db, days, include_today=False):
+async def _market_share_dataset(db, days, include_today=False, comparison_mode="all", competitor_ids=None):
+    from comparison_scope import resolve
+    scope = await resolve(db, comparison_mode, competitor_ids)
+    compute = lambda: _market_share_compute(db, days, include_today=include_today, comparison_mode=comparison_mode, competitor_ids=competitor_ids)
     if not include_today:
-        return await _serve_page_cache(db, "market-share/dataset", days,
-                                       lambda: _market_share_compute(db, days),
+        return await _serve_page_cache(db, "market-share/dataset:" + scope["scope_id"], days,
+                                       compute,
                                        days in _INSIGHTS_STD)
-    hit = _MS_LIVE_CACHE.get(days)
+    revision = await db.data_versions.find_one({"_id": "observations"}) or {}
+    key = (str(db.name), days, ledger.ksa_day_str(datetime.now(timezone.utc)), scope["scope_id"], revision.get("revision", 0))
+    hit = _MS_LIVE_CACHE.get(key)
     now = time.time()
     if hit and now - hit[0] < _MS_LIVE_TTL:
         return hit[1], {"source": "live_including_today", "computed_at": None,
                         "age_seconds": round(now - hit[0], 1), "stale": False}
-    body = await _market_share_compute(db, days, include_today=True)
-    _MS_LIVE_CACHE[days] = (now, body)
+    body = await compute()
+    if len(_MS_LIVE_CACHE) >= 32:
+        _MS_LIVE_CACHE.pop(next(iter(_MS_LIVE_CACHE)))
+    _MS_LIVE_CACHE[key] = (now, body)
     return body, {"source": "live_including_today", "computed_at": None,
                   "age_seconds": 0.0, "stale": False}
 
@@ -11051,7 +11091,7 @@ def _ms_filter(rows, *, search=None, category=None, brand=None, store_id=None,
     if brand:
         out = [r for r in out if (r.get("brand") or "") == brand]
     if store_id:
-        out = [r for r in out if any(s.get("store_id") == store_id for s in r.get("sellers", []))]
+        out = [r for r in out if store_id in r.get("membership_store_ids", [s.get("store_id") for s in r.get("sellers", [])])]
     if catalog == "mine":
         out = [r for r in out if r.get("in_catalog")]
     elif catalog == "not_mine":
@@ -11083,6 +11123,7 @@ _MS_SORTS = {
 
 @router.get("/market-share/overview")
 async def market_share_overview(days: int = Query(30),
+                                comparison_mode: str = "all", competitor_ids: Optional[str] = None,
                                 include_today: bool = Query(False, description="Include the still-accumulating KSA day"),
                                 search: Optional[str] = Query(None),
                                 category: Optional[str] = Query(None),
@@ -11097,7 +11138,7 @@ async def market_share_overview(days: int = Query(30),
     """Section-1 KPIs. Every filter the tables accept also moves these numbers —
     the headline is recomputed over the filtered subset with the SAME arithmetic
     (market_share.summarize), never re-derived a second way."""
-    ds, meta = await _market_share_dataset(db, days, include_today)
+    ds, meta = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     _apply_cache_headers(response, meta)
     all_rows = ds.get("my_products") or []
     all_missing = ds.get("missing_products") or []
@@ -11131,7 +11172,7 @@ async def market_share_overview(days: int = Query(30),
         kpis, quality_block = ds.get("kpis"), ds.get("data_quality")
 
     return {
-        "window": ds.get("window"),
+        "window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"),
         "kpis": kpis,
         "stores": ds.get("stores"),
         "data_quality": quality_block,
@@ -11149,7 +11190,7 @@ async def market_share_overview(days: int = Query(30),
         "filters": {
             "categories": sorted({r.get("category") for r in all_rows if r.get("category")}),
             "brands": sorted({r.get("brand") for r in all_rows if r.get("brand")}),
-            "stores": [{"store_id": s["store_id"], "store_name": s["store_name"]}
+            "stores": [{"store_id": s["store_id"], "store_name": s["store_name"], "is_own": s.get("is_own", False)}
                        for s in (ds.get("stores") or [])],
         },
     }
@@ -11157,6 +11198,7 @@ async def market_share_overview(days: int = Query(30),
 
 @router.get("/market-share/my-products")
 async def market_share_my_products(days: int = Query(30),
+                                   comparison_mode: str = "all", competitor_ids: Optional[str] = None,
                                    search: Optional[str] = Query(None),
                                    category: Optional[str] = Query(None),
                                    brand: Optional[str] = Query(None),
@@ -11170,13 +11212,13 @@ async def market_share_my_products(days: int = Query(30),
                                    limit: int = Query(100, ge=1, le=500),
                                    offset: int = Query(0, ge=0),
                                    response: Response = None, user=Depends(get_user)):
-    ds, meta = await _market_share_dataset(db, days, include_today)
+    ds, meta = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     _apply_cache_headers(response, meta)
     rows = _ms_filter(ds.get("my_products") or [], search=search, category=category,
                       brand=brand, store_id=store_id, catalog=catalog,
                       min_confidence=min_confidence, quality=quality, contested=contested)
     rows = sorted(rows, key=_MS_SORTS.get(sort, _MS_SORTS["market_revenue_desc"]))
-    return {"window": ds.get("window"), "total": len(rows),
+    return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "total": len(rows),
             "rows": rows[offset:offset + limit],
             "totals": {
                 "my_revenue": round(sum(r.get("my_revenue") or 0 for r in rows), 2) if any(r.get("my_revenue") is not None for r in rows) else None,
@@ -11188,22 +11230,24 @@ async def market_share_my_products(days: int = Query(30),
 
 @router.get("/market-share/product/{key}")
 async def market_share_product(key: str, days: int = Query(30),
+                               comparison_mode: str = "all", competitor_ids: Optional[str] = None,
                                include_today: bool = Query(False),
                                response: Response = None, user=Depends(get_user)):
     """Section B — the full competitor breakdown for ONE product. `key` accepts
     the SKU or the canonical GTIN key."""
-    ds, meta = await _market_share_dataset(db, days, include_today)
+    ds, meta = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     _apply_cache_headers(response, meta)
     k = str(key).strip().lower()
     for row in (ds.get("my_products") or []) + (ds.get("missing_products") or []):
         if k in ((row.get("sku") or "").lower(), (row.get("canonical_key") or "").lower(),
                  (row.get("barcode") or "").lower()):
-            return {"window": ds.get("window"), "product": row}
+            return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "product": row}
     raise HTTPException(404, "No tracked product for that SKU / barcode in this window")
 
 
 @router.get("/market-share/missing-products")
 async def market_share_missing(days: int = Query(30),
+                               comparison_mode: str = "all", competitor_ids: Optional[str] = None,
                                search: Optional[str] = Query(None),
                                category: Optional[str] = Query(None),
                                brand: Optional[str] = Query(None),
@@ -11214,12 +11258,12 @@ async def market_share_missing(days: int = Query(30),
                                limit: int = Query(100, ge=1, le=500),
                                offset: int = Query(0, ge=0),
                                response: Response = None, user=Depends(get_user)):
-    ds, meta = await _market_share_dataset(db, days, include_today)
+    ds, meta = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     _apply_cache_headers(response, meta)
     rows = _ms_filter(ds.get("missing_products") or [], search=search, category=category,
                       brand=brand, store_id=store_id, quality=quality)
     rows = sorted(rows, key=_MS_SORTS.get(sort, _MS_SORTS["opportunity_desc"]))
-    return {"window": ds.get("window"), "total": len(rows),
+    return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "total": len(rows),
             "total_untruncated": ds.get("missing_products_total"),
             "rows": rows[offset:offset + limit],
             "opportunity_value": round(sum(r.get("market_revenue") or 0 for r in rows), 2)}
@@ -11227,6 +11271,7 @@ async def market_share_missing(days: int = Query(30),
 
 @router.get("/market-share/brands")
 async def market_share_brands(days: int = Query(30), category: Optional[str] = Query(None),
+                              comparison_mode: str = "all", competitor_ids: Optional[str] = None,
                               search: Optional[str] = Query(None),
                               brand: Optional[str] = Query(None),
                               store_id: Optional[str] = Query(None),
@@ -11236,7 +11281,7 @@ async def market_share_brands(days: int = Query(30), category: Optional[str] = Q
                               contested: bool = Query(False),
                               include_today: bool = Query(False),
                               response: Response = None, user=Depends(get_user)):
-    ds, meta = await _market_share_dataset(db, days, include_today)
+    ds, meta = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     _apply_cache_headers(response, meta)
     my_rows = ds.get("my_products") or []
     applied = [v for v in (category, brand, store_id,
@@ -11261,13 +11306,14 @@ async def market_share_brands(days: int = Query(30), category: Optional[str] = Q
         q = search.strip().lower()
         rows = [r for r in rows if q in (r.get("brand") or "").lower()]
     resolved = (ds.get("data_quality") or {}).get("my_products_with_brand", 0)
-    return {"window": ds.get("window"), "rows": rows, "total": len(rows),
+    return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "rows": rows, "total": len(rows),
             "filtered": bool(applied) or bool(search),
             "unresolved_brand_products": max(0, len(my_rows) - resolved)}
 
 
 @router.get("/market-share/categories")
 async def market_share_categories(days: int = Query(30),
+                                  comparison_mode: str = "all", competitor_ids: Optional[str] = None,
                                   search: Optional[str] = Query(None),
                                   category: Optional[str] = Query(None),
                                   brand: Optional[str] = Query(None),
@@ -11279,7 +11325,7 @@ async def market_share_categories(days: int = Query(30),
                                   include_today: bool = Query(False),
                                   response: Response = None,
                                   user=Depends(get_user)):
-    ds, meta = await _market_share_dataset(db, days, include_today)
+    ds, meta = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     _apply_cache_headers(response, meta)
     applied = [v for v in (search, category, brand, store_id,
                            catalog if catalog != "all" else None,
@@ -11296,24 +11342,25 @@ async def market_share_categories(days: int = Query(30),
             "category")
     else:
         rows = ds.get("categories") or []
-    return {"window": ds.get("window"), "rows": rows, "total": len(rows),
+    return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "rows": rows, "total": len(rows),
             "filtered": bool(applied)}
 
 
 @router.get("/market-share/methodology")
 async def market_share_methodology(days: int = Query(30),
+                                   comparison_mode: str = "all", competitor_ids: Optional[str] = None,
                                    include_today: bool = Query(False),
                                    response: Response = None,
                                    user=Depends(get_user)):
-    ds, meta = await _market_share_dataset(db, days, include_today)
+    ds, meta = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     _apply_cache_headers(response, meta)
     zid = await zid_oauth.status(db)
     return {
         "window": ds.get("window"),
-        "tracked_market": ("Market share is based on tracked measured data inside Daleel, "
-                           "not the total Saudi market. It covers only the stores Daleel "
-                           "crawls, only the products it can match, and only the sales it "
-                           "can measure in the selected period."),
+        "comparison_scope": ds.get("comparison_scope"),
+        "tracked_market": ("Tracked observations inside Daleel are not the total Saudi market. "
+                           "Inventory movement and shelf-value proxies are not exact sales or revenue. "
+                           "Exact share is withheld without complete compatible transaction evidence."),
         "stores": ds.get("stores"),
         "sources": [
             {"id": market_share.SRC_ORDERS, "label": "Actual",
@@ -11346,7 +11393,7 @@ async def market_share_methodology(days: int = Query(30),
             "revenue_share_pct": "Own invoiced value divided by total invoiced value in that same complete cohort",
             "market_revenue": "For proxies: signal change multiplied by the observed shelf price; actual transaction value is unknown",
             "trend": "same metric over the previous equal-length window",
-            "opportunity_score": "0.5×measured revenue + 0.3×measured units + 0.2×seller count, each scaled to the largest row — a ranking heuristic, not a forecast",
+            "opportunity_score": "0.5×shelf-value proxy + 0.3×observed movement + 0.2×seller count, scaled within the comparison scope — not a sales forecast",
             "price_rank": "my price's position among comparable sellers, cheapest first",
         },
         "identity": {
@@ -11376,17 +11423,18 @@ def _ms_method_my_products(r):
     src = {
         market_share.SRC_ORDERS: "my units are exact invoices from the Zid orders ledger",
         market_share.SRC_COUNTER: "my units come from the store's published sold-counter difference between two crawls",
-        market_share.SRC_STOCK: "my units come from stock depletion between two crawls (a floor)",
-        market_share.SRC_ZERO: "my units measured as zero — signal present, product never moved",
+        market_share.SRC_STOCK: "inventory movement proxy, not verified sales; shelf-value proxy is not invoiced revenue",
+        market_share.SRC_ZERO: "observed zero movement, not proof of zero sales",
         market_share.SRC_NONE: "my units unavailable",
     }.get(r.get("my_units_source"), "my units unavailable")
-    return (f"share = my revenue ÷ Σ revenue of the {r.get('sellers_with_sales')} of "
-            f"{r.get('sellers_total')} sellers with sales data; {src}; "
+    return (f"exact share withheld unless all sellers have compatible complete transactions; "
+            f"observation signals for {r.get('sellers_with_sales')} of {r.get('sellers_total')} sellers; {src}; "
             f"trend vs the previous equal-length window")
 
 
 @router.get("/market-share/export")
 async def market_share_export(days: int = Query(30),
+                              comparison_mode: str = "all", competitor_ids: Optional[str] = None,
                               section: str = Query("my_products", description="my_products|missing|brands|categories"),
                               search: Optional[str] = Query(None),
                               category: Optional[str] = Query(None),
@@ -11400,16 +11448,17 @@ async def market_share_export(days: int = Query(30),
                               user=Depends(get_user)):
     """CSV with every visible column PLUS the source label, confidence level,
     unavailable reason and the calculation method behind each row."""
-    ds, _ = await _market_share_dataset(db, days, include_today)
+    ds, _ = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     buf = io.StringIO()
-    w = csv.writer(buf)
+    from comparison_scope import ScopedCSVWriter
+    w = ScopedCSVWriter(csv.writer(buf), ds["comparison_scope"], store_id)
     if section == "my_products":
         rows = _ms_filter(ds.get("my_products") or [], search=search, category=category,
                           brand=brand, store_id=store_id, catalog=catalog,
                           min_confidence=min_confidence, quality=quality, contested=contested)
         w.writerow(["Product", "SKU", "Barcode/GTIN", "Category", "Brand", "Brand source",
-                    "My price (SAR)", "My units", "My units source", "My revenue (SAR)",
-                    "Market units", "Market revenue (SAR)", "Unit share %", "Revenue share %",
+                    "My price (SAR)", "My units / movement proxy", "My units source", "My value (SAR; see source)",
+                    "Tracked movement", "Shelf-value proxy (SAR)", "Exact unit share %", "Exact revenue share %",
                     "Stores carrying it (competitors)", "Sellers total (incl. me)",
                     "Sales data available (sellers)", "Top competitor",
                     "Competitor price min", "Competitor price max", "Price spread ×",
@@ -11439,7 +11488,7 @@ async def market_share_export(days: int = Query(30),
                           brand=brand, store_id=store_id, quality=quality)
         w.writerow(["Product", "SKU", "Barcode/GTIN", "Category", "Brand", "Competitors selling it",
                     "Stores carrying it", "Sales data available (sellers)",
-                    "Market units", "Market revenue (SAR)", "Top competitor",
+                    "Tracked movement", "Shelf-value proxy (SAR)", "Top competitor",
                     "Avg price", "Min price", "Max price", "Trend units %", "Trend revenue %",
                     "Opportunity score", "Confidence", "Unavailable reason",
                     "Calculation method", "Recommended action"])
@@ -11454,8 +11503,8 @@ async def market_share_export(days: int = Query(30),
                         (r.get("trend") or {}).get("revenue_pct"),
                         r.get("opportunity_score"), r.get("confidence"),
                         r.get("unavailable_reason"),
-                        (f"Σ measured revenue of the {r.get('sellers_with_sales')} of "
-                         f"{r.get('competitor_count')} sellers with sales data; "
+                        (f"Σ shelf-value proxies of the {r.get('sellers_with_sales')} of "
+                         f"{r.get('competitor_count')} sellers with eligible observations; not exact revenue; "
                          f"opportunity score = {r.get('opportunity_formula')}"),
                         r.get("recommended_action")])
     elif section in ("brands", "categories"):
@@ -11475,9 +11524,9 @@ async def market_share_export(days: int = Query(30),
                 label)
         else:
             rows = ds.get(section) or []
-        w.writerow([label.title(), "Units", "Revenue (SAR)", "Market share %", "My units",
-                    "My revenue (SAR)", "My share of this row %", "Products",
-                    "Products in my catalog", "Products with measurable sales",
+        w.writerow([label.title(), "Units / movement", "Observed value / proxy (SAR)", "Exact market share %", "My units / proxy",
+                    "My observed value / proxy (SAR)", "My exact share of this row %", "Products",
+                    "Products in my catalog", "Products with observation signals",
                     "Missing products", "Missing opportunity value (SAR)",
                     "Trend units %", "Trend revenue %", "Confidence", "Coverage",
                     "Unavailable reason", "Calculation method"])
@@ -11492,9 +11541,8 @@ async def market_share_export(days: int = Query(30),
                         ("" if r.get("measured_products") else
                          f"none of the {r.get('products')} product(s) in this {label} has "
                          f"measurable sales in this window — share withheld"),
-                        (f"market share % = this row's measured revenue ÷ Σ measured revenue of "
-                         f"every {label} row; my share % = my measured revenue ÷ this row's "
-                         f"measured revenue; {r.get('coverage')}")])
+                        (f"Observed values are proxies unless backed by complete invoices; exact shares "
+                         f"withheld without compatible transactions for every seller; {r.get('coverage')}")])
     else:
         raise HTTPException(400, "section must be my_products|missing|brands|categories")
     return Response(

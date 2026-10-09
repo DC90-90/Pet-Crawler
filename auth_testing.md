@@ -9,3 +9,4 @@
 - Verify page readers can read only their allowed API families and cannot perform administrative mutations.
 - Verify public registration is disabled by default and crawler/cron endpoints require separate secrets.
 - Preserve production rate limits. Do not run destructive permissions tests against production.
+- Acceptance follow-up: wait for AuthProvider session verification before mounting authenticated layout polling. Verify notifications return 200 after login and that no protected poll runs on the login screen. Keep the existing cookie/Bearer contract and admin password unchanged.

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { RequestError } from "@/components/RequestError";
 import { CATEGORY_LABELS } from "@/lib/i18n";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -9,11 +10,11 @@ import { SourceChip, ConfidenceBadge, Unavailable, TrendCell, fmtMoney, fmtNum, 
 const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c || "—");
 
 const SORTS = [
-  ["market_revenue_desc", "Market revenue"],
+  ["market_revenue_desc", "Tracked shelf-value proxy"],
   ["revenue_share_desc", "My share (high)"],
   ["revenue_share_asc", "My share (low)"],
-  ["my_revenue_desc", "My revenue"],
-  ["units_desc", "Market units"],
+  ["my_revenue_desc", "My observed value"],
+  ["units_desc", "Tracked movement"],
   ["competitors_desc", "Competitors"],
   ["name_asc", "Name"],
 ];
@@ -23,6 +24,8 @@ export default function MyProductsShare({ days, includeToday, filters, onPickPro
   const [sort, setSort] = useState("market_revenue_desc");
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
   const limit = 50;
 
   useEffect(() => { setPage(0); }, [filters, days]);
@@ -30,16 +33,20 @@ export default function MyProductsShare({ days, includeToday, filters, onPickPro
   useEffect(() => {
     let live = true;
     setLoading(true);
+    setError(false); setData(null);
     api.get("/market-share/my-products", {
       params: { days, sort, include_today: includeToday, limit, offset: page * limit, ...filters },
     })
       .then((r) => live && setData(r.data))
+      .catch(() => live && setError(true))
       .finally(() => live && setLoading(false));
     return () => { live = false; };
-  }, [days, sort, page, filters, includeToday]);
+  }, [days, sort, page, filters, includeToday, retry]);
 
   const rows = data?.rows || [];
   const total = data?.total || 0;
+  if (error) return <RequestError id="ms-products" onRetry={() => setRetry(n => n + 1)} />;
+  if (loading) return <p data-testid="ms-products-loading" className="text-sm text-[#A1E4DB]">Loading…</p>;
 
   return (
     <div className="space-y-3" data-testid="ms-my-products">
@@ -63,9 +70,9 @@ export default function MyProductsShare({ days, includeToday, filters, onPickPro
         <Table>
           <TableHeader>
             <TableRow className="border-white/10">
-              {["Product", "SKU / GTIN", "Category", "Brand", "My price", "My units",
-                "My revenue", "Market units", "Market revenue", "Unit share", "Revenue share",
-                "Stores carrying", "Sales data available", "Top competitor", "Competitor range",
+              {["Product", "SKU / GTIN", "Category", "Brand", "My price", "My units / proxy",
+                "My value (see source)", "Tracked movement", "Shelf-value proxy", "Exact unit share", "Exact revenue share",
+                "Stores carrying", "Observation signals", "Top competitor", "Competitor range",
                 "My price rank", "Trend (rev)", "Confidence"].map((h) => (
                 <TableHead key={h} className="text-[9px] uppercase tracking-wider text-[#A1E4DB] whitespace-nowrap">
                   {h}
@@ -145,13 +152,13 @@ export default function MyProductsShare({ days, includeToday, filters, onPickPro
                   </span>
                   {!r.sellers_with_sales && (
                     <span className="block text-[9px] text-[#F59E0B]"
-                      title="Carrying a product and publishing sales data are two different things — no seller here publishes one">
-                      no seller publishes sales data
+                      title="No eligible observation intervals for this product in the selected window">
+                      no observation signal
                     </span>
                   )}
                   {r.sole_seller && (
                     <span className="block text-[9px] text-[#F59E0B]"
-                      title="No other tracked seller's sales are measurable, so a share here is 100% by default">
+                      title="No competitor observation signal; exact share remains withheld">
                       sole measurable seller
                     </span>
                   )}

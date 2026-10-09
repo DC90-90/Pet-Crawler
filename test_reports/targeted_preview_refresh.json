@@ -1,0 +1,243 @@
+{
+  "id": "53c5cd7b214b4223b3ab3b39e149e6f3",
+  "preview": "https://price-intel-dev.preview.emergentagent.com",
+  "database": "daleel_pets",
+  "mongo_host": "localhost",
+  "started_at": "2026-10-09T05:52:45.291764+00:00",
+  "target_skus": [
+    "5065023629268",
+    "5065023629848",
+    "8699245859829",
+    "Hair & Skin"
+  ],
+  "source_captures": [
+    {
+      "source": "own_litter",
+      "url": "https://pets-houses.com/products/beso-cat-litter-baby-powder-20kg",
+      "sha256": "0cc063d4199eebe97b1a5560ca0bcb58b7d6aff3c4b77891def156d54f7a1ffb",
+      "observed_at": "2026-10-09T05:52:46.354867+00:00",
+      "raw": {
+        "id": "134e4d5e-7866-435b-86b2-636f5b57952f",
+        "sku": "8699245859829",
+        "barcode": "2048",
+        "name": "بيسو رمل قطط برائحة البيبي باودر 20 كج ",
+        "price": 79.35,
+        "sale_price": null,
+        "effective_price": 79.35,
+        "currency": "SAR",
+        "quantity": 39,
+        "is_infinite": false,
+        "in_stock": true,
+        "has_options": false,
+        "is_taxable": true,
+        "attributes": [],
+        "images": [
+          {
+            "id": "b9e85785-b135-43bf-aaeb-7654ed15fa97",
+            "image": {
+              "full_size": "https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/b9e85785-b135-43bf-aaeb-7654ed15fa97.png",
+              "large": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=1000,height=1000/https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/b9e85785-b135-43bf-aaeb-7654ed15fa97.png",
+              "medium": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=770,height=770/https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/b9e85785-b135-43bf-aaeb-7654ed15fa97.png",
+              "small": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=500,height=500/https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/b9e85785-b135-43bf-aaeb-7654ed15fa97.png",
+              "thumbnail": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=370,height=370/https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/b9e85785-b135-43bf-aaeb-7654ed15fa97.png"
+            },
+            "alt_text": null,
+            "display_order": 1
+          }
+        ],
+        "product_url": "https://pets-houses.com/products/beso-cat-litter-baby-powder-20kg"
+      }
+    },
+    {
+      "source": "hair_skin",
+      "url": "https://pets-houses.com/products/beso-dry-food-hair-skin",
+      "sha256": "68168c6f3bfbb939eaabb91b9cc07d54d06b4a1de26290ec16ab8e0d37383d8e",
+      "observed_at": "2026-10-09T05:52:46.622574+00:00",
+      "raw": {
+        "id": "a3c752b2-f203-4b69-aac6-3eef10e63f95",
+        "sku": "Hair & Skin",
+        "barcode": "",
+        "name": "بيسو طعام جاف للقطط البالغة بالدجاج والسالمون للعناية بالشعر والبشرة",
+        "price": 85.0,
+        "sale_price": null,
+        "effective_price": 85.0,
+        "currency": "SAR",
+        "quantity": 17,
+        "is_infinite": false,
+        "in_stock": true,
+        "has_options": true,
+        "is_taxable": true,
+        "attributes": [],
+        "images": [
+          {
+            "id": "99cc4ab3-ad4e-4c10-978e-0ad84b49706a",
+            "image": {
+              "full_size": "https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/99cc4ab3-ad4e-4c10-978e-0ad84b49706a.png",
+              "large": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=1000,height=1000/https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/99cc4ab3-ad4e-4c10-978e-0ad84b49706a.png",
+              "medium": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=770,height=770/https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/99cc4ab3-ad4e-4c10-978e-0ad84b49706a.png",
+              "small": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=500,height=500/https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/99cc4ab3-ad4e-4c10-978e-0ad84b49706a.png",
+              "thumbnail": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=370,height=370/https://media.zid.store/109d86f9-1e54-40fe-976d-410787c33436/99cc4ab3-ad4e-4c10-978e-0ad84b49706a.png"
+            },
+            "alt_text": null,
+            "display_order": 1
+          }
+        ],
+        "variants": [
+          {
+            "id": "38c1217d-d68c-47a9-b1bc-e1a65e340348",
+            "sku": "5065023629268",
+            "barcode": "",
+            "name": "بيسو طعام جاف للقطط البالغة بالدجاج والسالمون للعناية بالشعر والبشرة - 2 كج",
+            "price": 46.0,
+            "sale_price": null,
+            "effective_price": 46.0,
+            "currency": "SAR",
+            "quantity": 15,
+            "is_infinite": false,
+            "in_stock": true,
+            "has_options": false,
+            "is_taxable": true,
+            "attributes": [
+              {
+                "id": "44d795ec-392f-45de-84a4-0875cd83a214",
+                "slug": "ar-الوزن-en-weight",
+                "name": "الوزن",
+                "value": "2 كج",
+                "type": "default",
+                "attribute_id": "84630d5c-f48e-43ce-8830-268ff21b150c",
+                "display_order": 2,
+                "type_value": null,
+                "product_id": "38c1217d-d68c-47a9-b1bc-e1a65e340348",
+                "attribute_image_id": null,
+                "attribute_display_order": 1,
+                "use_as_filter": false
+              }
+            ],
+            "images": []
+          },
+          {
+            "id": "2079c3b2-abfe-4eb4-8b46-34af7f5be63a",
+            "sku": "5065023629848",
+            "barcode": "",
+            "name": "بيسو طعام جاف للقطط البالغة بالدجاج والسالمون للعناية بالشعر والبشرة - 4kg",
+            "price": 85.0,
+            "sale_price": null,
+            "effective_price": 85.0,
+            "currency": "SAR",
+            "quantity": 2,
+            "is_infinite": false,
+            "in_stock": true,
+            "has_options": false,
+            "is_taxable": true,
+            "attributes": [
+              {
+                "id": "4b550020-eba8-40cb-a2e3-d6146864038c",
+                "slug": "ar-الوزن-en-weight",
+                "name": "الوزن",
+                "value": "4kg",
+                "type": "default",
+                "attribute_id": "84630d5c-f48e-43ce-8830-268ff21b150c",
+                "display_order": 1,
+                "type_value": null,
+                "product_id": "2079c3b2-abfe-4eb4-8b46-34af7f5be63a",
+                "attribute_image_id": null,
+                "attribute_display_order": 1,
+                "use_as_filter": false
+              }
+            ],
+            "images": []
+          }
+        ],
+        "product_url": "https://pets-houses.com/products/beso-dry-food-hair-skin"
+      }
+    },
+    {
+      "source": "petsy_litter",
+      "url": "https://petsysa.com/products/Cat-Litter-with-Baby-Powder-Scent-23-6-L-20-Kg-Beso",
+      "sha256": "bd0fa26f4269219634a45f3396d273cc8f68dc8023b025c4862af428ee725897",
+      "observed_at": "2026-10-09T05:52:47.025661+00:00",
+      "raw": {
+        "id": "351faf4b-5ed7-4196-b9a6-2429fb24ed71",
+        "sku": "8699245859829",
+        "barcode": "",
+        "name": "رمل للقطط برائحة البيبي باودر 23.6 ل (20 كغ) بيسو",
+        "price": 87.0,
+        "sale_price": null,
+        "effective_price": 87.0,
+        "currency": "SAR",
+        "quantity": 29,
+        "is_infinite": false,
+        "in_stock": true,
+        "has_options": false,
+        "is_taxable": true,
+        "attributes": [
+          {
+            "id": "3883ff36-1271-43db-a357-ed3205484aad",
+            "slug": "الفئة-العمرية",
+            "name": "مناسب لـ",
+            "value": "لكل القطط",
+            "type": "default",
+            "attribute_id": "206a33fd-b81a-4f9a-a6db-57ea73be1c8d",
+            "display_order": 1,
+            "type_value": null,
+            "product_id": "351faf4b-5ed7-4196-b9a6-2429fb24ed71",
+            "attribute_image_id": null,
+            "attribute_display_order": null,
+            "use_as_filter": true
+          }
+        ],
+        "images": [
+          {
+            "id": "7be56f6e-f74d-499c-ba9a-abda2061463a",
+            "image": {
+              "full_size": "https://media.zid.store/e80df4e5-1f39-4829-a642-3388808dcdea/7be56f6e-f74d-499c-ba9a-abda2061463a.jpg",
+              "large": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=1000,height=1000/https://media.zid.store/e80df4e5-1f39-4829-a642-3388808dcdea/7be56f6e-f74d-499c-ba9a-abda2061463a.jpg",
+              "medium": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=770,height=770/https://media.zid.store/e80df4e5-1f39-4829-a642-3388808dcdea/7be56f6e-f74d-499c-ba9a-abda2061463a.jpg",
+              "small": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=500,height=500/https://media.zid.store/e80df4e5-1f39-4829-a642-3388808dcdea/7be56f6e-f74d-499c-ba9a-abda2061463a.jpg",
+              "thumbnail": "https://media.zid.store/cdn-cgi/image/fit=scale-down,width=370,height=370/https://media.zid.store/e80df4e5-1f39-4829-a642-3388808dcdea/7be56f6e-f74d-499c-ba9a-abda2061463a.jpg"
+            },
+            "alt_text": null,
+            "display_order": 1
+          }
+        ],
+        "product_url": "https://petsysa.com/products/Cat-Litter-with-Baby-Powder-Scent-23-6-L-20-Kg-Beso"
+      }
+    },
+    {
+      "source": "zarafa_litter",
+      "url": "https://zarafaksa.com/en/beso-clumping-cat-litter-with-baby-powder-scent-20-kg/p1631950081",
+      "sha256": "cbbd9b89484f83210b89ec00889abb43ab76532157b623792eba12267fa867fa",
+      "observed_at": "2026-10-09T05:52:47.350127+00:00",
+      "raw": {
+        "id": "1631950081",
+        "sku": "8699245859829",
+        "name": "Beso Clumping Cat Litter with Baby Powder Scent- 20 Kg",
+        "price": 83.95,
+        "currency": "SAR",
+        "in_stock": true,
+        "images": "https://cdn.salla.sa/ydGDOl/10b3a089-b4c1-46ae-88ae-f036872208f6-1000x1000-EXa8ncRCFwEmpNGG7VUG8rToGhXGeqK1VJZyl3Ze.jpg",
+        "product_url": "https://zarafaksa.com/en/beso-clumping-cat-litter-with-baby-powder-scent-20-kg/p1631950081"
+      }
+    }
+  ],
+  "applied": true,
+  "matching": {
+    "total": 4,
+    "matched": 1,
+    "unmatched": 3,
+    "total_matches": 2
+  },
+  "unrelated_before": {
+    "my_products": "3e29a2f6ee31dee59abaadd1aa32de3694f61a30611b8f3f6dd73a28a42ffb6d",
+    "product_snapshots": "a986bd4a1f8382e49216f1be3dbafd4fe80902f6e81bbf468fdc7a93af87d1b5",
+    "product_matches": "f641a3eeb37c24c11a6c31d7eadc110cbcd7fa3114200391e881758c5f78f4e8"
+  },
+  "unrelated_after": {
+    "my_products": "3e29a2f6ee31dee59abaadd1aa32de3694f61a30611b8f3f6dd73a28a42ffb6d",
+    "product_snapshots": "a986bd4a1f8382e49216f1be3dbafd4fe80902f6e81bbf468fdc7a93af87d1b5",
+    "product_matches": "f641a3eeb37c24c11a6c31d7eadc110cbcd7fa3114200391e881758c5f78f4e8"
+  },
+  "unrelated_unchanged": true,
+  "status": "completed",
+  "finished_at": "2026-10-09T05:52:48.387334+00:00"
+}

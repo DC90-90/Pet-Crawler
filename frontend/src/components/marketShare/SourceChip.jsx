@@ -14,7 +14,7 @@ export const SOURCE_META = {
   sold_counter_diff: {
     label: "Counter proxy", icon: Activity,
     cls: "bg-[#1E988E]/12 text-[#5FD3C7] border-[#1E988E]/25",
-    tip: "Difference between two crawls of the store's published units-sold counter. The platform buckets and caps that badge, so it approximates real sales",
+    tip: "Valid uncapped change in a published counter — an observation proxy, not verified invoices",
   },
   stock_depletion: {
     label: "Inventory proxy", icon: Activity,
@@ -36,7 +36,7 @@ export const SOURCE_META = {
 export const REASON_TEXT = {
   store_publishes_no_sales_signal: "This store publishes neither a sold counter nor stock levels",
   fewer_than_two_crawls_in_window: "Only one crawl in this window — a change needs two",
-  no_seller_in_this_market_has_sales_data: "No seller of this product publishes sales data",
+  no_seller_in_this_market_has_sales_data: "No eligible observation intervals for this product in the selected window",
   store_not_crawled_in_window: "Store was not crawled in this window",
 };
 

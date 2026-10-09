@@ -2,6 +2,7 @@
 from fastapi import HTTPException
 
 READ_RULES = (
+    ("/api/comparison-stores", {"market_share", "price_intel", "insights", "scanner"}),
     ("/api/market-share", {"market_share"}),
     ("/api/price-intel", {"price_intel", "insights"}),
     ("/api/insights", {"price_intel", "insights"}),

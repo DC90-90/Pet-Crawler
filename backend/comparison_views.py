@@ -5,10 +5,10 @@ from core.utils import compute_market_position
 from observation_contract import gtin
 
 
-async def context(db, own_price_fn):
+async def context(db, own_price_fn, competitor_store_ids=None):
     own = await db.stores.find_one({"is_own_store": True}, {"_id": 0}) or {}
     products = await db.my_products.find({}, {"_id": 0}).to_list(50000)
-    cohorts = await build_cohorts(db, products, own.get("id"), own_price_fn)
+    cohorts = await build_cohorts(db, products, own.get("id"), own_price_fn, competitor_store_ids=competitor_store_ids)
     return own, products, cohorts
 
 
@@ -18,8 +18,9 @@ def position(own, product, price, cohort):
     return compute_market_position(cohort["sellers"] + [{"store_id": own.get("id"), "store_name": own.get("name"), "price": price}], own.get("id"))
 
 
-async def intel(db, own_price_fn):
-    own, products, cohorts = await context(db, own_price_fn)
+async def intel(db, own_price_fn, competitor_store_ids=None):
+    from stock_evidence import own_stock
+    own, products, cohorts = await context(db, own_price_fn, competitor_store_ids)
     full, actions, advantages = [], [], []
     for mp in products:
         sku = mp.get("sku")
@@ -30,14 +31,15 @@ async def intel(db, own_price_fn):
         low = sellers[0] if sellers else {}
         gap = round((price-low["price"])/low["price"]*100, 1) if low and price else None
         barcode = mp.get("barcode") if gtin(mp.get("barcode")) else sku if gtin(sku) else None
+        stock = own_stock(mp)
         row = dict(my_sku=sku, my_barcode=barcode, my_name_ar=mp.get("name_ar"), my_name_en=mp.get("name_en"),
-                   my_price=price or None, my_qty=mp.get("quantity"), sellers=len(sellers), image_url=mp.get("image_url"),
+                   my_price=price or None, my_qty=stock["quantity"], sellers=len(sellers), image_url=mp.get("image_url"),
                    cheapest_competitor=low.get("store_name", ""), cheapest_price=low.get("price"), diff_pct=gap,
                    price_status="live" if low else "unavailable", confidence=99 if low else 0, match_method="verified_offer",
                    flags=[], market_position=position(own, mp, price, c), cohort_id=c["cohort_id"],
                    excluded_sellers=c["excluded"], policy_version=POLICY_VERSION)
         full.append(row)
-        if gap is not None and gap > 5 and mp.get("in_stock") is True and mp.get("present_on_store") is not False:
+        if gap is not None and gap > 5 and stock["in_stock"] is True:
             actions.append({**row, "severity": "red" if gap > 15 else "yellow", "reason": f"Price gap {gap}%"})
         if gap is not None and gap <= 0:
             advantages.append({**row, "advantage": "cheapest", "saving_sar": round(low["price"]-price, 2)})
@@ -63,9 +65,10 @@ async def position_summary(db, price_fn):
             "price_policy": POLICY_VERSION}
 
 
-async def scanner(db, days, own_price_fn, orders_fn, sales_fn):
+async def scanner(db, days, own_price_fn, orders_fn, sales_fn, competitor_store_ids=None):
     import ledger
-    own, products, cohorts = await context(db, own_price_fn)
+    from stock_evidence import own_stock
+    own, products, cohorts = await context(db, own_price_fn, competitor_store_ids)
     start, end = ledger.sealed_ksa_window(days)
     orders = await orders_fn(db, start, end)
     signals = {(r.get("offer_id") or r["sku"], r["store_id"]): r["units"] for r in await sales_fn(db, start, until=end)}
@@ -77,12 +80,14 @@ async def scanner(db, days, own_price_fn, orders_fn, sales_fn):
             continue
         c, price = cohorts[sku], own_price_fn(mp)
         excluded.extend({**r, "sku": sku, "reason": r["excluded_reason"], "excluded_price": r.get("price")} for r in c["excluded"])
-        if not c["sellers"] or not price or mp.get("in_stock") is not True or mp.get("present_on_store") is False:
+        stock = own_stock(mp)
+        if not c["sellers"] or not price or stock["in_stock"] is not True:
             continue
         low, high = c["sellers"][0], c["sellers"][-1]
         gap = round((price-low["price"])/low["price"]*100, 1)
         if gap < 10:
-            positioned.append(dict(sku=sku, name_ar=mp.get("name_ar"), price=price, market_avg=c["avg"], store_name=own.get("name")))
+            positioned.append(dict(sku=sku, name_ar=mp.get("name_ar"), price=price, market_lowest=c["min"], market_avg=c["avg"],
+                                   market_highest=c["max"], competitors=c["sellers"], cohort_id=c["cohort_id"], store_name=own.get("name")))
             continue
         units = (orders["by_sku"].get(sku, {}).get("units", 0) if orders is not None else signals.get((mp.get("offer_id") or sku, own.get("id"))))
         basis = "orders" if orders is not None else "rollup" if units is not None else "none"

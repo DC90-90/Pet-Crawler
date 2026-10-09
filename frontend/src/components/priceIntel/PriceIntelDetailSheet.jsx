@@ -7,6 +7,8 @@ import { ConfidenceBadge, FlagBadges } from "./PriceIntelShared";
 import { SkuLine } from "@/components/SkuLine";
 import FreshnessBadge, { isStale } from "@/components/FreshnessBadge";
 import { useEffect, useState } from "react";
+import { RequestError } from "@/components/RequestError";
+import { HistoricalQuantity } from "@/components/HistoricalQuantity";
 
 function ProductImage({ src, name }) {
   const [failed, setFailed] = useState(false);
@@ -16,7 +18,7 @@ function ProductImage({ src, name }) {
     : <div className="w-16 h-16 shrink-0 flex items-center justify-center rounded-md bg-white/5 p-2 text-center text-[10px] text-[#A1E4DB]" data-testid="intel-detail-image-unavailable">Image unavailable</div>;
 }
 
-export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm, onReject }) {
+export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm, onReject, error, onRetry }) {
   const ownStoreId = detail?.own_store_id;
   const myProduct = detail?.my_product;
   const isVerifiedMine = !!myProduct && myProduct.is_own_store === true;
@@ -29,8 +31,9 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
     <Sheet open={!!selectedSku} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent aria-describedby={undefined} className="w-[600px] sm:max-w-[600px] bg-[#0A2728] border-white/10 overflow-y-auto" data-testid="product-detail-sheet">
         <SheetHeader>
-          <SheetTitle className="text-white text-lg">{myProduct?.name_en || myProduct?.name_ar || "Loading..."}</SheetTitle>
+          <SheetTitle className="text-white text-lg">{myProduct?.name_en || myProduct?.name_ar || (error ? "Product unavailable" : "Loading...")}</SheetTitle>
         </SheetHeader>
+        {error && <RequestError id="intel-detail" onRetry={onRetry} />}
         {detail && !isVerifiedMine && (
           <div className="mt-4 glass-card p-4 border border-[#EF4444]/30 bg-[#EF4444]/5" data-testid="not-mine-error">
             <p className="text-sm text-[#EF4444] font-semibold">This product is not in your store catalog</p>
@@ -50,6 +53,7 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
                   <SkuLine sku={myProduct.sku} barcode={myProduct.barcode} size="sm" className="mt-0.5" />
                   <p className="text-lg font-bold text-[#1E988E] metric-number mt-1" data-testid="intel-detail-own-price">{detail.market_summary.my_price ?? "—"} SAR</p>
                   {myProduct.price_status === "unavailable" && <p className="text-xs text-[#A1E4DB]" data-testid="intel-detail-own-price-unavailable">Current price unavailable</p>}
+                  <HistoricalQuantity quantity={myProduct.historical_quantity} observedAt={myProduct.historical_quantity_at} id="intel-own-historical-quantity" />
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3 mt-3 text-xs">
@@ -97,6 +101,7 @@ export function PriceIntelDetailSheet({ selectedSku, detail, onClose, onConfirm,
                   <Badge data-testid={`competitor-stock-${c.competitor_store_id}-${c.competitor_offer_id}`} className={`text-[10px] border-0 ${c.competitor_in_stock == null ? "bg-white/5 text-[#A1E4DB]" : c.competitor_in_stock ? "bg-[#10B981]/15 text-[#10B981]" : "bg-[#EF4444]/15 text-[#EF4444]"}`}>
                     {c.competitor_in_stock == null ? "Unknown stock" : c.competitor_in_stock ? "In Stock" : "OOS"}
                   </Badge>
+                  <HistoricalQuantity quantity={c.historical_quantity} observedAt={c.historical_quantity_at} id={`intel-historical-quantity-${c.competitor_store_id}-${c.competitor_offer_id}`} />
                 </div>
                 {c.price_history?.length > 1 && (
                   <div className="h-24 mt-2">

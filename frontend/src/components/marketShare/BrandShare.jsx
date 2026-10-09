@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { RequestError } from "@/components/RequestError";
 import { CATEGORY_LABELS } from "@/lib/i18n";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ConfidenceBadge, TrendCell, fmtMoney, fmtNum, fmtPct } from "./SourceChip";
@@ -9,19 +10,25 @@ const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c || "—");
 export default function BrandShare({ days, includeToday, filters }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     let live = true;
     setLoading(true);
+    setError(false); setData(null);
     api.get("/market-share/brands", {
       params: { days, include_today: includeToday, ...(filters || {}) },
     })
       .then((r) => live && setData(r.data))
+      .catch(() => live && setError(true))
       .finally(() => live && setLoading(false));
     return () => { live = false; };
-  }, [days, filters, includeToday]);
+  }, [days, filters, includeToday, retry]);
 
   const rows = data?.rows || [];
+  if (error) return <RequestError id="ms-brands" onRetry={() => setRetry(n => n + 1)} />;
+  if (loading) return <p data-testid="ms-brands-loading" className="text-sm text-[#A1E4DB]">Loading…</p>;
 
   return (
     <div className="space-y-3" data-testid="ms-brands">
@@ -36,7 +43,7 @@ export default function BrandShare({ days, includeToday, filters }) {
         <Table>
           <TableHeader>
             <TableRow className="border-white/10">
-              {["Brand", "Units", "Revenue", "Market share", "My units", "My revenue",
+              {["Brand", "Units / movement", "Observed value / proxy", "Exact market share", "My units / proxy", "My value / proxy",
                 "My share of brand", "Products", "In my catalog", "Measurable",
                 "Top products", "Top stores", "Trend (rev)", "Confidence"].map((h) => (
                 <TableHead key={h} className="text-[9px] uppercase tracking-wider text-[#A1E4DB] whitespace-nowrap">{h}</TableHead>

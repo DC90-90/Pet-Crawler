@@ -6,6 +6,7 @@ from comparison_views import context, position
 from core.utils import get_stock_signal
 from evidence_ledger import sales_map
 from observation_contract import gtin
+from stock_evidence import own_stock
 
 
 def verified_barcode(product):
@@ -24,24 +25,28 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
     orders = await orders_fn(db, start, end)
     sales = await sales_map(db, start, end)
     rows = []
+    parent_skus = {str(p.get("listing_id") or p.get("zid_id")): p.get("sku") for p in catalog if p.get("known_variant_parent")}
     for mp in catalog:
         sku = mp.get("sku")
         if not sku or sku not in cohorts:
             continue
         c, price = cohorts[sku], price_fn(mp)
+        stock = own_stock(mp)
         if category not in (None, "", "all") and category not in (mp.get("category"), mp.get("subcategory")):
             continue
         if animal_type not in (None, "", "all") and animal_type != mp.get("animal_type"):
             continue
-        if search and search.casefold() not in " ".join(str(mp.get(k) or "") for k in ("sku", "barcode", "name_ar", "name_en")).casefold():
+        parent_sku = parent_skus.get(str(mp.get("listing_id") or mp.get("zid_id")))
+        searchable = " ".join([*(str(mp.get(k) or "") for k in ("sku", "barcode", "name_ar", "name_en")), parent_sku or ""]).casefold()
+        if search and search.casefold() not in searchable:
             continue
         evidence = orders["by_sku"].get(sku, {"units": 0, "revenue": 0}) if orders is not None else sales.get((own.get("id"), mp.get("offer_id") or sku))
         units, value = (evidence.get("units"), evidence.get("revenue")) if evidence else (None, None)
-        row = {**mp, "sku": sku, "price": price or None, "market_price": c["avg"], "is_my_product": True,
+        row = {**mp, "sku": sku, "parent_sku": parent_sku, "price": price or None, "market_price": c["avg"], "is_my_product": True,
                "barcode": verified_barcode(mp),
                "category_candidate": mp.get("category"), "category": mp.get("category") if mp.get("category_source") in ("reviewed", "store_supplied", "import_file") else None,
-               "my_quantity": mp.get("quantity"), "my_units_sold": units, "my_revenue_est": value,
-               "qty_sold_est": units, "revenue_est": value, "my_stock_signal": get_stock_signal(mp.get("quantity"), mp.get("in_stock")) if price else "UNKNOWN",
+               **stock, "my_quantity": stock["quantity"], "my_units_sold": units, "my_revenue_est": value,
+               "qty_sold_est": units, "revenue_est": value, "my_stock_signal": get_stock_signal(stock["quantity"], stock["in_stock"]),
                "my_stock_status": "not_listed" if mp.get("present_on_store") is False else "own_catalog",
                "num_competitors": len({s["store_id"] for s in c["sellers"]+c["excluded"]}), "num_priced_competitors": len(c["sellers"]),
                "num_sellers": len(c["sellers"]), "competitor_min_price": c["min"], "competitor_max_price": c["max"],
@@ -65,33 +70,39 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
                      "sales_evidence_products": len(measurable), "sales_window": {"from": start, "to": end}}}
 
 
-async def detail(db, sku, days, price_fn):
-    own, products, cohorts = await context(db, price_fn)
+async def detail(db, sku, days, price_fn, competitor_store_ids=None):
+    own, products, cohorts = await context(db, price_fn, competitor_store_ids)
     mp = next((p for p in products if p.get("sku") == sku), None)
     if mp is None:
         raise HTTPException(404, "Product not in own catalog; use a store-specific offer")
     c, price = cohorts[sku], price_fn(mp)
+    stock = own_stock(mp)
     sellers = []
     for row in c["sellers"] + c["excluded"]:
         excluded = row.get("eligible") is False
         sellers.append({**row, "price": row.get("price") if not excluded else None,
                         "historical_price": row.get("price") if excluded else None,
+                        "historical_quantity": row.get("qty_available") if excluded else None,
+                        "historical_quantity_at": row.get("crawled_at") if excluded else None,
+                        "qty_available": None if excluded else row.get("qty_available"),
+                        "in_stock": None if excluded and row.get("excluded_reason") != "out_of_stock" else row.get("in_stock"),
                         "price_status": "excluded" if excluded else "live", "is_stale": excluded,
                         "last_crawl_at": row.get("crawled_at"), "days_since_crawl": None,
                         "tier4_status": None, "is_own_store": False,
                         "stock_signal": "UNKNOWN" if excluded and row.get("excluded_reason") != "out_of_stock" else get_stock_signal(row.get("qty_available"), row.get("in_stock"))})
     if price:
         sellers.append({"sku": sku, "store_id": own.get("id"), "store_name": own.get("name"), "price": price,
-                        "in_stock": mp.get("in_stock"), "qty_available": mp.get("quantity"), "is_own_store": True,
+                        "in_stock": stock["in_stock"], "qty_available": stock["quantity"], "is_own_store": True,
+                        "stock_signal": get_stock_signal(stock["quantity"], stock["in_stock"]),
                         "product_url": mp.get("product_url"), "price_status": "live", "confidence_score": 99, "source_tier": 0,
                         "last_crawl_at": mp.get("last_synced_at")})
     history, since = {}, datetime.now(timezone.utc)-timedelta(days=days)
     offer_ids = [s.get("offer_id") for s in c["sellers"] if s.get("offer_id")]
     async for snap in db.product_snapshots.find({"offer_id": {"$in": offer_ids}, "crawled_at": {"$gte": since}, "observation_version": 2, "comparable": True}, {"_id": 0}).sort("crawled_at", 1):
         history.setdefault(snap["store_name"], []).append({"date": snap["crawled_at"].isoformat(), "price": snap["price"], "qty": snap.get("qty_available")})
-    return {**mp, "price": price or None, "sale_price": mp.get("sale_price") if price else None,
+    return {**mp, **stock, "price": price or None, "sale_price": mp.get("sale_price") if price else None,
             "barcode": verified_barcode(mp), "source_tier": 0 if price else None, "confidence_score": 99 if price else None,
-            "historical_price": mp.get("price") if not price else None,
+            "historical_price": (mp.get("historical_price") if mp.get("historical_price") is not None else mp.get("price")) if not price else None,
             "price_status": "live" if price else "unavailable",
             "is_my_product": True, "store_prices": sellers, "seller_count": len(c["sellers"]),
             "seller_summary": {"live": len(c["sellers"]), "stale": len(c["excluded"]), "oos": sum(s.get("in_stock") is False for s in c["excluded"])},
@@ -100,8 +111,8 @@ async def detail(db, sku, days, price_fn):
             "history": history, "velocity": {"velocity": [], "avg_daily": None, "total_units": None}, "policy_version": c["policy_version"]}
 
 
-async def intel_detail(db, sku, price_fn):
-    result = await detail(db, sku, 30, price_fn)
+async def intel_detail(db, sku, price_fn, competitor_store_ids=None):
+    result = await detail(db, sku, 30, price_fn, competitor_store_ids)
     own = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1}) or {}
     competitors = [{**r, "competitor_store_id": r["store_id"], "competitor_store_name": r.get("store_name"),
                     "competitor_sku": r.get("sku"), "competitor_offer_id": r.get("offer_id"),

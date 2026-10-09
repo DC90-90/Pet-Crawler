@@ -579,7 +579,7 @@ async def _retired_match_my_product(db, my_product, comp_snapshots=None, comp_pr
 
 def _build_match(my_prod, snap, comp_prod, confidence, method):
     my_price = float(my_prod.get("sale_price") or my_prod.get("price") or 0)
-    comp_price = float(snap.get("price", 0))
+    comp_price = float(snap.get("price") or 0)
     diff_sar = round(comp_price - my_price, 2)
     diff_pct = round((diff_sar / my_price) * 100, 1) if my_price > 0 else 0
 
@@ -603,9 +603,9 @@ def _build_match(my_prod, snap, comp_prod, confidence, method):
         "competitor_store_id": snap["store_id"],
         "competitor_store_name": snap.get("store_name", ""),
         "competitor_price": comp_price,
-        "competitor_original_price": float(snap.get("original_price", comp_price)),
+        "competitor_original_price": float(snap.get("original_price") or comp_price),
         "competitor_in_stock": snap.get("in_stock", False),
-        "competitor_qty": snap.get("qty_available", 0),
+        "competitor_qty": snap.get("qty_available"),
         "diff_sar": diff_sar,
         "diff_pct": diff_pct,
         "position": "cheaper" if diff_sar > 0 else ("equal" if diff_sar == 0 else "expensive"),
@@ -631,7 +631,7 @@ async def _build_competitor_lookups(db, own_store_id):
     since = datetime.now(timezone.utc)-timedelta(days=MATCH_WINDOW_DAYS)
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
     rows = await db.product_snapshots.aggregate([
-        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False}},
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}}},
         {"$sort": {"crawled_at": -1}}, {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
         {"$replaceRoot": {"newRoot": "$row"}}, {"$project": FIELDS},
     ], allowDiskUse=True).to_list(200000)
@@ -693,7 +693,7 @@ async def _retired_build_competitor_lookups(db, own_store_id):
     return snapshots, products
 
 
-async def run_matching_for_all(db, progress_callback=None):
+async def run_matching_for_all(db, progress_callback=None, only_skus=None):
     """Run matching engine for ALL my_products. Returns summary stats."""
     # Hardening (Feb 2026): only run matching for items explicitly tagged as own-store.
     own_store = await db.stores.find_one({"is_own_store": True}, {"_id": 0, "id": 1})
@@ -728,6 +728,8 @@ async def run_matching_for_all(db, progress_callback=None):
                 "re-tags on boot); a partial run leaves products with no competitors.",
                 len(my_products), catalogue)
             my_products = await db.my_products.find({}, {"_id": 0}).to_list(5000)
+    if only_skus is not None:
+        my_products = [p for p in my_products if p.get("sku") in set(only_skus)]
     total = len(my_products)
     stats = {"total": total, "matched": 0, "unmatched": 0, "total_matches": 0}
 
@@ -738,10 +740,12 @@ async def run_matching_for_all(db, progress_callback=None):
     # produced NO snapshots inside the match window (stale/down/blocked).
     # Rebuilding against it would wipe every non-confirmed match. Abort loudly
     # instead — the error lands in sync_runs and the data-freshness alarm.
+    from price_cohort import exclusion
+    comp_snapshots = [s for s in comp_snapshots if s.get("offer_id") and exclusion(s) is None]
     if not comp_snapshots:
         raise RuntimeError(
-            f"Refusing to rebuild product_matches: 0 competitor snapshots in the last "
-            f"{MATCH_WINDOW_DAYS} days (crawlers stale or down). Existing matches left untouched."
+            "Refusing to rebuild product_matches: 0 current verified competitor offers "
+            "(missing, stale, quarantined, hidden or out of stock). Existing matches left untouched."
         )
 
     for i, mp in enumerate(my_products):
@@ -761,12 +765,13 @@ async def run_matching_for_all(db, progress_callback=None):
                     "my_sku": my_sku,
                     "competitor_sku": m["competitor_sku"],
                     "competitor_store_id": m["competitor_store_id"],
+                    "competitor_offer_id": m["competitor_offer_id"],
                     "manually_confirmed": True,
                 })
                 if existing:
                     continue
                 await db.product_matches.update_one(
-                    {"my_sku": my_sku, "competitor_sku": m["competitor_sku"], "competitor_store_id": m["competitor_store_id"]},
+                    {"my_sku": my_sku, "competitor_sku": m["competitor_sku"], "competitor_store_id": m["competitor_store_id"], "competitor_offer_id": m["competitor_offer_id"]},
                     {"$set": m},
                     upsert=True,
                 )

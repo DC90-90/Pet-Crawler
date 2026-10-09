@@ -1,20 +1,26 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { RequestError } from "@/components/RequestError";
 import { Badge } from "@/components/ui/badge";
 import { BookOpen, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { SourceChip, fmtNum } from "./SourceChip";
 
-export default function Methodology({ days, includeToday }) {
+export default function Methodology({ days, includeToday, scopeParams }) {
   const [d, setD] = useState(null);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
 
   useEffect(() => {
     let live = true;
-    api.get("/market-share/methodology", { params: { days, include_today: includeToday } })
-      .then((r) => live && setD(r.data));
+    setError(false); setD(null);
+    api.get("/market-share/methodology", { params: { days, include_today: includeToday, ...scopeParams } })
+      .then((r) => live && setD(r.data))
+      .catch(() => live && setError(true));
     return () => { live = false; };
-  }, [days, includeToday]);
+  }, [days, includeToday, scopeParams, retry]);
 
-  if (!d) return <p className="text-sm text-[#A1E4DB]">Loading…</p>;
+  if (error) return <RequestError id="ms-methodology" onRetry={() => setRetry(n => n + 1)} />;
+  if (!d) return <p className="text-sm text-[#A1E4DB]" data-testid="ms-methodology-loading">Loading…</p>;
 
   return (
     <div className="space-y-4 max-w-4xl" data-testid="ms-methodology">
@@ -114,8 +120,8 @@ export default function Methodology({ days, includeToday }) {
       <div className="glass-card p-5">
         <h3 className="text-sm font-semibold text-white mb-3">Why some numbers are unavailable</h3>
         <ul className="space-y-1 text-[11px] text-[#A1E4DB]">
-          <li>• Units are a DIFFERENCE between two crawls. One crawl in the window means no change can exist yet.</li>
-          <li>• A store that publishes neither a sold counter nor stock levels cannot have its sales measured at all —
+          <li>• Movement proxies need repeated valid observations of the same offer. One crawl cannot establish movement.</li>
+          <li>• A store that publishes neither a sold counter nor stock levels has no observation proxy —
             it still appears as a seller, with its price and stock status.</li>
           <li>• Exact own sales need complete Zid order coverage. Inventory changes are proxies: transfers,
             corrections, reservations and restocks can make them overstate or understate sales.</li>

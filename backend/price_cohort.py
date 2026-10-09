@@ -108,7 +108,7 @@ def select_cohort(own, rows, own_price, *, now=None, history=()):
                 cutoff=(now-timedelta(days=7)).isoformat(), currency="SAR", stock_policy="in_stock_only")
 
 
-async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None):
+async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, competitor_store_ids=None):
     now = now or datetime.now(timezone.utc)
     own_by_sku = {r["sku"]: r for r in own_rows if r.get("sku")}
     by_key = {}
@@ -125,6 +125,8 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None):
     # Latest offer first, BEFORE eligibility: an OOS reading must not resurrect an older in-stock price.
     seen = set()
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
+    if competitor_store_ids is not None:
+        active = [sid for sid in active if sid in competitor_store_ids]
     cursor = db.product_snapshots.aggregate([
         {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": now-timedelta(days=180)}}},
         {"$sort": {"crawled_at": -1}},

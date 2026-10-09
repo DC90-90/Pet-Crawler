@@ -148,6 +148,7 @@ function NoAccessPage() {
 }
 
 function AppLayout() {
+  const { user, checking } = useAuth();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [navCollapsed, setNavCollapsed] = useState(false);
   useEffect(() => {
@@ -155,6 +156,8 @@ function AppLayout() {
     window.addEventListener("keydown", close);
     return () => window.removeEventListener("keydown", close);
   }, []);
+  if (checking) return <PageLoader />;
+  if (!user) return <Navigate to="/login" replace />;
   return (
     <div className="flex min-h-screen" style={{ background: "radial-gradient(circle at top center, #090E1C 0%, #090E1C 100%)" }} data-testid="app-layout">
       {mobileNavOpen && <button className="fixed inset-0 z-30 bg-black/60 md:hidden" onClick={() => setMobileNavOpen(false)} aria-label="Close navigation" data-testid="mobile-nav-backdrop" />}
@@ -162,7 +165,7 @@ function AppLayout() {
       <main className={`app-main flex-1 min-w-0 min-h-screen flex flex-col ms-0 ${navCollapsed ? "md:ms-[68px]" : "md:ms-[240px]"}`}>
         <div className="flex items-center justify-between md:justify-end px-4 md:px-6 py-3 border-b border-white/5">
           <button className="md:hidden p-2 text-[#A1E4DB]" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-expanded={mobileNavOpen} data-testid="mobile-nav-open"><Menu className="w-5 h-5" /></button>
-          <NotificationBell />
+          {canAccessPage(user, "alerts") && <NotificationBell />}
         </div>
         <div className="flex-1 min-w-0">
         <Routes>

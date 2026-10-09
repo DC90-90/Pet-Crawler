@@ -1,5 +1,5 @@
 """Only observed offer identities can enter product_matches v2."""
-from price_cohort import identity_agrees, reviewed_brand_map, apply_brand_review
+from price_cohort import identity_agrees, reviewed_brand_map, apply_brand_review, exclusion
 
 
 async def match(db, own, snapshots=None, own_store_id=None):
@@ -16,10 +16,10 @@ async def match(db, own, snapshots=None, own_store_id=None):
     from matcher import _build_match
     for offer in snapshots:
         offer = apply_brand_review(offer, reviews)
-        if offer.get("store_id") == own_store_id or offer.get("observation_version") != 2 or not offer.get("offer_id") or offer.get("is_synthetic"):
+        if offer.get("store_id") == own_store_id or not offer.get("offer_id") or exclusion(offer) is not None:
             continue
         if any(b.get("competitor_store_id") == offer["store_id"] and
-               (b.get("competitor_offer_id") == offer["offer_id"] or b.get("competitor_sku") == offer.get("sku")) for b in blocked):
+               (b.get("competitor_offer_id") == offer["offer_id"] if b.get("competitor_offer_id") else b.get("competitor_sku") == offer.get("sku")) for b in blocked):
             continue
         manual = any(c.get("competitor_store_id") == offer["store_id"] and c.get("competitor_offer_id") == offer["offer_id"] for c in confirmed)
         if not identity_agrees(own, offer, manual):

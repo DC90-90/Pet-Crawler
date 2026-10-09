@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
+import { RequestError } from "@/components/RequestError";
 import { CATEGORY_LABELS } from "@/lib/i18n";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,8 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
   const [sort, setSort] = useState("opportunity_desc");
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
   const limit = 50;
 
   useEffect(() => { setPage(0); }, [filters, days]);
@@ -19,17 +22,21 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
   useEffect(() => {
     let live = true;
     setLoading(true);
+    setError(false); setData(null);
     const { catalog, min_confidence, ...rest } = filters || {};
     api.get("/market-share/missing-products", {
       params: { days, sort, include_today: includeToday, limit, offset: page * limit, ...rest },
     })
       .then((r) => live && setData(r.data))
+      .catch(() => live && setError(true))
       .finally(() => live && setLoading(false));
     return () => { live = false; };
-  }, [days, sort, page, filters, includeToday]);
+  }, [days, sort, page, filters, includeToday, retry]);
 
   const rows = data?.rows || [];
   const total = data?.total || 0;
+  if (error) return <RequestError id="ms-missing" onRetry={() => setRetry(n => n + 1)} />;
+  if (loading) return <p data-testid="ms-missing-loading" className="text-sm text-[#A1E4DB]">Loading…</p>;
 
   return (
     <div className="space-y-3" data-testid="ms-missing-products">
@@ -37,7 +44,7 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
         <p className="text-[11px] text-[#A1E4DB]" data-testid="ms-missing-count">
           {fmtNum(total)} product(s) competitors sell that I don't
           {data?.total_untruncated > total && ` · top ${fmtNum(total)} of ${fmtNum(data.total_untruncated)} by opportunity`}
-          {" · measured market value "}<span dir="ltr">{fmtMoney(data?.opportunity_value)}</span>
+          {" · shelf-value proxy "}<span dir="ltr">{fmtMoney(data?.opportunity_value)}</span>
         </p>
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] uppercase tracking-wide text-[#A1E4DB]">Sort</span>
@@ -45,8 +52,8 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
             className="bg-white/5 border border-white/10 rounded-md text-xs text-white px-2 py-1"
             data-testid="ms-missing-sort">
             <option value="opportunity_desc" className="bg-[#0B1220]">Opportunity score</option>
-            <option value="market_revenue_desc" className="bg-[#0B1220]">Market revenue</option>
-            <option value="units_desc" className="bg-[#0B1220]">Market units</option>
+            <option value="market_revenue_desc" className="bg-[#0B1220]">Shelf-value proxy</option>
+            <option value="units_desc" className="bg-[#0B1220]">Tracked movement</option>
             <option value="competitors_desc" className="bg-[#0B1220]">Competitors</option>
             <option value="name_asc" className="bg-[#0B1220]">Name</option>
           </select>
@@ -61,8 +68,8 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
         <Table>
           <TableHeader>
             <TableRow className="border-white/10">
-              {["Product", "SKU / GTIN", "Category", "Brand", "Competitors", "Market units",
-                "Market revenue", "Top competitor", "Avg price", "Price range", "Trend (rev)",
+              {["Product", "SKU / GTIN", "Category", "Brand", "Competitors", "Tracked movement",
+                "Shelf-value proxy", "Top competitor", "Avg price", "Price range", "Value trend",
                 "Opportunity", "Confidence", "Recommended action"].map((h) => (
                 <TableHead key={h} className="text-[9px] uppercase tracking-wider text-[#A1E4DB] whitespace-nowrap">{h}</TableHead>
               ))}
