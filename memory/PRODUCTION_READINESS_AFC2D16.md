@@ -1,6 +1,12 @@
 # Daleel production-readiness assessment
 
-## Latest exact-source verification — 2026-10-09
+## Latest native-build repair — 2026-10-09
+
+The user-reported native build failed at the application's frontend manifest gate, not MongoDB. **Code-only compatibility repair is implemented and independently tested:205 cases pass**, with successful isolated Git-less frontend-only and full-tree builds. Managed builds emit a truthful unverified frontend receipt, not a fake Git SHA or paired backend release manifest. Strict exported-artifact validation remains enforced. Docker/deploy files, lock, cron configuration and backend runtime guards are unchanged.
+
+**Production remains NO-GO.** Unverified workspace `/api/ready` intentionally remains503; compile success is not attested readiness. Actual native pipeline rerun/image proof and all remaining B1–B7 evidence are still required. No new deployment or production modification was made. Current details: **`memory/MANAGED_BUILD_FIX_12B8C449.md`**, **`test_reports/iteration_45.json`**, **`test_reports/managed_build_fix/`**. Post-fix static scan returned **PASS for code-level blockers only**; it does not close operational gates or substantiate its generic production-ready/startup notes.
+
+## Historical exact-source verification — 2026-10-09
 
 **Production remains NO-GO**, but remote lock inclusion and exact saved-source build/manifest/readiness subgates are now verified for **`2faa51c3ac21ef1d7fae97558bf666a7674bbd7e`**. **185/185 current checks passed**, with no failures/errors/skips or failed-run reruns. Real isolated exported-app `/api/ready` returned **200**, verified identity/boot, all capabilitiesOFF, zero DB collections created. The seven preview API cases remain preview checks, not exported-image E2E.
 

@@ -1,0 +1,15 @@
+{
+  "frontend/yarn.lock": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+  ".dockerignore": "2512eba2e28a96b6c0ac40773f77ad5325afb6c8707facb79b560a59fbd7a686",
+  ".emergent/crons.yml": "7bfc57007b41b80fbb336302338460834e103ae5b90b093c1bc1967b98f5460b",
+  "deploy/backend.Dockerfile": "cfcedb89f9183df5a2ae9c25e9adc24deb1fd563b53b6d3622862cf3a720cc30",
+  "deploy/nginx-frontend.conf": "c5e5f366697c9a636ba26233fbba69d46b3bf85de488620d0627a688befe1ebd",
+  "deploy/.env.example": "baf9b67a7e2a98284f114a2b4576a7dc09b55a1112cc751f461400c9ba3e46ae",
+  "deploy/PLATFORM_SUMMARY.md": "25c30f4ba4d51733274dc1fddc3a22e9b490fe3154d353077cdf5785ef2d8cd8",
+  "deploy/nginx.conf": "e821b85bc43c964a227eab0e8482b8c8c42a3a83a53aa4d888122ca5b5d52621",
+  "deploy/docker-compose.yml": "ee0b289af24f1c55ce471f01546154585af2932b18eb15992ab2f1f7e6f30142",
+  "deploy/start.sh": "c89336bace3bd3ad3ae4a698ce37c19f75b4f72f597f6289c457b0aa33c000ad",
+  "deploy/frontend.Dockerfile": "ab82aabddf093a346f91e96ae79e6b19797a17b4b1514977cb65bf2d909e7348",
+  "deploy/DEPLOYMENT_GUIDE.md": "30d79b0c9a81fee01adc8e974fd2f58d0af81eed4283f4a74146f339463aa63c",
+  "deploy/RELEASE_PACKAGING.md": "748daf93090e4038e33c048d7af2fdddaa08a04d64d85d2ed80e9fed2fb9b0ad"
+}

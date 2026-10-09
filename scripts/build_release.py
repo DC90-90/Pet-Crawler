@@ -23,6 +23,8 @@ def build(receipt_path, output):
     env.update(context)
     # Build-only opt-in: candidate status remains null-SHA/not-ready.
     env["DALEEL_ALLOW_CANDIDATE_BUILD"] = "true" if export.commit is None else "false"
+    # Exported-artifact builds must never fall back to managed/unverified compilation.
+    env["DALEEL_REQUIRE_VERIFIED_RELEASE_BUILD"] = "true"
     versions = {k: subprocess.check_output(command, text=True).strip() for k, command in {
         "node": ["node", "--version"], "yarn": ["yarn", "--version"], "python": [sys.executable, "--version"]}.items()}
     if not versions["node"].startswith("v20.") or versions["yarn"] != "1.22.22":
