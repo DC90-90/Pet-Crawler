@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from observation_contract import gtin, money, stable_id, TRUSTED_PRICE_BASES
 from pack_guard import slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers, discount_escapes
 
-POLICY_VERSION = "offers-v2-current-7d"
+POLICY_VERSION = "offers-v3-parent-aware-current-7d"
 FIELDS = {k: 1 for k in ("sku", "barcode", "store_id", "store_name", "offer_id", "listing_id", "variant_id", "name_ar", "name_en", "price", "currency", "price_basis", "in_stock", "qty_available", "product_url", "crawled_at", "observation_version", "confidence_score", "comparable", "is_synthetic", "present_on_store", "variant_skus", "variant_barcodes")}
 FIELDS["_id"] = 0
 FIELDS["brand"] = 1
@@ -59,6 +59,8 @@ def identity_agrees(own, offer, manual=False):
 
 def exclusion(row, now=None):
     now = now or datetime.now(timezone.utc)
+    if row.get("superseded_parent"):
+        return "parent_listing_not_an_offer"
     if row.get("is_synthetic") or row.get("data_origin") == "demo_seed":
         return "synthetic_observation"
     if row.get("observation_version") != 2 or row.get("comparable") is not True:
@@ -122,6 +124,8 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
         blocked.add((m.get("my_sku"), m.get("competitor_store_id"), m.get("competitor_offer_id")))
     grouped, history = {}, {}
     reviewed = await reviewed_brand_map(db)
+    from parent_identity import index, annotate
+    parents = await index(db)
     # Latest offer first, BEFORE eligibility: an OOS reading must not resurrect an older in-stock price.
     seen = set()
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
@@ -140,7 +144,7 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
     for sku, sid, oid in manual:
         manual_by_offer.setdefault((sid, oid), set()).add(sku)
     async for row in cursor:
-        row = apply_brand_review(row, reviewed)
+        row = annotate(apply_brand_review(row, reviewed), parents)
         candidates = set(manual_by_offer.get((row["store_id"], row.get("offer_id")), ()))
         for key in identity_keys(row):
             candidates.update(by_key.get(key, ()))

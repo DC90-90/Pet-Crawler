@@ -51,6 +51,6 @@ async def execute(db, run_id, kind, action):
         clean = {k: v for k, v in (result or {}).items() if k != "_id"} if isinstance(result, dict) else {}
         await db.job_runs.update_one({"_id": run_id}, {"$set": {"status": status, "finished_at": datetime.now(timezone.utc), "result": jsonable_encoder(clean)}})
     except Exception as exc:
-        await db.job_runs.update_one({"_id": run_id}, {"$set": {"status": "failed", "finished_at": datetime.now(timezone.utc), "error": type(exc).__name__}})
+        await db.job_runs.update_one({"_id": run_id}, {"$set": {"status": "failed", "finished_at": datetime.now(timezone.utc), "error": type(exc).__name__, "recovery": getattr(exc, "result", None)}})
     finally:
         await release(db, f"job:{kind}", owner)

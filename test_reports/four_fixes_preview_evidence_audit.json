@@ -1,0 +1,74 @@
+{
+  "database": "daleel_pets",
+  "host": "localhost",
+  "before": {
+    "my_products": {
+      "count": 2351,
+      "sha256": "06547bff55c7aa111ae25277875fc9dba920b3166d7925ca2e87375946b0b8e2"
+    },
+    "products": {
+      "count": 19643,
+      "sha256": "59a903b79aa3b8abc99d7f93d1efc3ca02b8aa330659d1355bcaaf1a6c4a88b1"
+    },
+    "product_snapshots": {
+      "count": 44292,
+      "sha256": "f080905b6807bf3f4796387ec289338100cd7bc3c938779413c6f3c32d869aba"
+    },
+    "observation_events": {
+      "count": 4203,
+      "sha256": "f2e96cc2289027111d801ad13ebf3b87e2c2bc1b502a2cb198c09fa768f2b1b3"
+    },
+    "daily_ledger": {
+      "count": 49109,
+      "sha256": "a9f62e63244f51d9825211e4a6690acef76584f007821dc28f1757811d0b43f9"
+    },
+    "daily_ledger_store": {
+      "count": 28,
+      "sha256": "ab18093bb9e08aa9a67180e8610d5b35c34b80b37415b1fe8614eecf35cbf8e7"
+    },
+    "crawl_checkpoints": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "listing_identities": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "after": {
+    "my_products": {
+      "count": 2351,
+      "sha256": "06547bff55c7aa111ae25277875fc9dba920b3166d7925ca2e87375946b0b8e2"
+    },
+    "products": {
+      "count": 19643,
+      "sha256": "59a903b79aa3b8abc99d7f93d1efc3ca02b8aa330659d1355bcaaf1a6c4a88b1"
+    },
+    "product_snapshots": {
+      "count": 44292,
+      "sha256": "f080905b6807bf3f4796387ec289338100cd7bc3c938779413c6f3c32d869aba"
+    },
+    "observation_events": {
+      "count": 4203,
+      "sha256": "f2e96cc2289027111d801ad13ebf3b87e2c2bc1b502a2cb198c09fa768f2b1b3"
+    },
+    "daily_ledger": {
+      "count": 49109,
+      "sha256": "a9f62e63244f51d9825211e4a6690acef76584f007821dc28f1757811d0b43f9"
+    },
+    "daily_ledger_store": {
+      "count": 28,
+      "sha256": "ab18093bb9e08aa9a67180e8610d5b35c34b80b37415b1fe8614eecf35cbf8e7"
+    },
+    "crawl_checkpoints": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "listing_identities": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "unchanged": true,
+  "scope": "Before/after independent testing; no live refresh or catalogue writes"
+}

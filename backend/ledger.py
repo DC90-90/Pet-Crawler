@@ -45,10 +45,11 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from pymongo.errors import DuplicateKeyError, OperationFailure
+from ledger_receipts import write_batch, require_complete, day_lock
 
 logger = logging.getLogger(__name__)
 
-LEDGER_WRITER_VERSION = 1
+LEDGER_WRITER_VERSION = 2
 
 # Asia/Riyadh is UTC+3 with no DST — a fixed offset is exact, not approximate.
 KSA_TZ = timezone(timedelta(hours=3))
@@ -87,6 +88,7 @@ def crawl_observation(norm):
         disc = round((1 - price / original) * 100)
     return {
         "sku": norm.get("sku"),
+        "event_id": norm.get("event_id"),
         "close_price": round(price, 2) if isinstance(price, (int, float)) else None,
         "close_sale_price": round(norm["sale_price"], 2) if norm.get("sale_price") else None,
         "close_original_price": round(original, 2) if isinstance(original, (int, float)) else None,
@@ -111,106 +113,9 @@ async def ensure_ledger_indexes(db):
 
 async def record_observations(db, store_id, store_name, observations, observed_at,
                               source_tier=None, confidence=None, crawl_run_id=None):
-    """Upsert one KSA day's ledger rows for a batch of observations.
-
-    observations: iterable of crawl_observation() dicts. Latest wins intra-day.
-    Writes to a sealed day are refused row-by-row and counted, never applied.
-
-    Returns {"day", "written", "rejected_sealed", "first_seen", "skipped"}.
-    Never raises on per-row trouble — the ledger must not cost a crawl — but a
-    batch-level failure propagates to the caller's fail-soft wrapper so it is
-    logged loudly rather than half-applied silently.
-    """
-    day = ksa_day_str(observed_at)
-    out = {"day": day, "written": 0, "rejected_sealed": 0, "first_seen": 0, "skipped": 0}
-    obs = [o for o in observations or [] if o.get("sku")]
-    if not obs:
-        return out
-
-    # Day-level seal gate: one cheap read instead of N rejected upserts.
-    sd_id = _store_day_id(store_id, day)
-    sd = await db.daily_ledger_store.find_one({"_id": sd_id}, {"_id": 0, "sealed_at": 1})
-    if sd and sd.get("sealed_at") is not None:
-        out["rejected_sealed"] = len(obs)
-        logger.warning("[Ledger] %s day %s is sealed — %d observations refused",
-                       store_id, day, len(obs))
-        return out
-
-    # First-seen detection reads sku_store_coverage (read-only). At the moment
-    # the crawl-path hook runs, coverage still reflects PRIOR crawls only —
-    # _recompute_store_metrics rebuilds it after the crawl completes — so "not
-    # in coverage" means "never seen by Daleel before", the honest new-arrival
-    # signal. Bounded by catalogue size (one doc per pair), not by history.
-    known_prior = set()
-    async for c in db.sku_store_coverage.find(
-            {"store_id": store_id}, {"_id": 0, "sku": 1}).batch_size(2000):
-        known_prior.add(c["sku"])
-
-    for o in obs:
-        sku = str(o["sku"])
-        rid = _row_id(store_id, o.get("offer_id") or sku, day)
-        first = sku not in known_prior
-        update = {
-            "$set": {
-                "close_price": o.get("close_price"),
-                "close_sale_price": o.get("close_sale_price"),
-                "close_original_price": o.get("close_original_price"),
-                "discount_pct": o.get("discount_pct"),
-                "on_sale": o.get("on_sale"),
-                "in_stock": o.get("in_stock"),
-                "qty_available": o.get("qty_available"),
-                "sold_count_cumulative": o.get("sold_count_cumulative"),
-                "sold_count_observed": o.get("sold_count_observed"),
-                "sold_count_capped": o.get("sold_count_capped"),
-                "offer_id": o.get("offer_id"),
-                "confidence": confidence,
-                "source_tier": source_tier,
-                "last_observed_at": observed_at,
-            },
-            "$inc": {"observations_that_day": 1},
-            "$setOnInsert": {
-                "store_id": store_id, "sku": sku, "ksa_date": day,
-                "is_first_day_for_store": first,
-                "sealed_at": None,
-                "writer_version": LEDGER_WRITER_VERSION,
-                "backfilled": False,
-            },
-        }
-        try:
-            await db.daily_ledger.update_one(
-                {"_id": rid, "sealed_at": None}, update, upsert=True)
-            out["written"] += 1
-            if first:
-                out["first_seen"] += 1
-                known_prior.add(sku)   # a second intra-batch sighting is not "first" again
-        except DuplicateKeyError:
-            out["rejected_sealed"] += 1      # row exists but is sealed — immutable
-        except OperationFailure as e:
-            if getattr(e, "code", None) == 11000:
-                out["rejected_sealed"] += 1
-            else:
-                out["skipped"] += 1
-                logger.warning("[Ledger] row %s failed: %s", rid, str(e)[:120])
-
-    skus_observed = await db.daily_ledger.count_documents(
-        {"store_id": store_id, "ksa_date": day})
-    await db.daily_ledger_store.update_one(
-        {"_id": sd_id, "sealed_at": None},
-        {"$set": {
-            "status": "ok",                 # finalised (ok|partial) at seal time
-            "skus_observed": skus_observed,
-            "store_name": store_name,
-            "crawl_run_id": crawl_run_id,
-            "last_observed_at": observed_at,
-        },
-         "$inc": {"first_seen_count": out["first_seen"]},
-         "$setOnInsert": {
-             "store_id": store_id, "ksa_date": day, "sealed_at": None,
-             "absent_count": None,          # unknown until the day seals
-             "writer_version": LEDGER_WRITER_VERSION,
-         }},
-        upsert=True)
-    return out
+    """Apply immutable observation receipts. Callers must propagate incomplete outcomes."""
+    return await write_batch(db, store_id, store_name, observations, observed_at,
+                             source_tier, confidence, crawl_run_id)
 
 
 def sealed_ksa_window(days, now=None):
@@ -293,57 +198,39 @@ async def seal_ksa_day(db, day=None, now=None):
         day = ksa_day_str(now - timedelta(days=1))
     if day >= ksa_day_str(now):
         raise ValueError("Only completed KSA days may be sealed")
-    sealed_at = now
     summary = {"day": day, "stores_sealed": 0, "no_data_stores": 0, "rows_sealed": 0}
 
     stores = [s async for s in db.stores.find(
         {"is_active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1})]
     for s in stores:
-        sid = s["id"]
-        sd_id = _store_day_id(sid, day)
-        sd = await db.daily_ledger_store.find_one({"_id": sd_id})
-        if sd is None:
-            # silence is data: the store produced nothing this KSA day
-            try:
-                await db.daily_ledger_store.insert_one({
-                    "_id": sd_id, "store_id": sid, "ksa_date": day,
-                    "store_name": s.get("name"),
-                    "status": "no_data", "skus_observed": 0,
-                    "crawl_run_id": None, "first_seen_count": 0,
-                    "absent_count": None,
-                    "sealed_at": sealed_at,
-                    "writer_version": LEDGER_WRITER_VERSION,
-                })
-                summary["no_data_stores"] += 1
-            except (DuplicateKeyError, OperationFailure):
-                pass                          # concurrent seal — already handled
-            continue
-        if sd.get("sealed_at") is not None:
-            continue                          # idempotent re-run
-        # absent = known catalogue pairs with no ledger row today. Both sets are
-        # bounded by catalogue size. Coverage at seal time includes today's
-        # crawl (rebuilt post-crawl), so absentees are genuine no-shows.
-        known = set()
-        async for c in db.sku_store_coverage.find(
-                {"store_id": sid}, {"_id": 0, "sku": 1}).batch_size(2000):
-            known.add(c["sku"])
-        today = set()
-        async for r in db.daily_ledger.find(
-                {"store_id": sid, "ksa_date": day}, {"_id": 0, "sku": 1}).batch_size(2000):
-            today.add(r["sku"])
-        absent = len(known - today)
-        observed = len(today)
-        status = "ok"
-        if known and observed < PARTIAL_BELOW * len(known):
-            status = "partial"
-        await db.daily_ledger_store.update_one(
-            {"_id": sd_id, "sealed_at": None},
-            {"$set": {"status": status, "skus_observed": observed,
-                      "absent_count": absent, "sealed_at": sealed_at}})
-        summary["stores_sealed"] += 1
-
-    res = await db.daily_ledger.update_many(
-        {"ksa_date": day, "sealed_at": None}, {"$set": {"sealed_at": sealed_at}})
-    summary["rows_sealed"] = getattr(res, "modified_count", 0)
+        async with day_lock(db, s["id"], day):
+            await _seal_store_day(db, s, day, now, summary)
     logger.info("[Ledger] sealed %s: %s", day, summary)
     return summary
+
+
+async def _seal_store_day(db, store, day, sealed_at, summary):
+    sid, sd_id = store["id"], _store_day_id(store["id"], day)
+    sd = await db.daily_ledger_store.find_one({"_id": sd_id}, {"_id": 0})
+    if sd and sd.get("sealed_at") is not None:
+        # Finish only row seals interrupted by a prior seal; never alter values/counters.
+        res = await db.daily_ledger.update_many({"store_id": sid, "ksa_date": day, "sealed_at": None},
+                                               {"$set": {"sealed_at": sd["sealed_at"]}})
+        summary["rows_sealed"] += res.modified_count
+        return
+    rows = await db.daily_ledger.find({"store_id": sid, "ksa_date": day}, {"_id": 0, "sku": 1, "is_first_day_for_store": 1}).to_list(None)
+    known = set(await db.sku_store_coverage.distinct("sku", {"store_id": sid}))
+    today = {r["sku"] for r in rows}
+    # Missing store-day metadata with durable rows means interrupted work, NOT no_data.
+    unresolved = (sd or {}).get("unresolved_observation_ids", [])
+    status = "partial" if unresolved or (known and len(today) < PARTIAL_BELOW*len(known)) or (rows and sd is None) else "ok"
+    if not rows and not sd:
+        status = "no_data"
+    await db.daily_ledger_store.update_one({"_id": sd_id, "sealed_at": None}, {
+        "$set": {"status": status, "skus_observed": len(rows), "first_seen_count": len({r["sku"] for r in rows if r.get("is_first_day_for_store")}),
+                 "absent_count": len(known-today) if status != "no_data" else None, "sealed_at": sealed_at},
+        "$setOnInsert": {"store_id": sid, "ksa_date": day, "store_name": store.get("name"), "crawl_run_id": None,
+                         "writer_version": LEDGER_WRITER_VERSION}}, upsert=True)
+    summary["no_data_stores" if status == "no_data" else "stores_sealed"] += 1
+    res = await db.daily_ledger.update_many({"store_id": sid, "ksa_date": day, "sealed_at": None}, {"$set": {"sealed_at": sealed_at}})
+    summary["rows_sealed"] += res.modified_count

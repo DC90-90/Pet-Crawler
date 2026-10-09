@@ -1023,6 +1023,9 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
         **listing, "_currency": store.get("currency", "SAR") if store.get("platform") in ("salla", "zid") else store.get("currency"),
         "_price_basis": "storefront_inc_vat" if tier in (1, 2, 3, 4) else listing.get("price_basis"),
     })]
+    from parent_identity import register_rows, index, is_parent
+    await register_rows(db, store["id"], expanded, now)
+    parents = await index(db)
     seen_offers = set()
     for raw in expanded:
         # Once a listing is known to be a parent, later incomplete responses
@@ -1033,7 +1036,7 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 "variant_id": {"$nin": [None, "root"]}}, {"_id": 0, "offer_id": 1})
             known_parent = await db.observation_quarantine.find_one({"store_id": store["id"], "listing_id": listing_id,
                 "quarantine_reasons": "unresolved_parent_variants"}, {"_id": 0, "listing_id": 1})
-            if known_child or known_parent:
+            if known_child or known_parent or is_parent(raw, parents, store["id"]):
                 raw = {**raw, "_unresolved_parent": True}
         norm = _normalize_raw_product(raw, store["name"])
         offer_id = stable_id(store["id"], norm["listing_id"], norm["variant_id"])
@@ -1162,9 +1165,10 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
 
     # Snapshots remain durable if the ledger fails. Surface failure so the checkpoint
     # stays replayable rather than declaring incomplete work successful.
-    await ledger.record_observations(
+    ledger_result = await ledger.record_observations(
         db, store["id"], store["name"], ledger_obs, now,
         source_tier=tier, confidence=confidence)
+    ledger.require_complete(ledger_result)
 
     return new_count, snap_count
 
@@ -3751,12 +3755,10 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
             snapshots_created = len(snap_docs)
         # iter67 — own-store ledger write (source_tier 0 = authenticated API,
         # confidence 99: the same labels the synthetic snapshots carry).
-        try:
-            await ledger.record_observations(
-                db, own_store_id, store["name"], _ledger_obs, started_at,
-                source_tier=0, confidence=99)
-        except Exception:
-            logger.exception("[Ledger] own-sync write failed — sync unaffected")
+        ledger_result = await ledger.record_observations(
+            db, own_store_id, store["name"], _ledger_obs, started_at,
+            source_tier=0, confidence=99)
+        ledger.require_complete(ledger_result)
 
     if sync_source_label == "public_crawl" and all_raw:
         before = await db.product_snapshots.count_documents({"store_id": own_store_id, "crawled_at": started_at})

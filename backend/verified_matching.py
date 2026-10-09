@@ -13,9 +13,11 @@ async def match(db, own, snapshots=None, own_store_id=None):
     confirmed = [r async for r in db.product_matches.find({"my_sku": own.get("sku"), "manually_confirmed": True, "identity_version": 2}, {"_id": 0})]
     out = []
     reviews = await reviewed_brand_map(db)
+    from parent_identity import index, annotate
+    parents = await index(db)
     from matcher import _build_match
     for offer in snapshots:
-        offer = apply_brand_review(offer, reviews)
+        offer = annotate(apply_brand_review(offer, reviews), parents)
         if offer.get("store_id") == own_store_id or not offer.get("offer_id") or exclusion(offer) is not None:
             continue
         if any(b.get("competitor_store_id") == offer["store_id"] and

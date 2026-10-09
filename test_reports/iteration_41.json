@@ -1,0 +1,45 @@
+{
+  "summary": "Revalidated the four remaining correctness gaps in preview scope: isolated + live suites passed and UI read-only checks passed on desktop/mobile target viewports.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/scripts/run_reviewed_tests.py",
+    "/app/backend/tests/test_four_correctness_regressions.py",
+    "/app/backend/tests/test_iter40_preview_scope_checks.py",
+    "/app/test_reports/pytest/reviewed-core-final.xml",
+    "/app/test_reports/pytest/isolated-auth-final.xml",
+    "/app/test_reports/pytest/real-source-final.xml",
+    "/app/test_reports/pytest/related-contracts-final.xml",
+    "/app/test_reports/pytest/six-acceptance-final.xml",
+    "/app/test_reports/pytest/four-correctness-final.xml",
+    "/app/test_reports/pytest/iter41_preview_scope_checks.xml"
+  ],
+  "action_items": [
+    "Proceed with Save to GitHub handoff using this validation set and updated acceptance memory.",
+    "If needed, run one extra manual UI pass specifically on a product/scope combination that renders Price Intel exclusion chips (data-dependent visual path)."
+  ],
+  "critical_code_review_comments": [
+    "No correctness regressions found in the four targeted gaps; all dedicated tests passed.",
+    "Backend emits FastAPI on_event deprecation warnings (non-blocking for this scope, but should be migrated to lifespan handlers)."
+  ],
+  "updated_files": [
+    "/app/memory/REVIEWED_FIXES_ACCEPTANCE.md",
+    "/app/test_reports/iteration_41.json"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "seed_data_creation": "None in preview; isolated suites used disposable UUID Mongo databases only.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "This run executed scripts/run_reviewed_tests.py (136 pass) + live test_iter40_preview_scope_checks.py (7 pass) = 143 pass total. Desktop/mobile UI checks were read-only on preview with exact 1920x800 and 390x844 viewports and no overflow.",
+  "rca of the issue": "No new issue reproduced in the targeted four-gap scope during this iteration."
+}

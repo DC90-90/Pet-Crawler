@@ -534,6 +534,9 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     prev_sales = await _read_sales(db, prev_start, prev_end, sealed=sealed)
     signals = await _store_signals(db, window_start, window_end)
     snaps = [s for s in await _latest_snapshots(db, snap_since, min_confidence) if s.get("store_id") in stores]
+    from parent_identity import index, annotate
+    parents = await index(db)
+    snaps = [annotate(s, parents) for s in snaps]
 
     my_rows = await db.my_products.find(
         {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "price": 1,
@@ -542,7 +545,9 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
              "barcode": 1, "brand_source": 1, "category_source": 1,
              "last_synced_at": 1, "present_on_store": 1, "currency": 1, "offer_id": 1,
              "known_variant_parent": 1, "quarantine_active": 1, "price_unavailable_reason": 1,
+             "listing_id": 1, "zid_id": 1, "variant_id": 1, "store_id": 1,
              "historical_quantity": 1, "historical_quantity_at": 1, "quantity_observed_at": 1}).to_list(50000)
+    my_rows = [annotate(r, parents, own_store_id) for r in my_rows]
     my_by_sku = {r["sku"]: r for r in my_rows if r.get("sku")}
     cohorts = await build_cohorts(db, my_rows, own_store_id, own_price_fn, now=now, competitor_store_ids=competitor_store_ids)
     cohort_links = {}

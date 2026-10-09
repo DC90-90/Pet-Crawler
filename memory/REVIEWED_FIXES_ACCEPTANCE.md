@@ -1,12 +1,12 @@
 # Independently reviewed Daleel fixes — preview acceptance
 
-Updated: **2026-10-09**. Scope: **preview only, six final acceptance findings plus Scanner/crawler correctness**. The October 9 section below supersedes earlier stale-data/test-count statements. No production changes, credential rotation, direct Git writes, or deployment occurred.
+Updated: **2026-10-09**. Current scope: **preview only, four parent-identity/ledger-recovery follow-up fixes against `daa86dfbe95230df8165c83230a4e574f2290d14`**, preserving the prior six fixes and newer work. The final continuation section below is authoritative (**143 passed**). No additional live refresh, historical backfill, production changes, credential rotation, direct Git writes, or deployment occurred in this continuation.
 
 ## Checkout and Git handoff
 - Requested repository: `DC90-90/Pet-Crawler`.
 - Requested destination branch: `conflict_130726_1244`.
 - Actual local checkout: `/app`, branch **`main`**.
-- Actual current HEAD verified October 9: **`65f6474399bbb89d37b25cd98a8d8062f804be98`**.
+- Current local/reference HEAD verified for this continuation: **`daa86dfbe95230df8165c83230a4e574f2290d14`**. Earlier six-fix continuation began at `65f6474399bbb89d37b25cd98a8d8062f804be98`.
 - That HEAD is this continuation's **starting checkpoint**, NOT a claimed remote commit for today's fixes. No direct commit/push or branch switch was performed. A resulting remote fix commit is pending the user's **Save to GitHub** action; none is invented here.
 - Preview: https://price-intel-dev.preview.emergentagent.com
 
@@ -125,3 +125,76 @@ Initial report `iteration_40.json` is retained as history; see `iteration_40_fol
 Use the chat's **Save to GitHub** control. Verify repository **DC90-90/Pet-Crawler** and intended branch **conflict_130726_1244** against the selected UI destination; local branch is still `main`. Include this acceptance report and final regressions. Record the resulting remote commit ID after save; **none is claimed yet**. No deployment action is authorized.
 
 Potential enhancement: an exportable per-offer evidence panel linking price, timestamp and source would make comparison review faster.
+
+## October 9 — continuation validation against commit `daa86dfbe95230df8165c83230a4e574f2290d14` scope
+
+Implementation and testing were preview-only. Live catalogue/evidence checks were read-only; mutation tests used disposable local UUID databases. Preserved newer working changes; no deployment, no live refresh/sync/crawl invocation, no backfill, no credential rotation, no production writes. `git cat-file -t`, `git show --stat --oneline` and `git log` confirmed the saved reference locally; no checkout/reset/revert/push occurred.
+
+### Commands run
+- `python /app/scripts/run_reviewed_tests.py`
+- `pytest -q /app/backend/tests/test_iter40_preview_scope_checks.py --junitxml=/app/test_reports/pytest/iter41_preview_scope_checks.xml`
+- Preview UI checks via browser automation (desktop `1920x800`, mobile `390x844`) using existing preview credentials.
+
+### Results
+- `run_reviewed_tests.py` groups passed:
+  - reviewed-core: **52 passed**
+  - isolated-auth: **10 passed**
+  - real-source: **6 passed**
+  - related-contracts: **36 passed**
+  - six-acceptance: **22 passed**
+  - four-correctness: **10 passed**
+- Live preview API suite (`test_iter40_preview_scope_checks.py`): **7 passed**
+- Combined target set this continuation: **143 passed, 0 failed**.
+
+### Focus checks completed for four remaining correctness gaps
+1. Parent identity persistence independent of `my_products` materialization: validated by `test_first_seen_parent_without_catalog_row_survives_flagless_own_response` and related competitor/read-through checks (pass).
+2. Root-first then children-later exclusion from current comparisons while preserving historical evidence: validated by `test_root_first_children_later_excludes_root_without_editing_history` (pass).
+3. Daily-ledger replay idempotence by immutable observation identity (including counters and stale replay protection): validated by interruption + old/new replay tests (pass).
+4. Row-level `OperationFailure` propagation and checkpoint non-success on partial batches; successful idempotent recovery without duplicates: validated by validator-code-121 test path (pass).
+
+### Preview UI read-only verification
+- My Products search confirms parent + children are separately retrievable (`Hair & Skin`, `5065023629268`, `5065023629848`) and parent detail shows unavailable current price with historical quantity context.
+- Price Intel/Market Share selected-competitor scope toggles were exercised successfully.
+- No desktop/mobile horizontal overflow observed (`overflow=0` on both 1920x800 and 390x844 runs).
+
+### Remaining limitations (explicit)
+- Price Intel detail exclusion chips depend on product/scope state; in this run, tested parent detail rendered as unavailable with zero sellers rather than showing exclusion-chip variants.
+- UI checks were read-only against existing preview data; synthetic root-first live chronology was not injected into preview (covered by isolated backend regressions).
+
+### Final implementation details and evidence
+
+| Gap | Fix and evidence |
+|---|---|
+| First-seen parent without a catalogue row | New monotonic `listing_identities` collection remembers store/listing identity and parent-SKU aliases before own-row filtering or competitor normalization. It does not depend on a successful `my_products` update. A flagless/SKU-only reappearance stays unavailable. Two-pass batch registration protects roots that precede children in the same batch. Valid native children stay separate. |
+| Previously accepted root superseded by children | `parent_identity.py` annotates current views and cohorts using the identity registry plus read-through existing child/quarantine evidence. Historical root snapshots/events are **not updated or re-timestamped**. `parent_listing_not_an_offer` excludes the root from current price cohorts, match resolution, own prices and Market Share. Price policy version changes to `offers-v3-parent-aware-current-7d`. |
+| Idempotent daily replay / stale closings | `ledger_receipts.py` applies each immutable event ID atomically with the row observation counter. Store-day first-seen counters are derived, not incremented again on retry. Duplicate receipts do not rewrite row fields; older new observations cannot replace a newer closing value or timestamp. Original microsecond ISO time is retained through checkpoint replay. |
+| Per-row failure cannot become success | The actual Mongo validator code **121 OperationFailure** test permits one row and rejects another. Batch returns incomplete; crawler propagates it; checkpoint is `recovery_required`, not `persisted`, and store-day status is partial. Removing the validator lets recovery finish without duplicate observations, snapshots, events, or first-seen counts. |
+
+- Interrupted **after successful ledger materialization but before checkpoint completion**: replay leaves both ledger row and store-day document identical. This is distinct from the prior iteration's pre-ledger interruption test.
+- Shared store/day leases serialize ledger writes and sealing. Seal resumes only pending row seals; it does not replace closing evidence. A lock conflict is an explicit unresolved operation, not success.
+- Recovery records structured checkpoint errors and raises `RecoveryIncomplete`; job failures retain recovery details. A failed recovery does not proceed to a new store crawl and pretend the previous work succeeded.
+- Own-store ledger results are also checked; unsuccessful outcomes are no longer hidden by a fail-soft log-and-success path.
+- A proven duplicate already applied to a sealed day can be acknowledged **without writing the sealed documents**. An unapplied sealed observation remains unresolved and requires separately authorized reconciliation.
+- Receipt-less legacy rows cannot prove old event membership. Replays at or before their stored timestamp—including the same BSON-truncated millisecond—are explicitly `legacy_observation_identity_unresolved`; no counters are guessed, receipts invented or history backfilled.
+
+### Final commands and artifacts
+- `python scripts/run_reviewed_tests.py` → **136 passed** = the previous126 isolated checks +10 new follow-up regressions.
+- `python -m pytest -q backend/tests/test_iter40_preview_scope_checks.py --junitxml=test_reports/pytest/preview-scope-final.xml` → **7 passed**. Environment values were loaded from existing preview configuration; passwords were not printed or changed.
+- Final main-agent re-run after the same-millisecond legacy guard: **143 passed, 0 failures**. Independent report `test_reports/iteration_41.json` also records143 passed before that additional conservative assertion; the full final suite was rerun afterward.
+- `python -m compileall -q backend scripts` → passed.
+- `yarn --cwd frontend build` → passed; no frontend source changes needed for these four backend corrections.
+- `python scripts/validate_crons.py` → five existing authenticated schedules valid; no schedules changed.
+- New tests: `backend/tests/test_four_correctness_regressions.py`; machine-readable output: `test_reports/pytest/four-correctness-final.xml` and the other six `*-final.xml` files.
+- Desktop/mobile smoke logs: `/root/.emergent/automation_output/20261009_112506/console_20261009_112506.log`. Parent remains unavailable with original historical17 and timestamp; 2kg46SAR/15 and4kg85SAR/2 remain distinct. Independent checks additionally exercised selected competitor views; both exact viewport sizes had no horizontal overflow.
+- `test_reports/four_fixes_preview_evidence_audit.json`: before/after independent-testing SHA256 fingerprints identical for **all eight** checked preview collections (`my_products`, `products`, `product_snapshots`, `observation_events`, `daily_ledger`, `daily_ledger_store`, `crawl_checkpoints`, `listing_identities`). New identity registry remains empty in live preview because no new ingest/backfill was authorized; existing evidence is protected by read-through classification.
+
+### Unresolved failures and operational limits
+- **No unresolved failure in the approved acceptance checks.**143/143 passed, plus build/compile and desktop/mobile checks.
+- Legacy receipt-less or unapplied sealed recovery is intentionally blocked, not silently repaired. These explicit states require separate authorized reconciliation; this continuation does not certify an old production ledger as reconciled.
+- Interrupted process leases expire after five minutes; recovery may report a lock conflict until expiry. No in-process retry timer, scheduler change, or production recovery job was introduced.
+- Per-row applied-ID arrays grow with genuine observations within that store/offer/day; exceptional high-volume receipt compaction is not implemented. Existing tests do not constitute load/chaos certification.
+- Browser verification did not manufacture a root-first chronology or new source evidence in the live preview. That chronology and real row-level failure/recovery are verified in isolated Mongo tests. Preview APIs were **not mocked**.
+- Existing external limitations remain: Zid approval/complete order coverage, Webshare billing/coverage, and **MOCKED email delivery**. Optional performance work, broader reconciliation, new-store activation, and the large server refactor remain deferred. No production readiness or full-catalogue freshness claim.
+
+### GitHub handoff status
+Save these changes using **Save to GitHub → `DC90-90/Pet-Crawler` → `conflict_130726_1244`**. Saved reference `daa86dfbe95230df8165c83230a4e574f2290d14` is the comparison baseline, **not a claimed new fix commit**. The resulting remote commit is **pending the user's save and verification**. No deployment is authorized.
