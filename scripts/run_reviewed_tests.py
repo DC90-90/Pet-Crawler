@@ -35,6 +35,7 @@ groups = {
     "related-contracts": ["test_pack_count_guard", "test_ledger_phase1", "test_ledger_phase2", "test_own_store_vat_basis"],
     "six-acceptance": ["test_acceptance_six_regressions"],
     "four-correctness": ["test_four_correctness_regressions"],
+    "matcher-parent-pool": ["test_matcher_parent_pool_regression"],
 }
 report_dir = ROOT / "test_reports/pytest"
 report_dir.mkdir(parents=True, exist_ok=True)

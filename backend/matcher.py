@@ -371,9 +371,9 @@ def _pack_compatible(my_text: str, comp_text: str) -> bool:
     return True
 
 
-async def match_my_product(db, my_product: dict, comp_snapshots: list = None, comp_products: dict = None, own_store_id: str = None) -> list:
+async def match_my_product(db, my_product: dict, comp_snapshots: list = None, comp_products: dict = None, own_store_id: str = None, *, candidates_prepared=False) -> list:
     from verified_matching import match
-    return await match(db, my_product, comp_snapshots, own_store_id)
+    return await match(db, my_product, comp_snapshots, own_store_id, candidates_prepared=candidates_prepared)
 
 
 async def _retired_match_my_product(db, my_product, comp_snapshots=None, comp_products=None, own_store_id=None):
@@ -736,12 +736,12 @@ async def run_matching_for_all(db, progress_callback=None, only_skus=None):
     # Pre-build lookups ONCE
     comp_snapshots, comp_products = await _build_competitor_lookups(db, own_store_id)
 
-    # iter22 safety guard: an empty candidate pool means the crawlers have
-    # produced NO snapshots inside the match window (stale/down/blocked).
+    # Evaluate the same parent-aware candidate pool for this guard and the run.
+    # Raw snapshots may exist while every offer is now excluded by parent identity.
     # Rebuilding against it would wipe every non-confirmed match. Abort loudly
     # instead — the error lands in sync_runs and the data-freshness alarm.
-    from price_cohort import exclusion
-    comp_snapshots = [s for s in comp_snapshots if s.get("offer_id") and exclusion(s) is None]
+    from verified_matching import prepare_candidates
+    comp_snapshots = await prepare_candidates(db, comp_snapshots, own_store_id)
     if not comp_snapshots:
         raise RuntimeError(
             "Refusing to rebuild product_matches: 0 current verified competitor offers "
@@ -749,7 +749,7 @@ async def run_matching_for_all(db, progress_callback=None, only_skus=None):
         )
 
     for i, mp in enumerate(my_products):
-        matches = await match_my_product(db, mp, comp_snapshots, comp_products, own_store_id)
+        matches = await match_my_product(db, mp, comp_snapshots, comp_products, own_store_id, candidates_prepared=True)
         my_sku = str(mp.get("sku", ""))
 
         # Remove old non-confirmed matches

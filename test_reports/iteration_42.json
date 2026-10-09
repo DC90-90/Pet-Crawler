@@ -1,0 +1,45 @@
+{
+  "summary": "Backend-only verification completed for matcher parent-aware candidate-pool regression scope. Re-ran reviewed isolated suite (137 checks), live read-only preview scope suite (7 checks), and backend compile check; all passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_matcher_parent_pool_regression.py",
+    "/app/scripts/run_reviewed_tests.py",
+    "/app/test_reports/pytest/reviewed-core-final.xml",
+    "/app/test_reports/pytest/isolated-auth-final.xml",
+    "/app/test_reports/pytest/real-source-final.xml",
+    "/app/test_reports/pytest/related-contracts-final.xml",
+    "/app/test_reports/pytest/six-acceptance-final.xml",
+    "/app/test_reports/pytest/four-correctness-final.xml",
+    "/app/test_reports/pytest/matcher-parent-pool-final.xml",
+    "/app/test_reports/pytest/iter42_preview_scope_checks.xml"
+  ],
+  "action_items": [
+    "Main agent can update acceptance report with this run's 144/144 pass evidence and command outputs.",
+    "Optional maintenance: migrate FastAPI startup/shutdown on_event handlers to lifespan to remove deprecation warnings."
+  ],
+  "critical_code_review_comments": [
+    "No functional regressions detected in requested matcher pool-guard scope.",
+    "matcher.py remains large (>700 lines), increasing change-risk; consider modular split after release-critical tasks."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_42.json",
+    "/app/test_reports/pytest/iter42_preview_scope_checks.xml"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "N/A (backend-only scope)"
+  },
+  "seed_data_creation": "No persistent seed data created. Mutation tests used disposable UUID DB via run_reviewed_tests runner.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Scope honored: no live refresh/backfill/sync/crawl endpoints called; no credential rotation; no code patching. Commands executed: python scripts/run_reviewed_tests.py (137 passed), pytest -q backend/tests/test_iter40_preview_scope_checks.py with env-backed preview credentials (7 passed), python -m compileall -q backend (pass).",
+  "rca of the issue": "Regression behavior validated: parent-aware prepare_candidates now applied before empty-pool guard and reused by run matching path (candidates_prepared=True), causing explicit RuntimeError when only superseded root remains. Existing automatic matches and snapshots stayed unchanged; durable matching job status correctly failed without result payload."
+}

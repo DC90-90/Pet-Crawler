@@ -1,12 +1,12 @@
 # Independently reviewed Daleel fixes — preview acceptance
 
-Updated: **2026-10-09**. Current scope: **preview only, four parent-identity/ledger-recovery follow-up fixes against `daa86dfbe95230df8165c83230a4e574f2290d14`**, preserving the prior six fixes and newer work. The final continuation section below is authoritative (**143 passed**). No additional live refresh, historical backfill, production changes, credential rotation, direct Git writes, or deployment occurred in this continuation.
+Updated: **2026-10-09**. Latest scope: **preview-only matcher parent-aware empty-pool safeguard against `aa2c44225430e65650deaf37608789c22d117503`**, preserving prior fixes and newer changes. The final matcher continuation section below is authoritative (**144 passed**). No live refresh, historical backfill, production changes, credential rotation, direct Git writes, or deployment was performed in this continuation.
 
 ## Checkout and Git handoff
 - Requested repository: `DC90-90/Pet-Crawler`.
 - Requested destination branch: `conflict_130726_1244`.
 - Actual local checkout: `/app`, branch **`main`**.
-- Current local/reference HEAD verified for this continuation: **`daa86dfbe95230df8165c83230a4e574f2290d14`**. Earlier six-fix continuation began at `65f6474399bbb89d37b25cd98a8d8062f804be98`.
+- Current local/reference HEAD verified for the matcher continuation: **`aa2c44225430e65650deaf37608789c22d117503`**. Earlier four-fix reference: `daa86dfbe95230df8165c83230a4e574f2290d14`; six-fix reference: `65f6474399bbb89d37b25cd98a8d8062f804be98`.
 - That HEAD is this continuation's **starting checkpoint**, NOT a claimed remote commit for today's fixes. No direct commit/push or branch switch was performed. A resulting remote fix commit is pending the user's **Save to GitHub** action; none is invented here.
 - Preview: https://price-intel-dev.preview.emergentagent.com
 
@@ -198,3 +198,41 @@ Implementation and testing were preview-only. Live catalogue/evidence checks wer
 
 ### GitHub handoff status
 Save these changes using **Save to GitHub → `DC90-90/Pet-Crawler` → `conflict_130726_1244`**. Saved reference `daa86dfbe95230df8165c83230a4e574f2290d14` is the comparison baseline, **not a claimed new fix commit**. The resulting remote commit is **pending the user's save and verification**. No deployment is authorized.
+
+## October 9 — matcher integration follow-up against saved `aa2c442`
+
+**Result: existing143 checks +1 new regression =144 passed; zero unresolved test failures.** This narrow continuation preserves the previous parent-identity and ledger-recovery changes.
+
+### Reproduction and correction
+- Before correction, `run_matching_for_all` checked ordinary offer eligibility before its empty-pool guard, but parent-registry annotation was applied later inside individual product matching. A pool containing only a formerly valid, now-superseded root therefore passed the guard, matched nothing, deleted automatic matches and returned normal unmatched statistics.
+- Added shared `verified_matching.prepare_candidates`: applies brand review, parent-registry/read-through annotations, own-store/offer-ID checks and current-offer exclusion at one evaluation time.
+- Batch matching prepares this pool **before** the existing no-eligible-offers safeguard. The exact prepared pool is reused during actual matching via `candidates_prepared=True`; standalone matching defaults to the same preparation path. This avoids a different guard-versus-match eligibility policy within a run.
+- Existing error text remains unchanged: `Refusing to rebuild product_matches: 0 current verified competitor offers (missing, stale, quarantined, hidden or out of stock). Existing matches left untouched.`
+- No schema, auth, UI, ledger, source ingestion or historical data changes were needed. Changed runtime files: `backend/matcher.py`, `backend/verified_matching.py`. Test runner includes the new dedicated regression group.
+
+### New regression: `test_parent_registry_only_pool_aborts_and_preserves_unrelated_automatic_matches`
+File: `backend/tests/test_matcher_parent_pool_regression.py`.
+1. Disposable local Mongo contains an owned product, a formerly valid root snapshot and two automatic matches: the root match and an unrelated offer.
+2. Parent registry marks that root's listing as a parent. The raw candidate passes ordinary exclusion; no eligible child observations exist; individual parent-aware matching produces no matches.
+3. Batch matching must raise the exact existing RuntimeError **before** individual matching/progress callbacks. Both automatic matches remain identical.
+4. The durable matching job must be **failed**, not completed, with no successful result payload. Both matches and the historical root snapshot remain unchanged afterward.
+
+### Actual commands and results
+- `git log -4 --oneline`, `git cat-file -t aa2c44225430e65650deaf37608789c22d117503`, `git show --stat --oneline aa2c44225430e65650deaf37608789c22d117503`: reference verified locally; no reset/checkout/revert or Git write.
+- **Red reproduction:** `python scripts/run_reviewed_tests.py` → existing136 isolated checks passed, new regression failed with **DID NOT RAISE RuntimeError**. Log: `/tmp/matcher-pool-before.log`.
+- **Final main run:** `python scripts/run_reviewed_tests.py` → **137 passed** (52 core +10 auth +6 real-source +36 related +22 six-acceptance +10 four-correctness +1 matcher-parent-pool). Log: `/tmp/matcher-pool-final.log`.
+- `python -m pytest -q backend/tests/test_iter40_preview_scope_checks.py --junitxml=test_reports/pytest/preview-scope-final.xml` → **7 passed**, using existing environment-backed preview credentials. No password changes or credential values printed.
+- `python -m compileall -q backend` → passed.
+- Independent testing repeated137 isolated +7 read-only preview API checks and compilation: **144/144 passed**, report `test_reports/iteration_42.json`, live XML `test_reports/pytest/iter42_preview_scope_checks.xml`.
+- Machine-readable new regression result: `test_reports/pytest/matcher-parent-pool-final.xml`. Existing selected test assertions were not relaxed or removed.
+- Read-only desktop preview smoke: authenticated My Products/Beso search loaded successfully; no matcher, sync or refresh action triggered. Log: `/root/.emergent/automation_output/20261009_121943/console_20261009_121943.log`. No frontend source changes; this narrow task did not repeat the previous full desktop/mobile design suite or claim a new frontend build.
+
+### Interrupted verification run and remaining limitations
+- One initial post-patch verification run encountered local MongoDB `AutoReconnect: localhost:27017: connection closed` failures during unrelated tests/teardown (`/tmp/matcher-pool-after.log`). These were not matcher assertion failures. Read-only investigation found Mongo responding normally afterward; the subsequent complete main-agent run and independent rerun both passed.
+- The transient disconnect's underlying cause was **not conclusively established**. No database reset, credential/configuration changes, fixture weakening, or production action was used to obtain the clean runs. There is no unresolved failure in the final144 checks.
+- Eligibility is evaluated once for the batch; per-product blacklist/confirmation and identity matching remain separate. This guard does not invent child offers or promise a match for every own product when other eligible candidates exist.
+- Mutation tests used disposable loopback UUID databases. No live matcher/refresh/crawl/sync/backfill endpoint or source-refresh script was invoked. Prior source snapshots and preview matching data were not rewritten by this task.
+- Existing unrelated limitations remain documented above: full-catalogue freshness/reconciliation, sealed or legacy recovery requiring authorization, Zid order approval, Webshare coverage/billing, and **MOCKED email delivery**. Broad refactoring and optional performance improvements remain deferred. This is not production-readiness certification.
+
+### Latest Save to GitHub handoff
+Use **Save to GitHub → `DC90-90/Pet-Crawler` → `conflict_130726_1244`**. `aa2c44225430e65650deaf37608789c22d117503` is the supplied saved reference, **not the resulting commit for this matcher correction**. New remote commit: **pending user save and confirmation**; no hash is invented or claimed pushed. No deployment.

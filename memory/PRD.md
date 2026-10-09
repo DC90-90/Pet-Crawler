@@ -1,6 +1,15 @@
 # Daleel — دليل | PRD & Progress Log
 
-## Reviewed-fix package acceptance — 2026-10-08 (LATEST)
+## Latest status — matcher guard correction, 2026-10-09
+- Preview-only reference: `aa2c44225430e65650deaf37608789c22d117503`; preserve newer code. Shared parent-aware candidate preparation now runs before the batch empty-pool safeguard and the same prepared pool is used for actual matching.
+- New root-only regression reproduced the failure before correction and now proves exact RuntimeError, untouched unrelated automatic matches/history, and failed durable job status without success stats.
+- **144 passed = existing143 +1 new regression**. `scripts/run_reviewed_tests.py`:137 isolated; live read-only scope suite:7; backend compile and desktop preview smoke passed. Independent report: `test_reports/iteration_42.json`. Authoritative detail: final section of `memory/REVIEWED_FIXES_ACCEPTANCE.md`.
+- One initial verification run hit transient local Mongo disconnects; final main and independent full reruns passed without weakening tests or changing DB settings. Underlying transient cause not conclusively established; no unresolved final test failure.
+- No live refresh, backfill, production changes, credential rotation, direct Git write or deployment. Runtime changes limited to `matcher.py` and `verified_matching.py`; new test `test_matcher_parent_pool_regression.py` added to runner. Prior parent/ledger work preserved.
+- **Next:** Save to GitHub for `DC90-90/Pet-Crawler` → `conflict_130726_1244`; resulting remote commit pending user save/verification. Supplied `aa2c442...` is the baseline, not a new fix commit.
+- Deferred scope unchanged: broad reconciliation/refactoring/performance, Zid/Webshare external blockers and **MOCKED email**. Potential enhancement: excluded-candidate counts/reasons in matching run history.
+
+## Reviewed-fix package acceptance — 2026-10-08 (historical)
 - User explicitly requested applying `Daleel-reviewed-fixes.zip` to preview only, checking hashes first, reconciling changes, reproducing tests/build/UI and real variants/Beso/unknown-sales behavior. No deployment, production data edits, historical backfills, or credential rotation authorized.
 - Read README/REVIEW before applying. All original hashes matched except an untracked frontend lockfile (expected absent): preserved it outside repo, applied reviewed frozen lock, then supplied overlay check/apply/postcheck succeeded for all 58 files. Package and evidence persisted under `/root/daleel-reviewed/`, outside repository.
 - Final authoritative acceptance report: `/app/memory/REVIEWED_FIXES_ACCEPTANCE.md`; machine-readable status `/app/test_reports/reviewed_fixes_final.json`. Earlier iteration38/39 reports retain intermediate failures and are superseded by final results.

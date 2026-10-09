@@ -1,8 +1,23 @@
 """Only observed offer identities can enter product_matches v2."""
 from price_cohort import identity_agrees, reviewed_brand_map, apply_brand_review, exclusion
+from datetime import datetime, timezone
 
 
-async def match(db, own, snapshots=None, own_store_id=None):
+async def prepare_candidates(db, snapshots, own_store_id=None):
+    """One parent-aware eligibility policy for the batch guard and actual matching."""
+    from parent_identity import index, annotate
+    parents = await index(db)
+    reviews = await reviewed_brand_map(db)
+    now = datetime.now(timezone.utc)
+    candidates = []
+    for snapshot in snapshots:
+        offer = annotate(apply_brand_review(snapshot, reviews), parents)
+        if offer.get("store_id") != own_store_id and offer.get("offer_id") and exclusion(offer, now=now) is None:
+            candidates.append(offer)
+    return candidates
+
+
+async def match(db, own, snapshots=None, own_store_id=None, *, candidates_prepared=False):
     if snapshots is None:
         from matcher import _build_competitor_lookups
         if own_store_id is None:
@@ -12,14 +27,10 @@ async def match(db, own, snapshots=None, own_store_id=None):
     blocked = [r async for r in db.match_blacklist.find({"my_sku": own.get("sku")}, {"_id": 0})]
     confirmed = [r async for r in db.product_matches.find({"my_sku": own.get("sku"), "manually_confirmed": True, "identity_version": 2}, {"_id": 0})]
     out = []
-    reviews = await reviewed_brand_map(db)
-    from parent_identity import index, annotate
-    parents = await index(db)
+    if not candidates_prepared:
+        snapshots = await prepare_candidates(db, snapshots, own_store_id)
     from matcher import _build_match
     for offer in snapshots:
-        offer = annotate(apply_brand_review(offer, reviews), parents)
-        if offer.get("store_id") == own_store_id or not offer.get("offer_id") or exclusion(offer) is not None:
-            continue
         if any(b.get("competitor_store_id") == offer["store_id"] and
                (b.get("competitor_offer_id") == offer["offer_id"] if b.get("competitor_offer_id") else b.get("competitor_sku") == offer.get("sku")) for b in blocked):
             continue
