@@ -13,6 +13,14 @@ FIELDS["brand_source"] = 1
 FIELDS["data_origin"] = 1
 
 
+def max_offer_age_days():
+    import os
+    try:
+        return max(1, int(os.environ.get("MAX_OFFER_AGE_DAYS", "14")))
+    except ValueError:
+        return 14
+
+
 def aware(value):
     if isinstance(value, str):
         try:
@@ -56,6 +64,10 @@ def identity_agrees(own, offer, manual=False):
     observed_name = " ".join(str(offer.get(k) or "") for k in ("name_ar", "name_en"))
     # A reused EAN is not proof that a named carton is the same as a single.
     # Use source names here (not lossy URL slugs); unresolved packs stay out.
+    # Kept on _pack_compatible deliberately: an explicit-both-sides-only rule
+    # lets "24 Pieces*400g" match a silent "400g" (test_pack_count_guard Beso
+    # fixtures); slug_pack_reject below already applies the explicit-both-sides
+    # rule on the slug axis.
     from matcher import _pack_compatible
     if name.strip() and observed_name.strip() and not _pack_compatible(name, observed_name):
         return False
@@ -77,7 +89,7 @@ def exclusion(row, now=None):
     if not (money(row.get("price")) or 0) > 0:
         return "price_unavailable"
     ts = aware(row.get("crawled_at") or row.get("last_crawl_at"))
-    if ts is None or ts > now + timedelta(minutes=5) or now - ts >= timedelta(days=7):
+    if ts is None or ts > now + timedelta(minutes=5) or now - ts >= timedelta(days=max_offer_age_days()):
         return "stale_or_unknown_observation"
     if (row.get("confidence_score") or 0) < 85:
         return "low_source_confidence"
@@ -114,7 +126,7 @@ def select_cohort(own, rows, own_price, *, now=None, history=()):
                 max=max(prices) if prices else None, avg=round(sum(prices)/len(prices), 2) if prices else None,
                 cohort_id=stable_id(POLICY_VERSION, [(r.get("offer_id"), str(r.get("crawled_at")), r["price"]) for r in rows]),
                 policy_version=POLICY_VERSION, observed_at=max([aware(r["crawled_at"]) for r in rows], default=None),
-                cutoff=(now-timedelta(days=7)).isoformat(), currency="SAR", stock_policy="in_stock_only")
+                cutoff=(now-timedelta(days=max_offer_age_days())).isoformat(), currency="SAR", stock_policy="in_stock_only")
 
 
 def snapshot_pipeline(active, now):
@@ -142,9 +154,9 @@ def freshness_transition(value, now):
     if ts is not None:
         if ts > now+timedelta(minutes=5):
             return ts-timedelta(minutes=5)
-        if ts+timedelta(days=7) > now:
-            return ts+timedelta(days=7)
-    return now+timedelta(days=7)  # Already-stale/missing dates do not become fresh.
+        if ts+timedelta(days=max_offer_age_days()) > now:
+            return ts+timedelta(days=max_offer_age_days())
+    return now+timedelta(days=max_offer_age_days())  # Already-stale/missing dates do not become fresh.
 
 
 async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, competitor_store_ids=None, parents=None):
@@ -183,7 +195,7 @@ async def _build_cohorts(db, own_rows, own_store_id, own_price_fn, now, competit
                                       max_time_ms=SNAPSHOT_QUERY_MAX_MS)
     valid_until = min([freshness_transition(stamp, now) for r in own_rows
                        for stamp in (r.get("last_synced_at"), r.get("quantity_observed_at") or r.get("last_synced_at"))],
-                      default=now+timedelta(days=7))
+                      default=now+timedelta(days=max_offer_age_days()))
     manual_by_offer = {}
     for sku, sid, oid in manual:
         manual_by_offer.setdefault((sid, oid), set()).add(sku)

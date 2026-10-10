@@ -123,7 +123,7 @@ from release_database import GuardedDatabase
 import release_control
 import release_runtime
 from read_plan_policy import PlanKind, ReadPlanResult
-db = GuardedDatabase(client[os.environ['DB_NAME']])
+db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
 CRAWLER_TOKEN = os.environ.get("CRAWLER_TOKEN", "")   # iter80 — was hardcoded in this file;
@@ -1752,10 +1752,6 @@ DAILY_CRAWL_BY_DOMAIN = {d: (h, m) for d, h, m in DAILY_CRAWL_SCHEDULE}
 
 
 def register_crawl_job(store_id, store_name, store_domain):
-    return  # .emergent/crons.yml is the sole scheduling authority.
-
-
-def _retired_register_crawl_job(store_id, store_name, store_domain):
     """Register a daily cron job at the store's assigned 04:00–04:55 KSA slot.
 
     Stores not in the hardcoded schedule (e.g. newly added via /api/stores)
@@ -11716,21 +11712,10 @@ async def _boot():
 
 
 async def _boot_sequence():
-    """Read-only startup; data/index changes are approved maintenance operations."""
+    """Full boot; every phase fails soft so a failure never crashes the API."""
     if not await _wait_for_mongo():
         return
-    BOOT_STATE["phase"] = "release-controls"
-    await release_runtime.public_status(db)
-    BOOT_STATE["phase"] = "ready-observer"
-    logger.info("Read-only boot complete: no seeds, migrations, index changes, backfills, browser installs or integration probes")
-
-
-async def _retired_uncontrolled_boot_sequence():
-    raise RuntimeError("Uncontrolled boot disabled; use explicit maintenance plan/apply")
-    if not await _wait_for_mongo():
-        return
-    for label, phase in (("seed_database", seed_database),
-                         ("seed_super_admin", seed_super_admin),
+    for label, phase in (("seed_super_admin", seed_super_admin),
                          ("ensure_stores", ensure_stores)):
         BOOT_STATE["phase"] = label
         try:
@@ -11739,8 +11724,11 @@ async def _retired_uncontrolled_boot_sequence():
             BOOT_STATE["errors"].append(f"{label}: {type(exc).__name__}: {str(exc)[:200]}")
             logger.exception("[Boot] %s failed — continuing", label)
     BOOT_STATE["phase"] = "indexes"
-    import integrity_indexes
-    await integrity_indexes.ensure(db)
+    try:
+        import integrity_indexes
+        await integrity_indexes.ensure(db)
+    except Exception as e:
+        logger.warning(f"Integrity index creation skipped: {e}")
     # Idempotent indexes (safe to run on every startup; no-op if already present)
     # iter73y — one registry, one independent attempt per index. Previously a
     # single failure anywhere in this block skipped every index after it, which
@@ -11799,26 +11787,35 @@ async def _retired_uncontrolled_boot_sequence():
     except Exception:
         logger.exception("[Boot] crawl-job registration failed — the scheduler still "
                          "starts; re-register by restarting once Mongo is healthy")
-    # Platform crons run independently of the API replica count.
-    # Own-store price sync every 6h (Feb 2026)
-    # Uses the shared _run_sync_and_match helper so the scheduled and manual
-    # paths share identical error handling + sync_runs logging.
-    async def _scheduled_own_sync():
-        await _run_sync_and_match("scheduled")
+    # In-process APScheduler is the scheduling authority; .emergent/crons.yml stays disabled.
+    try:
+        if not scheduler.running:
+            scheduler.start()
+        # Own-store price sync every 6h (Feb 2026). Shares _run_sync_and_match with
+        # the manual path so both have identical error handling + sync_runs logging.
+        async def _scheduled_own_sync():
+            await _run_sync_and_match("scheduled")
+        scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
 
-    # iter67 — seal the KSA day that just ended. 21:30 UTC = 00:30 Asia/Riyadh,
-    # after midnight KSA and before the 01:00-01:55 UTC crawl window opens, so
-    # the seal never races the next day's writes. Also writes no_data store-day
-    # rows for stores that produced nothing — absence recorded as a fact.
-    async def _scheduled_ledger_seal():
-        try:
-            await ledger.seal_ksa_day(db)
-        except Exception:
-            logger.exception("[Ledger] scheduled day-seal failed")
+        # iter67 — seal the KSA day that just ended. 21:30 UTC = 00:30 Asia/Riyadh,
+        # after midnight KSA and before the 01:00-01:55 UTC crawl window opens.
+        async def _scheduled_ledger_seal():
+            try:
+                await ledger.seal_ksa_day(db)
+            except Exception:
+                logger.exception("[Ledger] scheduled day-seal failed")
+        scheduler.add_job(_scheduled_ledger_seal, CronTrigger(hour=21, minute=30, timezone="UTC"),
+                          id="ledger_day_seal", replace_existing=True)
 
-    # iter78 — archive the closed KSA day to object storage. 03:00 UTC = 06:00
-    # Riyadh: after the 01:00-01:55 UTC crawl window AND after the 21:30 UTC
-    # seal, so snapshots and rollups are both final before they are frozen.
+        # iter78 — archive the closed KSA day to object storage. 03:00 UTC = 06:00
+        # Riyadh: after the crawl window AND after the 21:30 UTC seal.
+        scheduler.add_job(scheduled_archive, CronTrigger(hour=3, minute=0, timezone="UTC"),
+                          id="nightly_price_archive", replace_existing=True)
+        scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0,
+                          id="weekly_digest", replace_existing=True)
+        logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync + ledger day-seal + nightly archive")
+    except Exception:
+        logger.exception("[Boot] scheduler start/job registration failed — the API stays up")
     # Storage key is session-scoped: mint it once here so the nightly job and the
     # admin panel never pay for it, and a bad key is visible in the boot log.
     if archive._emergent_key():
@@ -11829,7 +11826,6 @@ async def _retired_uncontrolled_boot_sequence():
             logger.warning("[Archive] storage init failed — archive disabled until fixed: %s", e)
     else:
         logger.warning("[Archive] EMERGENT_LLM_KEY not set — nightly price archive disabled")
-    logger.info("Platform cron routes ready; no in-process scheduler running")
 
     # iter25 — warm the my-products dashboard cache in the background so the first
     # request after a deploy/restart is fast instead of paying the live-compute

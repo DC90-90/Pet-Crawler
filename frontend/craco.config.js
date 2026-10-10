@@ -6,9 +6,6 @@ require("dotenv").config();
 // Craco sets NODE_ENV=development for start, NODE_ENV=production for build
 const isDevServer = process.env.NODE_ENV !== "production";
 
-// Compile managed workspaces honestly; verify prepared release artifacts strictly.
-const releaseBuild = !isDevServer ? require("./release-build/prepare.cjs").prepareBuild() : null;
-
 // Environment variable overrides
 const config = {
   enableHealthCheck: process.env.ENABLE_HEALTH_CHECK === "true",
@@ -58,7 +55,6 @@ let webpackConfig = {
       if (config.enableHealthCheck && healthPluginInstance) {
         webpackConfig.plugins.push(healthPluginInstance);
       }
-      if (releaseBuild) webpackConfig.plugins.push(releaseBuild.plugin);
       return webpackConfig;
     },
   },

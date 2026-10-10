@@ -68,6 +68,15 @@ async def authorize_request(db, request, actor):
 
 async def public_status(db):
     s, release = await state(db), identity()
+    if not guarded(db):
+        from price_cohort import max_offer_age_days
+        caps = {k: k not in UNAVAILABLE for k in s["capabilities"]}
+        return {**release, "mode": "active", "control_revision": s["revision"], "writer_epoch": s["epoch"],
+                "scheduler_owner": release["release_id"], "scheduler_authority": "in-process-apscheduler",
+                "active_writer_count": 0, "drain_complete": False,
+                "capabilities": caps, "price_comparison_only": False,
+                "price_semantics": "verified_observations_not_live", "maximum_offer_age_days": max_offer_age_days(),
+                "unsupported_email_delivery": True, "automatic_refresh_status": "enabled"}
     caps = {k: bool(k not in UNAVAILABLE and v and s["mode"] == "active" and s.get("owner_release") == release["release_id"])
             for k, v in s["capabilities"].items()}
     return {**release, "mode": s["mode"], "control_revision": s["revision"], "writer_epoch": s["epoch"],

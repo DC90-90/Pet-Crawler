@@ -129,7 +129,7 @@ def test_own_stock_unknown_stale_removed_quarantined_and_zero_quantity_contract(
     assert out["stock_unavailable_reason"] == "removed_from_store"
     assert out["quantity"] is None and out["historical_quantity"] == 12
 
-    stale = {"quantity": 5, "in_stock": True, "quantity_observed_at": (now - timedelta(days=8)).isoformat()}
+    stale = {"quantity": 5, "in_stock": True, "quantity_observed_at": (now - timedelta(days=__import__("price_cohort").max_offer_age_days() + 1)).isoformat()}
     assert __import__("stock_evidence").own_stock(stale, now=now)["stock_unavailable_reason"] == "stale_or_unknown_observation"
 
     quarantined = {"quantity": 3, "in_stock": True, "quantity_observed_at": fresh, "quarantine_active": True}

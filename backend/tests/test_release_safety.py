@@ -42,18 +42,31 @@ async def configure(db, release, capabilities=None):
     return wrapped
 
 
-def test_startup_is_read_only_no_seed_migration_or_integration_probe(db, release, monkeypatch):
+def test_startup_runs_full_boot_without_demo_seed(db, release, monkeypatch):
+    """Retired release gate: boot seeds the admin, ensures stores/indexes and starts the scheduler, never the demo seed."""
     async def go():
-        wrapped = GuardedDatabase(db)
-        monkeypatch.setattr(server, "db", wrapped)
+        monkeypatch.setattr(server, "db", db)
         monkeypatch.setattr(server, "_wait_for_mongo", AsyncMock(return_value=True))
-        spies = []
-        for name in ("seed_super_admin", "seed_database", "ensure_all_indexes", "backfill_food_subcategories", "_maybe_backfill_store_metrics", "_retired_uncontrolled_boot_sequence"):
-            spy = AsyncMock(side_effect=AssertionError("startup side effect"))
-            monkeypatch.setattr(server, name, spy); spies.append(spy)
+        demo = AsyncMock(side_effect=AssertionError("demo seed must never run at boot"))
+        monkeypatch.setattr(server, "seed_database", demo)
+        spies = {}
+        for name in ("seed_super_admin", "ensure_stores", "ensure_all_indexes"):
+            spies[name] = AsyncMock(return_value={})
+            monkeypatch.setattr(server, name, spies[name])
+        monkeypatch.setattr(server.scheduler, "start", lambda: None)
+        monkeypatch.setattr(server.scheduler, "add_job", lambda *a, **k: None)
+        monkeypatch.setattr(server, "register_crawl_job", lambda *a, **k: None)
+        monkeypatch.setattr(server.archive, "_emergent_key", lambda: None)
+        monkeypatch.setattr(server.asyncio, "create_task", lambda coro: coro.close())
+        import threading
+        real_start = threading.Thread.start
+        monkeypatch.setattr(threading.Thread, "start", lambda self: None if self.name in ("playwright-selfheal", "proxy-smoketest") else real_start(self))
         await server._boot_sequence()
-        assert await db.list_collection_names() == []
-        for spy in spies: spy.assert_not_called()
+        demo.assert_not_called()
+        for spy in spies.values():
+            spy.assert_awaited_once()
+        assert server.BOOT_STATE["phase"] == "scheduler"
+        assert not server.BOOT_STATE["errors"]
     _run(go())
 
 
@@ -175,7 +188,7 @@ def test_unimplemented_delivery_cannot_be_enabled_and_unstamped_build_cannot_wri
     async def go():
         wrapped = GuardedDatabase(db)
         await control.transition(wrapped, "freeze", 0, "operator", "prepare activation")
-        for cap in ("email", "digests"):
+        for cap in ("email",):  # digests are implemented in-app; only outbound email stays unavailable
             s = await control.state(wrapped)
             with pytest.raises(control.ReleaseBlocked):
                 await control.transition(wrapped, "activate", s["revision"], "operator", "reject fake delivery", {cap: True}, release["release_id"])

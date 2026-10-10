@@ -719,9 +719,15 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         own = next((s for s in kept if s["is_own"]), None)
         comps = [s for s in kept if not s["is_own"]]
         with_sales = [s for s in kept if s["units"] is not None]
-        compatible = bool(with_sales) and len({s["units_source"] for s in with_sales}) == 1
+        # Market units are summed across sellers regardless of source; the
+        # mix is disclosed through market_value_basis / market_units_sources.
+        compatible = bool(with_sales)
         market_units = sum(s["units"] for s in with_sales) if compatible else None
         market_revenue = round(sum(s["revenue"] or 0 for s in with_sales), 2) if compatible else None
+        market_units_sources = sorted({s["units_source"] for s in with_sales})
+        market_value_basis = ("orders_exact" if with_sales and all(src == SRC_ORDERS for src in market_units_sources)
+                              else "mixed_orders_and_proxy" if SRC_ORDERS in market_units_sources
+                              else "shelf_price_proxy")
         prev_units = sum((s.get("prev_units") or 0) for s in kept)
         prev_revenue = round(sum((s.get("prev_revenue") or 0) for s in kept), 2)
 
@@ -780,7 +786,8 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "revenue_share_pct": _pct(my_revenue, market_revenue) if share_comparable else None,
             "share_comparable": share_comparable, "cohort_id": cohort["cohort_id"],
             "share_unavailable_reason": None if share_comparable else "incomplete_or_incompatible_sales_evidence",
-            "market_value_basis": "shelf_price_proxy" if any(s["units_source"] != SRC_ORDERS for s in with_sales) else "orders_exact",
+            "market_value_basis": market_value_basis,
+            "market_units_sources": market_units_sources,
             "competitor_count": len(comps),
             "sellers_total": len(kept),
             "sellers_with_sales": len(with_sales),
@@ -830,7 +837,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             pu = prev_sales.get((s["store_id"], s.get("offer_id") or s["sku_at_store"])) or {}
             s["prev_units"], s["prev_revenue"] = pu.get("units"), pu.get("revenue")
         with_sales = [s for s in sellers if s["units"] is not None]
-        compatible = bool(with_sales) and len({s["units_source"] for s in with_sales}) == 1
+        compatible = bool(with_sales)
         market_units = sum(s["units"] for s in with_sales) if compatible else None
         market_revenue = round(sum(s["revenue"] or 0 for s in with_sales), 2) if compatible else None
         prev_units = sum((s.get("prev_units") or 0) for s in sellers)

@@ -155,7 +155,7 @@ def test_shared_cohort_is_consistent_across_adapters_and_exclusions_are_explicit
         # All current-price adapters use the live clock. A fixed historical date
         # would correctly be stale in the live adapters but fresh in the injected one.
         now = datetime.now(timezone.utc)
-        old = now - timedelta(days=9)
+        old = now - timedelta(days=__import__("price_cohort").max_offer_age_days() + 2)
         await db.stores.insert_many([
             _store(OWN_STORE_ID, "My Store", own=True),
             _store("c1", "Comp 1"), _store("c2", "Comp 2"), _store("c3", "Comp 3"),
