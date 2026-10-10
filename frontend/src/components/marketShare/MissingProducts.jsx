@@ -4,7 +4,7 @@ import { RequestError } from "@/components/RequestError";
 import { CATEGORY_LABELS } from "@/lib/i18n";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { ConfidenceBadge, Unavailable, TrendCell, fmtMoney, fmtNum, REASON_TEXT } from "./SourceChip";
+import { ConfidenceBadge, Unavailable, TrendCell, SourceChip, fmtMoney, fmtNum, REASON_TEXT } from "./SourceChip";
 
 const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c || "—");
 
@@ -68,7 +68,7 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
         <Table>
           <TableHeader>
             <TableRow className="border-white/10">
-              {["Product", "SKU / GTIN", "Category", "Brand", "Competitors", "Tracked movement",
+              {["Product", "SKU / GTIN", "Category", "Brand", "Competitors", "Tracked movement", "Basis",
                 "Shelf-value proxy", "Top competitor", "Avg price", "Price range", "Value trend",
                 "Opportunity", "Confidence", "Recommended action"].map((h) => (
                 <TableHead key={h} className="text-[9px] uppercase tracking-wider text-[#A1E4DB] whitespace-nowrap">{h}</TableHead>
@@ -77,10 +77,10 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
           </TableHeader>
           <TableBody>
             {loading && rows.length === 0 && (
-              <TableRow><TableCell colSpan={14} className="text-xs text-[#A1E4DB] py-6 text-center">Loading…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={15} className="text-xs text-[#A1E4DB] py-6 text-center">Loading…</TableCell></TableRow>
             )}
             {!loading && rows.length === 0 && (
-              <TableRow><TableCell colSpan={14} className="text-xs text-[#A1E4DB] py-6 text-center" data-testid="ms-missing-empty">
+              <TableRow><TableCell colSpan={15} className="text-xs text-[#A1E4DB] py-6 text-center" data-testid="ms-missing-empty">
                 Nothing matches these filters
               </TableCell></TableRow>
             )}
@@ -101,6 +101,16 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
                 </TableCell>
                 <TableCell className="text-xs text-[#A1E4DB] whitespace-nowrap" dir="ltr">
                   {r.market_units === null ? <Unavailable reason={r.unavailable_reason} /> : fmtNum(r.market_units)}
+                </TableCell>
+                <TableCell className="whitespace-nowrap" data-testid={`ms-missing-basis-${i}`}>
+                  {(r.units_basis || []).length === 0
+                    ? <SourceChip source="unavailable" compact />
+                    : (r.units_basis || []).map((b) => <SourceChip key={b} source={b} compact />)}
+                  {r.sellers_without_signal > 0 && (
+                    <span className="ms-1 text-[9px] text-[#A1E4DB]" title="Sellers carrying the product with no sales signal in this window">
+                      +{r.sellers_without_signal} no signal
+                    </span>
+                  )}
                 </TableCell>
                 <TableCell className="text-xs text-white whitespace-nowrap" dir="ltr">
                   {r.market_revenue === null ? <Unavailable reason={r.unavailable_reason} /> : fmtMoney(r.market_revenue)}

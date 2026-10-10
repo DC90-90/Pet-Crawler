@@ -853,6 +853,11 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "name": name_en or name_ar or sample_sku,
             "brand": brand, "category": category, "category_source": category_method,
             "in_catalog": False,
+            # What the movement number rests on, per row: stock_depletion is a
+            # measured floor (Zid inventory), sold_counter_diff a bucketed
+            # badge proxy (Salla); sellers without any signal are counted.
+            "units_basis": sorted({s["units_source"] for s in with_sales}),
+            "sellers_without_signal": len(sellers) - len(with_sales),
             "my_unit_share_pct": None, "my_revenue_share_pct": None,
             "competitor_count": len(sellers),
             "competitors": [s["store_name"] for s in sorted(sellers, key=lambda s: s["store_name"])],
