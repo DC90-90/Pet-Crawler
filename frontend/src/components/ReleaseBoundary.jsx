@@ -5,7 +5,6 @@ const allowed = ["/", "/price-intel", "/insights", "/settings"];
 export const ReleaseBoundary = ({ children }) => {
   const release = useRelease();
   const { pathname } = useLocation();
-  if (pathname === "/alerts" && !release.capabilities.email) return <section className="p-6 text-[#A1E4DB]" data-testid="release-feature-disabled">Outbound notifications are unavailable in this release.</section>;
   if (!release.price_comparison_only || allowed.includes(pathname)) return children;
   return <section className="p-6 space-y-4" data-testid="release-feature-disabled">
     <h1 className="text-4xl text-white font-bold">Unavailable in this release</h1>

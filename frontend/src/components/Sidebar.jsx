@@ -74,7 +74,7 @@ export default function Sidebar({ mobileOpen = false, onClose, onCollapse }) {
       <nav className="flex-1 py-3 px-2 space-y-0.5">
         {navItems
           .filter((item) => {
-            if (item.to === "/alerts" && !release.capabilities.email) return false;
+            // Alerts are delivered in-app; outbound email is a separate, optional channel.
             if (release.price_comparison_only && !["/", "/insights"].includes(item.to)) return false;
             // Support either a single `pageKey` or a `pageKeys` array (any match).
             if (item.pageKeys) return item.pageKeys.some((k) => canAccessPage(user, k));
