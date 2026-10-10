@@ -1193,6 +1193,75 @@ def _build_salla_endpoints(base, cached_endpoint, platform="salla"):
     return endpoints
 
 
+ZID_VARIANT_DETAIL_CAP = 2000
+ZID_VARIANT_DETAIL_MAX_CONSECUTIVE_FAILURES = 30
+
+
+def _zid_needs_variant_detail(item):
+    """True for a Zid listing that declares options but ships no variant rows.
+
+    Verified live (10 Oct 2026, pets-houses.com and mowkly.com): the Zid list
+    feed returns `has_options: true` with an empty `variants` array for about
+    30 % of listings, while `GET /api/v1/products/{id}` returns the full
+    `variants[]` (id, sku — usually the EAN —, barcode, price, sale_price,
+    quantity, is_infinite). Without the detail call every such listing is
+    quarantined as an unresolved parent and its children never get a price.
+    """
+    if not isinstance(item, dict) or not item.get("id"):
+        return False
+    declared = item.get("has_options") in (True, 1, "true", "1") or item.get("has_variants") in (True, 1)
+    variants = item.get("variants") or item.get("skus")
+    return declared and not (isinstance(variants, list) and variants)
+
+
+async def _resolve_zid_variant_parents(http, base, items, crawl_log, fetch=None,
+                                       cap=ZID_VARIANT_DETAIL_CAP, headers=None, path_fmt="/api/v1/products/{id}"):
+    """Fill `variants` on Zid option parents from the product-detail route.
+
+    Mutates `items` in place. Paced by `polite_get`, bounded by `cap` and a
+    consecutive-failure circuit breaker; outcomes are recorded on the crawl
+    log so a silent regression is visible in the Stores page.
+    """
+    fetch = fetch or polite_get
+    targets = [it for it in items if _zid_needs_variant_detail(it)]
+    stats = {"candidates": len(targets), "fetched": 0, "resolved": 0, "failed": 0,
+             "skipped_cap": max(0, len(targets) - cap), "aborted": None}
+    crawl_log["variant_detail"] = stats
+    consecutive = 0
+    for it in targets[:cap]:
+        url = f"{base}{path_fmt.format(id=it['id'])}"
+        try:
+            resp = await fetch(http, url, headers=headers) if headers else await fetch(http, url)
+            stats["fetched"] += 1
+            if resp is None or resp.status_code != 200:
+                raise RuntimeError(f"http_{resp.status_code if resp is not None else 'none'}")
+            detail = resp.json()
+            if isinstance(detail, dict) and isinstance(detail.get("data"), dict):
+                detail = detail["data"]
+            variants = detail.get("variants") if isinstance(detail, dict) else None
+            if isinstance(variants, list) and variants:
+                it["variants"] = variants
+                for key in ("sold_products_count", "default_variant_id", "is_taxable", "categories"):
+                    if detail.get(key) is not None and it.get(key) is None:
+                        it[key] = detail[key]
+                stats["resolved"] += 1
+                consecutive = 0
+            else:
+                # Detail answered but has no children either: a genuine
+                # single product mislabelled as having options.
+                it["has_options"] = False
+                stats["resolved"] += 1
+                consecutive = 0
+        except Exception as exc:
+            stats["failed"] += 1
+            consecutive += 1
+            if consecutive >= ZID_VARIANT_DETAIL_MAX_CONSECUTIVE_FAILURES:
+                stats["aborted"] = f"{consecutive}_consecutive_failures: {type(exc).__name__}"
+                logger.warning(f"[VariantDetail] aborted after {consecutive} consecutive failures ({exc})")
+                break
+    return stats
+
+
 async def _try_single_endpoint(http, ep, crawl_log):
     """Try a single JSON endpoint. Returns (items_list, endpoint_dict) or ([], None)."""
     attempt = {"endpoint": ep["tag"], "status": None, "products": 0, "error": None}
@@ -1357,6 +1426,11 @@ async def crawl_salla_tier1(db, store):
                     all_raw = await _paginate_endpoint(http, matched_ep, items)
                     winning_endpoint = matched_ep
                     break
+            if all_raw and platform == "zid":
+                # Oct 10 2026 — resolve option parents from the detail route
+                # before the raw rows are checkpointed, so the persisted
+                # capture already carries one offer per variant.
+                await _resolve_zid_variant_parents(http, base, all_raw, crawl_log)
     except Exception as e:
         crawl_log["error"] = str(e)[:300]
 
@@ -2680,7 +2754,11 @@ def _is_valid_ean(val):
 # is what powers the "My Revenue / Units Sold" KPIs via the estimator's
 # sold_count_diff method — before Feb 2026 own-store snapshots hardcoded
 # sold_count=0, which made own-store sales estimation structurally impossible.
-ZID_SOLD_FIELD_CANDIDATES = ("sold_quantity", "sold_count", "sales_count", "total_sold", "sold")
+# `sold_products_count` is the cumulative counter the Zid storefront JSON
+# exposes on a share of listings (verified live 10 Oct 2026: 20 of 150 Mowkly
+# listings, all positive). The competitor normalizer already reads it; the
+# own-store Merchant path must too.
+ZID_SOLD_FIELD_CANDIDATES = ("sold_quantity", "sold_count", "sales_count", "sold_products_count", "total_sold", "sold")
 
 
 def _extract_zid_sold_count(product: dict) -> int:
@@ -2766,6 +2844,7 @@ async def _fetch_zid_api_catalog(db, store):
         "Accept": "application/json",
     }
     out = []
+    variant_stats = {"candidates": 0, "resolved": 0, "failed": 0}
     try:
         async with httpx.AsyncClient(base_url="https://api.zid.sa/v1", timeout=45.0) as http:
             page = 1
@@ -2782,6 +2861,19 @@ async def _fetch_zid_api_catalog(db, store):
                 resp.raise_for_status()
                 payload = resp.json()
                 items = payload.get("results") or []
+                # Option parents without inline variants: fetch the Merchant
+                # detail route so each variant becomes its own offer instead
+                # of the whole listing being quarantined (339 rows on the
+                # 10 Oct 2026 sync).
+                async def _merchant_detail(client, url, headers=None, **_):
+                    await asyncio.sleep(0.15)
+                    return await client.get(url, headers=headers)
+                vstats = await _resolve_zid_variant_parents(
+                    http, "", items, {}, fetch=_merchant_detail, headers=headers, path_fmt="/products/{id}/")
+                if vstats["candidates"]:
+                    variant_stats["candidates"] += vstats["candidates"]
+                    variant_stats["resolved"] += vstats["resolved"]
+                    variant_stats["failed"] += vstats["failed"]
                 from observation_contract import expand_variants, money, observed_int
                 for p in [v for item in items for v in expand_variants(item)]:
                     name_obj = p.get("name") or {}
@@ -2841,7 +2933,9 @@ async def _fetch_zid_api_catalog(db, store):
     except httpx.HTTPError as e:
         logger.error(f"[OwnSync][Zid API] network error after {len(out)} products: {e}")
         return out, "partial" if out else "network_failed"
-    logger.info(f"[OwnSync][Zid API] fetched {len(out)} products in {page} page(s)")
+    logger.info(f"[OwnSync][Zid API] fetched {len(out)} products in {page} page(s); "
+                f"variant parents resolved {variant_stats['resolved']}/{variant_stats['candidates']} "
+                f"(failed {variant_stats['failed']})")
     return out, "ok"
 
 
