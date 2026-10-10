@@ -19,11 +19,11 @@ export default function ShareOverview({ days, includeToday, filters, onPickProdu
     setD(null);
     api.get("/market-share/overview", { params: { days, include_today: includeToday, ...(filters || {}) } })
       .then((r) => live && setD(r.data))
-      .catch((e) => live && setErr(e.response?.data?.detail || "Failed to load overview"));
+      .catch((e) => live && setErr(e));
     return () => { live = false; };
   }, [days, includeToday, filters, retry]);
 
-  if (err) return <RequestError id="ms-overview" onRetry={() => setRetry(n => n + 1)} />;
+  if (err) return <RequestError id="ms-overview" error={err} onRetry={() => setRetry(n => n + 1)} />;
   if (!d) return <p className="text-sm text-[#A1E4DB]">Loading…</p>;
   const k = d.kpis || {};
   const q = d.data_quality || {};

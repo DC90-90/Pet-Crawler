@@ -61,6 +61,7 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
     matched = sum(r["num_priced_competitors"] > 0 for r in rows)
     value = round(sum(r["my_revenue_est"] or 0 for r in measurable), 2) if measurable else None
     return {"rows": rows, "total": len(rows), "categories": sorted({r["category"] for r in rows if r.get("category")}),
+            "_valid_until": min((c["valid_until"] for c in cohorts.values()), default=datetime.now(timezone.utc)+timedelta(seconds=300)),
             "kpis": {"total_products": len(rows), "matched_products": matched, "market_coverage_pct": round(matched/len(rows)*100, 1) if rows else 0,
                      "total_units_sold": sum(r["my_units_sold"] for r in measurable) if measurable else None,
                      "my_revenue": orders["revenue"] if orders is not None else value, "total_revenue": value,

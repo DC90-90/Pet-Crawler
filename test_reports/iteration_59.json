@@ -1,0 +1,46 @@
+{
+  "summary": "iter59 acceptance hardening completed on test/evidence only. Executed 10 tests in test_iter58_partition_reads.py (10 passed). Replaced partial canonical parity with full-row canonical BSON comparison + SHA256 digests, corrected benchmark index set/order, aligned monolith batch_size(2000), enforced 179-day fixture span metadata, added strategy-selection spies and caller-cancel/deadline assertions, and fixed preview non-empty assertion tautology.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter58_partition_reads.py",
+    "/app/test_reports/pytest/iteration_59_iter58.xml",
+    "/app/test_reports/iteration_59_run_iter58.log",
+    "/app/test_reports/p0_my_products/iter58_partition_benchmark.json",
+    "/app/test_reports/p0_my_products/iter58_preview_read_smoke.json",
+    "/app/test_reports/archive_iter58/test_iter58_partition_reads.py",
+    "/app/test_reports/archive_iter58/iteration_58.json",
+    "/app/test_reports/archive_iter58/iter58_partition_benchmark.json",
+    "/app/test_reports/archive_iter58/iter58_preview_read_smoke.json"
+  ],
+  "action_items": [
+    "No app code changes required from this iter59 hardening pass.",
+    "Use iter59 artifacts for conditional deploy decision (stronger parity + fairness evidence)."
+  ],
+  "critical_code_review_comments": [
+    "iter58 parity claim was previously overstated because canonical comparison ignored most projected fields; now full-row canonical Extended JSON parity is enforced run-by-run across new/default/hinted readers.",
+    "Benchmark index set in disposable DB now matches required production-observed ordering (includes sku_1_crawled_at_-1; removed wrong crawled_at_-1_sku_1).",
+    "Cancellation/deadline behavior now explicitly distinguishes client cancel diagnostics (confirmed_timeout=false) vs genuine budget expiry (confirmed_timeout=true), with worker drain and gate reset assertions.",
+    "MOCKED cases are explicitly isolated to branch-selection/cancellation controls; parity and benchmark gates run on real loopback Mongo fixtures."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter58_partition_reads.py",
+    "/app/test_reports/iteration_59.json"
+  ],
+  "success_rate": {
+    "backend": "100% (10/10)",
+    "frontend": "N/A (backend-only request)"
+  },
+  "seed_data_creation": "Disposable loopback UUID MongoDB datasets only; benchmark fixtures kept >=200k docs, 10 stores, 4KiB payload, and 179.458-day observed span under 180d filter.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Fresh JUnit: /app/test_reports/pytest/iteration_59_iter58.xml (10 passed). Balanced gate medians: new_total=475.087ms vs baseline_total=879.921ms; balanced slowest-partition-firstbatch median=90.86ms vs baseline_firstbatch=714.448ms. Skewed gate medians: new_total=579.537ms vs baseline_total=866.439ms. Full-row digests stable per distribution (balanced sha256=a50cd00d..., skewed sha256=dc8f2dd4...). Preview smoke now records/validates non-empty totals: total=2351, page_count=5 for days 14/30.",
+  "rca of the issue": "Root cause of prior evidence gap: canonical comparator reduced rows to 4 fields, allowing undetected differences (missing vs null/type/order/source/status/timestamps) and benchmark used non-production sku index order and unmatched monolith batching. Mitigation: full-row canonical BSON+SHA checks each measured run, corrected index definitions, aligned baseline batching, explicit strategy-branch spies, and deterministic cancel/deadline assertions."
+}

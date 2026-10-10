@@ -1,0 +1,151 @@
+{
+  "scope": "Local/preview correctness+performance acceptance, not production recovery",
+  "counts": {
+    "tests": 216,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "reports": [
+    {
+      "path": "/app/test_reports/pytest/iteration_58_p0_fix.xml",
+      "sha256": "a4fd5be6ed125b6ca7601d25f9923e525bec9a24415b2d70dbeed6958233472b",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/iteration_58_p0_cache_boundaries.xml",
+      "sha256": "0544273ed672c8193f1c41fa6bd89cecc5f75072af331e11e0914dcf463793ae",
+      "tests": 13,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/iteration_58_p0_fully_matched.xml",
+      "sha256": "17d04c08a2f8c6cc658f2cd035649bf0357107650e25d30bddb1455c67cc43c0",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/iteration_58_regression_chunk1.xml",
+      "sha256": "8d40ec8f2efad4c81c4084a66f5966d89b4b45e73e118e6a030cb1991bfb7cbe",
+      "tests": 31,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/iteration_58_iter52_compact.xml",
+      "sha256": "6df9951359a59b4c1ab550bddd3298c6cbcd2da3b4c5ecd2636e3d5f9b439718",
+      "tests": 2,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/iteration_59_iter58.xml",
+      "sha256": "094efda1c97a738dd0280d119bf1f8c041f97e9c21555220be36be38b2f7dae6",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/reviewed-core-final.xml",
+      "sha256": "4444ea87870fa96814311f5de2e5f7563502e95136a750e91202ad84c9710a66",
+      "tests": 52,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/isolated-auth-final.xml",
+      "sha256": "ab7ead9427ec2a92545920dc3aeb9a332926945a67f900ab8823cb2efe9ee0ba",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/real-source-final.xml",
+      "sha256": "1c7de78a8c642f9e2181d6b0e4fde97ef9626460da52bd97b4014d8ea3cabd3b",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/related-contracts-final.xml",
+      "sha256": "2ab9d95bc2d3c19c25e477e3e76992372606f73faf4dfce36e3ae2b2673d98c1",
+      "tests": 36,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/six-acceptance-final.xml",
+      "sha256": "09002a6d83d3561128fba99372232166af2c4288a0b6ff5c4170968644d4336d",
+      "tests": 22,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/four-correctness-final.xml",
+      "sha256": "7ae0ac59762fa0978ab5d94e3b3617d154d476e8ae31284cb4530ae327175b69",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/matcher-parent-pool-final.xml",
+      "sha256": "512047dd30abde4d6a0fd290c351b0395baa3b9346ec192e6d6165d4da7f50a6",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/release-safety-final.xml",
+      "sha256": "62664d2db92d858e72bbf38fa3219e997426e3585f1fe65fab7c9e76f8fb3af3",
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "source_sha256": {
+    "backend/cohort_reads.py": "6840c4221ffed2b4d17a01a45340d0871881618e06342171dca0718020a95b29",
+    "backend/price_cohort.py": "9106b7de70c978243f9ebb88fcfd2369ce25191cce5950a1319d2b2c176c351d",
+    "backend/snapshot_strategy.py": "c6313891b899e49e981973d1023711ba615a7664b446acb9206cda6279cacdb6",
+    "backend/price_read_limits.py": "8747eed54770c454298baed66e2fada1e8fd256240f0357c68be0c3be764c750",
+    "backend/server.py": "621bceea2735bee86d270631cceb0560da049ae898245570123dd10f60aead2a",
+    "backend/release_database.py": "d5a19e4955dfb45655be471b10f58aa566da169ac3dd82ea2fed4eee5b9d8b06",
+    ".emergent/crons.yml": "7bfc57007b41b80fbb336302338460834e103ae5b90b093c1bc1967b98f5460b"
+  },
+  "performance_gates": {
+    "balanced": {
+      "baseline_total_median_ms": 879.921,
+      "baseline_firstbatch_median_ms": 714.448,
+      "new_total_median_ms": 475.087,
+      "new_slowest_partition_firstbatch_median_ms": 90.86,
+      "all_under_20s": true
+    },
+    "skewed": {
+      "baseline_total_median_ms": 866.439,
+      "baseline_firstbatch_median_ms": 693.345,
+      "new_total_median_ms": 579.537,
+      "new_slowest_partition_firstbatch_median_ms": 571.983,
+      "all_under_20s": true
+    }
+  },
+  "benchmark_sha256": "f2d24a3a33b71d0b1aa61f8e9a1b201013a575fe3537ecfce073d895db2f86ab",
+  "frontend": "Unchanged; prior build/browser evidence iteration56; candidate preview smoke200",
+  "limits": "Seven alternating pairs per local warmed fixture; not production p95 or cold Atlas proof. Failure/branch mocks separate from real Mongo parity and performance."
+}

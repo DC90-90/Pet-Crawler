@@ -1,0 +1,67 @@
+{
+  "summary": "Completed same-origin deployment-fix verification: new regression suite added, isolated empty/unset/explicit frontend build matrix passed, full-tree managed empty-origin build passed, baseline 205 rerun plus new 33-case suite, and protected inputs remained unchanged.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/auth/login",
+        "issue": "Preview-scope suite initially failed with 401 when DALEEL_TEST_PASSWORD was unset in test process (credential plumbing issue, not product regression)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_same_origin_build.py",
+    "/app/test_reports/pytest/test_same_origin_build.xml",
+    "/app/test_reports/same_origin_build_fix/matrix-attempt-02/result.json",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/run_reviewed_tests.log",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/test_release_packaging.log",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/test_iter40_preview_scope_checks.log",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/test_managed_frontend_build.log",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/test_same_origin_build.log",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/xml-copies/reviewed-core-final.xml",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/xml-copies/isolated-auth-final.xml",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/xml-copies/real-source-final.xml",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/xml-copies/related-contracts-final.xml",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/xml-copies/six-acceptance-final.xml",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/xml-copies/four-correctness-final.xml",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/xml-copies/matcher-parent-pool-final.xml",
+    "/app/test_reports/same_origin_build_fix/baseline205-attempt-01/xml-copies/release-safety-final.xml",
+    "/app/test_reports/same_origin_build_fix/strict-candidate-attempt-01/result.json",
+    "/app/test_reports/same_origin_build_fix/strict-candidate-attempt-02/result.json",
+    "/app/test_reports/same_origin_build_fix/ready_health_check_attempt01.json",
+    "/app/test_reports/same_origin_build_fix/protected-inputs-compare-attempt01.json"
+  ],
+  "action_items": [
+    "Optional hardening: make candidate rehearsal wrapper/documentation explicitly load backend env keys required by check_artifact_ready.py (ENCRYPTION_KEY/JWT context), since attempt-01 failed before this env was loaded.",
+    "Optional hardening: guard preview-scope tests against empty DALEEL_TEST_PASSWORD with skip/fail-fast message to avoid ambiguous 401s."
+  ],
+  "critical_code_review_comments": [
+    "receipt.cjs now correctly treats empty/unset/whitespace REACT_APP_BACKEND_URL as same-origin (api_origin null), while preserving strict explicit-origin validation for malformed/protocol-relative/relative/non-http/path/query/hash/credentials/non-string cases.",
+    "BuildReceiptPlugin invariants are enforced: null-origin acceptance for missing/blank compiled key, mismatch/duplicates rejected, and compilation-time mutation still fail-closed.",
+    "api.js resolver fallback contract remains intact under VM-based source execution without modifying runtime API/auth code."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_same_origin_build.py",
+    "/app/tests/run_same_origin_build_matrix.py",
+    "/app/tests/run_preview_scope_checks_with_saved_credentials.py",
+    "/app/tests/run_strict_candidate_attempt01.py",
+    "/app/tests/run_strict_candidate_attempt02.py",
+    "/app/tests/check_ready_health_same_origin.py",
+    "/app/tests/compare_protected_inputs_same_origin.py",
+    "/app/test_reports/iteration_46.json"
+  ],
+  "success_rate": {
+    "backend": "100% (final executed suites)",
+    "frontend": "100% (build/provenance matrix cases)"
+  },
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Exact current executed total = 238 distinct cases (205 baseline + 33 new same-origin suite). Baseline split: run_reviewed_tests=156, release_packaging=22, iter40_preview_scope=7, managed_frontend_build=20. New suite test_same_origin_build=33. Matrix cases A/B/D resolved to api_mode same-origin + api_origin null; explicit case C resolved to explicit-origin with configured preview origin. All cases exit 0, lock hash unchanged, no generated backend/frontend release manifests fabricated in managed builds. /api/ready remains 503 and /api/health 200 on current unstamped workspace. strict-candidate-attempt-01 failed due missing backend env load in wrapper; strict-candidate-attempt-02 passed with exported ASGI 503, null git_commit, manifest_verified true, all capabilities off, zero DB collections.",
+  "rca of the issue": "Original native failure came from build-time receipt validation rejecting intentionally empty REACT_APP_BACKEND_URL. Regression tests plus isolated builds confirm post-fix behavior: empty/unset now maps to same-origin/null provenance and still keeps strict validation for explicit values."
+}

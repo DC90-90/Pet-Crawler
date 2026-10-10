@@ -1,0 +1,495 @@
+{
+  "generated_at": "2026-10-10T13:55:07.917296+00:00",
+  "base_url": "https://daleel.hrm-sa.com",
+  "policy": {
+    "sequential_only": true,
+    "per_request_timeout_seconds": 12,
+    "no_heavy_endpoints": true,
+    "no_db_direct_calls": true
+  },
+  "results": [
+    {
+      "label": "login_super_admin_once",
+      "method": "POST",
+      "requested_url": "https://daleel.hrm-sa.com/api/auth/login",
+      "status_code": 200,
+      "observed_at": "2026-10-10T13:55:08.548904+00:00",
+      "elapsed_ms": 631.54,
+      "final_url": "https://daleel.hrm-sa.com/api/auth/login",
+      "final_request_host": "daleel.hrm-sa.com",
+      "cross_origin_redirect": false,
+      "set_cookie_present": true,
+      "response_json_sanitized": {
+        "keys": [
+          "token",
+          "user"
+        ]
+      },
+      "response_body_sanitized": null
+    },
+    {
+      "label": "analytics_pipeline_cohort",
+      "method": "GET",
+      "requested_url": "https://daleel.hrm-sa.com/api/admin/analytics-read-plan?pipeline=cohort",
+      "status_code": 200,
+      "observed_at": "2026-10-10T13:55:08.657303+00:00",
+      "elapsed_ms": 108.32,
+      "final_url": "https://daleel.hrm-sa.com/api/admin/analytics-read-plan?pipeline=cohort",
+      "final_request_host": "daleel.hrm-sa.com",
+      "cross_origin_redirect": false,
+      "content_type": "application/json",
+      "response_json_sanitized": {
+        "query": "cohort",
+        "observed_at": "2026-10-10T13:55:08.607395+00:00",
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "status": "available",
+        "plan": {
+          "stages": [
+            "GROUP",
+            "PROJECTION_SIMPLE",
+            "FETCH",
+            "IXSCAN",
+            "$replaceRoot",
+            "$project"
+          ],
+          "indexes": [
+            {
+              "name": "crawled_at_1",
+              "keys": [
+                {
+                  "field": "crawled_at",
+                  "direction": 1
+                }
+              ]
+            }
+          ],
+          "blocking_sort": false,
+          "collection_scan": false
+        },
+        "applied_hint": null,
+        "alternative_index": "store_id_1_crawled_at_-1",
+        "alternative_plan": {
+          "stages": [
+            "GROUP",
+            "PROJECTION_SIMPLE",
+            "FETCH",
+            "SORT_MERGE",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "$replaceRoot",
+            "$project"
+          ],
+          "indexes": [
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            }
+          ],
+          "blocking_sort": false,
+          "collection_scan": false
+        },
+        "selected_hint": null,
+        "installed_indexes": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ],
+        "metadata_errors": []
+      },
+      "response_body_sanitized": null
+    },
+    {
+      "label": "analytics_pipeline_latest",
+      "method": "GET",
+      "requested_url": "https://daleel.hrm-sa.com/api/admin/analytics-read-plan?pipeline=latest",
+      "status_code": 200,
+      "observed_at": "2026-10-10T13:55:08.789204+00:00",
+      "elapsed_ms": 131.78,
+      "final_url": "https://daleel.hrm-sa.com/api/admin/analytics-read-plan?pipeline=latest",
+      "final_request_host": "daleel.hrm-sa.com",
+      "cross_origin_redirect": false,
+      "content_type": "application/json",
+      "response_json_sanitized": {
+        "query": "latest",
+        "observed_at": "2026-10-10T13:55:08.741848+00:00",
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "status": "available",
+        "plan": {
+          "stages": [
+            "GROUP",
+            "FETCH",
+            "IXSCAN",
+            "$replaceRoot",
+            "$project"
+          ],
+          "indexes": [
+            {
+              "name": "crawled_at_1",
+              "keys": [
+                {
+                  "field": "crawled_at",
+                  "direction": 1
+                }
+              ]
+            }
+          ],
+          "blocking_sort": false,
+          "collection_scan": false
+        },
+        "applied_hint": null,
+        "alternative_index": null,
+        "alternative_plan": null,
+        "selected_hint": null,
+        "installed_indexes": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ],
+        "metadata_errors": []
+      },
+      "response_body_sanitized": null
+    },
+    {
+      "label": "analytics_pipeline_ranking",
+      "method": "GET",
+      "requested_url": "https://daleel.hrm-sa.com/api/admin/analytics-read-plan?pipeline=ranking",
+      "status_code": 200,
+      "observed_at": "2026-10-10T13:55:08.881342+00:00",
+      "elapsed_ms": 92.08,
+      "final_url": "https://daleel.hrm-sa.com/api/admin/analytics-read-plan?pipeline=ranking",
+      "final_request_host": "daleel.hrm-sa.com",
+      "cross_origin_redirect": false,
+      "content_type": "application/json",
+      "response_json_sanitized": {
+        "query": "ranking",
+        "observed_at": "2026-10-10T13:55:08.844707+00:00",
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "status": "available",
+        "plan": {
+          "stages": [
+            "PROJECTION_SIMPLE",
+            "FETCH",
+            "IXSCAN",
+            "$sort",
+            "$group",
+            "$replaceRoot",
+            "$project"
+          ],
+          "indexes": [
+            {
+              "name": "crawled_at_1",
+              "keys": [
+                {
+                  "field": "crawled_at",
+                  "direction": 1
+                }
+              ]
+            }
+          ],
+          "blocking_sort": true,
+          "collection_scan": false
+        },
+        "applied_hint": null,
+        "alternative_index": null,
+        "alternative_plan": null,
+        "selected_hint": null,
+        "installed_indexes": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ],
+        "metadata_errors": []
+      },
+      "response_body_sanitized": null
+    }
+  ],
+  "notes": [],
+  "flow": "auth_diagnostics_sequence_completed"
+}

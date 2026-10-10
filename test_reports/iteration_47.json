@@ -1,0 +1,68 @@
+{
+  "summary": "Completed PRE-FIX P0 baseline only using disposable loopback Mongo + isolated ASGI auth override. Confirmed production traceback cause from RCA doc (price_cohort aggregate read timeout at socketTimeoutMS=45000), seeded 2,832 products + 100,811 snapshots, measured cold/repeat /api/my-products, captured aggregate explain stats, and validated synthetic aggregate timeout handling returns 500 (no silent empty success payload).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/my-products",
+        "issue": "Real production traceback confirms TimeoutError from price_cohort aggregate read path (RCA source), still an endpoint-critical failure mode when aggregate exceeds socket timeout.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "/api/my-products",
+        "issue": "In observer mode with GuardedDatabase, both cold and repeat calls are live_fallback and dashboard_cache remains empty (before=0, after=0), so repeat requests do not gain cache relief."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Root app shell",
+        "issue": "Local UI loaded, but displayed \"Release status is unavailable. Changes remain disabled.\" banner in smoke check.",
+        "selector": "body text banner",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Local frontend live reload",
+        "issue": "Browser console logged ws://localhost:443/ws connection refused during smoke run.",
+        "affected_selectors": [
+          "window console"
+        ]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_p0_my_products_baseline.py",
+    "/app/test_reports/p0_my_products/baseline_pre_fix.json",
+    "/app/test_reports/pytest/p0_my_products_baseline.xml"
+  ],
+  "action_items": [
+    "Implement P0 fix in application code (outside this baseline run), then rerun /app/backend/tests/test_p0_my_products_baseline.py for before/after comparison.",
+    "Preserve pricing correctness constraints during fix: no silent truncation, no empty-success fallback, no write-enablement workaround for caching, no production index/data mutation in this validation lane.",
+    "Recheck synthetic timeout behavior post-fix: response contract should remain explicit failure (not 200 empty data)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is extremely large (>12k lines), which raises maintainability and targeted RCA/debugging risk for latency-sensitive flows.",
+    "Current my-products cache-write path is best-effort and swallowed in observer mode, so request-path recompute pressure remains when cache cannot be persisted.",
+    "price_cohort aggregate pipeline still scans/returns large 180-day snapshot working set in baseline scale evidence (docs examined ~= rows returned), consistent with timeout susceptibility under larger production cardinality."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_p0_my_products_baseline.py",
+    "/app/test_reports/p0_my_products/baseline_pre_fix.json",
+    "/app/test_reports/pytest/p0_my_products_baseline.xml",
+    "/app/test_reports/iteration_47.json"
+  ],
+  "success_rate": {
+    "backend": "100% (2/2 tests passed in baseline harness)",
+    "frontend": "Smoke-only; app loaded with release-status warning banner"
+  },
+  "seed_data_creation": "Created disposable UUID DB p0_my_products_492f396202 (dropped after run) with 2,832 own products, 7 competitor stores, 100,811 product_snapshots, manual/blacklist/OOS/stale/parent/outlier differential fixtures, and observed-index set only (_id_, crawled_at_1, crawled_at_-1_sku_1, product_id_1, crawled_at_-1_store_id_1).",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Rerun command: pytest -v /app/backend/tests/test_p0_my_products_baseline.py --tb=short --junitxml=/app/test_reports/pytest/p0_my_products_baseline.xml. Baseline metrics from /app/test_reports/p0_my_products/baseline_pre_fix.json: cold 918.92ms, repeat 892.53ms, both cache_source=live_fallback, both 25 Mongo read commands (aggregate=1, find=16, distinct=1, getMore=7), cache docs unchanged 0->0, explain docsExamined=100810 keysExamined=100811 execMillis=329, synthetic ExecutionTimeout/NetworkTimeout each returned HTTP 500.",
+  "rca of the issue": "Verified from production RCA document (not inferred): /api/my-products 500 path originates at price_cohort aggregate read timeout (socketTimeoutMS=45000). Local baseline intentionally used synthetic timeout injection to validate current failure behavior without forcing real 45s waits."
+}

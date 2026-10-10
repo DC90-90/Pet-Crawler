@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-09T19:55:27.011823+00:00",
+  "isolated_root": "/tmp/daleel-managed-before-yk5mnar7",
+  "command": [
+    "yarn",
+    "build"
+  ],
+  "git_present": false,
+  "backend_present": false,
+  "manifests_present": false,
+  "dependency_mode": "existing-node_modules-linked-for-failure-reproduction-only",
+  "returncode": 1,
+  "expected_failure": "ENOENT backend/release_build.json from craco production verify gate",
+  "failure_reproduced": true
+}

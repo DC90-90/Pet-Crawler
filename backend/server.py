@@ -57,6 +57,7 @@ import zid_oauth  # iter79 — Zid partner-app OAuth (unlocks the Orders API)
 import market_share  # iter79 — Market Share aggregation
 import category_map  # Oct 2026 — one taxonomy across stores for category share
 import price_cohort
+import my_products_cache
 import comparison_views
 import job_control
 from access_policy import enforce as enforce_access
@@ -122,7 +123,8 @@ client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTim
 from release_database import GuardedDatabase
 import release_control
 import release_runtime
-db = GuardedDatabase(client[os.environ['DB_NAME']])
+from read_plan_policy import PlanKind, ReadPlanResult
+db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
 CRAWLER_TOKEN = os.environ.get("CRAWLER_TOKEN", "")   # iter80 — was hardcoded in this file;
@@ -1644,6 +1646,15 @@ async def admin_proxy_usage(user=Depends(get_user)):
     }
 
 
+@router.get("/admin/analytics-read-plan", response_model=ReadPlanResult)
+async def analytics_read_plan(request: Request, pipeline: PlanKind = "cohort",
+                              user: dict = Depends(require_super_admin)):
+    if len(request.query_params.multi_items()) > 1 or set(request.query_params)-{"pipeline"}:
+        raise HTTPException(400, "Only the fixed pipeline selector is accepted")
+    from read_diagnostics import collect_read_plan
+    return await collect_read_plan(db, pipeline)
+
+
 async def seed_super_admin():
     """Idempotent super admin seed.
 
@@ -1742,10 +1753,6 @@ DAILY_CRAWL_BY_DOMAIN = {d: (h, m) for d, h, m in DAILY_CRAWL_SCHEDULE}
 
 
 def register_crawl_job(store_id, store_name, store_domain):
-    return  # .emergent/crons.yml is the sole scheduling authority.
-
-
-def _retired_register_crawl_job(store_id, store_name, store_domain):
     """Register a daily cron job at the store's assigned 04:00–04:55 KSA slot.
 
     Stores not in the hardcoded schedule (e.g. newly added via /api/stores)
@@ -2630,17 +2637,20 @@ _LAST_DASHBOARD_RECOMPUTE = None           # module-level debounce for crawl bur
 
 def _dashboard_cache_key(days: int) -> str:
     from investigation_status import build_identity
-    return f"my_products:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:{ledger.ksa_day_str(datetime.now(timezone.utc))}:days={days}"
+    return f"my_products:{my_products_cache.SCHEMA}:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:{ledger.ksa_day_str(datetime.now(timezone.utc))}:days={days}"
 
 
 async def _store_dashboard_cache(db, days, dataset):
-    """Persist one window's dataset (jsonable-encoded) with a fresh timestamp."""
-    now = datetime.now(timezone.utc)
-    revision = await db.data_versions.find_one({"_id": "observations"}) or {}
+    """Explicit background writers only; request caching is entirely read-only."""
+    now = dataset["_computed_at"]
+    revision = await db.data_versions.find_one({"_id": "observations"}, {"_id": 0}) or {}
+    if revision.get("revision", 0) != dataset["_source_revision"]:
+        from price_read_limits import unavailable
+        raise unavailable("price_source_changed")
     await db.dashboard_cache.replace_one(
         {"key": _dashboard_cache_key(days)},
         {"key": _dashboard_cache_key(days), "window_days": days,
-         "computed_at": now, "dataset": jsonable_encoder(dataset), "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at")},
+         **jsonable_encoder(my_products_cache.envelope(dataset)), "source_observed_at": revision.get("observed_at")},
         upsert=True,
     )
     return now
@@ -2657,7 +2667,9 @@ async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     stats = {}
     for w in windows:
         t0 = _t.time()
-        ds = await _my_products_dataset(db, w, None, None, None, None, None, None, True)
+        from price_read_limits import bounded_read
+        ds = await bounded_read(my_products_cache.compute_dataset(db,
+            lambda: _my_products_dataset(db, w, None, None, None, None, None, None, True)))
         await _store_dashboard_cache(db, w, ds)
         stats[w] = {"rows": ds["total"], "secs": round(_t.time() - t0, 2)}
     _LAST_DASHBOARD_RECOMPUTE = datetime.now(timezone.utc)
@@ -2714,8 +2726,8 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
 
     `compute` is a zero-arg async callable returning the endpoint body. Returns
     (body, meta) where meta = {source, computed_at, age_seconds, stale}. On
-    miss / unparseable / stale-beyond-24h → compute live + best-effort refresh.
-    Never raises from the cache layer (only `compute` may)."""
+    miss / unparseable / expired → compute live without database writes.
+    Cache persistence is reserved for explicit background writers."""
     now = datetime.now(timezone.utc)
     if release_control.guarded(db):
         return await compute(), {"source": "observation_compute", "computed_at": now.isoformat(), "age_seconds": 0, "stale": False}
@@ -2738,16 +2750,11 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
                 ca = ca.replace(tzinfo=timezone.utc)
             age = (now - ca).total_seconds()
             revision = await db.data_versions.find_one({"_id": "observations"}) or {}
-            if age <= DASHBOARD_CACHE_MAX_AGE_SECS and doc.get("source_revision") == revision.get("revision", 0):
+            if 0 <= age <= DASHBOARD_CACHE_MAX_AGE_SECS and doc.get("source_revision") == revision.get("revision", 0):
                 return doc["payload"], {"source": "cache", "computed_at": ca.isoformat(),
                                         "age_seconds": round(age, 1), "stale": False}
     body = await compute()
-    stamped = None
-    try:
-        stamped = await _store_page_cache(db, base, days, body)
-    except Exception:
-        pass
-    return body, {"source": "live_fallback", "computed_at": (stamped or now).isoformat(),
+    return body, {"source": "live_fallback", "computed_at": now.isoformat(),
                   "age_seconds": 0.0, "stale": False}
 
 
@@ -3465,8 +3472,8 @@ async def my_products(
     own_only: bool = Query(True, description="Restrict results to SKUs present in db.my_products (your own store). The MyProducts page sets this to True (default); /api/insights/sales calls this function internally with own_only=False to retain market-wide aggregation."),
     user=Depends(get_user)
 ):
-    # iter25 — serve the default window views from db.dashboard_cache; keep
-    # filtered / on_date / search / own_only=False requests live (narrow + fast).
+    # Default windows share a revision/freshness-checked read-only cache.
+    # Filtered/custom dates remain live; neither path writes to the database.
     _cacheable = (
         bool(own_only)
         and not on_date and not date_from and not date_to
@@ -3476,45 +3483,9 @@ async def my_products(
         and days in DASHBOARD_CACHE_STD_WINDOWS
     )
 
-    dataset = None
-    cache_meta = {"source": "live_uncacheable", "computed_at": None, "age_seconds": None, "stale": False}
-
-    if _cacheable:
-        doc = None
-        try:
-            doc = await db.dashboard_cache.find_one({"key": _dashboard_cache_key(days)})
-        except Exception:
-            doc = None
-        if doc and doc.get("computed_at") is not None:
-            ca = doc["computed_at"]
-            if not isinstance(ca, datetime):
-                try:
-                    ca = datetime.fromisoformat(str(ca).replace("Z", "+00:00"))
-                except Exception:
-                    ca = None
-            if ca is not None:
-                if ca.tzinfo is None:
-                    ca = ca.replace(tzinfo=timezone.utc)
-                age = (datetime.now(timezone.utc) - ca).total_seconds()
-                revision = await db.data_versions.find_one({"_id": "observations"}) or {}
-                if age <= DASHBOARD_CACHE_MAX_AGE_SECS and isinstance(doc.get("dataset"), dict) and doc.get("source_revision") == revision.get("revision", 0):
-                    dataset = doc["dataset"]
-                    cache_meta = {"source": "cache", "computed_at": ca.isoformat(),
-                                  "age_seconds": round(age, 1), "stale": False}
-        if dataset is None:
-            # Miss, unparseable, or stale beyond 24h → compute live (current
-            # behavior) and best-effort refresh the cache. Never error.
-            dataset = await _my_products_dataset(db, days, None, None, None, None, None, None, True)
-            stamped = None
-            try:
-                stamped = await _store_dashboard_cache(db, days, dataset)
-            except Exception:
-                pass
-            cache_meta = {"source": "live_fallback",
-                          "computed_at": (stamped or datetime.now(timezone.utc)).isoformat(),
-                          "age_seconds": 0.0, "stale": False}
-    else:
-        dataset = await _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only)
+    dataset, cache_meta = await my_products_cache.serve(db, _dashboard_cache_key(days),
+        lambda: _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only),
+        max_age=DASHBOARD_CACHE_MAX_AGE_SECS, cacheable=_cacheable)
 
     # Sort (presentation) + pagination — identical to the pre-cache endpoint, so
     # the response's computed values are byte-identical whether served from cache
@@ -11781,21 +11752,10 @@ async def _boot():
 
 
 async def _boot_sequence():
-    """Read-only startup; data/index changes are approved maintenance operations."""
+    """Full boot; every phase fails soft so a failure never crashes the API."""
     if not await _wait_for_mongo():
         return
-    BOOT_STATE["phase"] = "release-controls"
-    await release_runtime.public_status(db)
-    BOOT_STATE["phase"] = "ready-observer"
-    logger.info("Read-only boot complete: no seeds, migrations, index changes, backfills, browser installs or integration probes")
-
-
-async def _retired_uncontrolled_boot_sequence():
-    raise RuntimeError("Uncontrolled boot disabled; use explicit maintenance plan/apply")
-    if not await _wait_for_mongo():
-        return
-    for label, phase in (("seed_database", seed_database),
-                         ("seed_super_admin", seed_super_admin),
+    for label, phase in (("seed_super_admin", seed_super_admin),
                          ("ensure_stores", ensure_stores)):
         BOOT_STATE["phase"] = label
         try:
@@ -11804,8 +11764,11 @@ async def _retired_uncontrolled_boot_sequence():
             BOOT_STATE["errors"].append(f"{label}: {type(exc).__name__}: {str(exc)[:200]}")
             logger.exception("[Boot] %s failed — continuing", label)
     BOOT_STATE["phase"] = "indexes"
-    import integrity_indexes
-    await integrity_indexes.ensure(db)
+    try:
+        import integrity_indexes
+        await integrity_indexes.ensure(db)
+    except Exception as e:
+        logger.warning(f"Integrity index creation skipped: {e}")
     # Idempotent indexes (safe to run on every startup; no-op if already present)
     # iter73y — one registry, one independent attempt per index. Previously a
     # single failure anywhere in this block skipped every index after it, which
@@ -11864,26 +11827,35 @@ async def _retired_uncontrolled_boot_sequence():
     except Exception:
         logger.exception("[Boot] crawl-job registration failed — the scheduler still "
                          "starts; re-register by restarting once Mongo is healthy")
-    # Platform crons run independently of the API replica count.
-    # Own-store price sync every 6h (Feb 2026)
-    # Uses the shared _run_sync_and_match helper so the scheduled and manual
-    # paths share identical error handling + sync_runs logging.
-    async def _scheduled_own_sync():
-        await _run_sync_and_match("scheduled")
+    # In-process APScheduler is the scheduling authority; .emergent/crons.yml stays disabled.
+    try:
+        if not scheduler.running:
+            scheduler.start()
+        # Own-store price sync every 6h (Feb 2026). Shares _run_sync_and_match with
+        # the manual path so both have identical error handling + sync_runs logging.
+        async def _scheduled_own_sync():
+            await _run_sync_and_match("scheduled")
+        scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
 
-    # iter67 — seal the KSA day that just ended. 21:30 UTC = 00:30 Asia/Riyadh,
-    # after midnight KSA and before the 01:00-01:55 UTC crawl window opens, so
-    # the seal never races the next day's writes. Also writes no_data store-day
-    # rows for stores that produced nothing — absence recorded as a fact.
-    async def _scheduled_ledger_seal():
-        try:
-            await ledger.seal_ksa_day(db)
-        except Exception:
-            logger.exception("[Ledger] scheduled day-seal failed")
+        # iter67 — seal the KSA day that just ended. 21:30 UTC = 00:30 Asia/Riyadh,
+        # after midnight KSA and before the 01:00-01:55 UTC crawl window opens.
+        async def _scheduled_ledger_seal():
+            try:
+                await ledger.seal_ksa_day(db)
+            except Exception:
+                logger.exception("[Ledger] scheduled day-seal failed")
+        scheduler.add_job(_scheduled_ledger_seal, CronTrigger(hour=21, minute=30, timezone="UTC"),
+                          id="ledger_day_seal", replace_existing=True)
 
-    # iter78 — archive the closed KSA day to object storage. 03:00 UTC = 06:00
-    # Riyadh: after the 01:00-01:55 UTC crawl window AND after the 21:30 UTC
-    # seal, so snapshots and rollups are both final before they are frozen.
+        # iter78 — archive the closed KSA day to object storage. 03:00 UTC = 06:00
+        # Riyadh: after the crawl window AND after the 21:30 UTC seal.
+        scheduler.add_job(scheduled_archive, CronTrigger(hour=3, minute=0, timezone="UTC"),
+                          id="nightly_price_archive", replace_existing=True)
+        scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0,
+                          id="weekly_digest", replace_existing=True)
+        logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync + ledger day-seal + nightly archive")
+    except Exception:
+        logger.exception("[Boot] scheduler start/job registration failed — the API stays up")
     # Storage key is session-scoped: mint it once here so the nightly job and the
     # admin panel never pay for it, and a bad key is visible in the boot log.
     if archive._emergent_key():
@@ -11894,7 +11866,6 @@ async def _retired_uncontrolled_boot_sequence():
             logger.warning("[Archive] storage init failed — archive disabled until fixed: %s", e)
     else:
         logger.warning("[Archive] EMERGENT_LLM_KEY not set — nightly price archive disabled")
-    logger.info("Platform cron routes ready; no in-process scheduler running")
 
     # iter25 — warm the my-products dashboard cache in the background so the first
     # request after a deploy/restart is fast instead of paying the live-compute

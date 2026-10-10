@@ -32,10 +32,16 @@ def install_release_routes(router, db_getter, require_admin, boot_getter):
         try:
             await db.command("ping")
             r = await public_status(db)
+            boot = boot_getter()
+            booted = boot.get("status") == "done" and not boot.get("errors")
+            if not control.guarded(db):
+                # Retired release gate: readiness is a plain health check.
+                return JSONResponse(status_code=200 if booted else 503, content={"ready": booted, "release": r,
+                                    "boot_status": boot.get("status"), "boot_errors": boot.get("errors") or [],
+                                    "reason": None if booted else "boot_incomplete"})
             from release_preflight import writer_schema
             schema = await writer_schema(db)
-            boot = boot_getter()
-            ok = boot.get("status") == "done" and not boot.get("errors") and r["manifest_verified"] and bool(re.fullmatch(r"[0-9a-f]{40}", r.get("git_commit") or ""))
+            ok = booted and r["manifest_verified"] and bool(re.fullmatch(r"[0-9a-f]{40}", r.get("git_commit") or ""))
             return JSONResponse(status_code=200 if ok else 503, content={"ready": ok, "release": r,
                                 "writer_schema": schema,
                                 "boot_status": boot.get("status"), "reason": None if ok else "boot_or_release_identity_unverified"})

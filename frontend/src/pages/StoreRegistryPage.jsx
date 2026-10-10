@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useReleaseActions, READ_ONLY_REASON } from "@/lib/releaseActions";
+import { RequestError } from "@/components/RequestError";
 
 const PLATFORMS = ["salla", "zid", "shopify", "woocommerce", "custom"];
 
@@ -36,6 +38,8 @@ function TierBadge({ tier }) {
 }
 
 export default function StoreRegistryPage() {
+  const { canEdit, canRefresh, canSchedule } = useReleaseActions();
+  const [error, setError] = useState(null);
   const { t } = useI18n();
   const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -49,16 +53,18 @@ export default function StoreRegistryPage() {
 
   const fetchStores = useCallback(() => {
     setLoading(true);
+    setError(null);
     api.get("/stores").then((r) => {
       const data = r.data;
       if (Array.isArray(data)) { setStores(data); }
       else { setStores(data.stores || []); setCrawlPaused(data.crawl_paused || false); }
-    }).catch(() => toast.error("Failed to load stores")).finally(() => setLoading(false));
+    }).catch(setError).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { fetchStores(); }, [fetchStores]);
 
   const handleSave = async () => {
+    if (!canEdit) return;
     if (!form.name || !form.domain) { toast.error("Name and domain required"); return; }
     try {
       await api.post("/stores", form);
@@ -70,6 +76,7 @@ export default function StoreRegistryPage() {
   };
 
   const handleDelete = async (store) => {
+    if (!canEdit) return;
     if (!window.confirm(`Delete ${store.name}?`)) return;
     try {
       await api.delete(`/stores/${store.id}`);
@@ -79,6 +86,7 @@ export default function StoreRegistryPage() {
   };
 
   const handleCrawl = async (store) => {
+    if (!canRefresh) return;
     setCrawling((p) => ({ ...p, [store.id]: true }));
     try {
       const r = await api.post(`/stores/${store.id}/crawl`);
@@ -137,23 +145,26 @@ export default function StoreRegistryPage() {
     return `${prefix} at ${hh}:${mm} KSA`;
   };
 
+  if (error) return <div className="p-6" data-testid="store-registry-page"><RequestError id="stores-request" error={error} onRetry={fetchStores} /></div>;
   return (
     <div className="p-6 space-y-5" data-testid="store-registry-page">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_stores")}</h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">Manage tracked competitor stores</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant={crawlPaused ? "destructive" : "outline"} size="sm"
+            disabled={!canSchedule || !canEdit} title={!canSchedule || !canEdit ? READ_ONLY_REASON : undefined}
             onClick={async () => {
+              if (!canSchedule || !canEdit) return;
               try { const r = await api.post("/scheduler/toggle-pause"); setCrawlPaused(r.data.crawl_paused); toast.success(r.data.message); }
               catch { toast.error("Failed"); }
             }}
             className="rounded-md text-xs" data-testid="pause-crawls-btn">
             {crawlPaused ? "Resume All Crawls" : "Pause All Crawls"}
           </Button>
-          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md text-xs" data-testid="add-store-btn">
+          <Button disabled={!canEdit} title={!canEdit ? READ_ONLY_REASON : undefined} size="sm" onClick={() => setDialogOpen(true)} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md text-xs" data-testid="add-store-btn">
             <Plus className="w-3.5 h-3.5 me-1.5" />{t("btn_add_store")}
           </Button>
         </div>
@@ -231,10 +242,10 @@ export default function StoreRegistryPage() {
                     <Button variant="ghost" size="sm" onClick={() => toggleExpand(s.id)} className="h-7 w-7 p-0 opacity-60 hover:opacity-100" data-testid={`expand-btn-${s.id}`}>
                       {expandedStore === s.id ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleCrawl(s)} disabled={crawling[s.id]} className="h-7 w-7 p-0" data-testid={`crawl-btn-${s.id}`}>
+                    <Button variant="ghost" size="sm" onClick={() => handleCrawl(s)} disabled={!canRefresh || crawling[s.id]} title={!canRefresh ? READ_ONLY_REASON : "Refresh source"} className="h-7 w-7 p-0" data-testid={`crawl-btn-${s.id}`}>
                       <RefreshCw className={`w-3.5 h-3.5 ${crawling[s.id] ? "animate-sync" : ""}`} />
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleDelete(s)} className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-[#EF4444]/10" data-testid={`delete-store-${s.id}`}>
+                    <Button disabled={!canEdit} title={!canEdit ? READ_ONLY_REASON : "Remove store"} variant="ghost" size="sm" onClick={() => handleDelete(s)} className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-[#EF4444]/10" data-testid={`delete-store-${s.id}`}>
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   </div>
@@ -310,7 +321,7 @@ export default function StoreRegistryPage() {
           </div>
           <DialogFooter className="relative z-[60]">
             <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="rounded-md" type="button">{t("btn_cancel")}</Button>
-            <Button size="sm" onClick={handleSave} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md" data-testid="store-save-btn" type="button">{t("btn_save")}</Button>
+            <Button disabled={!canEdit} size="sm" onClick={handleSave} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md" data-testid="store-save-btn" type="button">{t("btn_save")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

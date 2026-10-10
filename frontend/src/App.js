@@ -44,7 +44,8 @@ const queryClient = new QueryClient({
       staleTime: 60 * 1000,           // data is fresh for 60s
       gcTime: 5 * 60 * 1000,          // keep in cache for 5min
       refetchOnWindowFocus: false,    // don't refetch every time user tabs back
-      retry: 1,
+      // Axios owns the single analytics-timeout retry; don't multiply it here.
+      retry: (attempt, error) => error?.code !== "ERR_CANCELED" && !error?.config?._readRetryAttempt && attempt < 1,
     },
   },
 });

@@ -28,14 +28,14 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
       params: { days, sort, include_today: includeToday, limit, offset: page * limit, ...rest },
     })
       .then((r) => live && setData(r.data))
-      .catch(() => live && setError(true))
+      .catch((failure) => live && setError(failure))
       .finally(() => live && setLoading(false));
     return () => { live = false; };
   }, [days, sort, page, filters, includeToday, retry]);
 
   const rows = data?.rows || [];
   const total = data?.total || 0;
-  if (error) return <RequestError id="ms-missing" onRetry={() => setRetry(n => n + 1)} />;
+  if (error) return <RequestError id="ms-missing" error={error} onRetry={() => setRetry(n => n + 1)} />;
   if (loading) return <p data-testid="ms-missing-loading" className="text-sm text-[#A1E4DB]">Loading…</p>;
 
   return (

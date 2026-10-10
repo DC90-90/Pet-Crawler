@@ -1,6 +1,18 @@
 # Independently reviewed Daleel fixes — preview acceptance
 
-## Latest exact-source acceptance — 2026-10-09
+## Latest same-origin repair acceptance — 2026-10-09
+
+**238 final passes =205 baseline +33 same-origin regressions**, zero final failures/errors/skips. Empty/unset/whitespace build configuration now records same-origin/null origin consistently with the unchanged runtime API resolver. Explicit origins remain validated. Four native-like builds pass; strict candidate export still requires paired manifests and returns expected503 for nullSHA. Docker/env/lock/runtime safeguards remain unchanged.
+
+Evidence: `memory/SAME_ORIGIN_BUILD_FIX_DED49A10.md`, `test_reports/iteration_46.json`, `test_reports/same_origin_build_fix/main-evidence-validation.json`. Setup failures/reruns and missing raw initial401 evidence are recorded; no all-first-pass claim. Static scan **PASS for code-level blockers only**, no actual native retry/deployment. **Production NO-GO** and prior evidence gates remain open.
+
+## Historical managed-build repair acceptance — 2026-10-09
+
+**205 passed = existing185 +20 new build regressions**, zero final failures/errors/skips. Original missing-manifest CRACO error was reproduced before repair and retained. Corrected raw Git-less builds pass in frontend-only and full-tree layouts; frontend-only used fresh install, full-tree reused that isolated dependency tree. No fabricated sourceSHA/backend manifest, no readiness/write-guard weakening, no Docker/lock/cron edits. Strict candidate export also passes with expected503 readiness.
+
+Current evidence: `memory/MANAGED_BUILD_FIX_12B8C449.md`, `test_reports/iteration_45.json`, `test_reports/managed_build_fix/`. Static post-fix scan **PASS for code-level blockers only**; no actual native rerun/deployment. **Production NO-GO remains** with source/image provenance, `/api/ready` attestation and earlier production gates open. Prior committed-source proof below remains historical and does not cover the modified repair.
+
+## Historical exact-source acceptance — 2026-10-09
 
 Remote commit **`2faa51c3ac21ef1d7fae97558bf666a7674bbd7e`** now has verified approved lock bytes and a successful **exact-source** build. **185/185 passed** (156 isolated +22 packaging +7 existing preview API checks), zero failures/errors/skips; no failed-build/test reruns. Generated identity **`sha256:7c6d8146f2c7c9000d8e5df11ba7172d8caec105e81642e683aaeb8229789adc`** agrees across backend/public/compiled manifests. Actual exported ASGI `/api/ready` is **200**, not a mocked identity check. The compiled API origin remains the preview URL; seven preview API cases are not exported-image E2E.
 

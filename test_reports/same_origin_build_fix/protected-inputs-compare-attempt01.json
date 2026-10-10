@@ -1,0 +1,115 @@
+{
+  "all_unchanged": true,
+  "comparison": {
+    "frontend/yarn.lock": {
+      "before": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+      "after": "2348d43b12d72db4d7752db08aa23c9efd54f734d6ab913e1763c8c1cb24edf0",
+      "unchanged": true
+    },
+    "frontend/package.json": {
+      "before": "c64dd230c4be18f48404bc5639f4fd7f65db7a02d2f05912e1a40918a0364f1e",
+      "after": "c64dd230c4be18f48404bc5639f4fd7f65db7a02d2f05912e1a40918a0364f1e",
+      "unchanged": true
+    },
+    "frontend/.env": {
+      "before": "7480571b9fa3533fd9d521b624cd776a1aee1674316727555c3d9d3c862bade8",
+      "after": "7480571b9fa3533fd9d521b624cd776a1aee1674316727555c3d9d3c862bade8",
+      "unchanged": true
+    },
+    "frontend/src/lib/api.js": {
+      "before": "6fb58d26cf9071fc6e95f2623a8166ba6183bc0d806566ca35386ccc65b55e04",
+      "after": "6fb58d26cf9071fc6e95f2623a8166ba6183bc0d806566ca35386ccc65b55e04",
+      "unchanged": true
+    },
+    "backend/.env": {
+      "before": "4567cfc1ae4231545537e7b4e67fd4a000433886bd839c23c5ba4630c377dc77",
+      "after": "4567cfc1ae4231545537e7b4e67fd4a000433886bd839c23c5ba4630c377dc77",
+      "unchanged": true
+    },
+    "backend/requirements.txt": {
+      "before": "b25d6319d31d0a20a7e227a0a4283bec08a93003e406074242e76f4ab818b91d",
+      "after": "b25d6319d31d0a20a7e227a0a4283bec08a93003e406074242e76f4ab818b91d",
+      "unchanged": true
+    },
+    "backend/release_api.py": {
+      "before": "701c6f743ce10bdb21070dac2823fb23a109fa03a8cddb3f3b3fdb7754409c5a",
+      "after": "701c6f743ce10bdb21070dac2823fb23a109fa03a8cddb3f3b3fdb7754409c5a",
+      "unchanged": true
+    },
+    "backend/release_identity.py": {
+      "before": "2ee14839126e15ac3501bd059f0c2e6a12b57895bf0c5766fd142302792a9c3c",
+      "after": "2ee14839126e15ac3501bd059f0c2e6a12b57895bf0c5766fd142302792a9c3c",
+      "unchanged": true
+    },
+    "backend/release_runtime.py": {
+      "before": "badc711b3a871f2e7d77dbe9614e5817bf7d8aaa50f181b9573b9422a5cc8004",
+      "after": "badc711b3a871f2e7d77dbe9614e5817bf7d8aaa50f181b9573b9422a5cc8004",
+      "unchanged": true
+    },
+    "backend/release_control.py": {
+      "before": "a152d142bffcf6dba7b97bd5ade2a4cb5ca3ff4acd82f66c9f4f649a99233706",
+      "after": "a152d142bffcf6dba7b97bd5ade2a4cb5ca3ff4acd82f66c9f4f649a99233706",
+      "unchanged": true
+    },
+    ".dockerignore": {
+      "before": "2512eba2e28a96b6c0ac40773f77ad5325afb6c8707facb79b560a59fbd7a686",
+      "after": "2512eba2e28a96b6c0ac40773f77ad5325afb6c8707facb79b560a59fbd7a686",
+      "unchanged": true
+    },
+    ".emergent/crons.yml": {
+      "before": "7bfc57007b41b80fbb336302338460834e103ae5b90b093c1bc1967b98f5460b",
+      "after": "7bfc57007b41b80fbb336302338460834e103ae5b90b093c1bc1967b98f5460b",
+      "unchanged": true
+    },
+    "deploy/backend.Dockerfile": {
+      "before": "cfcedb89f9183df5a2ae9c25e9adc24deb1fd563b53b6d3622862cf3a720cc30",
+      "after": "cfcedb89f9183df5a2ae9c25e9adc24deb1fd563b53b6d3622862cf3a720cc30",
+      "unchanged": true
+    },
+    "deploy/nginx-frontend.conf": {
+      "before": "c5e5f366697c9a636ba26233fbba69d46b3bf85de488620d0627a688befe1ebd",
+      "after": "c5e5f366697c9a636ba26233fbba69d46b3bf85de488620d0627a688befe1ebd",
+      "unchanged": true
+    },
+    "deploy/.env.example": {
+      "before": "baf9b67a7e2a98284f114a2b4576a7dc09b55a1112cc751f461400c9ba3e46ae",
+      "after": "baf9b67a7e2a98284f114a2b4576a7dc09b55a1112cc751f461400c9ba3e46ae",
+      "unchanged": true
+    },
+    "deploy/PLATFORM_SUMMARY.md": {
+      "before": "25c30f4ba4d51733274dc1fddc3a22e9b490fe3154d353077cdf5785ef2d8cd8",
+      "after": "25c30f4ba4d51733274dc1fddc3a22e9b490fe3154d353077cdf5785ef2d8cd8",
+      "unchanged": true
+    },
+    "deploy/nginx.conf": {
+      "before": "e821b85bc43c964a227eab0e8482b8c8c42a3a83a53aa4d888122ca5b5d52621",
+      "after": "e821b85bc43c964a227eab0e8482b8c8c42a3a83a53aa4d888122ca5b5d52621",
+      "unchanged": true
+    },
+    "deploy/docker-compose.yml": {
+      "before": "ee0b289af24f1c55ce471f01546154585af2932b18eb15992ab2f1f7e6f30142",
+      "after": "ee0b289af24f1c55ce471f01546154585af2932b18eb15992ab2f1f7e6f30142",
+      "unchanged": true
+    },
+    "deploy/start.sh": {
+      "before": "c89336bace3bd3ad3ae4a698ce37c19f75b4f72f597f6289c457b0aa33c000ad",
+      "after": "c89336bace3bd3ad3ae4a698ce37c19f75b4f72f597f6289c457b0aa33c000ad",
+      "unchanged": true
+    },
+    "deploy/frontend.Dockerfile": {
+      "before": "ab82aabddf093a346f91e96ae79e6b19797a17b4b1514977cb65bf2d909e7348",
+      "after": "ab82aabddf093a346f91e96ae79e6b19797a17b4b1514977cb65bf2d909e7348",
+      "unchanged": true
+    },
+    "deploy/DEPLOYMENT_GUIDE.md": {
+      "before": "30d79b0c9a81fee01adc8e974fd2f58d0af81eed4283f4a74146f339463aa63c",
+      "after": "30d79b0c9a81fee01adc8e974fd2f58d0af81eed4283f4a74146f339463aa63c",
+      "unchanged": true
+    },
+    "deploy/RELEASE_PACKAGING.md": {
+      "before": "748daf93090e4038e33c048d7af2fdddaa08a04d64d85d2ed80e9fed2fb9b0ad",
+      "after": "748daf93090e4038e33c048d7af2fdddaa08a04d64d85d2ed80e9fed2fb9b0ad",
+      "unchanged": true
+    }
+  }
+}

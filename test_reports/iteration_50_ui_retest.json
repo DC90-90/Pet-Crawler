@@ -1,0 +1,14 @@
+{
+  "failure_injections": "MOCKED HTTP errors; success recovery uses real preview APIs",
+  "checks": [
+    "PASS overview and filter-options typed source-change",
+    "PASS my-products typed timeout",
+    "PASS missing typed timeout",
+    "PASS brands typed timeout",
+    "PASS categories typed timeout",
+    "PASS methodology typed timeout",
+    "PASS methodology retry recovers actual API data",
+    "PASS product-breakdown typed freshness failure",
+    "PASS product-breakdown retry removes error"
+  ]
+}

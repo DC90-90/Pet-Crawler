@@ -1,0 +1,209 @@
+{
+  "revision_invalidation": {
+    "cold_source": "live_fallback",
+    "warm_source": "memory_cache",
+    "after_revision_source": "live_fallback",
+    "after_revision_reads": {
+      "getMore": {
+        "count": 7,
+        "duration_ms": 101.779
+      },
+      "aggregate": {
+        "count": 1,
+        "duration_ms": 355.02
+      },
+      "distinct": {
+        "count": 1,
+        "duration_ms": 0.202
+      },
+      "find": {
+        "count": 15,
+        "duration_ms": 5.0760000000000005
+      }
+    }
+  },
+  "malformed_future_and_key_separation": {
+    "malformed_source": "live_fallback",
+    "future_source": "live_fallback",
+    "wrong_key_checks": {
+      "wrong_policy": {
+        "key": "my_products:my-products-read-v1:wrong-policy:7bab50c8b96e:2026-10-10:days=30",
+        "source": "live_fallback",
+        "reads": {
+          "getMore": {
+            "count": 7,
+            "duration_ms": 136.059
+          },
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 352.945
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.274
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 5.3340000000000005
+          }
+        }
+      },
+      "wrong_build": {
+        "key": "my_products:my-products-read-v1:offers-v3-parent-aware-current-7d:deadbeefcafe:2026-10-10:days=30",
+        "source": "live_fallback",
+        "reads": {
+          "getMore": {
+            "count": 7,
+            "duration_ms": 104.268
+          },
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 357.731
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.218
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 6.253
+          }
+        }
+      },
+      "wrong_ksa_day": {
+        "key": "my_products:my-products-read-v1:offers-v3-parent-aware-current-7d:7bab50c8b96e:1999-12-31:days=30",
+        "source": "live_fallback",
+        "reads": {
+          "getMore": {
+            "count": 7,
+            "duration_ms": 105.999
+          },
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 355.63
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.173
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 5.364000000000001
+          }
+        }
+      },
+      "wrong_window": {
+        "key": "my_products:my-products-read-v1:offers-v3-parent-aware-current-7d:7bab50c8b96e:2026-10-10:days=7",
+        "source": "live_fallback",
+        "reads": {
+          "getMore": {
+            "count": 7,
+            "duration_ms": 106.821
+          },
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 363.052
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.174
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 5.029999999999999
+          }
+        }
+      }
+    }
+  },
+  "quantity_observed_precedence_api": {
+    "sku": "SKU-MANUAL",
+    "stock_observed_at": "2026-10-10T12:19:20.877116+00:00",
+    "last_synced_at": "2026-10-10T14:14:20.877116+00:00"
+  },
+  "history_180d_boundary": {
+    "in_window_sellers": 2,
+    "out_window_sellers": 1,
+    "out_window_reasons": [
+      "below_corroborated_cluster"
+    ]
+  },
+  "failure_not_cached_retry": {
+    "first_status": 503,
+    "second_status": 200,
+    "second_source": "live_fallback",
+    "second_reads": {
+      "getMore": {
+        "count": 7,
+        "duration_ms": 103.25
+      },
+      "aggregate": {
+        "count": 1,
+        "duration_ms": 379.505
+      },
+      "distinct": {
+        "count": 1,
+        "duration_ms": 0.303
+      },
+      "find": {
+        "count": 15,
+        "duration_ms": 6.133
+      }
+    },
+    "flights_after_retry": 0
+  },
+  "benchmarks": {
+    "path": "/app/test_reports/p0_my_products/cache_boundaries_benchmarks.json",
+    "base_url": "https://price-intel-dev.preview.emergentagent.com"
+  },
+  "exact_7d_transition": {
+    "derived_valid_until": "2026-10-10T14:21:20.626000+00:00",
+    "valid_at_119s": true,
+    "valid_at_121s": false
+  },
+  "endpoint_boundary_own_price": {
+    "before": 200,
+    "warm": "memory_cache",
+    "after": 200,
+    "boundary_seconds": 120,
+    "price": null,
+    "quantity": 8,
+    "competitor_min_price": 40
+  },
+  "endpoint_boundary_competitor": {
+    "before": 200,
+    "warm": "memory_cache",
+    "after": 200,
+    "boundary_seconds": 120,
+    "price": 100.0,
+    "quantity": 8,
+    "competitor_min_price": null
+  },
+  "endpoint_boundary_quantity": {
+    "before": 200,
+    "warm": "memory_cache",
+    "after": 200,
+    "boundary_seconds": 120,
+    "price": 100.0,
+    "quantity": null,
+    "competitor_min_price": 40
+  },
+  "endpoint_boundary_future": {
+    "before": 200,
+    "warm": "memory_cache",
+    "after": 200,
+    "boundary_seconds": 60,
+    "price": 100.0,
+    "quantity": 8,
+    "competitor_min_price": 40
+  },
+  "endpoint_boundary_history": {
+    "before": 200,
+    "warm": "memory_cache",
+    "after": 200,
+    "boundary_seconds": 120,
+    "price": 100.0,
+    "quantity": 8,
+    "competitor_min_price": 100
+  }
+}

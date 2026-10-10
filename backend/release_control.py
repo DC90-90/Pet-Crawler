@@ -15,7 +15,7 @@ from release_identity import identity
 KEY = "release-write-control-v1"
 CAPABILITIES = {k: False for k in ("automatic_refresh", "manual_refresh", "manual_edits", "exact_orders",
                                   "proxy_crawling", "email", "digests", "archive", "ledger_sealing")}
-UNAVAILABLE = {"email", "digests"}  # Not implemented delivery must never be toggled into a success claim.
+UNAVAILABLE = {"email"}  # Outbound email is not implemented and must never be toggled into a success claim.
 permit = ContextVar("release_write_permit", default=None)
 request_path = ContextVar("release_request_path", default="")
 
@@ -41,7 +41,7 @@ async def state(db):
 
 async def feature(db, name):
     if not guarded(db):
-        return True  # Isolated legacy domain tests do not implement the runtime control plane.
+        return name not in UNAVAILABLE  # Retired gate: every implemented capability is on.
     s = await state(db)
     return name not in UNAVAILABLE and s["mode"] == "active" and s.get("owner_release") == identity()["release_id"] and s["capabilities"].get(name, False)
 

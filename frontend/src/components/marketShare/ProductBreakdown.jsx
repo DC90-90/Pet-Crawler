@@ -31,7 +31,7 @@ export default function ProductBreakdown({ productKey, days, includeToday, open,
     let live = true;
     api.get(`/market-share/product/${encodeURIComponent(productKey)}`, { params: { days, include_today: includeToday, ...scopeParams } })
       .then((r) => live && setRow(r.data.product))
-      .catch((e) => live && setErr(e.response?.data?.detail || "Could not load this product"));
+      .catch((e) => live && setErr(e));
     return () => { live = false; };
   }, [productKey, days, open, includeToday, scopeParams, retry]);
 
@@ -52,7 +52,7 @@ export default function ProductBreakdown({ productKey, days, includeToday, open,
           </SheetTitle>
         </SheetHeader>
 
-        {err && <RequestError id="ms-breakdown" onRetry={() => setRetry(n => n + 1)} />}
+        {err && <RequestError id="ms-breakdown" error={err} onRetry={() => setRetry(n => n + 1)} />}
 
         {row && (
           <div className="space-y-5 mt-4">

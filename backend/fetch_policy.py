@@ -26,6 +26,7 @@ like the callers' previous `try/except` shapes expected.
 
 import asyncio
 import logging
+import os
 import random
 import time
 from urllib.parse import urlparse
@@ -48,6 +49,10 @@ BASE_DELAY = 0.20          # seconds between requests to the same host
 MAX_DELAY = 8.0            # ceiling once a host is angry
 DECAY_AFTER_OK = 15        # consecutive OKs before we speed back up
 JITTER = 0.35              # ±35% so a crawl never looks metronomic
+# Salla storefront walks 429 from a datacenter IP at the default pace; a
+# per-host floor of 2.25s ±35% (1.5–3s) lets the cursor walk survive without a
+# proxy. Zid hosts keep BASE_DELAY.
+SALLA_PACING_FLOOR = float(os.environ.get("SALLA_PACING_FLOOR_SECS", "2.25"))
 DEFAULT_ATTEMPTS = 3
 # Consecutive per-product failures before a supplement pass gives up. Turns
 # "1365 wasted requests" into "30 requests and a recorded reason".
@@ -77,14 +82,21 @@ def _host(url, host_key=None):
     key = host_key or (urlparse(url).netloc or "unknown")
     return key, _hosts.setdefault(key, {"delay": BASE_DELAY, "next_at": 0.0,
                                         "ok_streak": 0, "throttled": 0,
-                                        "requests": 0, "impersonated": 0})
+                                        "requests": 0, "impersonated": 0, "floor": 0.0})
+
+
+def set_host_floor(url_or_host, floor):
+    """Minimum spacing for one host; backoff still widens above it."""
+    key = url_or_host if "://" not in url_or_host else urlparse(url_or_host).netloc
+    _, state = _host(key, key)
+    state["floor"] = max(0.0, float(floor))
 
 
 async def _pace(state):
     wait = state["next_at"] - time.monotonic()
     if wait > 0:
         await asyncio.sleep(wait)
-    spacing = state["delay"] * (1 + random.uniform(-JITTER, JITTER))
+    spacing = max(state["delay"], state.get("floor", 0.0)) * (1 + random.uniform(-JITTER, JITTER))
     state["next_at"] = time.monotonic() + max(0.0, spacing)
     state["requests"] += 1
 
@@ -202,7 +214,7 @@ def host_saturated(url, host_key=None):
 
 def host_diagnostics():
     """Per-host pacing snapshot for the admin crawl-health endpoint."""
-    return {k: {"delay_secs": round(v["delay"], 2), "requests": v["requests"],
+    return {k: {"delay_secs": round(v["delay"], 2), "floor_secs": round(v.get("floor", 0.0), 2), "requests": v["requests"],
                 "throttled": v["throttled"], "impersonated": v["impersonated"]}
             for k, v in sorted(_hosts.items())}
 

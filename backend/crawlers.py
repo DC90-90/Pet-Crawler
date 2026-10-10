@@ -22,7 +22,7 @@ from core.utils import _BARCODE_LEAD_RE, barcode_keys, canonical_barcode  # noqa
 # rollups from every persistence path; nothing reads it yet).
 import ledger
 from fetch_policy import (polite_get, host_saturated, SUPPLEMENT_ABORT_AFTER,  # noqa: F401
-                          host_diagnostics)
+                          host_diagnostics, set_host_floor, SALLA_PACING_FLOOR)
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/pw-browsers")
 logger = logging.getLogger(__name__)
@@ -1271,75 +1271,6 @@ def _build_salla_endpoints(base, cached_endpoint, platform="salla"):
     return endpoints
 
 
-ZID_VARIANT_DETAIL_CAP = 2000
-ZID_VARIANT_DETAIL_MAX_CONSECUTIVE_FAILURES = 30
-
-
-def _zid_needs_variant_detail(item):
-    """True for a Zid listing that declares options but ships no variant rows.
-
-    Verified live (10 Oct 2026, pets-houses.com and mowkly.com): the Zid list
-    feed returns `has_options: true` with an empty `variants` array for about
-    30 % of listings, while `GET /api/v1/products/{id}` returns the full
-    `variants[]` (id, sku — usually the EAN —, barcode, price, sale_price,
-    quantity, is_infinite). Without the detail call every such listing is
-    quarantined as an unresolved parent and its children never get a price.
-    """
-    if not isinstance(item, dict) or not item.get("id"):
-        return False
-    declared = item.get("has_options") in (True, 1, "true", "1") or item.get("has_variants") in (True, 1)
-    variants = item.get("variants") or item.get("skus")
-    return declared and not (isinstance(variants, list) and variants)
-
-
-async def _resolve_zid_variant_parents(http, base, items, crawl_log, fetch=None,
-                                       cap=ZID_VARIANT_DETAIL_CAP, headers=None, path_fmt="/api/v1/products/{id}"):
-    """Fill `variants` on Zid option parents from the product-detail route.
-
-    Mutates `items` in place. Paced by `polite_get`, bounded by `cap` and a
-    consecutive-failure circuit breaker; outcomes are recorded on the crawl
-    log so a silent regression is visible in the Stores page.
-    """
-    fetch = fetch or polite_get
-    targets = [it for it in items if _zid_needs_variant_detail(it)]
-    stats = {"candidates": len(targets), "fetched": 0, "resolved": 0, "failed": 0,
-             "skipped_cap": max(0, len(targets) - cap), "aborted": None}
-    crawl_log["variant_detail"] = stats
-    consecutive = 0
-    for it in targets[:cap]:
-        url = f"{base}{path_fmt.format(id=it['id'])}"
-        try:
-            resp = await fetch(http, url, headers=headers) if headers else await fetch(http, url)
-            stats["fetched"] += 1
-            if resp is None or resp.status_code != 200:
-                raise RuntimeError(f"http_{resp.status_code if resp is not None else 'none'}")
-            detail = resp.json()
-            if isinstance(detail, dict) and isinstance(detail.get("data"), dict):
-                detail = detail["data"]
-            variants = detail.get("variants") if isinstance(detail, dict) else None
-            if isinstance(variants, list) and variants:
-                it["variants"] = variants
-                for key in ("sold_products_count", "default_variant_id", "is_taxable", "categories"):
-                    if detail.get(key) is not None and it.get(key) is None:
-                        it[key] = detail[key]
-                stats["resolved"] += 1
-                consecutive = 0
-            else:
-                # Detail answered but has no children either: a genuine
-                # single product mislabelled as having options.
-                it["has_options"] = False
-                stats["resolved"] += 1
-                consecutive = 0
-        except Exception as exc:
-            stats["failed"] += 1
-            consecutive += 1
-            if consecutive >= ZID_VARIANT_DETAIL_MAX_CONSECUTIVE_FAILURES:
-                stats["aborted"] = f"{consecutive}_consecutive_failures: {type(exc).__name__}"
-                logger.warning(f"[VariantDetail] aborted after {consecutive} consecutive failures ({exc})")
-                break
-    return stats
-
-
 async def _try_single_endpoint(http, ep, crawl_log):
     """Try a single JSON endpoint. Returns (items_list, endpoint_dict) or ([], None)."""
     attempt = {"endpoint": ep["tag"], "status": None, "products": 0, "error": None}
@@ -1405,6 +1336,105 @@ CATALOG_MAX_PAGES = 800   # Salla cursor pages carry 15 items: 200 pages capped 
 async def _paginate_endpoint(http, ep, initial_items):
     from catalog_pagination import paginate
     return await paginate(http, ep, initial_items, polite_get, max_pages=CATALOG_MAX_PAGES)
+
+
+# Zid list feeds (public storefront and Merchant API alike) send has_options=true
+# with an EMPTY variants[]; only the detail route carries the per-variant offers
+# (id, sku=EAN, price, sale_price, quantity, is_infinite, is_taxable). Without
+# it every such listing is quarantined as unresolved_parent_variants.
+ZID_VARIANT_DETAIL_CAP = int(os.environ.get("ZID_VARIANT_DETAIL_CAP", "1500"))
+
+
+def _zid_unresolved_listings(items):
+    return [it for it in items
+            if isinstance(it, dict) and it.get("id")
+            and it.get("has_options") in (True, 1, "true", "1")
+            and not (it.get("variants") or it.get("skus"))]
+
+
+def _zid_apply_variant_detail(listing, detail):
+    """Graft the detail route's variants onto the list row. Returns True when resolved."""
+    if not isinstance(detail, dict):
+        return False
+    variants = detail.get("variants")
+    if not isinstance(variants, list) or not variants:
+        return False
+    listing["variants"] = variants
+    for k in ("default_variant_id", "sold_products_count", "options"):
+        if detail.get(k) is not None and listing.get(k) is None:
+            listing[k] = detail[k]
+    return True
+
+
+async def _zid_variant_detail_supplement(fetch, items, crawl_log, label, cap=ZID_VARIANT_DETAIL_CAP):
+    """Resolve has_options listings via `fetch(listing) -> (status, detail|None)`.
+
+    Shared by the public storefront path and the Merchant API path; mutates the
+    listings in place so expand_variants emits one offer per variant. Consecutive
+    transport/HTTP failures trip the breaker; a 200 with no variants is recorded
+    but does not count toward it.
+    """
+    todo = _zid_unresolved_listings(items)
+    fetched = failed = consecutive = 0
+    failed_by_status = {}
+    for it in todo[:cap]:
+        status, detail = None, None
+        try:
+            status, detail = await fetch(it)
+        except Exception as e:
+            status = "exception"
+            logger.info(f"[VariantDetail] {label} product={it.get('id')} failed: {str(e)[:80]}")
+        if _zid_apply_variant_detail(it, detail):
+            fetched += 1
+            consecutive = 0
+            continue
+        failed += 1
+        key = "no_variants" if status == 200 else (status if status is not None else "exception")
+        failed_by_status[key] = failed_by_status.get(key, 0) + 1
+        if status == 200:
+            consecutive = 0
+            continue
+        consecutive += 1
+        if status in (401, 403) and label == "merchant_api":
+            failed_by_status["aborted_auth"] = consecutive
+            logger.warning(f"[VariantDetail] {label}: aborting after auth status {status}")
+            break
+        if consecutive >= SUPPLEMENT_ABORT_AFTER:
+            failed_by_status["aborted_after_consecutive"] = consecutive
+            logger.warning(f"[VariantDetail] {label}: aborting after {consecutive} consecutive failures (last status {key})")
+            break
+    skipped_cap = max(0, len(todo) - cap)
+    crawl_log["variant_detail_candidates"] = len(todo)
+    crawl_log["variant_detail_fetched"] = fetched
+    crawl_log["variant_detail_failed"] = failed
+    if skipped_cap:
+        crawl_log["variant_detail_skipped_cap"] = skipped_cap
+    crawl_log.setdefault("endpoints_tried", []).append({
+        "endpoint": f"zid_variant_detail_{label}", "status": "ran" if todo else "skipped",
+        "products": fetched,
+        "error": (f"candidates={len(todo)} fetched={fetched} failed={failed} "
+                  + " ".join(f"{k}={v}" for k, v in failed_by_status.items())
+                  + (f" skipped_cap={skipped_cap}" if skipped_cap else "")) if todo else "no has_options listings without variants"})
+    logger.info(f"[VariantDetail] {label}: candidates={len(todo)} fetched={fetched} failed={failed} {failed_by_status}")
+    return fetched, failed
+
+
+async def _zid_public_variant_supplement(http, store, items, crawl_log):
+    domain = store.get("domain")
+
+    async def fetch(listing):
+        url = f"https://{domain}/api/v1/products/{listing['id']}"
+        r = await polite_get(http, url, attempts=2)
+        if r is None:
+            return None, None
+        if r.status_code != 200:
+            logger.info(f"[VariantDetail] public product={listing['id']} http_status={r.status_code}")
+            return r.status_code, None
+        body = r.json()
+        detail = body.get("data") if isinstance(body, dict) and isinstance(body.get("data"), dict) else body
+        return 200, detail
+
+    return await _zid_variant_detail_supplement(fetch, items, crawl_log, "public")
 
 
 async def _retired_paginate_endpoint(http, ep, initial_items):
@@ -1501,6 +1531,8 @@ async def crawl_salla_tier1(db, store):
 
     try:
         async with httpx.AsyncClient(**httpx_kwargs) as http:
+            if platform == "salla":
+                set_host_floor(store["domain"], SALLA_PACING_FLOOR)
             for ep in endpoints:
                 items, matched_ep = await _try_single_endpoint(http, ep, crawl_log)
                 if matched_ep:
@@ -1508,10 +1540,7 @@ async def crawl_salla_tier1(db, store):
                     winning_endpoint = matched_ep
                     break
             if all_raw and platform == "zid":
-                # Oct 10 2026 — resolve option parents from the detail route
-                # before the raw rows are checkpointed, so the persisted
-                # capture already carries one offer per variant.
-                await _resolve_zid_variant_parents(http, base, all_raw, crawl_log)
+                await _zid_public_variant_supplement(http, store, all_raw, crawl_log)
     except Exception as e:
         crawl_log["error"] = str(e)[:300]
 
@@ -2835,10 +2864,6 @@ def _is_valid_ean(val):
 # is what powers the "My Revenue / Units Sold" KPIs via the estimator's
 # sold_count_diff method — before Feb 2026 own-store snapshots hardcoded
 # sold_count=0, which made own-store sales estimation structurally impossible.
-# `sold_products_count` is the cumulative counter the Zid storefront JSON
-# exposes on a share of listings (verified live 10 Oct 2026: 20 of 150 Mowkly
-# listings, all positive). The competitor normalizer already reads it; the
-# own-store Merchant path must too.
 ZID_SOLD_FIELD_CANDIDATES = ("sold_quantity", "sold_count", "sales_count", "sold_products_count", "total_sold", "sold")
 
 
@@ -2900,7 +2925,7 @@ def _zid_is_taxable(p):
     return None
 
 
-async def _fetch_zid_api_catalog(db, store):
+async def _fetch_zid_api_catalog(db, store, stats=None):
     """Fetch the full product catalogue from Zid's authenticated Merchant API.
 
     Uses the per-store Manager Token + Store-Id headers (no OAuth flow). Iterates
@@ -2924,11 +2949,10 @@ async def _fetch_zid_api_catalog(db, store):
         "Accept-Language": "en",
         "Accept": "application/json",
     }
-    out = []
-    variant_stats = {"candidates": 0, "resolved": 0, "failed": 0}
+    stats = stats if stats is not None else {}
+    raw_items, status, page = [], "ok", 1
     try:
         async with httpx.AsyncClient(base_url="https://api.zid.sa/v1", timeout=45.0) as http:
-            page = 1
             while True:
                 resp = await http.get(
                     "/products/",
@@ -2936,75 +2960,13 @@ async def _fetch_zid_api_catalog(db, store):
                     headers=headers,
                 )
                 if resp.status_code in (401, 403):
-                    logger.error(f"[OwnSync][Zid API] auth rejected status={resp.status_code} after {len(out)} products")
+                    logger.error(f"[OwnSync][Zid API] auth rejected status={resp.status_code} after {len(raw_items)} products")
                     # Pages already fetched are real observations; keep them as partial.
-                    return out, "partial" if out else "auth_failed"
+                    status = "partial" if raw_items else "auth_failed"
+                    break
                 resp.raise_for_status()
                 payload = resp.json()
-                items = payload.get("results") or []
-                # Option parents without inline variants: fetch the Merchant
-                # detail route so each variant becomes its own offer instead
-                # of the whole listing being quarantined (339 rows on the
-                # 10 Oct 2026 sync).
-                async def _merchant_detail(client, url, headers=None, **_):
-                    await asyncio.sleep(0.15)
-                    return await client.get(url, headers=headers)
-                vstats = await _resolve_zid_variant_parents(
-                    http, "", items, {}, fetch=_merchant_detail, headers=headers, path_fmt="/products/{id}/")
-                if vstats["candidates"]:
-                    variant_stats["candidates"] += vstats["candidates"]
-                    variant_stats["resolved"] += vstats["resolved"]
-                    variant_stats["failed"] += vstats["failed"]
-                from observation_contract import expand_variants, money, observed_int
-                for p in [v for item in items for v in expand_variants(item)]:
-                    name_obj = p.get("name") or {}
-                    if isinstance(name_obj, str):
-                        name_obj = {"ar": name_obj, "en": name_obj}
-                    # iter73d — preserve the LIST price separately so
-                    # `resolve_own_price` can gross both list AND sale to the
-                    # same VAT basis. Before, `raw.price` collapsed to
-                    # `sale_price OR list`, dropping the list on on-sale
-                    # products — which erased the strikethrough / discount %
-                    # everywhere the Discounts / detail panels expect it.
-                    _list = money(p.get("price")) or 0
-                    _sale = money(p.get("sale_price")) or 0
-                    _eff = _sale if _sale and _sale > 0 else _list
-                    # A Zid product with no SKU is still one product; key it by
-                    # its Zid id (the `Z.<id>` convention storefront_price_lookup
-                    # already understands) instead of collapsing every such
-                    # row into one my_products document with sku "".
-                    _sku = str(p.get("sku") or "").strip() or (f"Z.{p.get('id')}" if p.get("id") else "")
-                    out.append({
-                        "sku": _sku,
-                        "barcode": str(p.get("barcode") or "").strip(),
-                        "name_ar": name_obj.get("ar") or "",
-                        "name_en": name_obj.get("en") or "",
-                        "price": _eff,
-                        "sale_price": _sale if _sale and _sale > 0 else None,
-                        "list_price": _list,       # NEW — always the regular price
-                        "qty_available": None if p.get("is_infinite") else observed_int(p.get("quantity")),
-                        "in_stock": True if p.get("is_infinite") else (observed_int(p.get("quantity")) > 0 if observed_int(p.get("quantity")) is not None else None),
-                        "listing_id": p.get("_listing_id"), "variant_id": p.get("_variant_id"),
-                        "_unresolved_parent": p.get("_unresolved_parent"), "has_options": p.get("has_options"),
-                        "_resolved_child": p.get("_resolved_child"), "_parent_sku": p.get("_parent_sku"),
-                        "attributes": p.get("attributes"), "currency": p.get("currency"),
-                        # Store-supplied taxonomy, verbatim (category share needs it).
-                        "store_categories": extract_store_categories(p),
-                        # Cumulative units-sold counter — feeds the estimator's
-                        # sold_count_diff method (works even for is_infinite
-                        # products whose qty can never show depletion).
-                        "sold_count": _extract_zid_sold_count(p),
-                        # iter46 — needed to decide whether a non-storefront
-                        # product may be grossed up by VAT. Preserved as a
-                        # TRISTATE: True / False / None(unknown) — never
-                        # coerced, so "unknown" can be tagged instead of
-                        # silently inflating a price.
-                        "is_taxable": _zid_is_taxable(p),
-                        "img_url": ((p.get("images") or [{}])[0] or {}).get("origin") or ((p.get("images") or [{}])[0] or {}).get("image") or "",
-                        "product_url": p.get("html_url") or "",
-                        "_zid_id": p.get("id"),
-                        "_zid_is_infinite": bool(p.get("is_infinite")),
-                    })
+                raw_items.extend(payload.get("results") or [])
                 if not payload.get("next"):
                     break
                 page += 1
@@ -3012,14 +2974,82 @@ async def _fetch_zid_api_catalog(db, store):
                 await asyncio.sleep(0.15)
                 if page > 100:
                     logger.warning("[OwnSync][Zid API] hit 100-page safety cap")
-                    return out, "partial"
+                    status = "partial"
+                    break
+            if raw_items and status != "auth_failed":
+                # has_options parents arrive with variants=[]; the detail route
+                # (trailing slash — without it the API 301s) carries the children.
+                async def _fetch_detail(listing):
+                    r = await http.get(f"/products/{listing['id']}/", headers=headers)
+                    if r.status_code != 200:
+                        logger.info(f"[VariantDetail] merchant_api product={listing['id']} http_status={r.status_code}")
+                        return r.status_code, None
+                    body = r.json()
+                    return 200, (body.get("product") if isinstance(body, dict) and isinstance(body.get("product"), dict) else body)
+                await _zid_variant_detail_supplement(_fetch_detail, raw_items, stats, "merchant_api")
     except httpx.HTTPError as e:
-        logger.error(f"[OwnSync][Zid API] network error after {len(out)} products: {e}")
-        return out, "partial" if out else "network_failed"
-    logger.info(f"[OwnSync][Zid API] fetched {len(out)} products in {page} page(s); "
-                f"variant parents resolved {variant_stats['resolved']}/{variant_stats['candidates']} "
-                f"(failed {variant_stats['failed']})")
-    return out, "ok"
+        logger.error(f"[OwnSync][Zid API] network error after {len(raw_items)} products: {e}")
+        status = "partial" if raw_items else "network_failed"
+    out = _zid_merchant_rows(raw_items)
+    if status == "ok":
+        logger.info(f"[OwnSync][Zid API] fetched {len(out)} products in {page} page(s)")
+    return out, status
+
+
+def _zid_merchant_rows(items):
+    """Map Merchant API listings (variants expanded) to the pre-normalised own-store row shape."""
+    from observation_contract import expand_variants, money, observed_int
+    out = []
+    for p in [v for item in items for v in expand_variants(item)]:
+        name_obj = p.get("name") or {}
+        if isinstance(name_obj, str):
+            name_obj = {"ar": name_obj, "en": name_obj}
+        # iter73d — preserve the LIST price separately so
+        # `resolve_own_price` can gross both list AND sale to the
+        # same VAT basis. Before, `raw.price` collapsed to
+        # `sale_price OR list`, dropping the list on on-sale
+        # products — which erased the strikethrough / discount %
+        # everywhere the Discounts / detail panels expect it.
+        _list = money(p.get("price")) or 0
+        _sale = money(p.get("sale_price")) or 0
+        _eff = _sale if _sale and _sale > 0 else _list
+        # A Zid product with no SKU is still one product; key it by
+        # its Zid id (the `Z.<id>` convention storefront_price_lookup
+        # already understands) instead of collapsing every such
+        # row into one my_products document with sku "".
+        _sku = str(p.get("sku") or "").strip() or (f"Z.{p.get('id')}" if p.get("id") else "")
+        out.append({
+            "sku": _sku,
+            "barcode": str(p.get("barcode") or "").strip(),
+            "name_ar": name_obj.get("ar") or "",
+            "name_en": name_obj.get("en") or "",
+            "price": _eff,
+            "sale_price": _sale if _sale and _sale > 0 else None,
+            "list_price": _list,       # NEW — always the regular price
+            "qty_available": None if p.get("is_infinite") else observed_int(p.get("quantity")),
+            "in_stock": True if p.get("is_infinite") else (observed_int(p.get("quantity")) > 0 if observed_int(p.get("quantity")) is not None else None),
+            "listing_id": p.get("_listing_id"), "variant_id": p.get("_variant_id"),
+            "_unresolved_parent": p.get("_unresolved_parent"), "has_options": p.get("has_options"),
+            "_resolved_child": p.get("_resolved_child"), "_parent_sku": p.get("_parent_sku"),
+            "attributes": p.get("attributes"), "currency": p.get("currency"),
+            # Store-supplied taxonomy, verbatim (category share needs it).
+            "store_categories": extract_store_categories(p),
+            # Cumulative units-sold counter — feeds the estimator's
+            # sold_count_diff method (works even for is_infinite
+            # products whose qty can never show depletion).
+            "sold_count": _extract_zid_sold_count(p),
+            # iter46 — needed to decide whether a non-storefront
+            # product may be grossed up by VAT. Preserved as a
+            # TRISTATE: True / False / None(unknown) — never
+            # coerced, so "unknown" can be tagged instead of
+            # silently inflating a price.
+            "is_taxable": _zid_is_taxable(p),
+            "img_url": ((p.get("images") or [{}])[0] or {}).get("origin") or ((p.get("images") or [{}])[0] or {}).get("image") or "",
+            "product_url": p.get("html_url") or "",
+            "_zid_id": p.get("id"),
+            "_zid_is_infinite": bool(p.get("is_infinite")),
+        })
+    return out
 
 
 def storefront_shelf_price(raw):
@@ -3481,9 +3511,17 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
 
     # ── Try Zid Merchant API first; fall back to public crawl on miss ──
     sync_source_label = None
-    all_raw, zid_status = (targeted_rows, "targeted_public") if targeted_rows is not None else await _fetch_zid_api_catalog(db, store)
+    variant_stats = {}
+    import inspect
+    _stats_kw = {"stats": variant_stats} if "stats" in inspect.signature(_fetch_zid_api_catalog).parameters else {}
+    all_raw, zid_status = (targeted_rows, "targeted_public") if targeted_rows is not None else await _fetch_zid_api_catalog(db, store, **_stats_kw)
     winning_endpoint = None
     crawl_log = _make_crawl_log(store, tier_attempted=1)
+    for k, v in variant_stats.items():
+        if k == "endpoints_tried":
+            crawl_log["endpoints_tried"].extend(v)
+        else:
+            crawl_log[k] = v
 
     if targeted_rows is not None:
         sync_source_label = "public_crawl"

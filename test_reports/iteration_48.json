@@ -1,0 +1,59 @@
+{
+  "summary": "Executed FINAL P0 backend-only validation on disposable loopback Mongo using new post-fix harness without modifying application code. Verified timeout cause from RCA traceback, timeout handling contract (503/retryable), no GET-side business writes, no silent truncation across 2,832 products/6 pages, and pipeline output parity (old vs optimized). Remaining high-priority limitation: process-memory singleflight/memory warm behavior did not coalesce concurrent cold requests in this local run.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/my-products",
+        "issue": "Concurrent cold requests did not singleflight in-process compute path in local validation (compute_calls=5 for 5 concurrent requests; cancel path compute_calls=2).",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "/api/my-products",
+        "issue": "Warm request remained live_fallback in observer/local run (no DB cache writes by design; memory warm benefit not observed)."
+      },
+      {
+        "endpoint": "external preview /api/my-products",
+        "issue": "Authenticated preview smoke test skipped because _auth helper could not login (DALEEL_TEST_PASSWORD/env-backed helper assertion)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_p0_my_products_fix.py",
+    "/app/test_reports/p0_my_products/fix_validation_post_fix.json",
+    "/app/test_reports/p0_my_products/run_reviewed_tests_p0.log",
+    "/app/test_reports/pytest/p0_my_products_fix.xml"
+  ],
+  "action_items": [
+    "Investigate my_products_cache singleflight key/loop scoping in ASGI path; expected one snapshot aggregate for concurrent identical cold requests.",
+    "Re-run external preview authenticated smoke with valid env-backed auth helper credential input (without creating new accounts).",
+    "After singleflight fix, re-run: pytest -v /app/backend/tests/test_p0_my_products_fix.py --tb=short --junitxml=/app/test_reports/pytest/p0_my_products_fix.xml"
+  ],
+  "critical_code_review_comments": [
+    "Timeout/error contract improvement verified: injected ExecutionTimeout, NetworkTimeout, raw TimeoutError, and partial-cursor/getMore failure now return explicit HTTP 503 retryable (no 200 empty-data fallback).",
+    "Read deadline evidence verified: aggregate commands carried maxTimeMS=15000 and app-level bounded read returned price_query_timeout on deadline breach.",
+    "Output parity preserved for optimized snapshot pipeline: rows_old=12610 == rows_new=12610 and per-row field parity matched excluding internal validity metadata."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_p0_my_products_fix.py",
+    "/app/test_reports/p0_my_products/fix_validation_post_fix.json",
+    "/app/test_reports/p0_my_products/run_reviewed_tests_p0.log",
+    "/app/test_reports/pytest/p0_my_products_fix.xml",
+    "/app/test_reports/iteration_48.json"
+  ],
+  "success_rate": {
+    "backend": "92%",
+    "frontend": "N/A (backend-only request)"
+  },
+  "seed_data_creation": "Created disposable DB p0_my_products_fix_7b4d24bb26 with 2,832 own products and 100,811 snapshots; additional valid GTIN semantic fixtures injected in-test for normalized GTIN and 2kg46 vs 4kg85 variant mismatch checks.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Baseline evidence preserved: /app/test_reports/iteration_47.json and /app/test_reports/p0_my_products/baseline_pre_fix.json untouched. New harness file is /app/backend/tests/test_p0_my_products_fix.py. Local medians and read counts are in fix_validation_post_fix.json; reviewed safe groups executed via scripts/run_reviewed_tests.py and passed (log captured).",
+  "rca of the issue": "Verified root cause reference from production RCA document remains aggregate read timeout path (price_cohort trace with socketTimeoutMS=45000). Post-fix behavior locally confirms explicit timeout handling and no cache-on-error; remaining limitation appears around in-process request coalescing observation (singleflight not observed under this ASGI test run)."
+}

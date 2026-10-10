@@ -1,0 +1,474 @@
+{
+  "payload_variants": {
+    "256B": {
+      "seed": {
+        "own_store_id": "own-store-iter51",
+        "competitor_store_ids": [
+          "comp-01",
+          "comp-02",
+          "comp-03"
+        ],
+        "seed_now": "2026-10-10 09:42:25+00:00",
+        "seeded_products": 2832,
+        "seeded_snapshots": 101953,
+        "payload_size": 256
+      },
+      "index_names": [
+        "_id_",
+        "crawled_at_1",
+        "product_id_1",
+        "sku_1_crawled_at_-1",
+        "store_id_1_crawled_at_-1"
+      ],
+      "cohort_benchmark_ms": {
+        "old_compact": {
+          "min": 414.39,
+          "median": 417.23,
+          "p95": 424.03
+        },
+        "new_pointer": {
+          "min": 788.31,
+          "median": 821.86,
+          "p95": 828.17
+        }
+      },
+      "cohort_read_counts": {
+        "old_compact": [
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 78.099
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 334.314
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          },
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 77.792
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 340.556
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          },
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 75.903
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 335.323
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          }
+        ],
+        "new_pointer": [
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 514.385
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 301.192
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          },
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 472.368
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 309.678
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          },
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 511.873
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 310.733
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          }
+        ]
+      },
+      "parity": {
+        "cohort_key_count": 8496,
+        "store_latest_key_count": 8497,
+        "ranking_store_count": 4
+      },
+      "execution_stats": {
+        "old": {
+          "totalDocsExamined": 101952,
+          "totalKeysExamined": 101953,
+          "executionTimeMillis": 391,
+          "usedDisk": false,
+          "spills": 0,
+          "spilledBytes": null,
+          "maxAccumulatorMemoryUsageBytes": {
+            "latest": 5864040,
+            "historical_max": 611712
+          },
+          "nReturned": 101952
+        },
+        "new": {
+          "totalDocsExamined": 101952,
+          "totalKeysExamined": 101953,
+          "executionTimeMillis": 734,
+          "usedDisk": false,
+          "spills": 0,
+          "spilledBytes": null,
+          "maxAccumulatorMemoryUsageBytes": {
+            "_latest_id": 611712,
+            "history_oldest_at": 611712,
+            "historical_max_price": 611712
+          },
+          "nReturned": 101952
+        }
+      }
+    },
+    "4KiB": {
+      "seed": {
+        "own_store_id": "own-store-iter51",
+        "competitor_store_ids": [
+          "comp-01",
+          "comp-02",
+          "comp-03"
+        ],
+        "seed_now": "2026-10-10 09:42:36+00:00",
+        "seeded_products": 2832,
+        "seeded_snapshots": 101953,
+        "payload_size": 4096
+      },
+      "index_names": [
+        "_id_",
+        "crawled_at_1",
+        "product_id_1",
+        "sku_1_crawled_at_-1",
+        "store_id_1_crawled_at_-1"
+      ],
+      "cohort_benchmark_ms": {
+        "old_compact": {
+          "min": 416.29,
+          "median": 418.66,
+          "p95": 419.76
+        },
+        "new_pointer": {
+          "min": 792.36,
+          "median": 824.74,
+          "p95": 838.34
+        }
+      },
+      "cohort_read_counts": {
+        "old_compact": [
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 72.776
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 344.256
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          },
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 76.792
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 338.408
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          },
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 76.009
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 334.313
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          }
+        ],
+        "new_pointer": [
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 473.73
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 314.208
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          },
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 500.424
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 318.368
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          },
+          {
+            "by_command": {
+              "getMore": {
+                "count": 1,
+                "duration_ms": 523.101
+              },
+              "aggregate": {
+                "count": 1,
+                "duration_ms": 310.897
+              },
+              "distinct": {
+                "count": 0,
+                "duration_ms": 0.0
+              },
+              "find": {
+                "count": 0,
+                "duration_ms": 0.0
+              }
+            },
+            "total_read_commands": 2
+          }
+        ]
+      },
+      "parity": {
+        "cohort_key_count": 8496,
+        "store_latest_key_count": 8497,
+        "ranking_store_count": 4
+      },
+      "execution_stats": {
+        "old": {
+          "totalDocsExamined": 101952,
+          "totalKeysExamined": 101953,
+          "executionTimeMillis": 404,
+          "usedDisk": false,
+          "spills": 0,
+          "spilledBytes": null,
+          "maxAccumulatorMemoryUsageBytes": {
+            "latest": 5864040,
+            "historical_max": 611712
+          },
+          "nReturned": 101952
+        },
+        "new": {
+          "totalDocsExamined": 101952,
+          "totalKeysExamined": 101953,
+          "executionTimeMillis": 736,
+          "usedDisk": false,
+          "spills": 0,
+          "spilledBytes": null,
+          "maxAccumulatorMemoryUsageBytes": {
+            "_latest_id": 611712,
+            "history_oldest_at": 611712,
+            "historical_max_price": 611712
+          },
+          "nReturned": 101952
+        }
+      }
+    }
+  },
+  "failure_contracts": {
+    "timeout::/api/my-products": {
+      "status": 503,
+      "body": {
+        "detail": {
+          "code": "price_query_timeout",
+          "message": "Price results are temporarily unavailable. Please retry.",
+          "retryable": true
+        }
+      }
+    },
+    "timeout::/api/price-intel/dashboard": {
+      "status": 503,
+      "body": {
+        "detail": {
+          "code": "price_query_timeout",
+          "message": "Price results are temporarily unavailable. Please retry.",
+          "retryable": true
+        }
+      }
+    },
+    "timeout::/api/price-intel/store-ranking": {
+      "status": 503,
+      "body": {
+        "detail": {
+          "code": "price_query_timeout",
+          "message": "Price results are temporarily unavailable. Please retry.",
+          "retryable": true
+        }
+      }
+    },
+    "timeout::/api/market-share/overview": {
+      "status": 503,
+      "body": {
+        "detail": {
+          "code": "price_query_timeout",
+          "message": "Price results are temporarily unavailable. Please retry.",
+          "retryable": true
+        }
+      }
+    },
+    "timeout::/api/insights/leaderboard": {
+      "status": 503,
+      "body": {
+        "detail": {
+          "code": "price_query_timeout",
+          "message": "Price results are temporarily unavailable. Please retry.",
+          "retryable": true
+        }
+      }
+    },
+    "timeout::/api/insights/top-sellers": {
+      "status": 503,
+      "body": {
+        "detail": {
+          "code": "price_query_timeout",
+          "message": "Price results are temporarily unavailable. Please retry.",
+          "retryable": true
+        }
+      }
+    },
+    "network_timeout::/api/my-products": {
+      "status": 503,
+      "body": {
+        "detail": {
+          "code": "price_query_timeout",
+          "message": "Price results are temporarily unavailable. Please retry.",
+          "retryable": true
+        }
+      }
+    }
+  }
+}

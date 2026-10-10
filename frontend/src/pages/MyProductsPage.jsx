@@ -79,6 +79,7 @@ export default function MyProductsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const requestId = useRef(0);
+  const requestAbort = useRef(null);
   const [days, setDays] = useState(30);
   const [onDate, setOnDate] = useState("");
   const [search, setSearch] = useState("");
@@ -98,6 +99,8 @@ export default function MyProductsPage() {
 
   const fetchData = useCallback(() => {
     const request = ++requestId.current;
+    requestAbort.current?.abort();
+    requestAbort.current = new AbortController();
     setLoading(true);
     setError(false);
     const offset = (page - 1) * pageSize;
@@ -109,13 +112,16 @@ export default function MyProductsPage() {
     };
     if (onDate) params.on_date = onDate;
     else params.days = days;
-    api.get("/my-products", { params })
+    api.get("/my-products", { params, signal: requestAbort.current.signal })
       .then((r) => request === requestId.current && setData(r.data))
-      .catch(() => { if (request === requestId.current) { setError(true); setData({ kpis: {}, products: [], total: 0 }); } })
+      .catch((failure) => { if (request === requestId.current) { setError(failure); } })
       .finally(() => request === requestId.current && setLoading(false));
   }, [days, onDate, debouncedSearch, category, sortBy, sortOrder, page, pageSize]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    fetchData();
+    return () => { requestId.current += 1; requestAbort.current?.abort(); };
+  }, [fetchData]);
   useEffect(() => {
     if (!syncRunId) return;
     let stopped = false;
@@ -183,7 +189,7 @@ export default function MyProductsPage() {
   };
 
   const kpis = data.kpis || {};
-  if (error) return <div className="p-6"><RequestError id="my-products-request" onRetry={fetchData} /></div>;
+  if (error) return <div className="p-6"><RequestError id="my-products-request" error={error} onRetry={fetchData} /></div>;
 
   return (
     <div className="p-6 space-y-5" data-testid="my-products-page">
@@ -241,7 +247,7 @@ export default function MyProductsPage() {
           // shows the order count; the estimation fallback keeps the old label.
           { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", tipKey: "kpi_my_revenue_tip", val: kpis.my_revenue == null ? "—" : `${kpis.my_revenue.toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : (kpis.my_revenue_source === "inventory_proxy" ? "Inventory-value proxy" : "Unavailable"), icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: kpis.avg_market_share == null ? "—" : `${kpis.avg_market_share}%`, sub: kpis.share_sample_size ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} products` : (isRTL ? "أدلة غير كافية" : "Insufficient sales evidence"), icon: TrendingDown, accent: "#F59E0B" },
-          { key: "kpi_market_coverage", tipKey: "kpi_market_coverage_tip", val: `${kpis.market_coverage_pct ?? 0}%`, sub: `${kpis.matched_products ?? 0} / ${kpis.total_products ?? 0}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
+          { key: "kpi_market_coverage", tipKey: "kpi_market_coverage_tip", val: kpis.market_coverage_pct == null ? "—" : `${kpis.market_coverage_pct}%`, sub: kpis.matched_products == null || kpis.total_products == null ? "Unavailable" : `${kpis.matched_products} / ${kpis.total_products}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
         ].filter(k => !release.price_comparison_only || ["kpi_products", "kpi_market_coverage"].includes(k.key)).map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
             <div className="flex items-center justify-between mb-2">
@@ -249,10 +255,10 @@ export default function MyProductsPage() {
                 {release.price_comparison_only && k.key === "kpi_market_coverage" ? "Tracked offer coverage" : t(k.key)}
                 {k.tipKey && <KpiInfoTooltip content={t(k.tipKey)} label={t("kpi_info_label")} />}
               </p>
-              <k.icon className="w-4 h-4" style={{ color: k.accent }} />
+              <k.icon className="w-4 h-4" style={{ color: loading ? "#1E988E" : k.accent }} />
             </div>
-            <p className="text-2xl font-bold tracking-tighter text-white metric-number animate-countUp">{k.val}</p>
-            {k.sub && <p className="text-[11px] text-[#A1E4DB] font-mono mt-0.5" data-testid={`kpi-${k.key}-sub`}>{k.sub}</p>}
+            <p className="text-2xl font-bold tracking-tighter text-white metric-number animate-countUp" data-testid={`kpi-${k.key}-value`}>{loading ? "—" : k.val}</p>
+            {(loading || k.sub) && <p className="text-[11px] text-[#A1E4DB] font-mono mt-0.5" data-testid={`kpi-${k.key}-sub`}>{loading ? (isRTL ? "جارٍ تحميل البيانات…" : "Loading observations…") : k.sub}</p>}
           </div>
         ))}
       </div>
@@ -495,7 +501,7 @@ export default function MyProductsPage() {
       <ProductDetailPanel sku={selectedSku} onClose={() => setSelectedSku(null)} />
 
       {/* Pagination */}
-      {data.total > pageSize && (
+      {!loading && data.total > pageSize && (
         <div className="flex items-center justify-between px-2" data-testid="pagination">
           <p className="text-xs text-[#A1E4DB]">
             {isRTL

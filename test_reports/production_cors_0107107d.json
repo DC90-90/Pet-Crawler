@@ -1,0 +1,30 @@
+{
+  "evidence_source": "Deployment-agent completion report relayed in this conversation; not an independent main-agent live test",
+  "active_run_id": "0107107d-2d21-47fb-8ee5-836d2779725f",
+  "outcome_reported": "Clean",
+  "live_url_reported": "https://saudi-pets-monitor.emergent.host",
+  "live_http_status_reported": 200,
+  "real_app_served_reported": true,
+  "backend_boot_without_cors_error_reported": true,
+  "cors_expected_single_origin": "https://daleel.hrm-sa.com",
+  "active_run_cors_matches_expected_reported": true,
+  "user_saved_setting": true,
+  "failed_previous_run_prefix": "35cb4348",
+  "previous_error": "CORS_ORIGINS must contain only explicit HTTP(S) origins",
+  "previous_failed_value_reported": "*",
+  "new_source_or_manifest_change_by_deployer_reported": false,
+  "main_agent_started_redeploy": false,
+  "main_agent_changed_production_secrets_or_data": false,
+  "full_production_readiness_approved": false,
+  "not_newly_verified": [
+    "Live /api/ready response",
+    "Custom-domain reachability",
+    "Authenticated and core user flows",
+    "Authorized backup restoration",
+    "Exact deployed Git SHA and immutable image provenance",
+    "Scheduler ownership and absence of overlapping legacy writers",
+    "Data freshness and quality",
+    "Operational acceptance"
+  ],
+  "next_action": "Separately authorized read-only live smoke checks and remaining gate evidence; no automatic production action"
+}

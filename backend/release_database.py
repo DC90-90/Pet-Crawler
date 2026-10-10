@@ -54,6 +54,20 @@ class GuardedDatabase:
     async def create_collection(self, *args, **kwargs):
         return await self.perform("$database", "create_collection", self.raw.create_collection, *args, **kwargs)
 
+    async def explain_snapshot_read(self, pipeline, *, hint=None):
+        """Dedicated READ-ONLY planner; general command policy stays unchanged."""
+        import asyncio
+        from read_plan_policy import MAX_PLAN_MS, validate_pipeline
+        validate_pipeline(pipeline)
+        command = {"explain": {"aggregate": "product_snapshots", "pipeline": pipeline,
+                    "cursor": {}, "allowDiskUse": True, "maxTimeMS": MAX_PLAN_MS},
+                   "verbosity": "queryPlanner"}
+        if hint is not None:
+            if not isinstance(hint, str):
+                raise ReleaseBlocked("invalid_read_plan_hint")
+            command["explain"]["hint"] = hint
+        return await asyncio.wait_for(self.raw.command(command), timeout=2.5)
+
     async def perform(self, collection, method, operation, *args, **kwargs):
         if collection == "release_control":
             raise ReleaseBlocked("control_plane_requires_authorized_transition")

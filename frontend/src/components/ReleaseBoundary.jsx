@@ -1,16 +1,13 @@
-import { useLocation, Link } from "react-router-dom";
 import { useRelease } from "@/contexts/ReleaseContext";
 
-const allowed = ["/", "/price-intel", "/insights", "/settings"];
 export const ReleaseBoundary = ({ children }) => {
   const release = useRelease();
-  const { pathname } = useLocation();
-  if (!release.price_comparison_only || allowed.includes(pathname)) return children;
-  return <section className="p-6 space-y-4" data-testid="release-feature-disabled">
-    <h1 className="text-4xl text-white font-bold">Unavailable in this release</h1>
-    <p className="text-sm text-[#A1E4DB]" data-testid="release-disabled-reason">Order analytics, outbound email and automated monitoring are disabled.</p>
-    <Link to="/price-intel" className="text-[#1E988E] underline" data-testid="release-back-to-prices">Observed price comparisons</Link>
-  </section>;
+  return <>
+    {release.mode !== "active" && <div role="status" className="mx-4 md:mx-6 mt-4 border-s-2 border-amber-400/70 bg-amber-400/5 px-4 py-3 text-xs text-[#A1E4DB]" data-testid="release-readonly-notice">
+      Read-only mode · Viewing and filtering are available. Changes, imports, source refreshes and delivery are disabled.
+    </div>}
+    {children}
+  </>;
 };
 
 export const ObservationNotice = () => {

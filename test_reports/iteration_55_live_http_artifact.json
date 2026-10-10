@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-10-10T11:49:51.361688+00:00",
+  "base_url": "https://daleel.hrm-sa.com",
+  "policy": {
+    "sequential_only": true,
+    "per_request_timeout_seconds": 12,
+    "no_heavy_endpoints": true,
+    "no_db_direct_calls": true
+  },
+  "results": [
+    {
+      "label": "health",
+      "method": "GET",
+      "requested_url": "https://daleel.hrm-sa.com/api/health",
+      "status_code": 200,
+      "observed_at": "2026-10-10T11:49:51.769551+00:00",
+      "elapsed_ms": 407.39,
+      "final_url": "https://daleel.hrm-sa.com/api/health",
+      "final_request_host": "daleel.hrm-sa.com",
+      "content_type": "application/json",
+      "response_json_sanitized": {
+        "status": "healthy",
+        "mongodb": "connected",
+        "scheduler_active_jobs": 0,
+        "playwright_available": true,
+        "last_successful_crawl": "2026-10-09T21:00:55.256337+00:00",
+        "uptime_seconds": 12190.3,
+        "boot": {
+          "status": "done",
+          "phase": "ready-observer",
+          "errors": []
+        }
+      },
+      "response_body_sanitized": null
+    },
+    {
+      "label": "analytics_cohort_unauth",
+      "method": "GET",
+      "requested_url": "https://daleel.hrm-sa.com/api/admin/analytics-read-plan?pipeline=cohort",
+      "status_code": 404,
+      "observed_at": "2026-10-10T11:49:51.839280+00:00",
+      "elapsed_ms": 69.64,
+      "final_url": "https://daleel.hrm-sa.com/api/admin/analytics-read-plan?pipeline=cohort",
+      "final_request_host": "daleel.hrm-sa.com",
+      "content_type": "application/json",
+      "response_json_sanitized": {
+        "detail": "Not Found"
+      },
+      "response_body_sanitized": null
+    }
+  ],
+  "flow": "route_not_deployed_at_observed_origin",
+  "notes": [
+    "404 on analytics-read-plan unauth probe; stopped per instruction."
+  ]
+}

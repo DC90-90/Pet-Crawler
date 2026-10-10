@@ -172,3 +172,8 @@ Rules taken from it:
    window can evict a fresh pod and fail the whole rollout.
 6. Preview NEVER reproduces this: local Mongo answers in microseconds and the
    image is warm. Reason about the cold-start path instead of testing for it.
+
+## 2026-10-10 — never edit backend/*.py while a long synchronous crawl runs in preview
+Uvicorn `--reload` (WatchFiles) shuts the worker down on ANY backend file change and waits for in-flight
+handlers ("Waiting for background tasks to complete"), so the preview API goes dark until the crawl
+finishes. Trigger crawls only after all code edits are done, or run crawls via the detached job path.

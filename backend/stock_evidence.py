@@ -1,6 +1,6 @@
 """Stock display contract: historical quantities are never current inventory."""
 from datetime import datetime, timezone, timedelta
-from price_cohort import aware
+from price_cohort import aware, max_offer_age_days
 from observation_contract import observed_int, unresolved_identity
 
 
@@ -11,7 +11,7 @@ def own_stock(product, now=None):
               "unresolved_parent_variants" if unresolved_identity(product) else
               product.get("price_unavailable_reason") or
               ("quarantined" if product.get("quarantine_active") else None))
-    if not reason and (stamp is None or stamp > now + timedelta(minutes=5) or now-stamp >= timedelta(days=7)):
+    if not reason and (stamp is None or stamp > now + timedelta(minutes=5) or now-stamp >= timedelta(days=max_offer_age_days())):
         reason = "stale_or_unknown_observation"
     qty = observed_int(product.get("quantity"))
     available = product.get("in_stock") if isinstance(product.get("in_stock"), bool) else None

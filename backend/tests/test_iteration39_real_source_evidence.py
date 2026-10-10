@@ -78,7 +78,7 @@ def test_real_beso_comparison_and_stale_unavailable_observations(source_db):
         # New unavailable observation supersedes old valid offer, never resurrected.
         unavailable = {**SOURCE["zarafa_litter"], "in_stock": False}
         await crawlers.process_crawled_products(db, stores[1], [unavailable], now+timedelta(seconds=1), tier=1)
-        await db.product_snapshots.update_many({"store_id": "petsy"}, {"$set": {"crawled_at": now-timedelta(days=9)}})
+        await db.product_snapshots.update_many({"store_id": "petsy"}, {"$set": {"crawled_at": now-timedelta(days=price_cohort.max_offer_age_days() + 2)}})
         cohort = (await price_cohort.build_cohorts(db, [own], "own", server._effective_own_price, now=now))[own["sku"]]
         assert cohort["min"] is None and cohort["sellers"] == []
         assert {s["excluded_reason"] for s in cohort["excluded"]} == {"out_of_stock", "stale_or_unknown_observation"}
