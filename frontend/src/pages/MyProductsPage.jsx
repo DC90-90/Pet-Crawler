@@ -111,7 +111,7 @@ export default function MyProductsPage() {
     else params.days = days;
     api.get("/my-products", { params })
       .then((r) => request === requestId.current && setData(r.data))
-      .catch(() => { if (request === requestId.current) { setError(true); setData({ kpis: {}, products: [], total: 0 }); } })
+      .catch((failure) => { if (request === requestId.current) { setError(failure); } })
       .finally(() => request === requestId.current && setLoading(false));
   }, [days, onDate, debouncedSearch, category, sortBy, sortOrder, page, pageSize]);
 
@@ -183,7 +183,7 @@ export default function MyProductsPage() {
   };
 
   const kpis = data.kpis || {};
-  if (error) return <div className="p-6"><RequestError id="my-products-request" onRetry={fetchData} /></div>;
+  if (error) return <div className="p-6"><RequestError id="my-products-request" error={error} onRetry={fetchData} /></div>;
 
   return (
     <div className="p-6 space-y-5" data-testid="my-products-page">

@@ -5,6 +5,8 @@ import { ShieldCheck, UserPlus, Trash2, KeyRound, ChevronDown, ChevronRight, Loc
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/App";
+import { ADMIN_READ_ONLY_REASON } from "@/lib/releaseActions";
+import { RequestError } from "@/components/RequestError";
 
 const PAGE_LABELS = {
   my_products: "My Products",
@@ -215,15 +217,15 @@ function UserRow({ u, allPages, onChange }) {
 
   return (
     <div className="rounded border mb-2" style={{ background: "#0A2728", borderColor: "#13625F" }} data-testid={`user-row-${u.id}`}>
-      <div className="flex items-center justify-between p-4">
+      <div className="flex flex-wrap gap-3 items-center justify-between p-4">
         <button
           type="button"
           onClick={() => !locked && setExpanded((v) => !v)}
-          className="flex items-center gap-3 text-left flex-1"
+          className="flex items-center gap-3 text-left flex-1 min-w-0"
           data-testid={`user-toggle-${u.id}`}
         >
           {locked ? <Lock className="w-4 h-4" style={{ color: "#FBBF24" }} /> : (expanded ? <ChevronDown className="w-4 h-4" style={{ color: "#A1E4DB" }} /> : <ChevronRight className="w-4 h-4" style={{ color: "#A1E4DB" }} />)}
-          <div>
+          <div className="min-w-0 break-words">
             <p className="text-sm" style={{ color: "#FFFFFF" }}>{u.name || u.email.split("@")[0]}</p>
             <p className="text-[11px]" style={{ color: "#A1E4DB", opacity: 0.7, fontFamily: "'JetBrains Mono', monospace" }}>{u.email}</p>
           </div>
@@ -235,10 +237,11 @@ function UserRow({ u, allPages, onChange }) {
           </span>
           {!locked && (
             <button
+              disabled
               onClick={deleteUser}
               className="p-2 rounded hover:bg-[#EF4444]/10 transition"
               style={{ color: "#EF4444" }}
-              title="Delete user"
+              title={ADMIN_READ_ONLY_REASON}
               data-testid={`delete-user-${u.id}`}
             >
               <Trash2 className="w-4 h-4" />
@@ -259,7 +262,7 @@ function UserRow({ u, allPages, onChange }) {
       )}
 
       {expanded && !locked && (
-        <div className="px-4 pb-4 space-y-4" style={{ borderTop: "1px solid #13625F" }}>
+        <fieldset disabled title={ADMIN_READ_ONLY_REASON} data-testid={`user-readonly-fields-${u.id}`} className="px-4 pb-4 space-y-4 min-w-0" style={{ borderTop: "1px solid #13625F" }}>
           <div className="pt-4">
             <label className="text-[10px] uppercase tracking-wider mb-2 block" style={{ color: "#A1E4DB", fontFamily: "'JetBrains Mono', monospace" }}>Role</label>
             <select
@@ -332,13 +335,14 @@ function UserRow({ u, allPages, onChange }) {
               {pwForm.saving ? "Saving..." : "Update"}
             </Button>
           </form>
-        </div>
+        </fieldset>
       )}
     </div>
   );
 }
 
 export default function UsersPage() {
+  const [error, setError] = useState(null);
   const { user: currentUser } = useAuth();
   const [data, setData] = useState({ users: [], all_pages: [], valid_roles: [] });
   const [loading, setLoading] = useState(true);
@@ -346,11 +350,12 @@ export default function UsersPage() {
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const { data: resp } = await api.get("/admin/users");
       setData(resp);
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Failed to load users");
+      setError(err);
     } finally {
       setLoading(false);
     }
@@ -372,9 +377,10 @@ export default function UsersPage() {
     return a.email.localeCompare(b.email);
   });
 
+  if (error) return <div className="p-6" data-testid="users-page"><RequestError id="users-request" error={error} onRetry={fetchUsers} /></div>;
   return (
     <div className="p-6 space-y-5" data-testid="users-page">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-[0.05em] uppercase" style={{ color: "#FFFFFF", fontFamily: "'Space Grotesk', sans-serif" }}>
             <ShieldCheck className="inline-block w-6 h-6 me-2" style={{ color: "#1E988E" }} />
@@ -393,7 +399,10 @@ export default function UsersPage() {
         />
       </div>
 
-      <CreateUserForm allPages={data.all_pages} onCreated={fetchUsers} />
+      <p className="text-xs text-amber-300" data-testid="users-readonly-reason">{ADMIN_READ_ONLY_REASON}</p>
+      <fieldset disabled title={ADMIN_READ_ONLY_REASON} className="min-w-0" data-testid="create-user-readonly">
+        <CreateUserForm allPages={data.all_pages} onCreated={fetchUsers} />
+      </fieldset>
 
       <div data-testid="users-list">
         {loading && <p className="text-xs" style={{ color: "#A1E4DB" }}>Loading...</p>}

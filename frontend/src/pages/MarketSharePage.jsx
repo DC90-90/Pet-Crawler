@@ -48,7 +48,7 @@ export default function MarketSharePage() {
     setOptionsError(false);
     api.get("/market-share/overview", { params: { days, include_today: includeToday } })
       .then((r) => setOpts(r.data.filters || { categories: [], brands: [], stores: [] }))
-      .catch(() => setOptionsError(true));
+      .catch((failure) => setOptionsError(failure));
   }, [days, nonce, includeToday]);
 
   const filters = useMemo(() => {
@@ -147,7 +147,7 @@ export default function MarketSharePage() {
       </div>
 
       <ComparisonScope scope={scope} prefix="ms" />
-      {optionsError && <RequestError id="ms-filter-options" onRetry={() => setNonce(n => n + 1)} />}
+      {optionsError && <RequestError id="ms-filter-options" error={optionsError} onRetry={() => setNonce(n => n + 1)} />}
       {tab !== "methodology" && (
         <div className="glass-card p-3" data-testid="ms-filters">
           <div className="flex flex-wrap items-center gap-2">

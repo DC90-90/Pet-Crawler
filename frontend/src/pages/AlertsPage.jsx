@@ -11,6 +11,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SkuLine } from "@/components/SkuLine";
+import { useReleaseActions, READ_ONLY_REASON } from "@/lib/releaseActions";
+import { RequestError } from "@/components/RequestError";
 
 const ALERT_TYPES = [
   { value: "price_drop", label: "Price Drop", icon: ArrowDown, color: "text-red-500" },
@@ -32,6 +34,9 @@ function AlertTypeIcon({ type }) {
 }
 
 export default function AlertsPage() {
+  const { canEdit, canDeliver } = useReleaseActions();
+  const canChange = canEdit && canDeliver;
+  const [error, setError] = useState(null);
   const { t, isRTL } = useI18n();
   const [alerts, setAlerts] = useState([]);
   const [feed, setFeed] = useState([]);
@@ -53,13 +58,14 @@ export default function AlertsPage() {
 
   const fetchAll = useCallback(() => {
     setLoading(true);
+    setError(null);
     Promise.all([
       api.get("/alerts"),
       api.get("/alerts/feed?days=30"),
     ]).then(([a, f]) => {
       setAlerts(a.data);
       setFeed(f.data);
-    }).catch(console.error).finally(() => setLoading(false));
+    }).catch(setError).finally(() => setLoading(false));
   }, []);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
@@ -98,6 +104,7 @@ export default function AlertsPage() {
   };
 
   const handleCreate = async () => {
+    if (!canChange) return;
     if (!form.product_sku) { toast.error("Select a product"); return; }
     try {
       await api.post("/alerts", form);
@@ -110,6 +117,7 @@ export default function AlertsPage() {
   };
 
   const handleDelete = async (id) => {
+    if (!canChange) return;
     try {
       await api.delete(`/alerts/${id}`);
       toast.success("Alert deleted");
@@ -118,6 +126,7 @@ export default function AlertsPage() {
   };
 
   const handleToggle = async (id) => {
+    if (!canChange) return;
     try {
       await api.put(`/alerts/${id}/toggle`);
       fetchAll();
@@ -125,6 +134,7 @@ export default function AlertsPage() {
   };
 
   const handleCheck = async () => {
+    if (!canChange) return;
     setChecking(true);
     try {
       const r = await api.post("/alerts/check");
@@ -139,20 +149,21 @@ export default function AlertsPage() {
     return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
   };
 
-  if (loading) return <div className="p-6 text-sm text-[#A1E4DB]">{t("loading")}</div>;
+  if (loading) return <div className="p-6 text-sm text-[#A1E4DB]" data-testid="alerts-loading">{t("loading")}</div>;
+  if (error) return <div className="p-6" data-testid="alerts-page"><RequestError id="alerts-request" error={error} onRetry={fetchAll} /></div>;
 
   return (
     <div className="p-6 space-y-5" data-testid="alerts-page">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap gap-3 items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">Alerts</h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">Monitor price changes and stock events</p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleCheck} disabled={checking} className="rounded-md text-xs" data-testid="check-alerts-btn">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={handleCheck} disabled={!canChange || checking} title={!canChange ? READ_ONLY_REASON : undefined} className="rounded-md text-xs" data-testid="check-alerts-btn">
             <RefreshCw className={`w-3.5 h-3.5 me-1.5 ${checking ? "animate-sync" : ""}`} />Check Now
           </Button>
-          <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md text-xs" data-testid="create-alert-btn">
+          <Button disabled={!canChange} title={!canChange ? READ_ONLY_REASON : undefined} size="sm" onClick={() => setDialogOpen(true)} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md text-xs" data-testid="create-alert-btn">
             <Plus className="w-3.5 h-3.5 me-1.5" />Create Alert
           </Button>
         </div>
@@ -204,10 +215,10 @@ export default function AlertsPage() {
                     </TableCell>
                     <TableCell className="text-end">
                       <div className="flex items-center gap-1 justify-end">
-                        <Button variant="ghost" size="sm" onClick={() => handleToggle(a.id)} className="h-7 w-7 p-0" data-testid={`toggle-alert-${a.id}`}>
+                        <Button disabled={!canChange} title={!canChange ? READ_ONLY_REASON : "Toggle alert"} variant="ghost" size="sm" onClick={() => handleToggle(a.id)} className="h-7 w-7 p-0" data-testid={`toggle-alert-${a.id}`}>
                           <Power className={`w-3.5 h-3.5 ${a.is_active ? "text-green-500" : "text-gray-400"}`} />
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(a.id)} className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-50" data-testid={`delete-alert-${a.id}`}>
+                        <Button disabled={!canChange} title={!canChange ? READ_ONLY_REASON : "Remove alert"} variant="ghost" size="sm" onClick={() => handleDelete(a.id)} className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-50" data-testid={`delete-alert-${a.id}`}>
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
                       </div>
@@ -329,7 +340,7 @@ export default function AlertsPage() {
           </div>
           <DialogFooter className="relative z-[60]">
             <Button variant="outline" size="sm" onClick={() => { setDialogOpen(false); resetSkuSearch(); }} className="rounded-md" type="button">{t("btn_cancel")}</Button>
-            <Button size="sm" onClick={handleCreate} disabled={!form.product_sku} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md disabled:opacity-50" data-testid="alert-save-btn" type="button">Create Alert</Button>
+            <Button size="sm" onClick={handleCreate} disabled={!canChange || !form.product_sku} className="bg-[#1E988E] hover:bg-[#6AC1B5] text-white rounded-md disabled:opacity-50" data-testid="alert-save-btn" type="button">Create Alert</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

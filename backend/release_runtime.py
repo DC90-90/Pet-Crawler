@@ -46,6 +46,10 @@ async def authorize_request(db, request, actor):
         return  # These handlers separately require the existing super-admin dependency.
     if path.startswith("/api/zid") and not await feature(db, "exact_orders"):
         raise ReleaseBlocked("exact_orders_disabled")
+    # Existing authentication/page authorization runs before this release gate.
+    # These two handlers only read user-owned history; never enable delivery.
+    if request.method == "GET" and path in {"/api/alerts", "/api/alerts/feed"}:
+        return
     if path.startswith(("/api/alerts", "/api/notifications", "/api/digest")):
         raise ReleaseBlocked("outbound_notifications_unavailable")
     if path == "/api/import/sync-orders" and not await feature(db, "exact_orders"):

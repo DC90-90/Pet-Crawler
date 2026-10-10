@@ -21,13 +21,13 @@ export default function BrandShare({ days, includeToday, filters }) {
       params: { days, include_today: includeToday, ...(filters || {}) },
     })
       .then((r) => live && setData(r.data))
-      .catch(() => live && setError(true))
+      .catch((failure) => live && setError(failure))
       .finally(() => live && setLoading(false));
     return () => { live = false; };
   }, [days, filters, includeToday, retry]);
 
   const rows = data?.rows || [];
-  if (error) return <RequestError id="ms-brands" onRetry={() => setRetry(n => n + 1)} />;
+  if (error) return <RequestError id="ms-brands" error={error} onRetry={() => setRetry(n => n + 1)} />;
   if (loading) return <p data-testid="ms-brands-loading" className="text-sm text-[#A1E4DB]">Loading…</p>;
 
   return (

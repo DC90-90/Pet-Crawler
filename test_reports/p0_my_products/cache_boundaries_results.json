@@ -4,21 +4,21 @@
     "warm_source": "memory_cache",
     "after_revision_source": "live_fallback",
     "after_revision_reads": {
-      "aggregate": {
-        "count": 1,
-        "duration_ms": 316.786
-      },
       "getMore": {
         "count": 7,
-        "duration_ms": 108.498
+        "duration_ms": 124.618
       },
       "find": {
         "count": 15,
-        "duration_ms": 5.678
+        "duration_ms": 6.303999999999999
+      },
+      "aggregate": {
+        "count": 1,
+        "duration_ms": 391.885
       },
       "distinct": {
         "count": 1,
-        "duration_ms": 0.195
+        "duration_ms": 0.232
       }
     }
   },
@@ -27,24 +27,24 @@
     "future_source": "live_fallback",
     "wrong_key_checks": {
       "wrong_policy": {
-        "key": "my_products:my-products-read-v1:wrong-policy:5824aaff31ac:2026-10-10:days=30",
+        "key": "my_products:my-products-read-v1:wrong-policy:2668731eb415:2026-10-10:days=30",
         "source": "live_fallback",
         "reads": {
-          "aggregate": {
-            "count": 1,
-            "duration_ms": 331.862
-          },
           "getMore": {
             "count": 7,
-            "duration_ms": 110.947
+            "duration_ms": 129.93
           },
           "find": {
             "count": 15,
-            "duration_ms": 5.0409999999999995
+            "duration_ms": 5.943
+          },
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 426.768
           },
           "distinct": {
             "count": 1,
-            "duration_ms": 0.25
+            "duration_ms": 0.273
           }
         }
       },
@@ -52,65 +52,65 @@
         "key": "my_products:my-products-read-v1:offers-v3-parent-aware-current-7d:deadbeefcafe:2026-10-10:days=30",
         "source": "live_fallback",
         "reads": {
-          "aggregate": {
-            "count": 1,
-            "duration_ms": 312.385
-          },
           "getMore": {
             "count": 7,
-            "duration_ms": 138.481
+            "duration_ms": 132.585
           },
           "find": {
             "count": 15,
-            "duration_ms": 5.276
+            "duration_ms": 6.128
+          },
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 391.642
           },
           "distinct": {
             "count": 1,
-            "duration_ms": 0.219
+            "duration_ms": 0.229
           }
         }
       },
       "wrong_ksa_day": {
-        "key": "my_products:my-products-read-v1:offers-v3-parent-aware-current-7d:5824aaff31ac:1999-12-31:days=30",
+        "key": "my_products:my-products-read-v1:offers-v3-parent-aware-current-7d:2668731eb415:1999-12-31:days=30",
         "source": "live_fallback",
         "reads": {
-          "aggregate": {
-            "count": 1,
-            "duration_ms": 310.537
-          },
           "getMore": {
             "count": 7,
-            "duration_ms": 112.75099999999999
+            "duration_ms": 131.814
           },
           "find": {
             "count": 15,
-            "duration_ms": 4.982
+            "duration_ms": 5.856000000000001
+          },
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 379.467
           },
           "distinct": {
             "count": 1,
-            "duration_ms": 0.201
+            "duration_ms": 0.208
           }
         }
       },
       "wrong_window": {
-        "key": "my_products:my-products-read-v1:offers-v3-parent-aware-current-7d:5824aaff31ac:2026-10-10:days=7",
+        "key": "my_products:my-products-read-v1:offers-v3-parent-aware-current-7d:2668731eb415:2026-10-10:days=7",
         "source": "live_fallback",
         "reads": {
-          "aggregate": {
-            "count": 1,
-            "duration_ms": 320.671
-          },
           "getMore": {
             "count": 7,
-            "duration_ms": 140.11200000000002
+            "duration_ms": 171.74
           },
           "find": {
             "count": 15,
-            "duration_ms": 5.358999999999999
+            "duration_ms": 5.743
+          },
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 391.982
           },
           "distinct": {
             "count": 1,
-            "duration_ms": 0.293
+            "duration_ms": 0.248
           }
         }
       }
@@ -118,8 +118,8 @@
   },
   "quantity_observed_precedence_api": {
     "sku": "SKU-MANUAL",
-    "stock_observed_at": "2026-10-10T04:49:02.018655+00:00",
-    "last_synced_at": "2026-10-10T06:44:02.018655+00:00"
+    "stock_observed_at": "2026-10-10T06:05:40.081296+00:00",
+    "last_synced_at": "2026-10-10T08:00:40.081296+00:00"
   },
   "history_180d_boundary": {
     "in_window_sellers": 2,
@@ -133,21 +133,21 @@
     "second_status": 200,
     "second_source": "live_fallback",
     "second_reads": {
-      "aggregate": {
-        "count": 1,
-        "duration_ms": 312.157
-      },
       "getMore": {
         "count": 7,
-        "duration_ms": 111.996
+        "duration_ms": 123.00200000000001
       },
       "find": {
         "count": 15,
-        "duration_ms": 5.092000000000001
+        "duration_ms": 5.949999999999999
+      },
+      "aggregate": {
+        "count": 1,
+        "duration_ms": 383.51
       },
       "distinct": {
         "count": 1,
-        "duration_ms": 0.198
+        "duration_ms": 0.232
       }
     },
     "flights_after_retry": 0
@@ -157,7 +157,7 @@
     "base_url": "https://price-intel-dev.preview.emergentagent.com"
   },
   "exact_7d_transition": {
-    "derived_valid_until": "2026-10-10T06:51:01.753000+00:00",
+    "derived_valid_until": "2026-10-10T08:07:39.805000+00:00",
     "valid_at_119s": true,
     "valid_at_121s": false
   },

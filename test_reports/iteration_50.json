@@ -1,0 +1,55 @@
+{
+  "summary": "Completed backend+frontend verification for read-only navigation restoration and truthful error behavior on preview. Super-admin now sees all 10 authorized tabs (including Market Share, Users, Alerts), all direct URLs load without release route-block page, read-only action controls are disabled across Stores/Import/Alerts/Users/Coverage, and backend release guards behaved as expected. One frontend gap remains: Market Share request errors still render generic text for typed backend codes.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Market Share error surfacing",
+        "issue": "MOCKED 500 with detail.code=price_source_changed renders generic message ('Request failed. Results are unavailable, not empty.') instead of specific mapped race/source-change text.",
+        "affected_selectors": [
+          "[data-testid='ms-overview-error-message']"
+        ]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter50_readonly_navigation_and_alerts.py",
+    "/app/test_reports/pytest/iteration_50_backend.xml",
+    "/app/test_reports/pytest/iteration_50_p0_three_modules.xml",
+    "/app/test_reports/iteration_50_p0_three_modules.log",
+    "/app/test_reports/iteration_50_run_reviewed_tests.log"
+  ],
+  "action_items": [
+    "Pass Axios error object into Market Share RequestError render paths (ShareOverview/MyProductsShare/MissingProducts/BrandShare/CategoryShare/Methodology/ProductBreakdown) so detail.code-based messaging is shown when backend provides typed failures.",
+    "Keep production /api/my-products timeout issue explicitly OPEN (not claimed fixed in this test run).",
+    "After frontend error-prop wiring fix, re-run MOCKED market-share race/timeouts and verify specific messages + retry behavior still works."
+  ],
+  "critical_code_review_comments": [
+    "Navigation restoration is correctly implemented in Sidebar/App routes: super_admin visibility for Users, preserved settings link, and market-share tab availability confirmed live.",
+    "ReleaseBoundary now keeps routes mountable while showing read-only notice; no route-level release hard-block observed.",
+    "Read-only capability gating is consistently enforced in UI controls (buttons/input/fieldset disabled) and no non-GET business API calls were fired during read navigation/filter/sort actions.",
+    "Backend release runtime guard exceptions for GET /api/alerts and GET /api/alerts/feed are correctly preserved while /api/alerts* (other paths), /api/notifications, and alert mutations remain blocked under release policy."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter50_readonly_navigation_and_alerts.py",
+    "/app/test_reports/iteration_50.json",
+    "/app/test_reports/pytest/iteration_50_backend.xml",
+    "/app/test_reports/pytest/iteration_50_p0_three_modules.xml",
+    "/app/test_reports/iteration_50_p0_three_modules.log",
+    "/app/test_reports/iteration_50_run_reviewed_tests.log"
+  ],
+  "success_rate": {
+    "backend": "100% (7/7 in iter50 target suite; requested reviewed/P0 reruns passed)",
+    "frontend": "92% (core read-only/nav workflows passed; 1 truthful-error mapping gap)"
+  },
+  "seed_data_creation": "No persistent preview data created. Disposable UUID loopback Mongo database used for release-runtime no-write verification and dropped after test.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Front-end real super-admin checks were run against https://price-intel-dev.preview.emergentagent.com with helper token injection (no hardcoded creds). MOCKED error tests validated my-products typed timeout messaging and retry success; market-share currently falls back to generic message because RequestError is mounted without error prop in several market-share components. MOCKED restricted-user /auth/me test confirmed only My Products nav visible and direct unauthorized route redirects to no-access. Desktop/mobile overflow offender scan reported 0 offenders.",
+  "rca of the issue": "RCA for remaining UI gap: RequestError supports typed backend error codes (price_query_timeout, price_source_changed, etc.) via error.response.data.detail.code, but multiple Market Share components render <RequestError ... /> without passing their caught Axios error object. This drops error context and forces generic fallback text, even when backend returned a specific race/timeout code. Reproduction: MOCKED 500 on /api/market-share/overview with {detail:{code:'price_source_changed'}} shows generic message; retry works and table reloads after mock removal."
+}

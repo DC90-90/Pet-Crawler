@@ -17,11 +17,11 @@ export default function CategoryShare({ days, includeToday, filters }) {
     setError(false);
     api.get("/market-share/categories", { params: { days, include_today: includeToday, ...(filters || {}) } })
       .then((r) => live && setRows(r.data.rows || []))
-      .catch(() => live && setError(true));
+      .catch((failure) => live && setError(failure));
     return () => { live = false; };
   }, [days, includeToday, filters, retry]);
 
-  if (error) return <RequestError id="ms-categories" onRetry={() => setRetry(n => n + 1)} />;
+  if (error) return <RequestError id="ms-categories" error={error} onRetry={() => setRetry(n => n + 1)} />;
   if (!rows) return <p className="text-sm text-[#A1E4DB]" data-testid="ms-categories-loading">Loading…</p>;
   if (rows.length === 0) return (
     <p className="text-sm text-[#A1E4DB]" data-testid="ms-categories-empty">No category could be resolved yet</p>

@@ -15,11 +15,11 @@ export default function Methodology({ days, includeToday, scopeParams }) {
     setError(false); setD(null);
     api.get("/market-share/methodology", { params: { days, include_today: includeToday, ...scopeParams } })
       .then((r) => live && setD(r.data))
-      .catch(() => live && setError(true));
+      .catch((failure) => live && setError(failure));
     return () => { live = false; };
   }, [days, includeToday, scopeParams, retry]);
 
-  if (error) return <RequestError id="ms-methodology" onRetry={() => setRetry(n => n + 1)} />;
+  if (error) return <RequestError id="ms-methodology" error={error} onRetry={() => setRetry(n => n + 1)} />;
   if (!d) return <p className="text-sm text-[#A1E4DB]" data-testid="ms-methodology-loading">Loading…</p>;
 
   return (

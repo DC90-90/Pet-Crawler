@@ -19,8 +19,8 @@
  * Backward compat: `/insights` and `/price-intel` both mount this page.
  */
 import { useState, useEffect, useRef } from "react";
-import { useRelease } from "@/contexts/ReleaseContext";
-import PriceComparisonPage from "@/pages/PriceComparisonPage";
+import { useReleaseActions } from "@/lib/releaseActions";
+import { ObservationNotice } from "@/components/ReleaseBoundary";
 import { ComparisonScope, useComparisonScope } from "@/components/ComparisonScope";
 import { RequestError } from "@/components/RequestError";
 import { useNavigate } from "react-router-dom";
@@ -66,11 +66,11 @@ const fetchIntel = (path, params) => async () => {
 };
 
 export default function IntelPage() {
-  const release = useRelease();
-  return release?.price_comparison_only ? <PriceComparisonPage /> : <FullIntelPage />;
+  return <FullIntelPage />;
 }
 
 function FullIntelPage() {
+  const { canEdit, canDigest } = useReleaseActions();
   const scope = useComparisonScope();
   const [detailError, setDetailError] = useState(false);
   const detailRequest = useRef(0);
@@ -149,6 +149,7 @@ function FullIntelPage() {
   };
   const closeDetail = () => { detailRequest.current += 1; setSelectedSku(null); setDetail(null); setDetailError(false); };
   const confirmMatch = async (m) => {
+    if (!canEdit) return;
     try {
       await api.post("/price-intel/confirm-match", { my_sku: m.my_sku, competitor_sku: m.competitor_sku, competitor_store_id: m.competitor_store_id, competitor_offer_id: m.competitor_offer_id });
       toast.success("Match confirmed (confidence → 100)");
@@ -157,6 +158,7 @@ function FullIntelPage() {
     } catch { toast.error("Failed"); }
   };
   const rejectMatch = async (m) => {
+    if (!canEdit) return;
     try {
       await api.post("/price-intel/reject-match", { my_sku: m.my_sku, competitor_sku: m.competitor_sku, competitor_store_id: m.competitor_store_id, competitor_offer_id: m.competitor_offer_id });
       toast.success("Match rejected and blacklisted");
@@ -182,11 +184,12 @@ function FullIntelPage() {
     { id: "gaps",       label: isRTL ? "فجوات الكتالوج" : "Catalog Gaps",      count: catalogGaps.length,                    icon: PackageSearch },
   ] : [];
 
-  if (results[7].isError) return <div className="p-6" data-testid="intel-page"><RequestError id="intel-request" onRetry={() => results[7].refetch()} /></div>;
+  if (results[7].isError) return <div className="p-6" data-testid="intel-page"><RequestError id="intel-request" error={results[7].error} onRetry={() => results[7].refetch()} /></div>;
 
   return (
     <div className="p-6 space-y-5" data-testid="intel-page">
-      {results.some(q => q.isError) && <RequestError id="intel-request" onRetry={() => results.filter(q => q.isError).forEach(q => q.refetch())} />}
+      <ObservationNotice />
+      {results.some(q => q.isError) && <RequestError id="intel-request" error={results.find(q => q.isError)?.error} onRetry={() => results.filter(q => q.isError).forEach(q => q.refetch())} />}
       {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -202,7 +205,7 @@ function FullIntelPage() {
           )}
         </div>
         <div className="flex flex-wrap gap-2 items-center" data-testid="intel-date-range">
-          <Button variant="outline" size="sm" onClick={() => setDigestOpen(true)} className="rounded-md text-xs h-7" data-testid="digest-btn">
+          <Button disabled={!canDigest} title={!canDigest ? "Digests are unavailable in this release" : undefined} variant="outline" size="sm" onClick={() => setDigestOpen(true)} className="rounded-md text-xs h-7" data-testid="digest-btn">
             <BarChart3 className="w-3 h-3 me-1" />Last Digest
           </Button>
           <SeasonalToggle show={seasonal.show} toggle={seasonal.toggle} />
@@ -570,6 +573,7 @@ function FullIntelPage() {
       {/* Overlays */}
       <DigestModal open={digestOpen} onClose={() => setDigestOpen(false)} />
       <PriceIntelDetailSheet
+        readOnly={!canEdit}
         error={detailError} onRetry={() => openDetail(selectedSku)}
         selectedSku={selectedSku}
         detail={detail}

@@ -12,10 +12,12 @@ import api from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, Zap, PackageSearch } from "lucide-react";
+import { ADMIN_READ_ONLY_REASON } from "@/lib/releaseActions";
+import { RequestError } from "@/components/RequestError";
 
 export default function CoverageReportPage() {
   const [busyStore, setBusyStore] = useState("");
-  const { data, isLoading, refetch } = useQuery({
+  const { data, error, isLoading, refetch } = useQuery({
     queryKey: ["coverage-report"],
     queryFn: async () => (await api.get("/admin/coverage-report")).data,
     staleTime: 30_000,
@@ -45,6 +47,7 @@ export default function CoverageReportPage() {
   if (isLoading) {
     return <div className="p-6 text-[#A1E4DB] text-sm" data-testid="coverage-loading">Loading coverage report…</div>;
   }
+  if (error) return <div className="p-6" data-testid="coverage-report-page"><RequestError id="coverage-request" error={error} onRetry={refetch} /></div>;
 
   const rows = data?.stores || [];
   const totals = rows.reduce((a, r) => ({
@@ -67,7 +70,7 @@ export default function CoverageReportPage() {
           <Button size="sm" variant="outline" onClick={() => refetch()} className="text-xs" data-testid="coverage-refresh">
             <RefreshCw className="w-3 h-3 me-1" />Refresh
           </Button>
-          <Button size="sm" onClick={() => triggerRematch("", "fleet")} disabled={busyStore === "rematch:ALL"} className="bg-[#F59E0B] text-black text-xs" data-testid="coverage-rematch-all">
+          <Button size="sm" onClick={() => triggerRematch("", "fleet")} disabled title={ADMIN_READ_ONLY_REASON} className="bg-[#F59E0B] text-black text-xs" data-testid="coverage-rematch-all">
             <PackageSearch className="w-3 h-3 me-1" />Rematch All
           </Button>
         </div>
@@ -82,7 +85,7 @@ export default function CoverageReportPage() {
       </div>
 
       {/* Per-store table */}
-      <div className="glass-card rounded-md overflow-hidden">
+      <div className="glass-card rounded-md overflow-x-auto max-w-full">
         <table className="w-full text-sm" data-testid="coverage-table">
           <thead className="bg-white/5 text-[10px] uppercase text-[#A1E4DB] tracking-wider">
             <tr>
@@ -115,10 +118,10 @@ export default function CoverageReportPage() {
                 <td className="p-2 text-end text-[10px] text-[#A1E4DB]">{r.last_full_crawl ? new Date(r.last_full_crawl).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "never"}</td>
                 <td className="p-2 text-end">
                   <div className="flex gap-1 justify-end">
-                    <Button size="sm" variant="outline" className="text-[10px] h-6 px-2" onClick={() => triggerRecrawl(r.store_id, r.name)} disabled={busyStore === `recrawl:${r.store_id}`} data-testid={`recrawl-${r.store_id}`}>
+                    <Button size="sm" variant="outline" className="text-[10px] h-6 px-2" onClick={() => triggerRecrawl(r.store_id, r.name)} disabled title={ADMIN_READ_ONLY_REASON} data-testid={`recrawl-${r.store_id}`}>
                       <Zap className="w-3 h-3" />
                     </Button>
-                    <Button size="sm" variant="outline" className="text-[10px] h-6 px-2" onClick={() => triggerRematch(r.store_id, r.name)} disabled={busyStore === `rematch:${r.store_id}`} data-testid={`rematch-${r.store_id}`}>
+                    <Button size="sm" variant="outline" className="text-[10px] h-6 px-2" onClick={() => triggerRematch(r.store_id, r.name)} disabled title={ADMIN_READ_ONLY_REASON} data-testid={`rematch-${r.store_id}`}>
                       <PackageSearch className="w-3 h-3" />
                     </Button>
                   </div>

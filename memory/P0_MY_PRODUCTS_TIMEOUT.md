@@ -1,5 +1,7 @@
 # P0 My Products timeout — verified mitigation, rollout held
 
+**Historical report:** The platform subsequently completed run`d57077e1-e621-4eef-a92a-5ee60b1a55ed` with this mitigation. Current live logs confirm the cold scan STILL returns503`price_query_timeout`. See `READONLY_NAVIGATION_RESTORED.md` and the latest d57077e1 RCA for current status; the separate navigation fix is preview-only. No production-resolution claim is made.
+
 Date: 2026-10-10. Scope: user-authorized P0 code and isolated/preview verification only.
 
 ## Decision

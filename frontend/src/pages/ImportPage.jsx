@@ -1,11 +1,15 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { Upload, FileSpreadsheet, CheckCircle2, Loader2, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useReleaseActions, READ_ONLY_REASON } from "@/lib/releaseActions";
+import { RequestError } from "@/components/RequestError";
 
 export default function ImportPage() {
+  const { canRefresh } = useReleaseActions();
+  const [statusError, setStatusError] = useState(null);
   const { isRTL } = useI18n();
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
@@ -15,14 +19,16 @@ export default function ImportPage() {
   const [status, setStatus] = useState(null);
 
   const fetchStatus = useCallback(async () => {
+    setStatusError(null);
     try {
       const r = await api.get("/import/status");
       setStatus(r.data);
-    } catch {}
+    } catch (error) { setStatusError(error); }
   }, []);
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (!canRefresh || !file) return;
     setUploading(true);
     try {
       const form = new FormData();
@@ -39,6 +45,7 @@ export default function ImportPage() {
   };
 
   const handleMatch = async () => {
+    if (!canRefresh) return;
     setMatching(true);
     try {
       const r = await api.post("/import/run-matching");
@@ -70,9 +77,10 @@ export default function ImportPage() {
       {/* Upload Area */}
       <div className="glass-card p-8">
         <div
-          className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors ${file ? "border-[#1E988E]/50 bg-[#1E988E]/5" : "border-white/10 hover:border-white/20"}`}
+          className={`border-2 border-dashed rounded-xl p-4 sm:p-12 text-center transition-colors ${file ? "border-[#1E988E]/50 bg-[#1E988E]/5" : "border-white/10 hover:border-white/20"}`}
           onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => { e.preventDefault(); setFile(e.dataTransfer.files[0]); }}
+          onDrop={(e) => { e.preventDefault(); if (canRefresh) setFile(e.dataTransfer.files[0]); }}
+          aria-disabled={!canRefresh}
           data-testid="upload-dropzone"
         >
           {file ? (
@@ -87,21 +95,21 @@ export default function ImportPage() {
               <p className="text-[#A1E4DB]">{isRTL ? "اسحب ملف Excel هنا أو" : "Drag Excel file here or"}</p>
             </div>
           )}
-          <input type="file" accept=".xlsx,.xls,.csv" className="hidden" id="file-input"
+          <input disabled={!canRefresh} data-testid="import-file-input" type="file" accept=".xlsx,.xls,.csv" className="hidden" id="file-input"
             onChange={(e) => setFile(e.target.files[0])} />
-          <label htmlFor="file-input" className="mt-3 inline-block cursor-pointer text-sm text-[#1E988E] hover:underline" data-testid="file-select-btn">
+          <label aria-disabled={!canRefresh} title={!canRefresh ? READ_ONLY_REASON : undefined} htmlFor="file-input" className={`mt-3 inline-block text-sm text-[#1E988E] ${canRefresh ? "cursor-pointer hover:underline" : "opacity-50 cursor-not-allowed"}`} data-testid="file-select-btn">
             {isRTL ? "اختر ملف" : "Browse files"}
           </label>
         </div>
 
-        <div className="flex gap-3 mt-5">
-          <Button onClick={handleUpload} disabled={!file || uploading}
+        <div className="flex flex-wrap gap-3 mt-5">
+          <Button onClick={handleUpload} disabled={!canRefresh || !file || uploading} title={!canRefresh ? READ_ONLY_REASON : undefined}
             className="rounded-full bg-[#1E988E] text-[#090E1C] font-semibold hover:bg-[#6AC1B5] disabled:opacity-40"
             data-testid="upload-btn">
             {uploading ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />{isRTL ? "جارٍ الاستيراد..." : "Importing..."}</> : (isRTL ? "استيراد" : "Import Products")}
           </Button>
           {importResult && (
-            <Button onClick={handleMatch} disabled={matching}
+            <Button onClick={handleMatch} disabled={!canRefresh || matching}
               className="rounded-full bg-[#F59E0B] text-[#090E1C] font-semibold hover:bg-[#FBBF24] disabled:opacity-40"
               data-testid="match-btn">
               {matching ? <><Loader2 className="w-4 h-4 animate-spin mr-2" />{isRTL ? "جارٍ المطابقة..." : "Matching..."}</> : <><Play className="w-4 h-4 mr-1" />{isRTL ? "تشغيل المطابقة" : "Run Matching Engine"}</>}
@@ -126,10 +134,11 @@ export default function ImportPage() {
       )}
 
       {/* Status */}
+      {statusError && <RequestError id="import-status" error={statusError} onRetry={fetchStatus} />}
       {status && (
         <div className="glass-card p-6" data-testid="status-card">
           <h3 className="text-white font-semibold mb-3">{isRTL ? "حالة النظام" : "System Status"}</h3>
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div><p className="text-[10px] uppercase text-[#A1E4DB]">My Products</p><p className="text-lg font-bold text-white metric-number">{status.my_products}</p></div>
             <div><p className="text-[10px] uppercase text-[#A1E4DB]">Matches</p><p className="text-lg font-bold text-[#1E988E] metric-number">{status.total_matches}</p></div>
             <div><p className="text-[10px] uppercase text-[#A1E4DB]">Confirmed</p><p className="text-lg font-bold text-[#10B981] metric-number">{status.confirmed_matches}</p></div>
