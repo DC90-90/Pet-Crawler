@@ -1,5 +1,10 @@
 # Daleel — دليل | PRD & Progress Log
 
+## OPEN live-data incident update — 2026-10-10
+- Screenshots nowshowrestoredtabsLIVE butMyProductsLoading→typedtimeout; loading0%/0÷0 isplaceholder, notemptyDB. Newservingrun`1970e575-b7af-48b5-95e6-318ac726f897` completed08:27UTC; sameDB/51collections; realBSONsnapshotOct9 20:57(~12h), so recentcrawlerdataEXISTS. MyProducts503,MarketShare/PriceIntel/Insights500,StoresaggregatealsoNetworkTimeout; lightweightreads200. No productionrecoveryclaim.
+- Read-onlydiagnosticsongoing. **Indexkeyorder UNVERIFIED**: JSONmetadata mayalphabeticallysortkeys despitegeneratedindexnames; requestedserver-side`$indexStats`+`$objectToArray`orderedarrays andboundedqueryPlanner. DoNOTblindlyaddduplicateindexes. Legacy12hcacheisNOTwarm/validunder300sTTL; rejectRCAstale-cache/200empty suggestions. EmptyZID_OAUTH_TOKENisoptionaloverride, notcompleteordersRCAbecauseMongotokensourceexists. No app/prodchangesinthisfollow-up.
+- Currentevidence/corrections/nexttask:`memory/CURRENT_DATA_READ_INCIDENT.md`, `deployer-agent-docs/RCA_1970e575-b7af-48b5-95e6-318ac726f897.MD`. Awaitauthoritativeplan/indexorderbeforeproductionrepairapproval; allwrite/index/deploy/freshness/historyconstraintsremain. HeavyanalyticsreadincidentstillOPEN.
+
 ## Latest decision — authorized tabs restored in preview; LIVE timeout still OPEN (2026-10-10)
 - User confirmed super_admin and **all authorized tabs visible read-only**, unavailable actions disabled instead of whole pages hidden. Restored10navlinks/directroutes +fullIntel views; unchangedrole/JWT/serverauth gates. Removedrelease-mode visibility filters, keptsource/import/store/alert/user-management writes disabled. No authcredential ordependency/env changes.
 - Narrowreleaseexception permits only already-authorizedGET`/alerts` and`/alerts/feed`; delivery/notifications/digests/allmutations/GuardedDatabase remainblocked. Betteractual-error messages and nofakeempty failures onnewlyexposedpages; typederrors passedthroughallMarketShareviews. Main/finalbrowserchecks verifydesktop1920/mobile390withzerooverflow.
