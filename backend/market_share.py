@@ -516,7 +516,8 @@ def summarize(my_rows, missing_rows, store_rows, *, catalog_total, orders_connec
 
 async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
                         category_fn, orders_by_sku, min_confidence,
-                        window_start, window_end, sealed=True, now=None, competitor_store_ids=None):
+                        window_start, window_end, sealed=True, now=None, competitor_store_ids=None,
+                        category_map=None):
     """The whole Market Share dataset for ONE window. Endpoints slice, filter
     and paginate this; it is computed once and page-cached."""
     now = now or datetime.now(timezone.utc)
@@ -583,7 +584,8 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     catalog = {}
     async for p in db.products.find(
             {}, {"_id": 0, "sku": 1, "offer_id": 1, "name_ar": 1, "name_en": 1, "brand": 1,
-                 "category": 1, "brand_source": 1, "category_source": 1, "barcode": 1}).batch_size(2000):
+                 "category": 1, "brand_source": 1, "category_source": 1, "barcode": 1,
+                 "store_categories": 1}).batch_size(2000):
         if p.get("offer_id"):
             catalog[p["offer_id"]] = p
 
@@ -831,6 +833,14 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         name_ar, name_en = sellers[0].get("name_ar") or "", sellers[0].get("name_en") or ""
         brand = cat_row.get("brand") if cat_row.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=cat_row.get("brand") or "") or ""
         category = cat_row.get("category") if cat_row.get("category_source") in ("reviewed", "store_supplied", "import_file") else ""
+        category_method = cat_row.get("category_source") if category else "unclassified"
+        if category_map is not None and cat_row.get("category_source") != "reviewed":
+            # A competitor's own category name is evidence, not a taxonomy
+            # node: map it onto the own-store taxonomy, or label it unmapped
+            # so it is counted and visible rather than silently dropped.
+            tags = cat_row.get("store_categories") or ([{"name": category}] if category else [])
+            mapped, category_method = category_map.label(sellers[0].get("store_id"), tags)
+            category = mapped
         top = max(with_sales, key=lambda s: (s["units"] or 0, s["revenue"] or 0), default=None)
         spread_ratio, spread_warning = _price_spread(sellers)
         confidence = ("unavailable" if not with_sales else
@@ -841,7 +851,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "barcode": cat_row.get("barcode") or (ckey if not ckey.startswith("sku:") else ""),
             "name_ar": name_ar, "name_en": name_en,
             "name": name_en or name_ar or sample_sku,
-            "brand": brand, "category": category,
+            "brand": brand, "category": category, "category_source": category_method,
             "in_catalog": False,
             "my_unit_share_pct": None, "my_revenue_share_pct": None,
             "competitor_count": len(sellers),
@@ -923,6 +933,9 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         "my_products": my_products,
         "missing_products": missing,
         "missing_products_total": missing_total,
+        "categories_unmapped_products": sum(1 for m in missing if str(m.get("category") or "").startswith("unmapped: ")),
+        "categories_unclassified_products": (sum(1 for r in my_products if not r.get("category"))
+                                             + sum(1 for m in missing if not m.get("category"))),
         "brands": brand_rows,
         "categories": category_rows,
         "data_quality": quality_summary(my_products, orders_by_sku is not None),

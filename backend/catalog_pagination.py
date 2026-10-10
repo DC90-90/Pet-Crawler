@@ -1,6 +1,29 @@
 """Pagination with evidence of completion, never a short-page heuristic."""
+import asyncio
+import random
 from urllib.parse import urljoin, urlparse
 from observation_contract import stable_id
+
+# Salla's storefront API rate-limits per IP after a burst of cursor pages
+# (verified 10 Oct 2026: HTTP 429 after 39 pages from a datacenter IP and
+# after 65 pages from a Saudi residential IP). A short pause between cursor
+# pages keeps the walk under the limit; a 429 is waited out and the SAME
+# cursor retried before the walk is declared partial.
+CURSOR_PAGE_PAUSE = (1.2, 2.4)          # seconds, uniform jitter
+RATE_LIMIT_WAITS = (20, 45, 90)         # seconds before retrying a 429, escalating
+RATE_LIMIT_STATUSES = {429, 503}
+
+
+async def _fetch_with_rate_limit_retry(fetch, http, url, params, meta):
+    """Retry the same page across RATE_LIMIT_WAITS when the host throttles."""
+    response = await fetch(http, url, params=params)
+    for wait in RATE_LIMIT_WAITS:
+        if response is None or response.status_code not in RATE_LIMIT_STATUSES:
+            return response
+        meta["rate_limit_waits"] = meta.get("rate_limit_waits", 0) + 1
+        await asyncio.sleep(wait)
+        response = await fetch(http, url, params=params)
+    return response
 
 
 async def paginate(http, ep, initial, fetch, max_pages=200):
@@ -54,7 +77,9 @@ async def paginate(http, ep, initial, fetch, max_pages=200):
             if ep.get("tag", "").startswith("/en/") and "/en/api/" not in url:
                 url = url.replace("/api/", "/en/api/", 1)
         try:
-            response = await fetch(http, url, params=params)
+            if cursor_mode:
+                await asyncio.sleep(random.uniform(*CURSOR_PAGE_PAUSE))
+            response = await _fetch_with_rate_limit_retry(fetch, http, url, params, meta)
             if response is None or response.status_code != 200:
                 meta["stop_reason"] = f"http_{response.status_code if response is not None else 'timeout'}"
                 break

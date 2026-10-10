@@ -55,6 +55,7 @@ from salla_revenue_estimate import (
 from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS_KSA_TZ
 import zid_oauth  # iter79 — Zid partner-app OAuth (unlocks the Orders API)
 import market_share  # iter79 — Market Share aggregation
+import category_map  # Oct 2026 — one taxonomy across stores for category share
 import price_cohort
 import comparison_views
 import job_control
@@ -11033,6 +11034,11 @@ async def _market_share_compute(db, days, include_today=False, comparison_mode="
     orders = await _own_orders_aggregate(db, start, end)
     from comparison_scope import resolve
     scope = await resolve(db, comparison_mode, competitor_ids)
+    try:
+        cmap = await category_map.load(db)
+    except Exception:
+        logger.exception("[MarketShare] category map unavailable — competitor categories stay unmapped")
+        cmap = None
     result = await market_share.build_dataset(
         db, days, own_id,
         own_price_fn=_effective_own_price,
@@ -11042,6 +11048,7 @@ async def _market_share_compute(db, days, include_today=False, comparison_mode="
         min_confidence=MIN_AGGREGATION_CONFIDENCE,
         window_start=start, window_end=end, sealed=not include_today,
         competitor_store_ids=scope["competitor_ids"] if scope["mode"] == "selected" else None,
+        category_map=cmap,
     )
     result["comparison_scope"] = scope
     # Membership is independent of compared sellers, including when none are selected.
@@ -11357,7 +11364,11 @@ async def market_share_categories(days: int = Query(30),
     else:
         rows = ds.get("categories") or []
     return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "rows": rows, "total": len(rows),
-            "filtered": bool(applied)}
+            "filtered": bool(applied),
+            # Products the taxonomy could not place: counted here, never hidden.
+            "unmapped_products": ds.get("categories_unmapped_products", 0),
+            "unclassified_products": ds.get("categories_unclassified_products", 0),
+            "taxonomy_source": "own_store_categories"}
 
 
 @router.get("/market-share/methodology")
@@ -11597,6 +11608,35 @@ async def job_status(run_id: str, user=Depends(get_user)):
         policy = await release_runtime.public_status(db)
         row["release_admission"] = "blocked" if policy["mode"] != "active" or row.get("release_id") != policy["scheduler_owner"] or row.get("writer_epoch") != policy["writer_epoch"] else "eligible"
     return row
+
+
+class CategoryMapIn(BaseModel):
+    store_id: str
+    store_category: str
+    canonical: Optional[str] = None  # None / "" clears a mapping back to unmapped
+
+
+@router.get("/admin/category-map")
+async def category_map_list(store_id: Optional[str] = Query(None), user=Depends(require_super_admin)):
+    """Every (store, store category) pair seen on competitor products, with the
+    canonical own-store category it maps to and how (reviewed/exact/synonym/
+    overlap/unmapped). Unmapped rows are the review queue."""
+    return await category_map.listing(db, store_id)
+
+
+@router.post("/admin/category-map")
+async def category_map_set(body: CategoryMapIn, user=Depends(require_super_admin)):
+    try:
+        await category_map.set_mapping(db, body.store_id, body.store_category, body.canonical, user.get("email", ""))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return {"status": "ok"}
+
+
+@router.post("/admin/category-map/rebuild")
+async def category_map_rebuild(user=Depends(require_super_admin)):
+    """Re-derive automatic mappings from the current catalogues; reviewed rows are kept."""
+    return await category_map.rebuild(db)
 
 
 @router.get("/admin/investigation/status")
