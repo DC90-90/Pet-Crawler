@@ -1,0 +1,20 @@
+{
+  "query": "/api/my-products?sort_by=revenue_est&sort_order=desc&limit=100&offset=0&days=30",
+  "observer": "observer",
+  "catalog_fixture_count": 2832,
+  "cache_before": 0,
+  "auth_dependency": "test-only override; app/db/cache/data logic unmodified",
+  "list_status": 200,
+  "list_total": 2832,
+  "analytics_status": 200,
+  "analytics_total": 2832,
+  "returned_rows": 100,
+  "cache": {
+    "source": "live_fallback",
+    "computed_at": "2026-10-09T22:30:09.826079+00:00",
+    "age_seconds": 0.0,
+    "stale": false
+  },
+  "cache_after": 0,
+  "documents_and_indexes_unchanged": true
+}

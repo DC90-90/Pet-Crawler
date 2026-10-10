@@ -1,0 +1,93 @@
+{
+  "products": 2832,
+  "snapshots": 101952,
+  "matched_products": 2832,
+  "cold": [
+    {
+      "milliseconds": 1247.14,
+      "reads": 22,
+      "by_command": {
+        "aggregate": 1,
+        "getMore": 5,
+        "find": 15,
+        "distinct": 1
+      }
+    },
+    {
+      "milliseconds": 1194.74,
+      "reads": 22,
+      "by_command": {
+        "aggregate": 1,
+        "getMore": 5,
+        "find": 15,
+        "distinct": 1
+      }
+    },
+    {
+      "milliseconds": 1223.77,
+      "reads": 22,
+      "by_command": {
+        "aggregate": 1,
+        "getMore": 5,
+        "find": 15,
+        "distinct": 1
+      }
+    }
+  ],
+  "warm": [
+    {
+      "milliseconds": 15.84,
+      "reads": 1,
+      "by_command": {
+        "aggregate": 0,
+        "getMore": 0,
+        "find": 1,
+        "distinct": 0
+      }
+    },
+    {
+      "milliseconds": 15.28,
+      "reads": 1,
+      "by_command": {
+        "aggregate": 0,
+        "getMore": 0,
+        "find": 1,
+        "distinct": 0
+      }
+    },
+    {
+      "milliseconds": 15.24,
+      "reads": 1,
+      "by_command": {
+        "aggregate": 0,
+        "getMore": 0,
+        "find": 1,
+        "distinct": 0
+      }
+    },
+    {
+      "milliseconds": 15.32,
+      "reads": 1,
+      "by_command": {
+        "aggregate": 0,
+        "getMore": 0,
+        "find": 1,
+        "distinct": 0
+      }
+    },
+    {
+      "milliseconds": 15.27,
+      "reads": 1,
+      "by_command": {
+        "aggregate": 0,
+        "getMore": 0,
+        "find": 1,
+        "distinct": 0
+      }
+    }
+  ],
+  "unique_skus": 2832,
+  "attempted_writes": 0,
+  "actual_writes": 0,
+  "dashboard_cache_documents": 0
+}

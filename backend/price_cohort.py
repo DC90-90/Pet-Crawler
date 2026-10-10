@@ -2,6 +2,7 @@
 from datetime import datetime, timezone, timedelta
 from observation_contract import gtin, money, stable_id, TRUSTED_PRICE_BASES
 from pack_guard import slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers, discount_escapes
+from price_read_limits import SNAPSHOT_QUERY_MAX_MS
 
 POLICY_VERSION = "offers-v3-parent-aware-current-7d"
 FIELDS = {k: 1 for k in ("sku", "barcode", "store_id", "store_name", "offer_id", "listing_id", "variant_id", "name_ar", "name_en", "price", "currency", "price_basis", "in_stock", "qty_available", "product_url", "crawled_at", "observation_version", "confidence_score", "comparable", "is_synthetic", "present_on_store", "variant_skus", "variant_barcodes")}
@@ -110,7 +111,33 @@ def select_cohort(own, rows, own_price, *, now=None, history=()):
                 cutoff=(now-timedelta(days=7)).isoformat(), currency="SAR", stock_policy="in_stock_only")
 
 
-async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, competitor_store_ids=None):
+def snapshot_pipeline(active, now):
+    # Keep the full 180-day discount corroboration/excluded-seller history.
+    # Project BEFORE $$ROOT grouping so raw crawl payloads cannot fill/spill it.
+    # Latest selection still precedes all identity/stock/eligibility filtering.
+    return [
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": now-timedelta(days=180)}}},
+        {"$sort": {"crawled_at": -1}},
+        {"$project": FIELDS},
+        {"$group": {"_id": {"$ifNull": ["$offer_id", {"store": "$store_id", "sku": "$sku"}]},
+                    "latest": {"$first": "$$ROOT"}, "history_oldest_at": {"$min": "$crawled_at"},
+                    "historical_max": {"$max": {"$cond": [{"$and": [{"$eq": ["$observation_version", 2]}, {"$eq": ["$comparable", True]}]}, "$price", None]}}}},
+        {"$replaceRoot": {"newRoot": {"$mergeObjects": ["$latest", {"historical_max_price": "$historical_max", "history_oldest_at": "$history_oldest_at"}]}}},
+        {"$project": {**FIELDS, "historical_max_price": 1, "history_oldest_at": 1}},
+    ]
+
+
+def freshness_transition(value, now):
+    ts = aware(value)
+    if ts is not None:
+        if ts > now+timedelta(minutes=5):
+            return ts-timedelta(minutes=5)
+        if ts+timedelta(days=7) > now:
+            return ts+timedelta(days=7)
+    return now+timedelta(days=7)  # Already-stale/missing dates do not become fresh.
+
+
+async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, competitor_store_ids=None, parents=None):
     now = now or datetime.now(timezone.utc)
     own_by_sku = {r["sku"]: r for r in own_rows if r.get("sku")}
     by_key = {}
@@ -125,38 +152,41 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
     grouped, history = {}, {}
     reviewed = await reviewed_brand_map(db)
     from parent_identity import index, annotate
-    parents = await index(db)
+    parents = parents if parents is not None else await index(db)
     # Latest offer first, BEFORE eligibility: an OOS reading must not resurrect an older in-stock price.
     seen = set()
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
     if competitor_store_ids is not None:
         active = [sid for sid in active if sid in competitor_store_ids]
-    cursor = db.product_snapshots.aggregate([
-        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": now-timedelta(days=180)}}},
-        {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": {"$ifNull": ["$offer_id", {"store": "$store_id", "sku": "$sku"}]},
-                    "latest": {"$first": "$$ROOT"},
-                    "historical_max": {"$max": {"$cond": [{"$and": [{"$eq": ["$observation_version", 2]}, {"$eq": ["$comparable", True]}]}, "$price", None]}}}},
-        {"$replaceRoot": {"newRoot": {"$mergeObjects": ["$latest", {"historical_max_price": "$historical_max"}]}}},
-        {"$project": {**FIELDS, "historical_max_price": 1}},
-    ], allowDiskUse=True).batch_size(2000)
+    cursor = db.product_snapshots.aggregate(snapshot_pipeline(active, now),
+        allowDiskUse=True, maxTimeMS=SNAPSHOT_QUERY_MAX_MS).batch_size(2000)
+    valid_until = min([freshness_transition(stamp, now) for r in own_rows
+                       for stamp in (r.get("last_synced_at"), r.get("quantity_observed_at") or r.get("last_synced_at"))],
+                      default=now+timedelta(days=7))
     manual_by_offer = {}
     for sku, sid, oid in manual:
         manual_by_offer.setdefault((sid, oid), set()).add(sku)
-    async for row in cursor:
-        row = annotate(apply_brand_review(row, reviewed), parents)
-        candidates = set(manual_by_offer.get((row["store_id"], row.get("offer_id")), ()))
-        for key in identity_keys(row):
-            candidates.update(by_key.get(key, ()))
-        offer_key = (row["store_id"], row.get("offer_id") or row.get("sku"))
-        for sku in candidates:
-            own = own_by_sku.get(sku)
-            scoped = (sku, row["store_id"], row.get("offer_id"))
-            if own and scoped not in blocked and identity_agrees(own, row, scoped in manual):
-                if row.get("observation_version") == 2:
-                    history.setdefault(sku, []).append({**row, "price": row.get("historical_max_price") or row.get("price")})
-                if offer_key not in seen:
-                    grouped.setdefault(sku, []).append(row)
-        seen.add(offer_key)
-    return {sku: select_cohort(own, grouped.get(sku, []), own_price_fn(own), now=now,
-                               history=history.get(sku, [])) for sku, own in own_by_sku.items()}
+    try:
+        async for row in cursor:
+            oldest = aware(row.pop("history_oldest_at", None))
+            valid_until = min(valid_until, freshness_transition(row.get("crawled_at"), now),
+                              oldest+timedelta(days=180) if oldest else valid_until)
+            row = annotate(apply_brand_review(row, reviewed), parents)
+            candidates = set(manual_by_offer.get((row["store_id"], row.get("offer_id")), ()))
+            for key in identity_keys(row):
+                candidates.update(by_key.get(key, ()))
+            offer_key = (row["store_id"], row.get("offer_id") or row.get("sku"))
+            for sku in candidates:
+                own = own_by_sku.get(sku)
+                scoped = (sku, row["store_id"], row.get("offer_id"))
+                if own and scoped not in blocked and identity_agrees(own, row, scoped in manual):
+                    if row.get("observation_version") == 2:
+                        history.setdefault(sku, []).append({**row, "price": row.get("historical_max_price") or row.get("price")})
+                    if offer_key not in seen:
+                        grouped.setdefault(sku, []).append(row)
+            seen.add(offer_key)
+    finally:
+        await cursor.close()
+    return {sku: {**select_cohort(own, grouped.get(sku, []), own_price_fn(own), now=now,
+                               history=history.get(sku, [])), "valid_until": valid_until}
+            for sku, own in own_by_sku.items()}

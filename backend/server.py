@@ -56,6 +56,7 @@ from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS
 import zid_oauth  # iter79 — Zid partner-app OAuth (unlocks the Orders API)
 import market_share  # iter79 — Market Share aggregation
 import price_cohort
+import my_products_cache
 import comparison_views
 import job_control
 from access_policy import enforce as enforce_access
@@ -2629,17 +2630,20 @@ _LAST_DASHBOARD_RECOMPUTE = None           # module-level debounce for crawl bur
 
 def _dashboard_cache_key(days: int) -> str:
     from investigation_status import build_identity
-    return f"my_products:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:{ledger.ksa_day_str(datetime.now(timezone.utc))}:days={days}"
+    return f"my_products:{my_products_cache.SCHEMA}:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:{ledger.ksa_day_str(datetime.now(timezone.utc))}:days={days}"
 
 
 async def _store_dashboard_cache(db, days, dataset):
-    """Persist one window's dataset (jsonable-encoded) with a fresh timestamp."""
-    now = datetime.now(timezone.utc)
-    revision = await db.data_versions.find_one({"_id": "observations"}) or {}
+    """Explicit background writers only; request caching is entirely read-only."""
+    now = dataset["_computed_at"]
+    revision = await db.data_versions.find_one({"_id": "observations"}, {"_id": 0}) or {}
+    if revision.get("revision", 0) != dataset["_source_revision"]:
+        from price_read_limits import unavailable
+        raise unavailable("price_source_changed")
     await db.dashboard_cache.replace_one(
         {"key": _dashboard_cache_key(days)},
         {"key": _dashboard_cache_key(days), "window_days": days,
-         "computed_at": now, "dataset": jsonable_encoder(dataset), "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at")},
+         **jsonable_encoder(my_products_cache.envelope(dataset)), "source_observed_at": revision.get("observed_at")},
         upsert=True,
     )
     return now
@@ -2656,7 +2660,9 @@ async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     stats = {}
     for w in windows:
         t0 = _t.time()
-        ds = await _my_products_dataset(db, w, None, None, None, None, None, None, True)
+        from price_read_limits import bounded_read
+        ds = await bounded_read(my_products_cache.compute_dataset(db,
+            lambda: _my_products_dataset(db, w, None, None, None, None, None, None, True)))
         await _store_dashboard_cache(db, w, ds)
         stats[w] = {"rows": ds["total"], "secs": round(_t.time() - t0, 2)}
     _LAST_DASHBOARD_RECOMPUTE = datetime.now(timezone.utc)
@@ -3464,8 +3470,8 @@ async def my_products(
     own_only: bool = Query(True, description="Restrict results to SKUs present in db.my_products (your own store). The MyProducts page sets this to True (default); /api/insights/sales calls this function internally with own_only=False to retain market-wide aggregation."),
     user=Depends(get_user)
 ):
-    # iter25 — serve the default window views from db.dashboard_cache; keep
-    # filtered / on_date / search / own_only=False requests live (narrow + fast).
+    # Default windows share a revision/freshness-checked read-only cache.
+    # Filtered/custom dates remain live; neither path writes to the database.
     _cacheable = (
         bool(own_only)
         and not on_date and not date_from and not date_to
@@ -3475,45 +3481,9 @@ async def my_products(
         and days in DASHBOARD_CACHE_STD_WINDOWS
     )
 
-    dataset = None
-    cache_meta = {"source": "live_uncacheable", "computed_at": None, "age_seconds": None, "stale": False}
-
-    if _cacheable:
-        doc = None
-        try:
-            doc = await db.dashboard_cache.find_one({"key": _dashboard_cache_key(days)})
-        except Exception:
-            doc = None
-        if doc and doc.get("computed_at") is not None:
-            ca = doc["computed_at"]
-            if not isinstance(ca, datetime):
-                try:
-                    ca = datetime.fromisoformat(str(ca).replace("Z", "+00:00"))
-                except Exception:
-                    ca = None
-            if ca is not None:
-                if ca.tzinfo is None:
-                    ca = ca.replace(tzinfo=timezone.utc)
-                age = (datetime.now(timezone.utc) - ca).total_seconds()
-                revision = await db.data_versions.find_one({"_id": "observations"}) or {}
-                if age <= DASHBOARD_CACHE_MAX_AGE_SECS and isinstance(doc.get("dataset"), dict) and doc.get("source_revision") == revision.get("revision", 0):
-                    dataset = doc["dataset"]
-                    cache_meta = {"source": "cache", "computed_at": ca.isoformat(),
-                                  "age_seconds": round(age, 1), "stale": False}
-        if dataset is None:
-            # Miss, unparseable, or stale beyond 24h → compute live (current
-            # behavior) and best-effort refresh the cache. Never error.
-            dataset = await _my_products_dataset(db, days, None, None, None, None, None, None, True)
-            stamped = None
-            try:
-                stamped = await _store_dashboard_cache(db, days, dataset)
-            except Exception:
-                pass
-            cache_meta = {"source": "live_fallback",
-                          "computed_at": (stamped or datetime.now(timezone.utc)).isoformat(),
-                          "age_seconds": 0.0, "stale": False}
-    else:
-        dataset = await _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only)
+    dataset, cache_meta = await my_products_cache.serve(db, _dashboard_cache_key(days),
+        lambda: _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only),
+        max_age=DASHBOARD_CACHE_MAX_AGE_SECS, cacheable=_cacheable)
 
     # Sort (presentation) + pagination — identical to the pre-cache endpoint, so
     # the response's computed values are byte-identical whether served from cache

@@ -1,0 +1,431 @@
+{
+  "seed": {
+    "own_products": 2832,
+    "snapshots": 100811,
+    "fixture_note": "Baseline fixture intentionally includes many invalid GTIN-style SKUs for robustness."
+  },
+  "scenarios": {
+    "cold_3_runs": [
+      {
+        "elapsed_ms": 1023.09,
+        "source": "live_fallback",
+        "read_counts": {
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 308.179
+          },
+          "getMore": {
+            "count": 7,
+            "duration_ms": 114.031
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 4.968
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.162
+          }
+        }
+      },
+      {
+        "elapsed_ms": 1053.8,
+        "source": "live_fallback",
+        "read_counts": {
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 313.542
+          },
+          "getMore": {
+            "count": 7,
+            "duration_ms": 137.591
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 5.231
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.233
+          }
+        }
+      },
+      {
+        "elapsed_ms": 1041.77,
+        "source": "live_fallback",
+        "read_counts": {
+          "aggregate": {
+            "count": 1,
+            "duration_ms": 310.42
+          },
+          "getMore": {
+            "count": 7,
+            "duration_ms": 110.76200000000001
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 4.713
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.19
+          }
+        }
+      }
+    ],
+    "warm_5_runs": [
+      {
+        "elapsed_ms": 11.45,
+        "source": "memory_cache",
+        "read_counts": {
+          "aggregate": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "getMore": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.371
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          }
+        }
+      },
+      {
+        "elapsed_ms": 11.19,
+        "source": "memory_cache",
+        "read_counts": {
+          "aggregate": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "getMore": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.208
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          }
+        }
+      },
+      {
+        "elapsed_ms": 11.0,
+        "source": "memory_cache",
+        "read_counts": {
+          "aggregate": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "getMore": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.238
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          }
+        }
+      },
+      {
+        "elapsed_ms": 11.15,
+        "source": "memory_cache",
+        "read_counts": {
+          "aggregate": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "getMore": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.226
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          }
+        }
+      },
+      {
+        "elapsed_ms": 10.72,
+        "source": "memory_cache",
+        "read_counts": {
+          "aggregate": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "getMore": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.19
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          }
+        }
+      }
+    ],
+    "stored_valid_cache": {
+      "elapsed_ms": 250.64,
+      "source": "cache",
+      "read_counts": {
+        "aggregate": {
+          "count": 0,
+          "duration_ms": 0.0
+        },
+        "getMore": {
+          "count": 0,
+          "duration_ms": 0.0
+        },
+        "find": {
+          "count": 3,
+          "duration_ms": 17.661
+        },
+        "distinct": {
+          "count": 0,
+          "duration_ms": 0.0
+        }
+      }
+    },
+    "full_pagination": {
+      "pages": [
+        {
+          "offset": 0,
+          "elapsed_ms": 314.72,
+          "total": 2832,
+          "source": "cache",
+          "read_counts": {
+            "aggregate": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "getMore": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.566
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            }
+          }
+        },
+        {
+          "offset": 500,
+          "elapsed_ms": 281.69,
+          "total": 2832,
+          "source": "cache",
+          "read_counts": {
+            "aggregate": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "getMore": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.764
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            }
+          }
+        },
+        {
+          "offset": 1000,
+          "elapsed_ms": 282.5,
+          "total": 2832,
+          "source": "cache",
+          "read_counts": {
+            "aggregate": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "getMore": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.276
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            }
+          }
+        },
+        {
+          "offset": 1500,
+          "elapsed_ms": 282.02,
+          "total": 2832,
+          "source": "cache",
+          "read_counts": {
+            "aggregate": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "getMore": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.098
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            }
+          }
+        },
+        {
+          "offset": 2000,
+          "elapsed_ms": 288.88,
+          "total": 2832,
+          "source": "cache",
+          "read_counts": {
+            "aggregate": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "getMore": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.495
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            }
+          }
+        },
+        {
+          "offset": 2500,
+          "elapsed_ms": 267.28,
+          "total": 2832,
+          "source": "cache",
+          "read_counts": {
+            "aggregate": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "getMore": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.665000000000001
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            }
+          }
+        }
+      ],
+      "unique_skus": 2832
+    },
+    "concurrent_cold": {
+      "requests": 5,
+      "compute_calls": 1,
+      "sources": [
+        "live_fallback",
+        "memory_coalesced",
+        "memory_coalesced",
+        "memory_coalesced",
+        "memory_coalesced"
+      ],
+      "read_counts": {
+        "aggregate": {
+          "count": 1,
+          "duration_ms": 320.829
+        },
+        "getMore": {
+          "count": 7,
+          "duration_ms": 112.619
+        },
+        "find": {
+          "count": 23,
+          "duration_ms": 46.272
+        },
+        "distinct": {
+          "count": 1,
+          "duration_ms": 0.223
+        }
+      }
+    },
+    "timeouts": {
+      "real_max_time_ms_1": {
+        "attempts": [
+          {
+            "timed_out": true,
+            "type": "ExecutionTimeout"
+          }
+        ],
+        "seen": true
+      },
+      "api_with_snapshot_query_max_1": {
+        "status": 503,
+        "detail": {
+          "code": "price_query_timeout",
+          "message": "Price results are temporarily unavailable. Please retry.",
+          "retryable": true
+        }
+      },
+      "injection_note": "No synthetic injection used in this scenario; real Mongo maxTimeMS bound only."
+    },
+    "compact_projection_explain": {
+      "old": {
+        "totalDocsExamined": 100810,
+        "totalKeysExamined": 100811,
+        "executionTimeMillis": 343,
+        "maxAccumulatorMemoryUsageBytes": {
+          "latest": 12927853,
+          "historical_max": 907776
+        }
+      },
+      "new": {
+        "totalDocsExamined": 100810,
+        "totalKeysExamined": 100811,
+        "executionTimeMillis": 384,
+        "maxAccumulatorMemoryUsageBytes": {
+          "latest": 8598501,
+          "history_oldest_at": 907776,
+          "historical_max": 907776
+        }
+      },
+      "note": "Projection-before-group did not change examined docs/keys; execution time is reported, not claimed as speedup."
+    }
+  }
+}

@@ -7,11 +7,11 @@ from observation_contract import gtin
 
 async def context(db, own_price_fn, competitor_store_ids=None):
     own = await db.stores.find_one({"is_own_store": True}, {"_id": 0}) or {}
-    products = await db.my_products.find({}, {"_id": 0}).to_list(50000)
+    products = await db.my_products.find({}, {"_id": 0}).to_list(None)
     from parent_identity import index, annotate
     parents = await index(db)
     products = [annotate(p, parents, own.get("id")) for p in products]
-    cohorts = await build_cohorts(db, products, own.get("id"), own_price_fn, competitor_store_ids=competitor_store_ids)
+    cohorts = await build_cohorts(db, products, own.get("id"), own_price_fn, competitor_store_ids=competitor_store_ids, parents=parents)
     return own, products, cohorts
 
 

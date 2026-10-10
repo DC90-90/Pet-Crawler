@@ -1,0 +1,162 @@
+{
+  "db_name": "p0_my_products_492f396202",
+  "observer_mode": "observer",
+  "seed": {
+    "own_products": 2832,
+    "snapshots": 100811,
+    "competitor_stores": 7
+  },
+  "index_shapes": {
+    "_id_": [
+      [
+        "_id",
+        1
+      ]
+    ],
+    "crawled_at_1": [
+      [
+        "crawled_at",
+        1
+      ]
+    ],
+    "crawled_at_-1_sku_1": [
+      [
+        "crawled_at",
+        -1
+      ],
+      [
+        "sku",
+        1
+      ]
+    ],
+    "product_id_1": [
+      [
+        "product_id",
+        1
+      ]
+    ],
+    "crawled_at_-1_store_id_1": [
+      [
+        "crawled_at",
+        -1
+      ],
+      [
+        "store_id",
+        1
+      ]
+    ]
+  },
+  "endpoint_measurements": {
+    "cold": {
+      "status": 200,
+      "elapsed_ms": 918.92,
+      "cache_source": "live_fallback",
+      "total": 2832,
+      "query_counts": {
+        "find": {
+          "count": 16,
+          "duration_ms": 5.837
+        },
+        "aggregate": {
+          "count": 1,
+          "duration_ms": 255.513
+        },
+        "getMore": {
+          "count": 7,
+          "duration_ms": 111.616
+        },
+        "distinct": {
+          "count": 1,
+          "duration_ms": 0.165
+        }
+      },
+      "total_read_commands": 25,
+      "total_read_duration_ms": 373.13
+    },
+    "repeat": {
+      "status": 200,
+      "elapsed_ms": 892.53,
+      "cache_source": "live_fallback",
+      "total": 2832,
+      "query_counts": {
+        "find": {
+          "count": 16,
+          "duration_ms": 6.05
+        },
+        "aggregate": {
+          "count": 1,
+          "duration_ms": 256.658
+        },
+        "getMore": {
+          "count": 7,
+          "duration_ms": 105.029
+        },
+        "distinct": {
+          "count": 1,
+          "duration_ms": 0.179
+        }
+      },
+      "total_read_commands": 25,
+      "total_read_duration_ms": 367.92
+    },
+    "dashboard_cache_docs": {
+      "before": 0,
+      "after": 0
+    }
+  },
+  "cohort_fixture_assertions": {
+    "manual_sellers": 1,
+    "blacklist_sellers": 0,
+    "oos_excluded": [
+      "out_of_stock"
+    ],
+    "stale_excluded": [],
+    "parent_excluded": []
+  },
+  "aggregate_explain": {
+    "pipeline_reference": {
+      "function": "price_cohort.build_cohorts",
+      "file": "/app/backend/price_cohort.py",
+      "first_line": 113,
+      "policy_version": "offers-v3-parent-aware-current-7d"
+    },
+    "metrics": {
+      "totalDocsExamined": 100810,
+      "totalKeysExamined": 100811,
+      "executionTimeMillis": 329,
+      "nReturned": 100810,
+      "usedDisk": false,
+      "spills": 0,
+      "spilledBytes": null,
+      "stages_sample": [
+        "FETCH",
+        "IXSCAN",
+        "FETCH",
+        "IXSCAN",
+        "FETCH",
+        "IXSCAN",
+        "FETCH",
+        "IXSCAN"
+      ]
+    }
+  },
+  "synthetic_timeouts": {
+    "execution_timeout": {
+      "status": 500,
+      "body": {
+        "non_json": true
+      }
+    },
+    "network_timeout": {
+      "status": 500,
+      "body": {
+        "non_json": true
+      }
+    }
+  },
+  "production_traceback_reference": {
+    "source": "/app/deployer-agent-docs/RCA_0107107d-2d21-47fb-8ee5-836d2779725f.MD",
+    "confirmed_cause": "price_cohort aggregate read timed out at socketTimeoutMS=45000 (production traceback)",
+    "note": "Synthetic timeout injection is local-only and intentionally does not wait for a real 45s timeout."
+  }
+}

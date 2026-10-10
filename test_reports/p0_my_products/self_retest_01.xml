@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="3" time="5.541" timestamp="2026-10-10T06:35:04.490640+00:00" hostname="agent-env-24867ce7-9497-42ab-89a5-067b1dc88c54"><testcase classname="backend.tests.test_p0_my_products_fix" name="test_00_confirm_timeout_traceback_cause" time="0.000" /><testcase classname="backend.tests.test_p0_my_products_fix" name="test_10_p0_post_fix_scenarios" time="2.970"><failure message="assert ([])">backend/tests/test_p0_my_products_fix.py:803: in test_10_p0_post_fix_scenarios
+    outcome = p0_env["loop"].run_until_complete(run())
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_p0_my_products_fix.py:318: in run
+    assert max_time_values and all(v == 15000 for v in max_time_values)
+E   assert ([])</failure></testcase><testcase classname="backend.tests.test_p0_my_products_fix" name="test_20_preview_external_authenticated_smoke" time="1.990" /></testsuite></testsuites>
