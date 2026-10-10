@@ -23,6 +23,10 @@ Base: `origin/conflict_130726_1244` (the code emergent.sh deploys; `main` is two
    - Manual match confirmation is validated on identity, not on current stock/age.
    - `store_views.latest()` bounded to 30 days (index-friendly); `sales_map` filters unavailable intervals in the query.
 4. **Frontend**: alerts page and notification bell no longer gated on the outbound-email capability.
+5. **Zid variant parents resolved from the detail route** (`_resolve_zid_variant_parents`): local Mowkly crawl went from 2,053 to 4,864 comparable offers, 0 quarantined, barcodes 1,834 → 3,907. Own-store Merchant path does the same. `sold_products_count` read as the Zid sold counter.
+6. **Store-supplied categories captured** on `my_products` and competitor `products` (`store_categories`, `category`, `category_source=store_supplied`), merchandising buckets excluded. Prerequisite for category share; cross-store mapping (`category_map`) is next.
+
+Deployment model confirmed with emergent support: production builds only from the emergent workspace; GitHub is version control. Each release = push a branch here, then paste `EMERGENT_RELEASE_MESSAGE.md` to the emergent agent.
 
 Focused suites: 67 passed / 37 failed vs 62 / 42 on the untouched branch; no new failure families (remaining failures pin retired pre-v2 contracts).
 

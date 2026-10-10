@@ -473,6 +473,67 @@ def classify_food_subcategory_hybrid(parent_category, name, store_tags):
     return classify_food_subcategory(parent_category, name, store_tags)
 
 
+# Store "categories" that are merchandising buckets, not product taxonomy.
+# Verified on mowkly.com / pets-houses.com feeds (10 Oct 2026): a product
+# carries e.g. ["طعام رطب", "عروض", "معلبات", "العلامة التجارية", "اكانا"].
+_NON_TAXONOMY_CATEGORY_SLUGS = {"offers", "offer", "sale", "sales", "deals", "brands", "brand",
+                                "best-sellers", "bestsellers", "best-seller", "new", "new-arrivals",
+                                "featured", "all", "all-products", "home", "homepage"}
+_NON_TAXONOMY_CATEGORY_NAMES = {"عروض", "العروض", "تخفيضات", "الأكثر مبيعا", "الأكثر مبيعاً", "الاكثر مبيعا",
+                                "العلامة التجارية", "العلامات التجارية", "الماركات", "جديد", "وصل حديثا", "وصل حديثاً",
+                                "offers", "sale", "brands", "best sellers", "new arrivals", "featured", "all products"}
+
+
+def extract_store_categories(raw):
+    """The store's own category tags as structured rows.
+
+    Zid: `categories: [{id, name, slug, parent_id, ...}]` (name may be a
+    string or {ar, en}); Salla: `category: {name, url}` and sometimes
+    `categories: [...]`. Returns [{id, name, slug, parent_id}] in feed order,
+    empty when the feed carries none. This is store-supplied evidence, kept
+    verbatim; mapping onto one shared taxonomy happens downstream.
+    """
+    rows = []
+    sources = []
+    cats = raw.get("categories")
+    if isinstance(cats, list):
+        sources.extend(cats)
+    single = raw.get("category")
+    if isinstance(single, (dict, str)) and single:
+        sources.append(single)
+    for c in sources:
+        if isinstance(c, str):
+            name = c.strip()
+            if name:
+                rows.append({"id": None, "name": name, "slug": None, "parent_id": None})
+            continue
+        if not isinstance(c, dict):
+            continue
+        nm = c.get("name")
+        if isinstance(nm, dict):
+            nm = nm.get("ar") or nm.get("en") or next((v for v in nm.values() if v), None)
+        name = str(nm or "").strip()
+        if not name:
+            continue
+        rows.append({"id": str(c["id"]) if c.get("id") is not None else None, "name": name,
+                     "slug": str(c.get("slug") or "").strip() or None,
+                     "parent_id": str(c["parent_id"]) if c.get("parent_id") not in (None, "") else None})
+    return rows
+
+
+def primary_store_category(cats):
+    """First store category that is a taxonomy node, not a merchandising bucket.
+    Returns "" when every tag is a bucket (the row stays unclassified rather
+    than being filed under "Offers")."""
+    for c in cats or []:
+        slug = (c.get("slug") or "").lower()
+        name = (c.get("name") or "").strip().lower()
+        if slug in _NON_TAXONOMY_CATEGORY_SLUGS or name in _NON_TAXONOMY_CATEGORY_NAMES:
+            continue
+        return c.get("name") or ""
+    return ""
+
+
 def extract_store_category_names(raw):
     """Join the store's own category tag names (Salla: [{name: str}], Zid:
     [{name: {ar, en}}]) into one text blob for the subcategory classifier."""
@@ -1064,13 +1125,20 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
         # iter36 — hybrid classifier input: product name + the store's own
         # category tag names (when the raw payload carries them).
         store_cats = extract_store_category_names(raw)
+        store_category_rows = extract_store_categories(raw)
+        supplied_category = primary_store_category(store_category_rows)
         if not existing:
             pid = str(uuid.uuid4())
-            category = guess_category(norm["name_ar"])
+            # Store-supplied taxonomy beats the name guess; the guess is kept
+            # separately so nothing is lost and the source is explicit.
+            category = supplied_category or guess_category(norm["name_ar"])
             await db.products.insert_one({
                 "id": pid, "sku": norm["sku"], "offer_id": offer_id,
                 "store_id": store["id"], "listing_id": norm["listing_id"], "variant_id": norm["variant_id"],
                 "metadata_source": "store_observation",
+                "store_categories": store_category_rows,
+                "category_source": "store_supplied" if supplied_category else "store_observation",
+                "category_guess": guess_category(norm["name_ar"]),
                 # iter61 — _normalize_raw_product has extracted this since
                 # iter35 (variant-aware, from skus[].barcode/gtin/mpn) and both
                 # write sites dropped it. The matcher's Level-1 barcode step
@@ -1103,6 +1171,16 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 patch["image_url"] = norm["img_url"]
             if product_url and not existing.get("product_url"):
                 patch["product_url"] = product_url
+            if store_category_rows and existing.get("category_source") != "reviewed":
+                # Refresh store-supplied tags on every crawl; promote a
+                # name-guessed row to store-supplied the first time the feed
+                # carries a real taxonomy node.
+                if existing.get("store_categories") != store_category_rows:
+                    patch["store_categories"] = store_category_rows
+                if supplied_category and existing.get("category_source") != "store_supplied":
+                    patch["category"] = supplied_category
+                    patch["category_source"] = "store_supplied"
+                    patch["category_guess"] = existing.get("category")
             if "subcategory" not in existing:
                 # iter36 — one-shot enrichment of pre-existing products (the
                 # startup backfill covers products no crawl revisits).
@@ -2907,6 +2985,8 @@ async def _fetch_zid_api_catalog(db, store):
                         "_unresolved_parent": p.get("_unresolved_parent"), "has_options": p.get("has_options"),
                         "_resolved_child": p.get("_resolved_child"), "_parent_sku": p.get("_parent_sku"),
                         "attributes": p.get("attributes"), "currency": p.get("currency"),
+                        # Store-supplied taxonomy, verbatim (category share needs it).
+                        "store_categories": extract_store_categories(p),
                         # Cumulative units-sold counter — feeds the estimator's
                         # sold_count_diff method (works even for is_infinite
                         # products whose qty can never show depletion).
@@ -3578,6 +3658,12 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
                 norm["original_price"] = norm.get("price")
         if norm.get("price") is None:
             continue
+        # Store-supplied categories travel with the row on both sources:
+        # the merchant fetch pre-extracts them; the public payload is parsed here.
+        store_cats = raw.get("store_categories") if raw.get("_zid_id") else extract_store_categories(raw)
+        store_cats = store_cats or []
+        category_fields = ({"store_categories": store_cats, "category": primary_store_category(store_cats),
+                            "category_source": "store_supplied"} if store_cats else {})
         basis_counts[price_basis] = basis_counts.get(price_basis, 0) + 1
         # iter54 — hand the RESOLVED price to the snapshot writer below.
         # That writer re-read `raw["price"]` from scratch, i.e. the Zid Merchant
@@ -3645,6 +3731,7 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
                 "price_basis": price_basis,
                 "currency": "SAR",
                 "discovered_via": sync_source_label,
+                **category_fields,
             }
             await db.my_products.update_one(
                 {"sku": crawled_sku},
@@ -3678,6 +3765,14 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
             "present_on_store": True,
             "last_seen_on_store": sync_ts,
         }
+        if category_fields:
+            # A reviewed category is a human decision and is never overwritten;
+            # store-supplied tags are refreshed every sync.
+            existing_src = (await db.my_products.find_one({"sku": target_sku}, {"_id": 0, "category_source": 1}) or {}).get("category_source")
+            if existing_src == "reviewed":
+                update_doc["store_categories"] = store_cats
+            else:
+                update_doc.update(category_fields)
         await db.my_products.update_one({"sku": target_sku}, {"$set": update_doc, "$unset": {"price_unavailable_reason": ""}})
         seen_skus.add(target_sku)
         updated += 1
