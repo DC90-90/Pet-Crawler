@@ -1399,9 +1399,12 @@ async def _try_single_endpoint(http, ep, crawl_log):
     return [], None
 
 
+CATALOG_MAX_PAGES = 800   # Salla cursor pages carry 15 items: 200 pages capped CutePets at 3,000 of a larger catalogue (10 Oct 2026)
+
+
 async def _paginate_endpoint(http, ep, initial_items):
     from catalog_pagination import paginate
-    return await paginate(http, ep, initial_items, polite_get)
+    return await paginate(http, ep, initial_items, polite_get, max_pages=CATALOG_MAX_PAGES)
 
 
 async def _retired_paginate_endpoint(http, ep, initial_items):
