@@ -7,85 +7,77 @@
   "scenarios": {
     "cold_3_runs": [
       {
-        "elapsed_ms": 1472.63,
+        "elapsed_ms": 1080.31,
         "source": "live_fallback",
         "read_counts": {
-          "distinct": {
-            "count": 1,
-            "duration_ms": 0.315
-          },
-          "find": {
-            "count": 15,
-            "duration_ms": 16.023999999999997
-          },
           "getMore": {
             "count": 7,
-            "duration_ms": 170.698
+            "duration_ms": 128.903
           },
           "aggregate": {
             "count": 1,
-            "duration_ms": 548.466
+            "duration_ms": 359.375
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.218
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 5.214
           }
         }
       },
       {
-        "elapsed_ms": 1424.0,
+        "elapsed_ms": 1085.12,
         "source": "live_fallback",
         "read_counts": {
-          "distinct": {
-            "count": 1,
-            "duration_ms": 0.44
-          },
-          "find": {
-            "count": 15,
-            "duration_ms": 8.164
-          },
           "getMore": {
             "count": 7,
-            "duration_ms": 200.084
+            "duration_ms": 131.587
           },
           "aggregate": {
             "count": 1,
-            "duration_ms": 491.157
+            "duration_ms": 361.121
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.248
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 5.213
           }
         }
       },
       {
-        "elapsed_ms": 1473.12,
+        "elapsed_ms": 1084.66,
         "source": "live_fallback",
         "read_counts": {
-          "distinct": {
-            "count": 1,
-            "duration_ms": 1.122
-          },
-          "find": {
-            "count": 15,
-            "duration_ms": 25.855999999999998
-          },
           "getMore": {
             "count": 7,
-            "duration_ms": 185.89999999999998
+            "duration_ms": 104.472
           },
           "aggregate": {
             "count": 1,
-            "duration_ms": 496.273
+            "duration_ms": 351.652
+          },
+          "distinct": {
+            "count": 1,
+            "duration_ms": 0.207
+          },
+          "find": {
+            "count": 15,
+            "duration_ms": 5.247999999999999
           }
         }
       }
     ],
     "warm_5_runs": [
       {
-        "elapsed_ms": 12.91,
+        "elapsed_ms": 11.69,
         "source": "memory_cache",
         "read_counts": {
-          "distinct": {
-            "count": 0,
-            "duration_ms": 0.0
-          },
-          "find": {
-            "count": 1,
-            "duration_ms": 0.457
-          },
           "getMore": {
             "count": 0,
             "duration_ms": 0.0
@@ -93,21 +85,21 @@
           "aggregate": {
             "count": 0,
             "duration_ms": 0.0
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.372
           }
         }
       },
       {
-        "elapsed_ms": 14.16,
+        "elapsed_ms": 11.48,
         "source": "memory_cache",
         "read_counts": {
-          "distinct": {
-            "count": 0,
-            "duration_ms": 0.0
-          },
-          "find": {
-            "count": 1,
-            "duration_ms": 0.453
-          },
           "getMore": {
             "count": 0,
             "duration_ms": 0.0
@@ -115,21 +107,21 @@
           "aggregate": {
             "count": 0,
             "duration_ms": 0.0
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.278
           }
         }
       },
       {
-        "elapsed_ms": 17.48,
+        "elapsed_ms": 11.49,
         "source": "memory_cache",
         "read_counts": {
-          "distinct": {
-            "count": 0,
-            "duration_ms": 0.0
-          },
-          "find": {
-            "count": 1,
-            "duration_ms": 0.911
-          },
           "getMore": {
             "count": 0,
             "duration_ms": 0.0
@@ -137,21 +129,21 @@
           "aggregate": {
             "count": 0,
             "duration_ms": 0.0
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.231
           }
         }
       },
       {
-        "elapsed_ms": 15.05,
+        "elapsed_ms": 11.45,
         "source": "memory_cache",
         "read_counts": {
-          "distinct": {
-            "count": 0,
-            "duration_ms": 0.0
-          },
-          "find": {
-            "count": 1,
-            "duration_ms": 0.692
-          },
           "getMore": {
             "count": 0,
             "duration_ms": 0.0
@@ -159,21 +151,21 @@
           "aggregate": {
             "count": 0,
             "duration_ms": 0.0
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.259
           }
         }
       },
       {
-        "elapsed_ms": 17.17,
+        "elapsed_ms": 11.89,
         "source": "memory_cache",
         "read_counts": {
-          "distinct": {
-            "count": 0,
-            "duration_ms": 0.0
-          },
-          "find": {
-            "count": 1,
-            "duration_ms": 0.842
-          },
           "getMore": {
             "count": 0,
             "duration_ms": 0.0
@@ -181,22 +173,22 @@
           "aggregate": {
             "count": 0,
             "duration_ms": 0.0
+          },
+          "distinct": {
+            "count": 0,
+            "duration_ms": 0.0
+          },
+          "find": {
+            "count": 1,
+            "duration_ms": 0.263
           }
         }
       }
     ],
     "stored_valid_cache": {
-      "elapsed_ms": 299.01,
+      "elapsed_ms": 277.86,
       "source": "cache",
       "read_counts": {
-        "distinct": {
-          "count": 0,
-          "duration_ms": 0.0
-        },
-        "find": {
-          "count": 3,
-          "duration_ms": 40.748
-        },
         "getMore": {
           "count": 0,
           "duration_ms": 0.0
@@ -204,6 +196,14 @@
         "aggregate": {
           "count": 0,
           "duration_ms": 0.0
+        },
+        "distinct": {
+          "count": 0,
+          "duration_ms": 0.0
+        },
+        "find": {
+          "count": 3,
+          "duration_ms": 38.793000000000006
         }
       }
     },
@@ -211,18 +211,10 @@
       "pages": [
         {
           "offset": 0,
-          "elapsed_ms": 369.75,
+          "elapsed_ms": 282.14,
           "total": 2832,
           "source": "cache",
           "read_counts": {
-            "distinct": {
-              "count": 0,
-              "duration_ms": 0.0
-            },
-            "find": {
-              "count": 3,
-              "duration_ms": 25.601999999999997
-            },
             "getMore": {
               "count": 0,
               "duration_ms": 0.0
@@ -230,23 +222,23 @@
             "aggregate": {
               "count": 0,
               "duration_ms": 0.0
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.468
             }
           }
         },
         {
           "offset": 500,
-          "elapsed_ms": 311.32,
+          "elapsed_ms": 278.94,
           "total": 2832,
           "source": "cache",
           "read_counts": {
-            "distinct": {
-              "count": 0,
-              "duration_ms": 0.0
-            },
-            "find": {
-              "count": 3,
-              "duration_ms": 27.273999999999997
-            },
             "getMore": {
               "count": 0,
               "duration_ms": 0.0
@@ -254,23 +246,23 @@
             "aggregate": {
               "count": 0,
               "duration_ms": 0.0
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.642000000000001
             }
           }
         },
         {
           "offset": 1000,
-          "elapsed_ms": 321.59,
+          "elapsed_ms": 284.53,
           "total": 2832,
           "source": "cache",
           "read_counts": {
-            "distinct": {
-              "count": 0,
-              "duration_ms": 0.0
-            },
-            "find": {
-              "count": 3,
-              "duration_ms": 33.891999999999996
-            },
             "getMore": {
               "count": 0,
               "duration_ms": 0.0
@@ -278,23 +270,23 @@
             "aggregate": {
               "count": 0,
               "duration_ms": 0.0
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.110000000000001
             }
           }
         },
         {
           "offset": 1500,
-          "elapsed_ms": 317.38,
+          "elapsed_ms": 282.56,
           "total": 2832,
           "source": "cache",
           "read_counts": {
-            "distinct": {
-              "count": 0,
-              "duration_ms": 0.0
-            },
-            "find": {
-              "count": 3,
-              "duration_ms": 31.437
-            },
             "getMore": {
               "count": 0,
               "duration_ms": 0.0
@@ -302,23 +294,23 @@
             "aggregate": {
               "count": 0,
               "duration_ms": 0.0
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 15.049
             }
           }
         },
         {
           "offset": 2000,
-          "elapsed_ms": 304.51,
+          "elapsed_ms": 307.44,
           "total": 2832,
           "source": "cache",
           "read_counts": {
-            "distinct": {
-              "count": 0,
-              "duration_ms": 0.0
-            },
-            "find": {
-              "count": 3,
-              "duration_ms": 25.463
-            },
             "getMore": {
               "count": 0,
               "duration_ms": 0.0
@@ -326,23 +318,23 @@
             "aggregate": {
               "count": 0,
               "duration_ms": 0.0
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 14.751000000000001
             }
           }
         },
         {
           "offset": 2500,
-          "elapsed_ms": 286.53,
+          "elapsed_ms": 267.5,
           "total": 2832,
           "source": "cache",
           "read_counts": {
-            "distinct": {
-              "count": 0,
-              "duration_ms": 0.0
-            },
-            "find": {
-              "count": 3,
-              "duration_ms": 18.745
-            },
             "getMore": {
               "count": 0,
               "duration_ms": 0.0
@@ -350,6 +342,14 @@
             "aggregate": {
               "count": 0,
               "duration_ms": 0.0
+            },
+            "distinct": {
+              "count": 0,
+              "duration_ms": 0.0
+            },
+            "find": {
+              "count": 3,
+              "duration_ms": 14.895000000000001
             }
           }
         }
@@ -360,28 +360,28 @@
       "requests": 5,
       "compute_calls": 1,
       "sources": [
-        "live_fallback",
         "memory_coalesced",
+        "live_fallback",
         "memory_coalesced",
         "memory_coalesced",
         "memory_coalesced"
       ],
       "read_counts": {
-        "distinct": {
-          "count": 1,
-          "duration_ms": 0.314
-        },
-        "find": {
-          "count": 23,
-          "duration_ms": 41.864000000000004
-        },
         "getMore": {
           "count": 7,
-          "duration_ms": 136.728
+          "duration_ms": 103.898
         },
         "aggregate": {
           "count": 1,
-          "duration_ms": 489.514
+          "duration_ms": 358.322
+        },
+        "distinct": {
+          "count": 1,
+          "duration_ms": 0.204
+        },
+        "find": {
+          "count": 23,
+          "duration_ms": 18.52
         }
       }
     },
@@ -409,7 +409,7 @@
       "old": {
         "totalDocsExamined": 100810,
         "totalKeysExamined": 100811,
-        "executionTimeMillis": 474,
+        "executionTimeMillis": 337,
         "maxAccumulatorMemoryUsageBytes": {
           "latest": 12927853,
           "historical_max": 907776
@@ -418,7 +418,7 @@
       "new": {
         "totalDocsExamined": 100810,
         "totalKeysExamined": 100811,
-        "executionTimeMillis": 516,
+        "executionTimeMillis": 406,
         "maxAccumulatorMemoryUsageBytes": {
           "latest": 8598501,
           "history_oldest_at": 907776,

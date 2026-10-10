@@ -13,26 +13,34 @@
           "comp-02",
           "comp-03"
         ],
-        "seed_now": "2026-10-10 12:12:26+00:00",
+        "seed_now": "2026-10-10 14:20:05+00:00",
         "seeded_products": 2832,
         "seeded_snapshots": 101953,
         "payload_size": 256
       },
       "cohort": {
         "reference_ms": {
-          "min": 507.12,
-          "median": 508.32,
-          "max": 603.52
+          "min": 376.1,
+          "median": 376.64,
+          "max": 377.44
         },
         "revised_ms": {
-          "min": 578.46,
-          "median": 596.91,
-          "max": 693.29
+          "min": 426.97,
+          "median": 437.04,
+          "max": 453.3
         },
         "read_counts": {
           "reference": [
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 300.144
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 74.033
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -40,20 +48,20 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 104.036
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 496.923
                 }
               },
               "total_read_commands": 2
             },
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 297.007
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 74.48
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -61,20 +69,20 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 84.682
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 416.904
                 }
               },
               "total_read_commands": 2
             },
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 298.02
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 73.242
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -82,14 +90,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 93.526
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 409.799
                 }
               },
               "total_read_commands": 2
@@ -98,6 +98,14 @@
           "revised": [
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 341.224
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 79.085
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -105,20 +113,20 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 133.969
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 552.985
                 }
               },
               "total_read_commands": 2
             },
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 349.808
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 97.36
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -126,20 +134,20 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 93.721
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 479.549
                 }
               },
               "total_read_commands": 2
             },
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 356.805
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 75.25
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -147,14 +155,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 127.743
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 463.811
                 }
               },
               "total_read_commands": 2
@@ -164,19 +164,19 @@
       },
       "latest_bench": {
         "full_ms": {
-          "min": 397.83,
-          "median": 419.26,
-          "max": 429.59
+          "min": 260.14,
+          "median": 264.21,
+          "max": 317.79
         },
         "leaderboard_compact_ms": {
-          "min": 259.6,
-          "median": 267.88,
-          "max": 288.65
+          "min": 197.0,
+          "median": 206.17,
+          "max": 230.55
         },
         "rank7d_compact_ms": {
-          "min": 220.02,
-          "median": 222.52,
-          "max": 230.07
+          "min": 161.55,
+          "median": 162.15,
+          "max": 163.57
         },
         "metrics": {
           "full": {
@@ -184,6 +184,14 @@
             "bytes": 7335740,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 234.805
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 76.983
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -191,14 +199,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 55.949
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 336.491
                 }
               },
               "total_read_commands": 2
@@ -209,6 +209,14 @@
             "bytes": 985629,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 184.877
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 15.552
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -216,14 +224,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 23.474
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 237.938
                 }
               },
               "total_read_commands": 2
@@ -234,6 +234,14 @@
             "bytes": 4560112,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 129.187
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 32.251
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -241,14 +249,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 47.193
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 169.729
                 }
               },
               "total_read_commands": 2
@@ -258,17 +258,17 @@
       },
       "market_share_bench": {
         "query_bytes_identical": true,
-        "timing_control_within_20pct": false,
+        "timing_control_within_20pct": true,
         "interpretation": "A/A control only; no Market Share query speedup claim",
         "old_ms": {
-          "min": 230.92,
-          "median": 233.99,
-          "max": 245.3
+          "min": 165.61,
+          "median": 169.15,
+          "max": 169.86
         },
         "new_ms": {
-          "min": 232.46,
-          "median": 300.14,
-          "max": 320.79
+          "min": 164.69,
+          "median": 168.44,
+          "max": 219.84
         },
         "rows_bytes": {
           "old_postgroup": {
@@ -276,6 +276,14 @@
             "bytes": 4559597,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 125.666
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 35.597
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -283,14 +291,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 43.36
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 182.991
                 }
               },
               "total_read_commands": 2
@@ -301,6 +301,14 @@
             "bytes": 4559597,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 126.936
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 32.482
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -308,14 +316,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 107.124
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 186.277
                 }
               },
               "total_read_commands": 2
@@ -326,7 +326,7 @@
           "old": {
             "totalDocsExamined": 59842,
             "totalKeysExamined": 59842,
-            "executionTimeMillis": 207,
+            "executionTimeMillis": 140,
             "usedDisk": false,
             "spills": 0,
             "spilledBytes": null,
@@ -338,7 +338,7 @@
           "new": {
             "totalDocsExamined": 59842,
             "totalKeysExamined": 59842,
-            "executionTimeMillis": 212,
+            "executionTimeMillis": 141,
             "usedDisk": false,
             "spills": 0,
             "spilledBytes": null,
@@ -350,10 +350,10 @@
         }
       },
       "asgi_large_fixture": {
-        "my_products_cold_ms": 1928.84,
-        "my_products_warm_ms": 7.92,
-        "store_ranking_ms": 318.0,
-        "leaderboard_ms": 268.34
+        "my_products_cold_ms": 1579.67,
+        "my_products_warm_ms": 6.86,
+        "store_ranking_ms": 259.98,
+        "leaderboard_ms": 207.24
       },
       "observer_writes": {
         "attempted": 0,
@@ -373,26 +373,34 @@
           "comp-02",
           "comp-03"
         ],
-        "seed_now": "2026-10-10 12:12:46+00:00",
+        "seed_now": "2026-10-10 14:20:20+00:00",
         "seeded_products": 2832,
         "seeded_snapshots": 101953,
         "payload_size": 4096
       },
       "cohort": {
         "reference_ms": {
-          "min": 475.02,
-          "median": 496.27,
-          "max": 520.34
+          "min": 384.1,
+          "median": 401.25,
+          "max": 410.18
         },
         "revised_ms": {
-          "min": 516.18,
-          "median": 527.86,
-          "max": 538.78
+          "min": 428.15,
+          "median": 433.56,
+          "max": 440.57
         },
         "read_counts": {
           "reference": [
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 300.879
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 98.738
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -400,20 +408,20 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 117.225
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 376.975
                 }
               },
               "total_read_commands": 2
             },
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 307.479
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 71.189
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -421,20 +429,20 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 137.959
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 376.459
                 }
               },
               "total_read_commands": 2
             },
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 303.338
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 102.523
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -442,14 +450,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 85.509
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 384.456
                 }
               },
               "total_read_commands": 2
@@ -458,6 +458,14 @@
           "revised": [
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 364.319
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 70.848
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -465,20 +473,20 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 86.359
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 446.288
                 }
               },
               "total_read_commands": 2
             },
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 347.665
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 76.146
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -486,20 +494,20 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 86.923
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 424.218
                 }
               },
               "total_read_commands": 2
             },
             {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 355.008
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 73.144
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -507,14 +515,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 89.778
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 431.536
                 }
               },
               "total_read_commands": 2
@@ -524,19 +524,19 @@
       },
       "latest_bench": {
         "full_ms": {
-          "min": 430.39,
-          "median": 504.39,
-          "max": 537.2
+          "min": 330.57,
+          "median": 334.6,
+          "max": 340.74
         },
         "leaderboard_compact_ms": {
-          "min": 271.47,
-          "median": 285.97,
-          "max": 305.49
+          "min": 202.47,
+          "median": 202.98,
+          "max": 205.07
         },
         "rank7d_compact_ms": {
-          "min": 256.23,
-          "median": 274.53,
-          "max": 421.03
+          "min": 163.38,
+          "median": 197.95,
+          "max": 204.97
         },
         "metrics": {
           "full": {
@@ -544,6 +544,14 @@
             "bytes": 39964220,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 267.844
+                },
+                "getMore": {
+                  "count": 3,
+                  "duration_ms": 61.06999999999999
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -551,14 +559,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 3,
-                  "duration_ms": 127.037
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 397.756
                 }
               },
               "total_read_commands": 4
@@ -569,6 +569,14 @@
             "bytes": 985629,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 182.619
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 15.302
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -576,14 +584,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 33.008
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 231.212
                 }
               },
               "total_read_commands": 2
@@ -594,6 +594,14 @@
             "bytes": 4560112,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 127.686
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 68.083
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -601,14 +609,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 110.816
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 160.72
                 }
               },
               "total_read_commands": 2
@@ -621,14 +621,14 @@
         "timing_control_within_20pct": true,
         "interpretation": "A/A control only; no Market Share query speedup claim",
         "old_ms": {
-          "min": 248.51,
-          "median": 348.74,
-          "max": 351.75
+          "min": 197.06,
+          "median": 197.49,
+          "max": 258.84
         },
         "new_ms": {
-          "min": 253.65,
-          "median": 262.55,
-          "max": 284.33
+          "min": 194.34,
+          "median": 197.19,
+          "max": 255.26
         },
         "rows_bytes": {
           "old_postgroup": {
@@ -636,6 +636,14 @@
             "bytes": 4559597,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 157.352
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 97.635
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -643,14 +651,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 128.013
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 216.033
                 }
               },
               "total_read_commands": 2
@@ -661,6 +661,14 @@
             "bytes": 4559597,
             "reads": {
               "by_command": {
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 154.661
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 34.543
+                },
                 "distinct": {
                   "count": 0,
                   "duration_ms": 0.0
@@ -668,14 +676,6 @@
                 "find": {
                   "count": 0,
                   "duration_ms": 0.0
-                },
-                "getMore": {
-                  "count": 1,
-                  "duration_ms": 42.493
-                },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 206.101
                 }
               },
               "total_read_commands": 2
@@ -686,7 +686,7 @@
           "old": {
             "totalDocsExamined": 59842,
             "totalKeysExamined": 59842,
-            "executionTimeMillis": 229,
+            "executionTimeMillis": 177,
             "usedDisk": false,
             "spills": 0,
             "spilledBytes": null,
@@ -698,7 +698,7 @@
           "new": {
             "totalDocsExamined": 59842,
             "totalKeysExamined": 59842,
-            "executionTimeMillis": 236,
+            "executionTimeMillis": 168,
             "usedDisk": false,
             "spills": 0,
             "spilledBytes": null,
@@ -710,10 +710,10 @@
         }
       },
       "asgi_large_fixture": {
-        "my_products_cold_ms": 1790.97,
-        "my_products_warm_ms": 7.59,
-        "store_ranking_ms": 422.41,
-        "leaderboard_ms": 261.69
+        "my_products_cold_ms": 1580.8,
+        "my_products_warm_ms": 6.89,
+        "store_ranking_ms": 267.35,
+        "leaderboard_ms": 225.26
       },
       "observer_writes": {
         "attempted": 0,

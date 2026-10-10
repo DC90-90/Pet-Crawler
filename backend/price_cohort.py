@@ -2,10 +2,8 @@
 from datetime import datetime, timezone, timedelta
 from observation_contract import gtin, money, stable_id, TRUSTED_PRICE_BASES
 from pack_guard import slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers, discount_escapes
-from price_read_limits import SNAPSHOT_QUERY_MAX_MS, bounded_read, close_read_cursor, read_budget_expired
-import asyncio
-from pymongo.errors import PyMongoError
-import time
+from price_read_limits import SNAPSHOT_QUERY_MAX_MS, bounded_read
+from cohort_reads import read_cohort_snapshots
 
 POLICY_VERSION = "offers-v3-parent-aware-current-7d"
 FIELDS = {k: 1 for k in ("sku", "barcode", "store_id", "store_name", "offer_id", "listing_id", "variant_id", "name_ar", "name_en", "price", "currency", "price_basis", "in_stock", "qty_available", "product_url", "crawled_at", "observation_version", "confidence_score", "comparable", "is_synthetic", "present_on_store", "variant_skus", "variant_barcodes")}
@@ -171,51 +169,33 @@ async def _build_cohorts(db, own_rows, own_store_id, own_price_fn, now, competit
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
     if competitor_store_ids is not None:
         active = [sid for sid in active if sid in competitor_store_ids]
-    pipeline = snapshot_pipeline(active, now)
-    from snapshot_strategy import selected_hint, failed_hint, completed_hint
-    hint = await selected_hint(db)
-    options = {"hint": hint} if hint else {}
-    started = time.perf_counter()
-    cursor = db.product_snapshots.aggregate(pipeline,
-        allowDiskUse=True, maxTimeMS=SNAPSHOT_QUERY_MAX_MS, **options).batch_size(2000)
+    rows = await read_cohort_snapshots(db, active, now, snapshot_pipeline,
+                                      max_time_ms=SNAPSHOT_QUERY_MAX_MS)
     valid_until = min([freshness_transition(stamp, now) for r in own_rows
                        for stamp in (r.get("last_synced_at"), r.get("quantity_observed_at") or r.get("last_synced_at"))],
                       default=now+timedelta(days=7))
     manual_by_offer = {}
     for sku, sid, oid in manual:
         manual_by_offer.setdefault((sid, oid), set()).add(sku)
-    try:
-        async for row in cursor:
-            oldest = aware(row.pop("history_oldest_at", None))
-            valid_until = min(valid_until, freshness_transition(row.get("crawled_at"), now),
-                              oldest+timedelta(days=180) if oldest else valid_until)
-            row = annotate(apply_brand_review(row, reviewed), parents)
-            candidates = set(manual_by_offer.get((row["store_id"], row.get("offer_id")), ()))
-            for key in identity_keys(row):
-                candidates.update(by_key.get(key, ()))
-            offer_key = (row["store_id"], row.get("offer_id") or row.get("sku"))
-            for sku in candidates:
-                own = own_by_sku.get(sku)
-                scoped = (sku, row["store_id"], row.get("offer_id"))
-                if own and scoped not in blocked and identity_agrees(own, row, scoped in manual):
-                    if (row.get("observation_version") == 2 and not row.get("is_synthetic")
-                            and row.get("data_origin") != "demo_seed"):
-                        history.setdefault(sku, []).append({**row, "price": row.get("historical_max_price") or row.get("price")})
-                    if offer_key not in seen:
-                        grouped.setdefault(sku, []).append(row)
-            seen.add(offer_key)
-    except (PyMongoError, TimeoutError, asyncio.CancelledError) as exc:
-        confirmed_timeout = not isinstance(exc, asyncio.CancelledError) or read_budget_expired()
-        if confirmed_timeout:
-            failed_hint(db, hint)
-        if not isinstance(exc, PyMongoError) or exc.timeout:
-            from read_diagnostics import capture_after_timeout
-            capture_after_timeout(db, "cohort", pipeline, applied_hint=hint,
-                                  confirmed_timeout=confirmed_timeout)
-        raise
-    finally:
-        await close_read_cursor(cursor)
-    completed_hint(db, hint, (time.perf_counter()-started)*1000)
+    for row in rows:
+        oldest = aware(row.pop("history_oldest_at", None))
+        valid_until = min(valid_until, freshness_transition(row.get("crawled_at"), now),
+                          oldest+timedelta(days=180) if oldest else valid_until)
+        row = annotate(apply_brand_review(row, reviewed), parents)
+        candidates = set(manual_by_offer.get((row["store_id"], row.get("offer_id")), ()))
+        for key in identity_keys(row):
+            candidates.update(by_key.get(key, ()))
+        offer_key = (row["store_id"], row.get("offer_id") or row.get("sku"))
+        for sku in candidates:
+            own = own_by_sku.get(sku)
+            scoped = (sku, row["store_id"], row.get("offer_id"))
+            if own and scoped not in blocked and identity_agrees(own, row, scoped in manual):
+                if (row.get("observation_version") == 2 and not row.get("is_synthetic")
+                        and row.get("data_origin") != "demo_seed"):
+                    history.setdefault(sku, []).append({**row, "price": row.get("historical_max_price") or row.get("price")})
+                if offer_key not in seen:
+                    grouped.setdefault(sku, []).append(row)
+        seen.add(offer_key)
     return {sku: {**select_cohort(own, grouped.get(sku, []), own_price_fn(own), now=now,
                                history=history.get(sku, [])), "valid_until": valid_until}
             for sku, own in own_by_sku.items()}
