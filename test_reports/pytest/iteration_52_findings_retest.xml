@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="5" time="16.999" timestamp="2026-10-10T10:00:26.793952+00:00" hostname="agent-env-24867ce7-9497-42ab-89a5-067b1dc88c54"><testcase classname="backend.tests.test_iter52_findings" name="test_existing_five_per_minute_limit_with_stable_peer[False]" time="0.029" /><testcase classname="backend.tests.test_iter52_findings" name="test_existing_five_per_minute_limit_with_stable_peer[True]" time="0.022" /><testcase classname="backend.tests.test_iter52_findings" name="test_latest_low_confidence_and_persisted_exclusion_flags" time="0.038" /><testcase classname="backend.tests.test_iter52_compact_reads" name="test_iter52_compact_reads_benchmark_and_contracts" time="11.167"><failure message="AssertionError: market-share compact median regressed &gt;20%: old=224.78 new=274.26&#10;assert False&#10; +  where False = _within_20pct(224.78, 274.26)">backend/tests/test_iter52_compact_reads.py:479: in test_iter52_compact_reads_benchmark_and_contracts
+    asyncio.run(scenario())
+/usr/local/lib/python3.11/asyncio/runners.py:190: in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/runners.py:118: in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/local/lib/python3.11/asyncio/base_events.py:654: in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+backend/tests/test_iter52_compact_reads.py:476: in scenario
+    bench["payload_variants"]["256B"] = await run_payload(256)
+                                        ^^^^^^^^^^^^^^^^^^^^^^
+backend/tests/test_iter52_compact_reads.py:284: in run_payload
+    assert _within_20pct(old_market_stats["median"], new_market_stats["median"]), (
+E   AssertionError: market-share compact median regressed &gt;20%: old=224.78 new=274.26
+E   assert False
+E    +  where False = _within_20pct(224.78, 274.26)</failure></testcase><testcase classname="backend.tests.test_iter52_compact_reads" name="test_iter52_preview_heavy_endpoints_smoke" time="5.051" /></testsuite></testsuites>

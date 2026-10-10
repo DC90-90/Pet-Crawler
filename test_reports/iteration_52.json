@@ -1,0 +1,71 @@
+{
+  "summary": "Completed backend-only final verification for revised iter52 compact read strategy. Ran reviewed regression pack (156 tests), P0 suites (17 tests), iter50 read-only guards (7 tests), and new iter52 benchmark/smoke suite (2 tests).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/api/auth/login",
+        "issue": "Live brute-force/rate-limit lockout was not observed after 6 consecutive failed logins from this runner (all 401, no 429). This may indicate preview ingress/IP extraction bypassing limiter or lockout not effectively enforced in this environment.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "market_share._latest_snapshots (internal read path)",
+        "issue": "Function accepts min_confidence but current latest_pipeline query does not apply it; potential confidence-filter drift risk versus caller intent."
+      },
+      {
+        "endpoint": "Observer mode cache path",
+        "issue": "iter52 benchmark captured write_attempted=2 / write_actual=0 (blocked as expected). No persisted writes, but attempted writes still occur in request path under observer mode."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/scripts/run_reviewed_tests.py",
+    "/app/backend/tests/test_p0_my_products_fix.py",
+    "/app/backend/tests/test_p0_cache_boundaries.py",
+    "/app/backend/tests/test_p0_fully_matched_catalog.py",
+    "/app/backend/tests/test_iter50_readonly_navigation_and_alerts.py",
+    "/app/backend/tests/test_iter52_compact_reads.py",
+    "/app/test_reports/iter52_readpath_benchmark.json",
+    "/app/test_reports/iter52_preview_smoke.json",
+    "/app/test_reports/pytest/iteration_52_p0.xml",
+    "/app/test_reports/pytest/iteration_52_iter50.xml",
+    "/app/test_reports/pytest/iteration_52_iter52.xml",
+    "/app/test_reports/pytest/reviewed-core-final.xml",
+    "/app/test_reports/pytest/isolated-auth-final.xml",
+    "/app/test_reports/pytest/real-source-final.xml",
+    "/app/test_reports/pytest/related-contracts-final.xml",
+    "/app/test_reports/pytest/six-acceptance-final.xml",
+    "/app/test_reports/pytest/four-correctness-final.xml",
+    "/app/test_reports/pytest/matcher-parent-pool-final.xml",
+    "/app/test_reports/pytest/release-safety-final.xml"
+  ],
+  "action_items": [
+    "Investigate live auth rate limiting path (/api/auth/login): confirm proxy/IP extraction, limiter middleware order, and expected 429 after 5 failed attempts.",
+    "Decide whether market_share._latest_snapshots must enforce min_confidence in query for contract clarity.",
+    "Review observer-mode attempted write calls from request path if strict zero-attempt policy is required."
+  ],
+  "critical_code_review_comments": [
+    "Read-path compact strategy validated: snapshot_reads.latest_pipeline is now traditional match/project/sort/group/replaceRoot with no $lookup dependency.",
+    "price_cohort.snapshot_pipeline matches required compact pre-late-materialization shape (project-before-group with history_oldest_at + historical_max_price).",
+    "Potential correctness risk: market_share._latest_snapshots signature includes min_confidence but current query omits it."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter52_compact_reads.py",
+    "/app/test_reports/iteration_52.json"
+  ],
+  "success_rate": {
+    "backend": "99%",
+    "frontend": "N/A (backend-only request)"
+  },
+  "seed_data_creation": "Disposable UUID loopback Mongo fixture seeded per payload variant (256B and 4KiB), 2,832 own products + 101,953 snapshots including 220-day stale offer case.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iter51 artifacts preserved. New iter52 artifacts: /app/test_reports/iter52_readpath_benchmark.json and /app/test_reports/iter52_preview_smoke.json. All requested suites passed in this run; follow-up focus is auth limiter behavior on live preview and min_confidence usage review in market_share._latest_snapshots.",
+  "rca of the issue": "Auth lockout observation: repeated failed logins from this runner returned 401 without transitioning to 429. Likely causes: client IP not stable/exposed to slowapi key_func behind ingress, middleware ordering, or environment-specific bypass in preview. Mitigation: add explicit forwarded-for handling/validation in limiter key derivation and re-verify with controlled source IP tests."
+}

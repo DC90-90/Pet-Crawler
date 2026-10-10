@@ -1,5 +1,7 @@
 # Authorized read-only navigation restored; production cohort timeout still open
 
+**Later correction:** Nav restoration subsequently went live in run1970e575, but data reads still time out. Missing-store-leading-index claim below is WITHDRAWN (metadata-tool dict sorting); do not create duplicates based on the earlier key-order interpretation. See `CURRENT_DATA_READ_INCIDENT.md` and `READ_PATH_CANDIDATE_VERIFICATION.md` for current findings/unpublished candidate and185final checks.
+
 Date: 2026-10-10 (final verification around08:06 UTC).
 
 ## User request and scope

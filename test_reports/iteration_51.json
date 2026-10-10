@@ -1,0 +1,61 @@
+{
+  "summary": "Completed backend-first verification for read-path optimization candidate using disposable loopback Mongo and preview smoke. Functional parity and failure contracts passed, but isolated cold-path benchmarks show the new pointer+lookup cohort pipeline is materially slower than the old compact pipeline for both 256B and 4KiB payload fixtures.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "core cohort read path used by /api/my-products, /api/price-intel/dashboard, /api/price-intel/store-ranking, /api/market-share/overview, /api/insights/*",
+        "issue": "HIGH regression risk in isolated benchmark: new pointer+lookup cohort pipeline median ~822-825ms vs old compact ~417-419ms (about 2x slower) with same docs/keys examined (101952/101953).",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter51_readpath_optimization.py",
+    "/app/test_reports/iter51_readpath_benchmark.json",
+    "/app/test_reports/iter51_preview_smoke.json",
+    "/app/test_reports/pytest/iteration_51_readpath.xml",
+    "/app/test_reports/pytest/iteration_51_p0_fully_matched.xml",
+    "/app/test_reports/pytest/iteration_51_p0_fix.xml",
+    "/app/test_reports/pytest/iteration_51_p0_cache_boundaries.xml",
+    "/app/test_reports/p0_my_products/fully_matched_benchmark.json",
+    "/app/test_reports/p0_my_products/fix_validation_post_fix.json",
+    "/app/test_reports/p0_my_products/cache_boundaries_benchmarks.json"
+  ],
+  "action_items": [
+    "Re-evaluate acceptance of current late-materialization cohort implementation for production rollout due to isolated cold regression (~2x).",
+    "Investigate reducing winner lookup amplification/getMore cost in new pipeline (e.g., narrowed winner fetch strategy) before claiming read-path speed fix.",
+    "Keep current bounded 503 contract behavior (price_query_timeout / price_source_changed) as-is; it validated correctly under injected timeout/network failures.",
+    "Run follow-up benchmark on a fixture that includes true production-like index/cardinality skew and compare old/new p95 before merge decision."
+  ],
+  "critical_code_review_comments": [
+    "No evidence of silent row loss in tested paths: parity checks for old/new cohort key sets and store-latest key sets passed on disposable fixture.",
+    "Observed index family in iter51 fixture matches requested actual names (_id_, crawled_at_1, sku_1_crawled_at_-1, product_id_1, store_id_1_crawled_at_-1); no extra 'make it fast' index was introduced.",
+    "Ranking 7d-bounded path matched old full-history+exclusion semantics on tested fixture (store_id -> products/in_stock_pct/rank parity).",
+    "MY_PRODUCTS baseline_pre_fix artifact was preserved and not overwritten."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter51_readpath_optimization.py",
+    "/app/test_reports/iter51_readpath_benchmark.json",
+    "/app/test_reports/iter51_preview_smoke.json",
+    "/app/test_reports/iteration_51.json",
+    "/app/test_reports/pytest/iteration_51_readpath.xml",
+    "/app/test_reports/pytest/iteration_51_p0_fully_matched.xml",
+    "/app/test_reports/pytest/iteration_51_p0_fix.xml",
+    "/app/test_reports/pytest/iteration_51_p0_cache_boundaries.xml"
+  ],
+  "success_rate": {
+    "backend": "100% test pass rate (19/19), but performance objective NOT met for new cohort path in isolated benchmarks",
+    "frontend": "N/A (backend-first run; only load/smoke evidence captured)"
+  },
+  "seed_data_creation": "Created disposable UUID loopback Mongo fixtures only. Largest iter51 fixture: 2832 own products, 101953 snapshots, payload variants 256B and 4KiB. All disposable DBs dropped post-test.",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All requested heavy preview smoke GETs in iter51 returned 200 on external URL (/api/stores, /api/insights/leaderboard, /api/price-intel/store-ranking, /api/market-share/overview, /api/insights/top-sellers, /api/my-products days=14/30). Failure injections in iter51 are MOCKED and validated retryable 503 behavior. Main open concern is performance regression of new pointer cohort read path under isolated cold benchmark.",
+  "rca of the issue": "RCA (performance): in isolated fixtures using requested index family, the pointer pipeline adds per-winner lookup materialization overhead and significantly higher aggregate/getMore duration despite same docs/keys examined. Measured medians: old compact ~417-419ms vs new pointer ~822-825ms (both 256B and 4KiB payload datasets). Functional behavior (parity, failure contracts, no partial-empty success) validated; speed claim did not. Mitigation: treat as potential reject/revise for performance until improved p95 on representative load."
+}

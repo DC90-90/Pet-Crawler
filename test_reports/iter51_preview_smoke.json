@@ -1,0 +1,65 @@
+{
+  "base_url": "https://price-intel-dev.preview.emergentagent.com",
+  "results": [
+    {
+      "path": "/api/stores",
+      "params": {},
+      "status": 200,
+      "elapsed_ms": 207.4
+    },
+    {
+      "path": "/api/insights/leaderboard",
+      "params": {
+        "days": 30
+      },
+      "status": 200,
+      "elapsed_ms": 308.62
+    },
+    {
+      "path": "/api/price-intel/store-ranking",
+      "params": {},
+      "status": 200,
+      "elapsed_ms": 316.87
+    },
+    {
+      "path": "/api/market-share/overview",
+      "params": {
+        "days": 30
+      },
+      "status": 200,
+      "elapsed_ms": 2781.95
+    },
+    {
+      "path": "/api/insights/top-sellers",
+      "params": {
+        "days": 30
+      },
+      "status": 200,
+      "elapsed_ms": 307.4
+    },
+    {
+      "path": "/api/my-products",
+      "params": {
+        "days": 14,
+        "limit": 5,
+        "offset": 0,
+        "sort_by": "revenue_est",
+        "sort_order": "desc"
+      },
+      "status": 200,
+      "elapsed_ms": 2658.8
+    },
+    {
+      "path": "/api/my-products",
+      "params": {
+        "days": 30,
+        "limit": 5,
+        "offset": 0,
+        "sort_by": "revenue_est",
+        "sort_order": "desc"
+      },
+      "status": 200,
+      "elapsed_ms": 2682.02
+    }
+  ]
+}

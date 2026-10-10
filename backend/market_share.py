@@ -40,6 +40,7 @@ from evidence_ledger import sales_map
 from price_cohort import FIELDS, build_cohorts, identity_agrees
 from stock_evidence import own_stock
 from price_cohort import exclusion
+from snapshot_reads import complete_latest
 from pack_guard import (
     slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers,
 )
@@ -188,13 +189,22 @@ async def _store_signals(db, start, end):
     return out
 
 
-async def _latest_snapshots(db, since, min_confidence):
-    active = await db.stores.distinct("id", {"is_active": {"$ne": False}})
-    return await db.product_snapshots.aggregate([
+def _latest_snapshot_pipeline(active, since):
+    # Keep the established post-group projection: moving this many fields
+    # before grouping added work for every historical row in local benchmarks.
+    return [
         {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}, "offer_id": {"$type": "string"}}},
         {"$sort": {"crawled_at": -1}}, {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
         {"$replaceRoot": {"newRoot": "$row"}}, {"$project": FIELDS},
-    ], allowDiskUse=True).to_list(200000)
+    ]
+
+
+async def _latest_snapshots(db, since, min_confidence):
+    # Legacy argument is retained for caller compatibility, not a pre-latest
+    # predicate. The shared versioned policy applies its confidence floor AFTER
+    # selecting latest evidence; filtering here resurrects older trusted prices.
+    active = await db.stores.distinct("id", {"is_active": {"$ne": False}})
+    return await complete_latest(db, _latest_snapshot_pipeline(active, since))
 
 
 async def _retired_latest_snapshots(db, since, min_confidence):
@@ -526,7 +536,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
 
     stores = {s["id"]: s for s in await db.stores.find(
         {"is_active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1, "platform": 1, "is_own_store": 1,
-             "is_active": 1, "last_crawl_at": 1, "last_crawl_status": 1}).to_list(200)}
+             "is_active": 1, "last_crawl_at": 1, "last_crawl_status": 1}).to_list(None)}
     if competitor_store_ids is not None:
         stores = {sid: s for sid, s in stores.items() if sid == own_store_id or sid in competitor_store_ids}
 
@@ -546,7 +556,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
              "last_synced_at": 1, "present_on_store": 1, "currency": 1, "offer_id": 1,
              "known_variant_parent": 1, "quarantine_active": 1, "price_unavailable_reason": 1,
              "listing_id": 1, "zid_id": 1, "variant_id": 1, "store_id": 1,
-             "historical_quantity": 1, "historical_quantity_at": 1, "quantity_observed_at": 1}).to_list(50000)
+             "historical_quantity": 1, "historical_quantity_at": 1, "quantity_observed_at": 1}).to_list(None)
     my_rows = [annotate(r, parents, own_store_id) for r in my_rows]
     my_by_sku = {r["sku"]: r for r in my_rows if r.get("sku")}
     cohorts = await build_cohorts(db, my_rows, own_store_id, own_price_fn, now=now, competitor_store_ids=competitor_store_ids)

@@ -3,18 +3,23 @@ from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException
 import ledger
 from evidence_ledger import sales_map
-from price_cohort import exclusion, identity_keys
+from price_cohort import exclusion, identity_keys, FIELDS
+from snapshot_reads import latest_pipeline, complete_latest
+
+# Unlike cohort observations (annotated from the parent registry), store views
+# also consume persisted exclusion flags. Do not lose them in projections.
+ELIGIBILITY_FIELDS = {**FIELDS, "data_origin": 1, "superseded_parent": 1, "last_crawl_at": 1}
 
 
-async def latest(db, store_id=None):
+async def latest(db, store_id=None, since=None, projection=None):
     query = {"observation_version": 2, "is_synthetic": False}
     if store_id:
         query["store_id"] = store_id
-    return await db.product_snapshots.aggregate([
-        {"$match": query}, {"$sort": {"crawled_at": -1}},
-        {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
-        {"$replaceRoot": {"newRoot": "$row"}}, {"$project": {"_id": 0}},
-    ], allowDiskUse=True).to_list(200000)
+    if since is not None:
+        query["crawled_at"] = {"$gte": since}
+    # Historical catalog counts/profile/stale denominators still need ALL time.
+    # Only callers whose output already excludes older evidence supply `since`.
+    return await complete_latest(db, latest_pipeline(query, projection))
 
 
 async def profile(db, store_id, orders_fn):
@@ -66,7 +71,7 @@ async def profile(db, store_id, orders_fn):
 async def leaderboard(db, days):
     start, end = ledger.sealed_ksa_window(days)
     signals = await sales_map(db, start, end)
-    observations = await latest(db)
+    observations = await latest(db, projection={"store_id": 1, "comparable": 1})
     rows = []
     async for store in db.stores.find({"is_active": {"$ne": False}, "is_own_store": {"$ne": True}}, {"_id": 0}):
         values = [r for (sid, _), r in signals.items() if sid == store["id"]]
@@ -80,18 +85,19 @@ async def leaderboard(db, days):
 
 
 async def ranking(db, orders_fn):
-    stores = await db.stores.find({"is_active": {"$ne": False}}, {"_id": 0}).to_list(10000)
+    stores = await db.stores.find({"is_active": {"$ne": False}}, {"_id": 0}).to_list(None)
     start, end = ledger.sealed_ksa_window(30)
     sales = await sales_map(db, start, end)
-    rows, all_offers = [], await latest(db)
-    valid = [s for s in all_offers if exclusion(s) is None]
+    now = datetime.now(timezone.utc)
+    rows, all_offers = [], await latest(db, since=now-timedelta(days=7), projection=ELIGIBILITY_FIELDS)
+    valid = [s for s in all_offers if exclusion(s, now=now) is None]
     for store in stores:
         sid = store["id"]
         obs = [s for s in valid if s["store_id"] == sid]
         # Coverage ranks use eligible offers. Availability needs all recent
         # observations with known stock, including out-of-stock offers.
         known_stock = [s for s in all_offers if s['store_id'] == sid
-                       and exclusion({**s, 'in_stock': True}) is None
+                       and exclusion({**s, 'in_stock': True}, now=now) is None
                        and isinstance(s.get('in_stock'), bool)]
         stock_pct = round(100 * sum(s['in_stock'] for s in known_stock) / len(known_stock), 1) if known_stock else None
         signals = [v for (store_key, _), v in sales.items() if store_key == sid]
@@ -122,10 +128,10 @@ async def ranking(db, orders_fn):
 
 
 async def market_summary(db, days, price_fn):
-    from comparison_views import context, position_summary
+    from comparison_views import context, summarize_positions
     import statistics
-    _, products, cohorts = await context(db, price_fn)
-    observations = await latest(db)
+    own, products, cohorts = await context(db, price_fn)
+    observations = await latest(db, projection=ELIGIBILITY_FIELDS)
     valid = [s for s in observations if exclusion(s) is None]
     own_keys = set().union(*(identity_keys(p) for p in products)) if products else set()
     unmatched = {key for s in valid for key in identity_keys(s) if key not in own_keys}
@@ -142,13 +148,14 @@ async def market_summary(db, days, price_fn):
             "median_spread": round(statistics.median(spreads), 2) if spreads else None,
             "avg_confidence": round(sum(s["confidence_score"] for s in valid)/len(valid), 1) if valid else None,
             "freshness_breakdown": {"total_tracked": len(observations), "this_week": len(valid), "stale": len(observations)-len(valid)},
-            "market_position_summary": await position_summary(db, price_fn)}
+            "market_position_summary": summarize_positions(own, products, cohorts, price_fn)}
 
 
 async def top_sellers(db, days, store_id=None):
     start, end = ledger.sealed_ksa_window(days)
     signals = await sales_map(db, start, end)
-    observations = {s["offer_id"]: s for s in await latest(db)}
+    observations = {s["offer_id"]: s for s in await latest(db, projection={
+        "name_ar": 1, "name_en": 1, "store_name": 1, "source_tier": 1, "confidence_score": 1, "price": 1})}
     active = set(await db.stores.distinct("id", {"is_active": {"$ne": False}}))
     result = []
     for (sid, oid), r in signals.items():

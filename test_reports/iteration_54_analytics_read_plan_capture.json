@@ -1,0 +1,1479 @@
+{
+  "generated_at": "2026-10-10T11:48:09.592318+00:00",
+  "base_url": "https://price-intel-dev.preview.emergentagent.com",
+  "endpoint": "/api/admin/analytics-read-plan",
+  "request_sequence": [
+    "cohort",
+    "latest",
+    "ranking"
+  ],
+  "results": [
+    {
+      "pipeline": "cohort",
+      "status_code": 200,
+      "elapsed_ms_client": 136.88,
+      "elapsed_ms_http": 135.63,
+      "response_json": {
+        "query": "cohort",
+        "observed_at": "2026-10-10T11:48:09.263435+00:00",
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "status": "available",
+        "plan": {
+          "stages": [
+            "PROJECTION_SIMPLE",
+            "FETCH",
+            "IXSCAN",
+            "$group",
+            "$replaceRoot",
+            "$project"
+          ],
+          "indexes": [
+            {
+              "name": "crawled_at_-1_store_id_1",
+              "keys": [
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                },
+                {
+                  "field": "store_id",
+                  "direction": 1
+                }
+              ]
+            }
+          ],
+          "blocking_sort": false,
+          "collection_scan": false
+        },
+        "applied_hint": null,
+        "alternative_index": "store_id_1_crawled_at_-1",
+        "alternative_plan": {
+          "stages": [
+            "PROJECTION_SIMPLE",
+            "FETCH",
+            "SORT_MERGE",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "IXSCAN",
+            "$group",
+            "$replaceRoot",
+            "$project"
+          ],
+          "indexes": [
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            },
+            {
+              "name": "store_id_1_crawled_at_-1",
+              "keys": [
+                {
+                  "field": "store_id",
+                  "direction": 1
+                },
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            }
+          ],
+          "blocking_sort": false,
+          "collection_scan": false
+        },
+        "selected_hint": null,
+        "installed_indexes": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_store_id_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "store_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_sku_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_confidence_score_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "confidence_score",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "discount_pct_-1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "discount_pct",
+                "direction": -1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "barcode_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "barcode",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_skus_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_skus",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_barcodes_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_barcodes",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "event_id_1",
+            "keys": [
+              {
+                "field": "event_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_offer_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "offer_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ],
+        "metadata_errors": []
+      },
+      "sanitization": {
+        "forbidden_keys_present": [],
+        "contains_objectid_literal": false,
+        "contains_oid_literal": false
+      },
+      "contract": {
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "selected_hint": null,
+        "applied_hint": null,
+        "installed_indexes_ordered_key_arrays": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_store_id_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "store_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_sku_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_confidence_score_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "confidence_score",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "discount_pct_-1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "discount_pct",
+                "direction": -1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "barcode_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "barcode",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_skus_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_skus",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_barcodes_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_barcodes",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "event_id_1",
+            "keys": [
+              {
+                "field": "event_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_offer_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "offer_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ]
+      },
+      "plan_capture": {
+        "status": "available",
+        "successful_plan_capture": true,
+        "metadata_errors": []
+      }
+    },
+    {
+      "pipeline": "latest",
+      "status_code": 200,
+      "elapsed_ms_client": 164.38,
+      "elapsed_ms_http": 162.48,
+      "response_json": {
+        "query": "latest",
+        "observed_at": "2026-10-10T11:48:09.431395+00:00",
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "status": "available",
+        "plan": {
+          "stages": [
+            "FETCH",
+            "IXSCAN",
+            "$group",
+            "$replaceRoot",
+            "$project"
+          ],
+          "indexes": [
+            {
+              "name": "crawled_at_-1",
+              "keys": [
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            }
+          ],
+          "blocking_sort": false,
+          "collection_scan": false
+        },
+        "applied_hint": null,
+        "alternative_index": null,
+        "alternative_plan": null,
+        "selected_hint": null,
+        "installed_indexes": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_store_id_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "store_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_sku_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_confidence_score_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "confidence_score",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "discount_pct_-1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "discount_pct",
+                "direction": -1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "barcode_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "barcode",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_skus_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_skus",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_barcodes_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_barcodes",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "event_id_1",
+            "keys": [
+              {
+                "field": "event_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_offer_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "offer_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ],
+        "metadata_errors": []
+      },
+      "sanitization": {
+        "forbidden_keys_present": [],
+        "contains_objectid_literal": false,
+        "contains_oid_literal": false
+      },
+      "contract": {
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "selected_hint": null,
+        "applied_hint": null,
+        "installed_indexes_ordered_key_arrays": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_store_id_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "store_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_sku_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_confidence_score_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "confidence_score",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "discount_pct_-1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "discount_pct",
+                "direction": -1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "barcode_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "barcode",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_skus_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_skus",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_barcodes_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_barcodes",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "event_id_1",
+            "keys": [
+              {
+                "field": "event_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_offer_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "offer_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ]
+      },
+      "plan_capture": {
+        "status": "available",
+        "successful_plan_capture": true,
+        "metadata_errors": []
+      }
+    },
+    {
+      "pipeline": "ranking",
+      "status_code": 200,
+      "elapsed_ms_client": 130.02,
+      "elapsed_ms_http": 128.64,
+      "response_json": {
+        "query": "ranking",
+        "observed_at": "2026-10-10T11:48:09.560492+00:00",
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "status": "available",
+        "plan": {
+          "stages": [
+            "PROJECTION_SIMPLE",
+            "FETCH",
+            "IXSCAN",
+            "$sort",
+            "$group",
+            "$replaceRoot",
+            "$project"
+          ],
+          "indexes": [
+            {
+              "name": "crawled_at_-1",
+              "keys": [
+                {
+                  "field": "crawled_at",
+                  "direction": -1
+                }
+              ]
+            }
+          ],
+          "blocking_sort": true,
+          "collection_scan": false
+        },
+        "applied_hint": null,
+        "alternative_index": null,
+        "alternative_plan": null,
+        "selected_hint": null,
+        "installed_indexes": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_store_id_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "store_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_sku_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_confidence_score_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "confidence_score",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "discount_pct_-1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "discount_pct",
+                "direction": -1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "barcode_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "barcode",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_skus_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_skus",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_barcodes_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_barcodes",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "event_id_1",
+            "keys": [
+              {
+                "field": "event_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_offer_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "offer_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ],
+        "metadata_errors": []
+      },
+      "sanitization": {
+        "forbidden_keys_present": [],
+        "contains_objectid_literal": false,
+        "contains_oid_literal": false
+      },
+      "contract": {
+        "mode": "queryPlanner",
+        "trigger": "manual",
+        "selected_hint": null,
+        "applied_hint": null,
+        "installed_indexes_ordered_key_arrays": [
+          {
+            "name": "_id_",
+            "keys": [
+              {
+                "field": "_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_sku_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_store_id_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "store_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_sku_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "sku",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "crawled_at_-1_confidence_score_1",
+            "keys": [
+              {
+                "field": "crawled_at",
+                "direction": -1
+              },
+              {
+                "field": "confidence_score",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "discount_pct_-1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "discount_pct",
+                "direction": -1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "product_id_1",
+            "keys": [
+              {
+                "field": "product_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "barcode_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "barcode",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_skus_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_skus",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "variant_barcodes_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "variant_barcodes",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          },
+          {
+            "name": "event_id_1",
+            "keys": [
+              {
+                "field": "event_id",
+                "direction": 1
+              }
+            ]
+          },
+          {
+            "name": "store_id_1_offer_id_1_crawled_at_-1",
+            "keys": [
+              {
+                "field": "store_id",
+                "direction": 1
+              },
+              {
+                "field": "offer_id",
+                "direction": 1
+              },
+              {
+                "field": "crawled_at",
+                "direction": -1
+              }
+            ]
+          }
+        ]
+      },
+      "plan_capture": {
+        "status": "available",
+        "successful_plan_capture": true,
+        "metadata_errors": []
+      }
+    }
+  ],
+  "limits": {
+    "read_only_preview_check": true,
+    "does_not_prove_production_winning_plan": true,
+    "does_not_resolve_45s_timeout_root_cause": true
+  }
+}

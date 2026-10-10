@@ -2,13 +2,17 @@
 from datetime import datetime, timezone, timedelta
 from observation_contract import gtin, money, stable_id, TRUSTED_PRICE_BASES
 from pack_guard import slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers, discount_escapes
-from price_read_limits import SNAPSHOT_QUERY_MAX_MS
+from price_read_limits import SNAPSHOT_QUERY_MAX_MS, bounded_read, close_read_cursor, read_budget_expired
+import asyncio
+from pymongo.errors import PyMongoError
+import time
 
 POLICY_VERSION = "offers-v3-parent-aware-current-7d"
 FIELDS = {k: 1 for k in ("sku", "barcode", "store_id", "store_name", "offer_id", "listing_id", "variant_id", "name_ar", "name_en", "price", "currency", "price_basis", "in_stock", "qty_available", "product_url", "crawled_at", "observation_version", "confidence_score", "comparable", "is_synthetic", "present_on_store", "variant_skus", "variant_barcodes")}
 FIELDS["_id"] = 0
 FIELDS["brand"] = 1
 FIELDS["brand_source"] = 1
+FIELDS["data_origin"] = 1
 
 
 def aware(value):
@@ -113,7 +117,7 @@ def select_cohort(own, rows, own_price, *, now=None, history=()):
 
 def snapshot_pipeline(active, now):
     # Keep the full 180-day discount corroboration/excluded-seller history.
-    # Project BEFORE $$ROOT grouping so raw crawl payloads cannot fill/spill it.
+    # Project BEFORE $$ROOT grouping so unused crawl payloads cannot fill it.
     # Latest selection still precedes all identity/stock/eligibility filtering.
     return [
         {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": now-timedelta(days=180)}}},
@@ -121,7 +125,11 @@ def snapshot_pipeline(active, now):
         {"$project": FIELDS},
         {"$group": {"_id": {"$ifNull": ["$offer_id", {"store": "$store_id", "sku": "$sku"}]},
                     "latest": {"$first": "$$ROOT"}, "history_oldest_at": {"$min": "$crawled_at"},
-                    "historical_max": {"$max": {"$cond": [{"$and": [{"$eq": ["$observation_version", 2]}, {"$eq": ["$comparable", True]}]}, "$price", None]}}}},
+                    "historical_max": {"$max": {"$cond": [{"$and": [
+                        {"$eq": ["$observation_version", 2]}, {"$eq": ["$comparable", True]},
+                        {"$not": [{"$ifNull": ["$is_synthetic", False]}]},
+                        {"$ne": [{"$ifNull": ["$data_origin", ""]}, "demo_seed"]}
+                    ]}, "$price", None]}}}},
         {"$replaceRoot": {"newRoot": {"$mergeObjects": ["$latest", {"historical_max_price": "$historical_max", "history_oldest_at": "$history_oldest_at"}]}}},
         {"$project": {**FIELDS, "historical_max_price": 1, "history_oldest_at": 1}},
     ]
@@ -138,6 +146,11 @@ def freshness_transition(value, now):
 
 
 async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, competitor_store_ids=None, parents=None):
+    return await bounded_read(_build_cohorts(db, own_rows, own_store_id, own_price_fn, now,
+                                          competitor_store_ids, parents))
+
+
+async def _build_cohorts(db, own_rows, own_store_id, own_price_fn, now, competitor_store_ids, parents):
     now = now or datetime.now(timezone.utc)
     own_by_sku = {r["sku"]: r for r in own_rows if r.get("sku")}
     by_key = {}
@@ -158,8 +171,13 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
     if competitor_store_ids is not None:
         active = [sid for sid in active if sid in competitor_store_ids]
-    cursor = db.product_snapshots.aggregate(snapshot_pipeline(active, now),
-        allowDiskUse=True, maxTimeMS=SNAPSHOT_QUERY_MAX_MS).batch_size(2000)
+    pipeline = snapshot_pipeline(active, now)
+    from snapshot_strategy import selected_hint, failed_hint, completed_hint
+    hint = await selected_hint(db)
+    options = {"hint": hint} if hint else {}
+    started = time.perf_counter()
+    cursor = db.product_snapshots.aggregate(pipeline,
+        allowDiskUse=True, maxTimeMS=SNAPSHOT_QUERY_MAX_MS, **options).batch_size(2000)
     valid_until = min([freshness_transition(stamp, now) for r in own_rows
                        for stamp in (r.get("last_synced_at"), r.get("quantity_observed_at") or r.get("last_synced_at"))],
                       default=now+timedelta(days=7))
@@ -180,13 +198,24 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
                 own = own_by_sku.get(sku)
                 scoped = (sku, row["store_id"], row.get("offer_id"))
                 if own and scoped not in blocked and identity_agrees(own, row, scoped in manual):
-                    if row.get("observation_version") == 2:
+                    if (row.get("observation_version") == 2 and not row.get("is_synthetic")
+                            and row.get("data_origin") != "demo_seed"):
                         history.setdefault(sku, []).append({**row, "price": row.get("historical_max_price") or row.get("price")})
                     if offer_key not in seen:
                         grouped.setdefault(sku, []).append(row)
             seen.add(offer_key)
+    except (PyMongoError, TimeoutError, asyncio.CancelledError) as exc:
+        confirmed_timeout = not isinstance(exc, asyncio.CancelledError) or read_budget_expired()
+        if confirmed_timeout:
+            failed_hint(db, hint)
+        if not isinstance(exc, PyMongoError) or exc.timeout:
+            from read_diagnostics import capture_after_timeout
+            capture_after_timeout(db, "cohort", pipeline, applied_hint=hint,
+                                  confirmed_timeout=confirmed_timeout)
+        raise
     finally:
-        await cursor.close()
+        await close_read_cursor(cursor)
+    completed_hint(db, hint, (time.perf_counter()-started)*1000)
     return {sku: {**select_cohort(own, grouped.get(sku, []), own_price_fn(own), now=now,
                                history=history.get(sku, [])), "valid_until": valid_until}
             for sku, own in own_by_sku.items()}

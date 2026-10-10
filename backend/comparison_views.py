@@ -58,6 +58,10 @@ async def intel(db, own_price_fn, competitor_store_ids=None):
 
 async def position_summary(db, price_fn):
     own, products, cohorts = await context(db, price_fn)
+    return summarize_positions(own, products, cohorts, price_fn)
+
+
+def summarize_positions(own, products, cohorts, price_fn):
     ranked = [position(own, p, price_fn(p), cohorts[p["sku"]]) for p in products if p.get("sku") in cohorts]
     ranked = [r for r in ranked if r]
     return {"ranked_products": len(ranked), "total_my_products": len(products),

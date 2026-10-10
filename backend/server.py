@@ -122,6 +122,7 @@ client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTim
 from release_database import GuardedDatabase
 import release_control
 import release_runtime
+from read_plan_policy import PlanKind, ReadPlanResult
 db = GuardedDatabase(client[os.environ['DB_NAME']])
 JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALG = "HS256"
@@ -1644,6 +1645,15 @@ async def admin_proxy_usage(user=Depends(get_user)):
     }
 
 
+@router.get("/admin/analytics-read-plan", response_model=ReadPlanResult)
+async def analytics_read_plan(request: Request, pipeline: PlanKind = "cohort",
+                              user: dict = Depends(require_super_admin)):
+    if len(request.query_params.multi_items()) > 1 or set(request.query_params)-{"pipeline"}:
+        raise HTTPException(400, "Only the fixed pipeline selector is accepted")
+    from read_diagnostics import collect_read_plan
+    return await collect_read_plan(db, pipeline)
+
+
 async def seed_super_admin():
     """Idempotent super admin seed.
 
@@ -2719,8 +2729,8 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
 
     `compute` is a zero-arg async callable returning the endpoint body. Returns
     (body, meta) where meta = {source, computed_at, age_seconds, stale}. On
-    miss / unparseable / stale-beyond-24h → compute live + best-effort refresh.
-    Never raises from the cache layer (only `compute` may)."""
+    miss / unparseable / expired → compute live without database writes.
+    Cache persistence is reserved for explicit background writers."""
     now = datetime.now(timezone.utc)
     if release_control.guarded(db):
         return await compute(), {"source": "observation_compute", "computed_at": now.isoformat(), "age_seconds": 0, "stale": False}
@@ -2743,16 +2753,11 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
                 ca = ca.replace(tzinfo=timezone.utc)
             age = (now - ca).total_seconds()
             revision = await db.data_versions.find_one({"_id": "observations"}) or {}
-            if age <= DASHBOARD_CACHE_MAX_AGE_SECS and doc.get("source_revision") == revision.get("revision", 0):
+            if 0 <= age <= DASHBOARD_CACHE_MAX_AGE_SECS and doc.get("source_revision") == revision.get("revision", 0):
                 return doc["payload"], {"source": "cache", "computed_at": ca.isoformat(),
                                         "age_seconds": round(age, 1), "stale": False}
     body = await compute()
-    stamped = None
-    try:
-        stamped = await _store_page_cache(db, base, days, body)
-    except Exception:
-        pass
-    return body, {"source": "live_fallback", "computed_at": (stamped or now).isoformat(),
+    return body, {"source": "live_fallback", "computed_at": now.isoformat(),
                   "age_seconds": 0.0, "stale": False}
 
 
