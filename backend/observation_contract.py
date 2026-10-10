@@ -5,6 +5,8 @@ import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 VERSION = 2
+# Only bases whose VAT treatment is evidenced are comparable. An assumed or
+# unknown tax basis is kept on the row for audit but never priced (finding F10).
 TRUSTED_PRICE_BASES = {"storefront_inc_vat", "merchant_computed_inc_vat", "merchant_non_taxable"}
 
 
@@ -88,7 +90,9 @@ def expand_variants(raw):
         attrs = variant.get("attributes") or variant.get("options") or []
         vid = str(variant.get("id") or variant.get('variant_id') or
                   stable_id(variant.get('sku'), variant.get('barcode'), attrs))
-        row = {k: raw[k] for k in ("name", "title", "images", "image", "urls", "url", "html_url", "product_url", "categories", "brand", "currency", "_currency", "_price_basis") if k in raw}
+        # Tax status is a listing-level attribute in Zid, so children inherit
+        # it; inventory, price, barcode and SKU never are.
+        row = {k: raw[k] for k in ("name", "title", "images", "image", "urls", "url", "html_url", "product_url", "categories", "brand", "currency", "_currency", "_price_basis", "is_taxable", "taxable") if k in raw}
         row.update(variant)
         row.update(_listing_id=str(raw.get("id") or raw.get("listing_id") or raw.get("sku") or stable_id(raw.get("name"))),
                    _variant_id=vid, attributes=attrs, _parent_sku=raw.get("sku"), _resolved_child=True)

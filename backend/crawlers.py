@@ -2776,8 +2776,9 @@ async def _fetch_zid_api_catalog(db, store):
                     headers=headers,
                 )
                 if resp.status_code in (401, 403):
-                    logger.error(f"[OwnSync][Zid API] auth rejected status={resp.status_code}")
-                    return [], "auth_failed"
+                    logger.error(f"[OwnSync][Zid API] auth rejected status={resp.status_code} after {len(out)} products")
+                    # Pages already fetched are real observations; keep them as partial.
+                    return out, "partial" if out else "auth_failed"
                 resp.raise_for_status()
                 payload = resp.json()
                 items = payload.get("results") or []
@@ -2795,8 +2796,13 @@ async def _fetch_zid_api_catalog(db, store):
                     _list = money(p.get("price")) or 0
                     _sale = money(p.get("sale_price")) or 0
                     _eff = _sale if _sale and _sale > 0 else _list
+                    # A Zid product with no SKU is still one product; key it by
+                    # its Zid id (the `Z.<id>` convention storefront_price_lookup
+                    # already understands) instead of collapsing every such
+                    # row into one my_products document with sku "".
+                    _sku = str(p.get("sku") or "").strip() or (f"Z.{p.get('id')}" if p.get("id") else "")
                     out.append({
-                        "sku": str(p.get("sku") or "").strip(),
+                        "sku": _sku,
                         "barcode": str(p.get("barcode") or "").strip(),
                         "name_ar": name_obj.get("ar") or "",
                         "name_en": name_obj.get("en") or "",
@@ -2849,6 +2855,12 @@ def storefront_shelf_price(raw):
     """
     list_price = _price_amount(raw.get("price"))
     effective = _price_amount(raw.get("effective_price"))
+    # Oct 10 2026 — the live Zid storefront payload carries `price` + `sale_price`
+    # and no `effective_price`; reading only the latter made every on-sale
+    # product look full price and erased our own discounts.
+    if effective <= 0:
+        sale = _price_amount(raw.get("sale_price"))
+        effective = sale if 0 < sale < list_price else 0
     shelf = effective if effective > 0 else list_price
     return shelf, list_price
 
@@ -3120,19 +3132,16 @@ async def _retired_paginate_own_storefront(http, ep, initial_items, max_pages=OW
 #   on the storefront            -> its inc-VAT shelf price   storefront_inc_vat
 #   not on it, is_taxable True   -> merchant price x (1+VAT)  merchant_computed_inc_vat
 #   not on it, is_taxable False  -> merchant price unchanged  merchant_non_taxable
-#   not on it, is_taxable None   -> merchant price x (1+VAT)  merchant_assumed_inc_vat
-#                                                             (iter73d — Saudi
-#                                                             default: retail
-#                                                             goods are taxable)
+#   not on it, is_taxable None   -> merchant price unchanged  merchant_unknown_tax
+#                                   (UNTRUSTED: kept, counted, never compared)
 #
-# iter73d — the previous "unknown → keep ex-VAT" rule was correct in principle
-# ("inflating a real price by 15% is a bug") but wrong in Saudi practice: 99%
-# of retail goods ARE taxable, Zid's Merchant API doesn't always populate
-# is_taxable, and the resulting mixed-basis rows were the cause of the "my
-# prices show without VAT on some tabs" client report. The `merchant_assumed_
-# inc_vat` tag keeps the auto-grossed rows countable, so operators can spot-
-# check them; a genuinely non-taxable product must set is_taxable=False in
-# Zid so the resolver keeps its ex-VAT basis.
+# History: iter73d grossed the unknown case by default ("Saudi retail goods are
+# taxable"). The Oct 2026 investigation (finding F10) reversed that: an
+# unverified 15 % is a fabricated price. The practical cause of most unknowns
+# was variant children not inheriting the listing's is_taxable flag; that is
+# fixed in observation_contract.expand_variants, so the unknown branch is now
+# the exception, not the rule. `merchant_assumed_inc_vat` is therefore
+# unreachable and kept only as a basis name legacy rows may still carry.
 #
 # iter73i — new signal `storefront_authoritative` (Aug 3 2026). When the
 # storefront overlay ran and produced a NON-EMPTY index, it is the source of
@@ -3170,7 +3179,12 @@ def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
                 "storefront_inc_vat")
 
     if is_taxable is None:
-        # Missing tax evidence is not permission to add 15%.
+        # Finding F10 (Oct 2026): missing tax evidence is not permission to add
+        # 15 %. The row is kept with its raw merchant numbers under an untrusted
+        # basis, so it is counted and auditable but never compared. With
+        # variant children now inheriting the listing's is_taxable flag this
+        # branch should be rare; a non-empty count here means Zid left the
+        # flag unset on a root product and the owner should set it in Zid.
         value = _price_amount(merchant_price)
         original = _price_amount(merchant_list_price) or value
         return value, None, original, "merchant_unknown_tax"
@@ -3183,23 +3197,8 @@ def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
     # before the argument existed, no regression).
     list_p = _price_amount(merchant_list_price) if merchant_list_price is not None else price
 
-    # iter73i — storefront ran, this SKU isn't on it: the merchant sale is
-    # invisible to the shopper. Anchor on the LIST price only.
-    if False:  # Absence from a listing never proves that a merchant sale is hidden.
-        # Effective price = list_price (fall back to merchant_price when the
-        # merchant didn't distinguish list vs sale).
-        eff = list_p if list_p > 0 else price
-        if is_taxable is False:
-            return (round(eff, 2),
-                    None,
-                    round(eff, 2),
-                    "merchant_hidden_non_taxable")
-        mult = 1 + KSA_VAT_RATE
-        return (round(eff * mult, 2),
-                None,
-                round(eff * mult, 2),
-                "merchant_hidden_from_storefront_inc_vat")
-
+    # Absence from the storefront listing never proves that a merchant sale is
+    # hidden, so `storefront_authoritative` is informational only.
     if is_taxable is False:
         return (round(price, 2),
                 (round(sale, 2) if sale > 0 else None),
@@ -3313,7 +3312,11 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
         sync_source_label = "public_crawl"
         winning_endpoint = {"tag": "targeted_product_pages", "_pagination": {"complete": False}}
         crawl_log.update(tier_used=1, endpoint_used="targeted_product_pages", scope="targeted_listings")
-    elif zid_status == "ok" and all_raw:
+    elif zid_status in ("ok", "partial") and all_raw:
+        # A partial merchant fetch (page cap, mid-walk network error) still
+        # beats the public crawl: it carries exact stock, sold counters and the
+        # hidden catalogue. `catalog_complete` below stays False for "partial",
+        # which blocks the archival step — nothing unseen is marked removed.
         sync_source_label = "zid_api"
         winning_endpoint = {"tag": "zid_merchant_api"}
         crawl_log["tier_used"] = 0  # 0 = authenticated API (better than tier 1 public)
@@ -3416,10 +3419,19 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
     # assign one sibling's price or orders to another when that key is ambiguous.
     # Preserve the raw offers for explicit reconciliation rather than guessing.
     from own_quarantine import filter_own_rows
+    # Every SKU the source returned this run, including rows the quarantine
+    # filter removes and the parents of expanded variants. A quarantined row
+    # was still SEEN on the store, so it must never be archived as removed.
+    skus_seen_at_source = set()
+    for _r in all_raw:
+        for _k in ("sku", "_parent_sku"):
+            _v = str(_r.get(_k) or "").strip()
+            if _v:
+                skus_seen_at_source.add(_v)
     all_raw, quarantined_own = await filter_own_rows(db, store, all_raw, sync_source_label, started_at, _normalize_raw_product)
     if quarantined_own:
-        catalog_complete = False
-        crawl_log['complete'] = False
+        # Quarantine is a per-row identity problem, not evidence that the
+        # catalogue fetch was incomplete; `catalog_complete` stays as fetched.
         crawl_log['quarantined_offers'] = quarantined_own
 
     for raw in all_raw:
@@ -3465,15 +3477,10 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
             # effective_price-first shelf rule here on the raw row.
             norm = _normalize_raw_product(raw, store["name"])
             price_basis = "storefront_inc_vat"
-            shelf, list_price = storefront_shelf_price(raw)
-            if shelf > 0:
-                norm["price"] = shelf
-                norm["sale_price"] = shelf if (list_price > 0 and shelf < list_price - 0.009) else None
-                # iter73d — record the LIST price so the my_products /
-                # snapshot writers pick it up as `original_price`. Fall back
-                # to shelf when the storefront didn't carry a distinct list.
-                norm["original_price"] = list_price if list_price > 0 else shelf
-            else:
+            # normalize_offer already picks the sale-aware effective price and
+            # the list price as original_price; the snapshot writer uses the
+            # same contract, so my_products and snapshots can no longer disagree.
+            if not norm.get("original_price"):
                 norm["original_price"] = norm.get("price")
         if norm.get("price") is None:
             continue
@@ -3633,7 +3640,9 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
             price_basis_v = _res[3] if _res else "merchant_assumed_inc_vat"
             if price_basis_v not in TRUSTED_PRICE_BASES:
                 continue
-            offer_id = stable_id(own_store_id, raw.get("listing_id") or raw.get("_zid_id"), raw.get("variant_id") or "root")
+            # Same key order as the my_products writer above (own_offer_id), or
+            # the two ids diverge and our own sales history is never found.
+            offer_id = stable_id(own_store_id, raw.get("listing_id") or raw.get("_listing_id") or raw.get("_zid_id") or raw.get("id"), raw.get("variant_id") or raw.get("_variant_id") or "root")
             qty = raw.get("qty_available")
             in_stock = raw.get("in_stock") if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""
@@ -3689,7 +3698,7 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
                 round(float(_prev.get("price") or 0), 2) == _snap_price
                 and _prev.get("qty_available") == qty
                 and int(_prev.get("sold_count") or 0) == int(raw.get("sold_count") or 0)
-                and bool(_prev.get("in_stock")) == in_stock
+                and _prev.get("in_stock") is in_stock  # tri-state: True / False / None(unknown)
             )
             # Upsert catalog row (idempotent — only sets if new, preserves history)
             prod_upserts.append({
@@ -3771,12 +3780,22 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
     # Soft-archive only: row + history are preserved, but `present_on_store=False`
     # lets the UI badge them as "Removed from store" without filtering them out.
     archived = 0
-    if all_raw and catalog_complete and len(seen_skus) == len({str(r.get("sku") or "") for r in all_raw}):
+    # Archive only when (a) the catalogue fetch was complete, and (b) this run
+    # used the same source as the previous one. The merchant API sees ~2,300
+    # products including hidden ones; the public storefront sees ~1,300. A
+    # source flip (token expiry → public fallback) must not mark a thousand
+    # hidden products "removed from store" and zero their prices on read.
+    previous_source = store.get("own_store_sync_source")
+    same_source = previous_source in (None, "", sync_source_label)
+    if all_raw and catalog_complete and same_source:
+        keep = list(seen_skus | skus_seen_at_source)
         res = await db.my_products.update_many(
-            {"sku": {"$nin": list(seen_skus)}},
+            {"sku": {"$nin": keep}},
             {"$set": {"present_on_store": False, "last_archive_check": sync_ts}},
         )
         archived = res.modified_count or 0
+    elif all_raw and catalog_complete and not same_source:
+        logger.warning(f"[OwnSync] archival skipped: source changed {previous_source} → {sync_source_label}")
 
     duration = (datetime.now(timezone.utc) - started_at).total_seconds()
     crawl_log["products_updated"] = updated

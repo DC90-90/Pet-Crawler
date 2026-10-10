@@ -50,8 +50,14 @@ REQUIRED_STORES = [
      "working_endpoint": "/api/v1/products", "is_own_store": True},
 
     # ── Competitors (original registry) ──
-    {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "use_storefront_categories": True},
-    {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "use_storefront_categories": True},
+    # Oct 10 2026 — verified live: the Salla storefront JSON API answers on the
+    # locale-prefixed route (/en/api/v1/products, cursor pagination) for
+    # cutepets, hamtaro, zarafa and lanapets; the bare /api/v1/products route
+    # returns "This API is deprecated". Tier 1 is complete and cheap, so the
+    # Playwright category walk is demoted to a fallback (use_storefront_categories
+    # False). caty-store is the reverse: /en/ 404s and the bare route works.
+    {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products"},
+    {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
     # iter40 — platform corrected salla→zid: mowkly.com serves a Zid-style
     # /api/v1/products API (page pagination, quantity exposed) and produces
     # measurable sales signals; the old "salla" tag made the ranking's
@@ -62,9 +68,9 @@ REQUIRED_STORES = [
     {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
     {"name": "Petsy", "domain": "petsysa.com", "platform": "zid", "priority": 2, "working_endpoint": "/api/v1/products"},
     {"name": "Panda Store", "domain": "matjarpanda.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
-    {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
-    {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "use_storefront_categories": True},
-    {"name": "Lana Pets", "domain": "lanapets.com", "platform": "salla", "priority": 1,
+    {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/api/v1/products"},
+    {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products"},
+    {"name": "Lana Pets", "domain": "lanapets.com", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products",
      "discovery": "re-verified Jul 2026: live, carries Royal Canin/Schesir/Applaws/Kit Cat"},
 ]
 
@@ -110,7 +116,9 @@ async def ensure_stores(db):
             updates = {}
             if existing.get("platform") != s["platform"]:
                 updates["platform"] = s["platform"]
-            if s.get("working_endpoint") and not existing.get("working_endpoint"):
+            # The registry's verified endpoint wins over a cached one: a stale
+            # cache (e.g. the deprecated bare Salla route) costs a full tier.
+            if s.get("working_endpoint") and existing.get("working_endpoint") != s["working_endpoint"]:
                 updates["working_endpoint"] = s["working_endpoint"]
             desired_tier1_only = bool(s.get("tier1_only", False))
             if bool(existing.get("tier1_only", False)) != desired_tier1_only:

@@ -733,8 +733,15 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             confidence, conf_reason = "low", spread_warning
         cohort = cohorts[sku]
         stats = {"min": cohort["min"], "max": cohort["max"], "avg": cohort["avg"]}
-        share_comparable = (my_units is not None and len(with_sales) == len(kept) and len(with_sales) >= 2
-                            and all(s["units_source"] == SRC_ORDERS for s in with_sales))
+        # A share needs: our own measured units, every seller in the cohort
+        # measurable (a partial denominator would inflate us), and at least one
+        # competitor. Competitor units are measured proxies (stock depletion or
+        # sold-counter deltas), never order ledgers, so the previous
+        # "all sellers orders_exact" clause made a share impossible by
+        # construction; `share_basis` now states what the number rests on.
+        share_comparable = (my_units is not None and len(with_sales) == len(kept) and len(with_sales) >= 2)
+        share_basis = ("orders_vs_proxy" if (own or {}).get("units_source") == SRC_ORDERS
+                       else "proxy_vs_proxy") if share_comparable else None
 
         ranked_price = sorted(cohort['sellers'] + ([{'price': my_price, 'is_own': True}] if my_price > 0 else []), key=lambda s: s['price'])
         price_rank = next((i + 1 for i, s in enumerate(ranked_price) if s.get('is_own')), None) if cohort['sellers'] else None

@@ -170,7 +170,7 @@ function AppLayout() {
       <main className={`app-main flex-1 min-w-0 min-h-screen flex flex-col ms-0 ${navCollapsed ? "md:ms-[68px]" : "md:ms-[240px]"}`}>
         <div className="flex items-center justify-between md:justify-end px-4 md:px-6 py-3 border-b border-white/5">
           <button className="md:hidden p-2 text-[#A1E4DB]" onClick={() => setMobileNavOpen(true)} aria-label="Open navigation" aria-expanded={mobileNavOpen} data-testid="mobile-nav-open"><Menu className="w-5 h-5" /></button>
-          {release.capabilities.email && canAccessPage(user, "alerts") && <NotificationBell />}
+          {!release.price_comparison_only && canAccessPage(user, "alerts") && <NotificationBell />}
         </div>
         <div className="flex-1 min-w-0">
         <ReleaseBoundary><Routes>

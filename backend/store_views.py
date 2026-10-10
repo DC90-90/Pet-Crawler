@@ -11,14 +11,15 @@ from snapshot_reads import latest_pipeline, complete_latest
 ELIGIBILITY_FIELDS = {**FIELDS, "data_origin": 1, "superseded_parent": 1, "last_crawl_at": 1}
 
 
-async def latest(db, store_id=None, since=None, projection=None):
-    query = {"observation_version": 2, "is_synthetic": False}
+async def latest(db, store_id=None, since=None, projection=None, days=30):
+    # Bounded by crawl date so the aggregation rides the (store_id, crawled_at)
+    # index instead of scanning every snapshot ever written; an offer not seen
+    # in `days` is not a current listing for any store view. Callers whose
+    # output already excludes older evidence pass a tighter explicit `since`.
+    cutoff = since if since is not None else datetime.now(timezone.utc) - timedelta(days=days)
+    query = {"observation_version": 2, "is_synthetic": False, "crawled_at": {"$gte": cutoff}}
     if store_id:
         query["store_id"] = store_id
-    if since is not None:
-        query["crawled_at"] = {"$gte": since}
-    # Historical catalog counts/profile/stale denominators still need ALL time.
-    # Only callers whose output already excludes older evidence supply `since`.
     return await complete_latest(db, latest_pipeline(query, projection))
 
 
