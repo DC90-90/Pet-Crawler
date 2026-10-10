@@ -8502,7 +8502,10 @@ async def confirm_match(data: MatchActionIn, user=Depends(get_user)):
     offer = await db.product_snapshots.find_one({"store_id": data.competitor_store_id, "offer_id": data.competitor_offer_id, "observation_version": 2}, {"_id": 0}, sort=[("crawled_at", -1)])
     if offer:
         offer = price_cohort.apply_brand_review(offer, await price_cohort.reviewed_brand_map(db))
-    if not own or not offer or offer.get("sku") != data.competitor_sku or price_cohort.exclusion(offer) is not None or not price_cohort.identity_agrees(own, offer, manual=True):
+    # Identity is confirmed on the offer, not on its current stock or age: an
+    # out-of-stock or week-old listing is still the same product. Only a
+    # contradictory GTIN (identity_agrees) refuses a human confirmation.
+    if not own or not offer or offer.get("sku") != data.competitor_sku or not price_cohort.identity_agrees(own, offer, manual=True):
         raise HTTPException(409, "Contradictory or unverified product identity")
     result = await db.product_matches.update_one(
         {"my_sku": data.my_sku, "competitor_sku": data.competitor_sku, "competitor_store_id": data.competitor_store_id, "competitor_offer_id": data.competitor_offer_id},

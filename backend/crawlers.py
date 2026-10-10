@@ -3632,7 +3632,9 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
             price_basis_v = _res[3] if _res else "merchant_assumed_inc_vat"
             if price_basis_v not in TRUSTED_PRICE_BASES:
                 continue
-            offer_id = stable_id(own_store_id, raw.get("listing_id") or raw.get("_zid_id"), raw.get("variant_id") or "root")
+            # Same key order as the my_products writer above (own_offer_id), or
+            # the two ids diverge and our own sales history is never found.
+            offer_id = stable_id(own_store_id, raw.get("listing_id") or raw.get("_listing_id") or raw.get("_zid_id") or raw.get("id"), raw.get("variant_id") or raw.get("_variant_id") or "root")
             qty = raw.get("qty_available")
             in_stock = raw.get("in_stock") if not raw.get("_zid_is_infinite") else True
             barcode = raw.get("barcode") or ""

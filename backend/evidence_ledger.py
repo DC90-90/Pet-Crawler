@@ -37,7 +37,8 @@ async def record(db, snapshot):
 
 
 async def sales_map(db, start, end, sealed=True):
-    q = {"date": {"$gte": ksa_day_str(start), "$lte": ksa_day_str(end-timedelta(seconds=1))}, "algorithm_version": VERSION}
+    q = {"date": {"$gte": ksa_day_str(start), "$lte": ksa_day_str(end-timedelta(seconds=1))}, "algorithm_version": VERSION,
+         "units": {"$ne": None}}  # unavailable intervals are never summed; filter them in the query, not in Python
     out = {}
     sealed_days = {}
     if sealed:

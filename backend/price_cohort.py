@@ -41,6 +41,10 @@ def identity_agrees(own, offer, manual=False):
     # Contradictory observed identifiers cannot be overruled by local SKU equality.
     if ours and theirs and not ours.intersection(theirs):
         return False
+    # A human confirmation outranks the name/brand heuristics below; only a
+    # contradictory observed GTIN (above) can still refuse it.
+    if manual:
+        return True
     if own.get("brand") and offer.get("brand") and own.get("brand_source") in ("store_supplied", "reviewed") and offer.get("brand_source") in ("store_supplied", "reviewed"):
         from crawlers import canonical_brand
         if canonical_brand(own["brand"]) != canonical_brand(offer["brand"]):
@@ -120,8 +124,14 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
     manual, blocked = set(), set()
     async for m in db.product_matches.find({"manually_confirmed": True, "identity_version": 2}, {"_id": 0}):
         manual.add((m.get("my_sku"), m.get("competitor_store_id"), m.get("competitor_offer_id")))
+    blocked_by_sku = set()
     async for m in db.match_blacklist.find({}, {"_id": 0}):
-        blocked.add((m.get("my_sku"), m.get("competitor_store_id"), m.get("competitor_offer_id")))
+        if m.get("competitor_offer_id"):
+            blocked.add((m.get("my_sku"), m.get("competitor_store_id"), m.get("competitor_offer_id")))
+        else:
+            # Rejections recorded before offer ids existed are keyed by the
+            # competitor SKU; honour them the same way verified_matching does.
+            blocked_by_sku.add((m.get("my_sku"), m.get("competitor_store_id"), m.get("competitor_sku")))
     grouped, history = {}, {}
     reviewed = await reviewed_brand_map(db)
     from parent_identity import index, annotate
@@ -152,7 +162,8 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
         for sku in candidates:
             own = own_by_sku.get(sku)
             scoped = (sku, row["store_id"], row.get("offer_id"))
-            if own and scoped not in blocked and identity_agrees(own, row, scoped in manual):
+            legacy_block = (sku, row["store_id"], row.get("sku")) in blocked_by_sku
+            if own and scoped not in blocked and not legacy_block and identity_agrees(own, row, scoped in manual):
                 if row.get("observation_version") == 2:
                     history.setdefault(sku, []).append({**row, "price": row.get("historical_max_price") or row.get("price")})
                 if offer_key not in seen:

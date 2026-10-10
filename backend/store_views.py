@@ -6,8 +6,12 @@ from evidence_ledger import sales_map
 from price_cohort import exclusion, identity_keys
 
 
-async def latest(db, store_id=None):
-    query = {"observation_version": 2, "is_synthetic": False}
+async def latest(db, store_id=None, days=30):
+    # Bounded by crawl date so the aggregation rides the (store_id, crawled_at)
+    # index instead of scanning every snapshot ever written; an offer not seen
+    # in `days` is not a current listing for any store view.
+    query = {"observation_version": 2, "is_synthetic": False,
+             "crawled_at": {"$gte": datetime.now(timezone.utc) - timedelta(days=days)}}
     if store_id:
         query["store_id"] = store_id
     return await db.product_snapshots.aggregate([

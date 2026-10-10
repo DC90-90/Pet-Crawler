@@ -33,10 +33,21 @@ def interval(previous, current):
         method = "sold_count_diff"
     else:
         qty = [number(s.get("qty_available")) for s in (previous, current)]
-        if any(v is None or v in PLACEHOLDERS or v > 200 for v in qty):
+        if any(v is None for v in qty):
+            return None, None, "stock_gap"
+        # The placeholder / >200 filters were written for Salla's "quantity=100"
+        # default. Zid storefront and Merchant API rows expose the merchant's
+        # exact inventory (`quantity_observed` is set by the v2 normalizer), so
+        # a real stock of 100 or 450 must not be thrown away. Rows without the
+        # observed flag (legacy / unknown source) keep the defensive filter.
+        exact = all(s.get("quantity_observed") is True for s in (previous, current))
+        if not exact and any(v in PLACEHOLDERS or v > 200 for v in qty):
             return None, None, "stock_gap"
         delta = max(0, qty[0] - qty[1])
-        if delta > 10:
+        # Cap scales with the interval length (30 units per 24 h): a fixed cap
+        # of 10 discarded exactly the best-selling days from the share math.
+        hours = (seconds / 3600) if all(isinstance(t, datetime) for t in times) else 24
+        if delta > 30 * max(1.0, hours / 24):
             return None, None, "stock_anomaly"
         method = "qty_positive_delta_sum"
     price = number(current.get("price"))
