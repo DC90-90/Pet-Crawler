@@ -5,7 +5,7 @@
       "path": "/api/stores",
       "params": {},
       "status": 200,
-      "elapsed_ms": 180.1
+      "elapsed_ms": 240.82
     },
     {
       "path": "/api/insights/leaderboard",
@@ -13,13 +13,13 @@
         "days": 30
       },
       "status": 200,
-      "elapsed_ms": 162.84
+      "elapsed_ms": 167.9
     },
     {
       "path": "/api/price-intel/store-ranking",
       "params": {},
       "status": 200,
-      "elapsed_ms": 187.66
+      "elapsed_ms": 219.01
     },
     {
       "path": "/api/market-share/overview",
@@ -27,7 +27,7 @@
         "days": 30
       },
       "status": 200,
-      "elapsed_ms": 1348.96
+      "elapsed_ms": 1444.5
     },
     {
       "path": "/api/insights/top-sellers",
@@ -35,7 +35,7 @@
         "days": 30
       },
       "status": 200,
-      "elapsed_ms": 165.08
+      "elapsed_ms": 174.36
     },
     {
       "path": "/api/my-products",
@@ -47,7 +47,7 @@
         "sort_order": "desc"
       },
       "status": 200,
-      "elapsed_ms": 1377.09
+      "elapsed_ms": 131.06
     },
     {
       "path": "/api/my-products",
@@ -59,7 +59,7 @@
         "sort_order": "desc"
       },
       "status": 200,
-      "elapsed_ms": 1398.25
+      "elapsed_ms": 1455.16
     }
   ]
 }

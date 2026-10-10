@@ -4,85 +4,85 @@
   "matched_products": 2832,
   "cold": [
     {
-      "milliseconds": 1310.73,
+      "milliseconds": 1495.96,
       "reads": 22,
       "by_command": {
         "distinct": 1,
         "find": 15,
-        "aggregate": 1,
-        "getMore": 5
+        "getMore": 5,
+        "aggregate": 1
       }
     },
     {
-      "milliseconds": 1367.71,
+      "milliseconds": 1476.66,
       "reads": 22,
       "by_command": {
         "distinct": 1,
         "find": 15,
-        "aggregate": 1,
-        "getMore": 5
+        "getMore": 5,
+        "aggregate": 1
       }
     },
     {
-      "milliseconds": 1282.16,
+      "milliseconds": 1537.48,
       "reads": 22,
       "by_command": {
         "distinct": 1,
         "find": 15,
-        "aggregate": 1,
-        "getMore": 5
+        "getMore": 5,
+        "aggregate": 1
       }
     }
   ],
   "warm": [
     {
-      "milliseconds": 17.09,
+      "milliseconds": 17.66,
       "reads": 1,
       "by_command": {
         "distinct": 0,
         "find": 1,
-        "aggregate": 0,
-        "getMore": 0
+        "getMore": 0,
+        "aggregate": 0
       }
     },
     {
-      "milliseconds": 17.04,
+      "milliseconds": 17.6,
       "reads": 1,
       "by_command": {
         "distinct": 0,
         "find": 1,
-        "aggregate": 0,
-        "getMore": 0
+        "getMore": 0,
+        "aggregate": 0
       }
     },
     {
-      "milliseconds": 16.85,
+      "milliseconds": 17.15,
       "reads": 1,
       "by_command": {
         "distinct": 0,
         "find": 1,
-        "aggregate": 0,
-        "getMore": 0
+        "getMore": 0,
+        "aggregate": 0
       }
     },
     {
-      "milliseconds": 17.09,
+      "milliseconds": 17.36,
       "reads": 1,
       "by_command": {
         "distinct": 0,
         "find": 1,
-        "aggregate": 0,
-        "getMore": 0
+        "getMore": 0,
+        "aggregate": 0
       }
     },
     {
-      "milliseconds": 16.86,
+      "milliseconds": 17.27,
       "reads": 1,
       "by_command": {
         "distinct": 0,
         "find": 1,
-        "aggregate": 0,
-        "getMore": 0
+        "getMore": 0,
+        "aggregate": 0
       }
     }
   ],

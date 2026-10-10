@@ -18,6 +18,7 @@ import json
 import statistics
 import time
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -159,10 +160,17 @@ def test_iter52_compact_reads_benchmark_and_contracts():
             active = seeded["competitor_store_ids"]
             seed_now = seeded["seed_now"]
 
-            # -------- Cohort benchmark: exact prechange reference vs revised --------
+            # Frozen prechange reference deliberately retains the old historical
+            # predicate. The ONLY allowed change excludes fabricated history;
+            # do not restore synthetic/demo prices merely to match that reference.
             ref_pipeline = _reference_cohort_pipeline(active, seed_now)
             revised_pipeline = price_cohort.snapshot_pipeline(active, seed_now)
-            assert revised_pipeline == ref_pipeline, "Revised cohort pipeline deviates from required compact reference"
+            expected_pipeline = deepcopy(ref_pipeline)
+            expected_pipeline[3]["$group"]["historical_max"]["$max"]["$cond"][0]["$and"].extend([
+                {"$not": [{"$ifNull": ["$is_synthetic", False]}]},
+                {"$ne": [{"$ifNull": ["$data_origin", ""]}, "demo_seed"]},
+            ])
+            assert revised_pipeline == expected_pipeline, "Unexpected cohort drift beyond synthetic-history exclusion"
 
             cohort_timings = {"reference": [], "revised": []}
             cohort_reads = {"reference": [], "revised": []}

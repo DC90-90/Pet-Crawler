@@ -13,21 +13,21 @@
           "comp-02",
           "comp-03"
         ],
-        "seed_now": "2026-10-10 10:13:27+00:00",
+        "seed_now": "2026-10-10 12:12:26+00:00",
         "seeded_products": 2832,
         "seeded_snapshots": 101953,
         "payload_size": 256
       },
       "cohort": {
         "reference_ms": {
-          "min": 474.48,
-          "median": 502.91,
-          "max": 522.31
+          "min": 507.12,
+          "median": 508.32,
+          "max": 603.52
         },
         "revised_ms": {
-          "min": 483.99,
-          "median": 484.71,
-          "max": 527.53
+          "min": 578.46,
+          "median": 596.91,
+          "max": 693.29
         },
         "read_counts": {
           "reference": [
@@ -41,13 +41,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 382.042
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 88.895
+                  "duration_ms": 104.036
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 496.923
                 }
               },
               "total_read_commands": 2
@@ -62,13 +62,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 399.095
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 97.676
+                  "duration_ms": 84.682
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 416.904
                 }
               },
               "total_read_commands": 2
@@ -83,13 +83,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 374.155
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 140.413
+                  "duration_ms": 93.526
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 409.799
                 }
               },
               "total_read_commands": 2
@@ -106,13 +106,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 381.404
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 140.546
+                  "duration_ms": 133.969
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 552.985
                 }
               },
               "total_read_commands": 2
@@ -127,13 +127,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 386.537
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 91.989
+                  "duration_ms": 93.721
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 479.549
                 }
               },
               "total_read_commands": 2
@@ -148,13 +148,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 377.069
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 98.687
+                  "duration_ms": 127.743
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 463.811
                 }
               },
               "total_read_commands": 2
@@ -164,19 +164,19 @@
       },
       "latest_bench": {
         "full_ms": {
-          "min": 393.42,
-          "median": 403.81,
-          "max": 407.93
+          "min": 397.83,
+          "median": 419.26,
+          "max": 429.59
         },
         "leaderboard_compact_ms": {
-          "min": 246.05,
-          "median": 273.94,
-          "max": 309.95
+          "min": 259.6,
+          "median": 267.88,
+          "max": 288.65
         },
         "rank7d_compact_ms": {
-          "min": 206.57,
-          "median": 211.69,
-          "max": 229.87
+          "min": 220.02,
+          "median": 222.52,
+          "max": 230.07
         },
         "metrics": {
           "full": {
@@ -192,13 +192,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 339.303
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 62.848
+                  "duration_ms": 55.949
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 336.491
                 }
               },
               "total_read_commands": 2
@@ -217,13 +217,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 217.856
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 21.788
+                  "duration_ms": 23.474
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 237.938
                 }
               },
               "total_read_commands": 2
@@ -242,13 +242,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 158.258
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 45.718
+                  "duration_ms": 47.193
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 169.729
                 }
               },
               "total_read_commands": 2
@@ -258,17 +258,17 @@
       },
       "market_share_bench": {
         "query_bytes_identical": true,
-        "timing_control_within_20pct": true,
+        "timing_control_within_20pct": false,
         "interpretation": "A/A control only; no Market Share query speedup claim",
         "old_ms": {
-          "min": 251.1,
-          "median": 255.51,
-          "max": 257.81
+          "min": 230.92,
+          "median": 233.99,
+          "max": 245.3
         },
         "new_ms": {
-          "min": 248.68,
-          "median": 298.01,
-          "max": 301.87
+          "min": 232.46,
+          "median": 300.14,
+          "max": 320.79
         },
         "rows_bytes": {
           "old_postgroup": {
@@ -284,13 +284,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 207.329
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 45.978
+                  "duration_ms": 43.36
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 182.991
                 }
               },
               "total_read_commands": 2
@@ -309,13 +309,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 186.084
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 106.108
+                  "duration_ms": 107.124
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 186.277
                 }
               },
               "total_read_commands": 2
@@ -326,7 +326,7 @@
           "old": {
             "totalDocsExamined": 59842,
             "totalKeysExamined": 59842,
-            "executionTimeMillis": 208,
+            "executionTimeMillis": 207,
             "usedDisk": false,
             "spills": 0,
             "spilledBytes": null,
@@ -338,7 +338,7 @@
           "new": {
             "totalDocsExamined": 59842,
             "totalKeysExamined": 59842,
-            "executionTimeMillis": 206,
+            "executionTimeMillis": 212,
             "usedDisk": false,
             "spills": 0,
             "spilledBytes": null,
@@ -350,10 +350,10 @@
         }
       },
       "asgi_large_fixture": {
-        "my_products_cold_ms": 1909.55,
-        "my_products_warm_ms": 7.77,
-        "store_ranking_ms": 491.96,
-        "leaderboard_ms": 258.07
+        "my_products_cold_ms": 1928.84,
+        "my_products_warm_ms": 7.92,
+        "store_ranking_ms": 318.0,
+        "leaderboard_ms": 268.34
       },
       "observer_writes": {
         "attempted": 0,
@@ -373,21 +373,21 @@
           "comp-02",
           "comp-03"
         ],
-        "seed_now": "2026-10-10 10:13:47+00:00",
+        "seed_now": "2026-10-10 12:12:46+00:00",
         "seeded_products": 2832,
         "seeded_snapshots": 101953,
         "payload_size": 4096
       },
       "cohort": {
         "reference_ms": {
-          "min": 497.84,
-          "median": 498.4,
-          "max": 509.53
+          "min": 475.02,
+          "median": 496.27,
+          "max": 520.34
         },
         "revised_ms": {
-          "min": 474.04,
-          "median": 485.77,
-          "max": 558.79
+          "min": 516.18,
+          "median": 527.86,
+          "max": 538.78
         },
         "read_counts": {
           "reference": [
@@ -401,13 +401,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 408.275
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 87.478
+                  "duration_ms": 117.225
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 376.975
                 }
               },
               "total_read_commands": 2
@@ -422,13 +422,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 406.397
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 91.403
+                  "duration_ms": 137.959
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 376.459
                 }
               },
               "total_read_commands": 2
@@ -443,13 +443,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 402.773
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 90.188
+                  "duration_ms": 85.509
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 384.456
                 }
               },
               "total_read_commands": 2
@@ -466,13 +466,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 379.978
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 88.646
+                  "duration_ms": 86.359
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 446.288
                 }
               },
               "total_read_commands": 2
@@ -487,13 +487,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 407.24
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 146.745
+                  "duration_ms": 86.923
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 424.218
                 }
               },
               "total_read_commands": 2
@@ -508,13 +508,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 380.711
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 98.482
+                  "duration_ms": 89.778
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 431.536
                 }
               },
               "total_read_commands": 2
@@ -524,19 +524,19 @@
       },
       "latest_bench": {
         "full_ms": {
-          "min": 420.96,
-          "median": 435.87,
-          "max": 515.0
+          "min": 430.39,
+          "median": 504.39,
+          "max": 537.2
         },
         "leaderboard_compact_ms": {
-          "min": 243.65,
-          "median": 245.75,
-          "max": 248.24
+          "min": 271.47,
+          "median": 285.97,
+          "max": 305.49
         },
         "rank7d_compact_ms": {
-          "min": 178.41,
-          "median": 189.57,
-          "max": 246.94
+          "min": 256.23,
+          "median": 274.53,
+          "max": 421.03
         },
         "metrics": {
           "full": {
@@ -552,13 +552,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 360.379
-                },
                 "getMore": {
                   "count": 3,
-                  "duration_ms": 148.278
+                  "duration_ms": 127.037
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 397.756
                 }
               },
               "total_read_commands": 4
@@ -577,13 +577,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 214.286
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 23.755
+                  "duration_ms": 33.008
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 231.212
                 }
               },
               "total_read_commands": 2
@@ -602,13 +602,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 143.264
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 32.568
+                  "duration_ms": 110.816
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 160.72
                 }
               },
               "total_read_commands": 2
@@ -621,14 +621,14 @@
         "timing_control_within_20pct": true,
         "interpretation": "A/A control only; no Market Share query speedup claim",
         "old_ms": {
-          "min": 246.81,
-          "median": 251.15,
-          "max": 328.23
+          "min": 248.51,
+          "median": 348.74,
+          "max": 351.75
         },
         "new_ms": {
-          "min": 249.44,
-          "median": 249.76,
-          "max": 258.1
+          "min": 253.65,
+          "median": 262.55,
+          "max": 284.33
         },
         "rows_bytes": {
           "old_postgroup": {
@@ -644,13 +644,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 193.334
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 49.109
+                  "duration_ms": 128.013
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 216.033
                 }
               },
               "total_read_commands": 2
@@ -669,13 +669,13 @@
                   "count": 0,
                   "duration_ms": 0.0
                 },
-                "aggregate": {
-                  "count": 1,
-                  "duration_ms": 204.849
-                },
                 "getMore": {
                   "count": 1,
-                  "duration_ms": 39.134
+                  "duration_ms": 42.493
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 206.101
                 }
               },
               "total_read_commands": 2
@@ -686,7 +686,7 @@
           "old": {
             "totalDocsExamined": 59842,
             "totalKeysExamined": 59842,
-            "executionTimeMillis": 230,
+            "executionTimeMillis": 229,
             "usedDisk": false,
             "spills": 0,
             "spilledBytes": null,
@@ -698,7 +698,7 @@
           "new": {
             "totalDocsExamined": 59842,
             "totalKeysExamined": 59842,
-            "executionTimeMillis": 224,
+            "executionTimeMillis": 236,
             "usedDisk": false,
             "spills": 0,
             "spilledBytes": null,
@@ -710,10 +710,10 @@
         }
       },
       "asgi_large_fixture": {
-        "my_products_cold_ms": 1811.68,
-        "my_products_warm_ms": 7.53,
-        "store_ranking_ms": 295.92,
-        "leaderboard_ms": 273.31
+        "my_products_cold_ms": 1790.97,
+        "my_products_warm_ms": 7.59,
+        "store_ranking_ms": 422.41,
+        "leaderboard_ms": 261.69
       },
       "observer_writes": {
         "attempted": 0,

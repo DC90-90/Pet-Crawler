@@ -1,0 +1,105 @@
+{
+  "scope": "local/preview acceptance; NOT production recovery",
+  "counts": {
+    "tests": 206,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "reports": [
+    {
+      "path": "/app/test_reports/pytest/reviewed-core-final.xml",
+      "sha256": "b83bf19fcf920d64b2c400c710598a5c5a606a3c1a05989c226af4b8ffc4a952",
+      "tests": 52,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/isolated-auth-final.xml",
+      "sha256": "885dc800d8303f8fbf0c6e8305809f8d0a42542d84147d858cbbfd5c7102478d",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/real-source-final.xml",
+      "sha256": "64ee4020ad39e6b3aff0220c28b431c6f5a52fc87738ffd8ab26b1b0ff185f75",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/related-contracts-final.xml",
+      "sha256": "ad767ffdaea338d4320442dd4f7070404e41e8d55b0a76c2737bd056a7173eeb",
+      "tests": 36,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/six-acceptance-final.xml",
+      "sha256": "fd39e93596aad2320897cba4dad523b7a3c08d814298d210a578569d5ace0e38",
+      "tests": 22,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/four-correctness-final.xml",
+      "sha256": "17d9b9a6948ee596b731c882eb2e4694cb463eb0181831ccffcb5a44dae323a5",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/matcher-parent-pool-final.xml",
+      "sha256": "ab70beec9698616e97d054bb3879ec37273b2560929ff49ef48b1ccbbcdb684e",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/release-safety-final.xml",
+      "sha256": "a90b63daf5c9ac00abf3d7357434c8b565cdbbec660042694067186889d81393",
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    {
+      "path": "/app/test_reports/pytest/iteration_56_final.xml",
+      "sha256": "87cf560ea351bc2c5848a7cbb230ca4fa276b2c453fd5a036c25b5a6c14b69e2",
+      "tests": 50,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "source_sha256": {
+    "backend/snapshot_strategy.py": "c6313891b899e49e981973d1023711ba615a7664b446acb9206cda6279cacdb6",
+    "backend/read_diagnostics.py": "1eee7f0f2787e45e0e4b58ed632311475a3919c27078c9909169b8de82983aec",
+    "backend/read_plan_policy.py": "6aa34b5970cfa2d1f752c9df64dc7ff3d99c93052c3662423287da4517422dbc",
+    "backend/price_cohort.py": "62ca9687dc603b91c6a8e5fef50a35721b79000ae9bf1bf3d6eaf646361a4885",
+    "backend/snapshot_reads.py": "63ca27284e738ff4c735995784ae203253980d21386475413d3ca0ffd71b8e8b",
+    "backend/store_views.py": "aecac19bda158b034ba03b76bab2b119248c76beb9d6eea37910bac6136a6a3c",
+    "backend/market_share.py": "25f45d48d298a9b94ef2575ecea47e74a9b280bdbe5d9ce665e1fc93521bbddf",
+    "backend/server.py": "621bceea2735bee86d270631cceb0560da049ae898245570123dd10f60aead2a",
+    "backend/release_database.py": "d5a19e4955dfb45655be471b10f58aa566da169ac3dd82ea2fed4eee5b9d8b06",
+    "frontend/src/lib/api.js": "327bf32d411864042de906226da08877082dad27520e2e73c69ead9d813295ab",
+    "frontend/src/lib/readRetry.js": "4f2c86150dcce7d67569ea9345a83412717a4be701afb3b5f76605a89bd6d663",
+    "frontend/src/App.js": "ae838cb8fe67828ef7e0a8f9b8ead6297d4e3cc51793539da197ad70b044a4cc",
+    ".emergent/crons.yml": "7bfc57007b41b80fbb336302338460834e103ae5b90b093c1bc1967b98f5460b"
+  },
+  "failed_attempts_preserved": [
+    "iteration_56_backend.log",
+    "iteration_56_postfix.log"
+  ],
+  "frontend_build": "iteration_56_frontend_build.log",
+  "browser_report": "iteration_56.json",
+  "mocked": "Browser503/cursor failures only; real Mongo fixtures and preview APIs separately tested"
+}

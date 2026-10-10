@@ -1,0 +1,729 @@
+{
+  "scope": "iter52 compact read-path verification",
+  "notes": {
+    "transport": "MOCKED only for >200k complete_latest drain contract",
+    "lookup_id_claim": "not_applicable_lookup_removed"
+  },
+  "payload_variants": {
+    "256B": {
+      "seed": {
+        "own_store_id": "own-store-iter51",
+        "competitor_store_ids": [
+          "comp-01",
+          "comp-02",
+          "comp-03"
+        ],
+        "seed_now": "2026-10-10 12:10:00+00:00",
+        "seeded_products": 2832,
+        "seeded_snapshots": 101953,
+        "payload_size": 256
+      },
+      "cohort": {
+        "reference_ms": {
+          "min": 476.35,
+          "median": 484.13,
+          "max": 534.67
+        },
+        "revised_ms": {
+          "min": 561.46,
+          "median": 570.07,
+          "max": 570.28
+        },
+        "read_counts": {
+          "reference": [
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 439.167
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 92.38
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            },
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 385.639
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 91.308
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            },
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 384.448
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 86.033
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          ],
+          "revised": [
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 461.709
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 102.701
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            },
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 435.582
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 119.867
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            },
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 437.156
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 127.577
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          ]
+        }
+      },
+      "latest_bench": {
+        "full_ms": {
+          "min": 384.65,
+          "median": 400.98,
+          "max": 428.31
+        },
+        "leaderboard_compact_ms": {
+          "min": 243.54,
+          "median": 248.74,
+          "max": 256.77
+        },
+        "rank7d_compact_ms": {
+          "min": 198.32,
+          "median": 210.08,
+          "max": 210.29
+        },
+        "metrics": {
+          "full": {
+            "rows": 8497,
+            "bytes": 7335740,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 330.036
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 48.453
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          },
+          "leaderboard_compact": {
+            "rows": 8497,
+            "bytes": 985629,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 227.143
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 23.331
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          },
+          "rank7d_compact": {
+            "rows": 8496,
+            "bytes": 4560112,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 163.278
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 44.511
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          }
+        }
+      },
+      "market_share_bench": {
+        "query_bytes_identical": true,
+        "timing_control_within_20pct": true,
+        "interpretation": "A/A control only; no Market Share query speedup claim",
+        "old_ms": {
+          "min": 227.01,
+          "median": 228.37,
+          "max": 232.6
+        },
+        "new_ms": {
+          "min": 227.0,
+          "median": 234.78,
+          "max": 299.53
+        },
+        "rows_bytes": {
+          "old_postgroup": {
+            "rows": 8495,
+            "bytes": 4559597,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 185.214
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 42.476
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          },
+          "revised_postgroup": {
+            "rows": 8495,
+            "bytes": 4559597,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 181.83
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 39.681
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          }
+        },
+        "execution_stats": {
+          "old": {
+            "totalDocsExamined": 59842,
+            "totalKeysExamined": 59842,
+            "executionTimeMillis": 204,
+            "usedDisk": false,
+            "spills": 0,
+            "spilledBytes": null,
+            "maxAccumulatorMemoryUsageBytes": {
+              "row": 8612431
+            },
+            "nReturned": 59835
+          },
+          "new": {
+            "totalDocsExamined": 59842,
+            "totalKeysExamined": 59842,
+            "executionTimeMillis": 207,
+            "usedDisk": false,
+            "spills": 0,
+            "spilledBytes": null,
+            "maxAccumulatorMemoryUsageBytes": {
+              "row": 8612431
+            },
+            "nReturned": 59835
+          }
+        }
+      },
+      "asgi_large_fixture": {
+        "my_products_cold_ms": 1895.29,
+        "my_products_warm_ms": 7.52,
+        "store_ranking_ms": 314.3,
+        "leaderboard_ms": 261.67
+      },
+      "observer_writes": {
+        "attempted": 0,
+        "actual": 0
+      },
+      "contracts": {
+        "timeout_503": true,
+        "no_200k_cap": 200001,
+        "mocked_transport": true
+      }
+    },
+    "4KiB": {
+      "seed": {
+        "own_store_id": "own-store-iter51",
+        "competitor_store_ids": [
+          "comp-01",
+          "comp-02",
+          "comp-03"
+        ],
+        "seed_now": "2026-10-10 12:10:20+00:00",
+        "seeded_products": 2832,
+        "seeded_snapshots": 101953,
+        "payload_size": 4096
+      },
+      "cohort": {
+        "reference_ms": {
+          "min": 472.38,
+          "median": 499.14,
+          "max": 515.63
+        },
+        "revised_ms": {
+          "min": 515.85,
+          "median": 517.2,
+          "max": 551.91
+        },
+        "read_counts": {
+          "reference": [
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 378.8
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 117.883
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            },
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 380.239
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 85.544
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            },
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 385.441
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 125.004
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          ],
+          "revised": [
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 428.145
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 82.153
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            },
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 420.765
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 91.797
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            },
+            {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 443.214
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 92.582
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          ]
+        }
+      },
+      "latest_bench": {
+        "full_ms": {
+          "min": 413.01,
+          "median": 418.67,
+          "max": 424.3
+        },
+        "leaderboard_compact_ms": {
+          "min": 243.26,
+          "median": 243.86,
+          "max": 270.39
+        },
+        "rank7d_compact_ms": {
+          "min": 192.5,
+          "median": 250.06,
+          "max": 259.65
+        },
+        "metrics": {
+          "full": {
+            "rows": 8497,
+            "bytes": 39964220,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 337.142
+                },
+                "getMore": {
+                  "count": 3,
+                  "duration_ms": 75.251
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 4
+            }
+          },
+          "leaderboard_compact": {
+            "rows": 8497,
+            "bytes": 985629,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 215.639
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 23.012
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          },
+          "rank7d_compact": {
+            "rows": 8496,
+            "bytes": 4560112,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 154.131
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 93.071
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          }
+        }
+      },
+      "market_share_bench": {
+        "query_bytes_identical": true,
+        "timing_control_within_20pct": true,
+        "interpretation": "A/A control only; no Market Share query speedup claim",
+        "old_ms": {
+          "min": 261.93,
+          "median": 337.48,
+          "max": 353.9
+        },
+        "new_ms": {
+          "min": 243.94,
+          "median": 249.45,
+          "max": 264.88
+        },
+        "rows_bytes": {
+          "old_postgroup": {
+            "rows": 8495,
+            "bytes": 4559597,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 210.411
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 122.633
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          },
+          "revised_postgroup": {
+            "rows": 8495,
+            "bytes": 4559597,
+            "reads": {
+              "by_command": {
+                "find": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                },
+                "aggregate": {
+                  "count": 1,
+                  "duration_ms": 200.035
+                },
+                "getMore": {
+                  "count": 1,
+                  "duration_ms": 38.269
+                },
+                "distinct": {
+                  "count": 0,
+                  "duration_ms": 0.0
+                }
+              },
+              "total_read_commands": 2
+            }
+          }
+        },
+        "execution_stats": {
+          "old": {
+            "totalDocsExamined": 59842,
+            "totalKeysExamined": 59842,
+            "executionTimeMillis": 223,
+            "usedDisk": false,
+            "spills": 0,
+            "spilledBytes": null,
+            "maxAccumulatorMemoryUsageBytes": {
+              "row": 41233231
+            },
+            "nReturned": 59835
+          },
+          "new": {
+            "totalDocsExamined": 59842,
+            "totalKeysExamined": 59842,
+            "executionTimeMillis": 222,
+            "usedDisk": false,
+            "spills": 0,
+            "spilledBytes": null,
+            "maxAccumulatorMemoryUsageBytes": {
+              "row": 41233231
+            },
+            "nReturned": 59835
+          }
+        }
+      },
+      "asgi_large_fixture": {
+        "my_products_cold_ms": 1863.84,
+        "my_products_warm_ms": 7.55,
+        "store_ranking_ms": 421.25,
+        "leaderboard_ms": 257.74
+      },
+      "observer_writes": {
+        "attempted": 0,
+        "actual": 0
+      },
+      "contracts": {
+        "timeout_503": true,
+        "no_200k_cap": 200001,
+        "mocked_transport": true
+      }
+    }
+  }
+}

@@ -51,7 +51,8 @@ async def selected_hint(db):
     except Exception:
         return None
     name = current["hint"]
-    if not name or (not current["logged_success"] and current["until"] <= time.monotonic()):
+    if not name or current["until"] <= time.monotonic():
+        current["hint"] = None
         return None
     try:
         indexes = await asyncio.wait_for(db.product_snapshots.index_information(), timeout=1)
