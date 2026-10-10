@@ -5,10 +5,9 @@ import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 VERSION = 2
-# merchant_assumed_inc_vat: Zid left is_taxable unset; Saudi retail goods are
-# taxable at 15 %, so the grossed price is labelled an assumption and counted
-# separately in the VAT audit rather than withheld (see resolve_own_price).
-TRUSTED_PRICE_BASES = {"storefront_inc_vat", "merchant_computed_inc_vat", "merchant_non_taxable", "merchant_assumed_inc_vat"}
+# Only bases whose VAT treatment is evidenced are comparable. An assumed or
+# unknown tax basis is kept on the row for audit but never priced (finding F10).
+TRUSTED_PRICE_BASES = {"storefront_inc_vat", "merchant_computed_inc_vat", "merchant_non_taxable"}
 
 
 def decimal_number(value):

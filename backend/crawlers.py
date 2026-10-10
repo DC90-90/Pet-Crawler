@@ -3132,19 +3132,16 @@ async def _retired_paginate_own_storefront(http, ep, initial_items, max_pages=OW
 #   on the storefront            -> its inc-VAT shelf price   storefront_inc_vat
 #   not on it, is_taxable True   -> merchant price x (1+VAT)  merchant_computed_inc_vat
 #   not on it, is_taxable False  -> merchant price unchanged  merchant_non_taxable
-#   not on it, is_taxable None   -> merchant price x (1+VAT)  merchant_assumed_inc_vat
-#                                                             (iter73d — Saudi
-#                                                             default: retail
-#                                                             goods are taxable)
+#   not on it, is_taxable None   -> merchant price unchanged  merchant_unknown_tax
+#                                   (UNTRUSTED: kept, counted, never compared)
 #
-# iter73d — the previous "unknown → keep ex-VAT" rule was correct in principle
-# ("inflating a real price by 15% is a bug") but wrong in Saudi practice: 99%
-# of retail goods ARE taxable, Zid's Merchant API doesn't always populate
-# is_taxable, and the resulting mixed-basis rows were the cause of the "my
-# prices show without VAT on some tabs" client report. The `merchant_assumed_
-# inc_vat` tag keeps the auto-grossed rows countable, so operators can spot-
-# check them; a genuinely non-taxable product must set is_taxable=False in
-# Zid so the resolver keeps its ex-VAT basis.
+# History: iter73d grossed the unknown case by default ("Saudi retail goods are
+# taxable"). The Oct 2026 investigation (finding F10) reversed that: an
+# unverified 15 % is a fabricated price. The practical cause of most unknowns
+# was variant children not inheriting the listing's is_taxable flag; that is
+# fixed in observation_contract.expand_variants, so the unknown branch is now
+# the exception, not the rule. `merchant_assumed_inc_vat` is therefore
+# unreachable and kept only as a basis name legacy rows may still carry.
 #
 # iter73i — new signal `storefront_authoritative` (Aug 3 2026). When the
 # storefront overlay ran and produced a NON-EMPTY index, it is the source of
@@ -3180,6 +3177,17 @@ def resolve_own_price(sf_hit, merchant_price=None, merchant_sale_price=None,
                 (round(shelf, 2) if on_sale else None),
                 _orig,
                 "storefront_inc_vat")
+
+    if is_taxable is None:
+        # Finding F10 (Oct 2026): missing tax evidence is not permission to add
+        # 15 %. The row is kept with its raw merchant numbers under an untrusted
+        # basis, so it is counted and auditable but never compared. With
+        # variant children now inheriting the listing's is_taxable flag this
+        # branch should be rare; a non-empty count here means Zid left the
+        # flag unset on a root product and the owner should set it in Zid.
+        value = _price_amount(merchant_price)
+        original = _price_amount(merchant_list_price) or value
+        return value, None, original, "merchant_unknown_tax"
 
     price = _price_amount(merchant_price)
     sale = _price_amount(merchant_sale_price)
