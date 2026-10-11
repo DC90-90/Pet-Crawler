@@ -2680,7 +2680,9 @@ async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
                 max_age=DASHBOARD_CACHE_MAX_AGE_SECS), background=True)
             await _store_dashboard_cache(db, w, ds)
         except Exception as exc:
-            stats[w] = {"error": f"{type(exc).__name__}: {str(exc)[:120]}", "secs": round(_t.time() - t0, 2)}
+            detail = getattr(exc, "detail", None)
+            stats[w] = {"error": (detail if isinstance(detail, dict) else f"{type(exc).__name__}: {str(exc)[:200]}"),
+                        "secs": round(_t.time() - t0, 2)}
             _rebuild_mark(f"dashboard:{w}d", stats[w])
             logger.exception("[DashboardCache] window %sd failed", w)
             continue
@@ -2827,7 +2829,8 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
                 await _store_page_cache(db, base, w, payload)
                 stats[f"{base}#{w}"] = round(_t.time() - t0, 2)
             except Exception as e:
-                stats[f"{base}#{w}"] = f"ERROR: {str(e)[:80]}"
+                detail = getattr(e, "detail", None)
+                stats[f"{base}#{w}"] = {"error": detail} if isinstance(detail, dict) else f"ERROR: {str(e)[:120]}"
                 logger.exception(f"[PageCache] recompute failed for {base} @ {w}d")
             _rebuild_mark(f"page:{base}:{w}d", stats[f"{base}#{w}"])
       for base, compute in _SINGLE_CACHE_SPECS:
@@ -2904,7 +2907,9 @@ async def cache_rebuild_status(user=Depends(require_super_admin)):
     last error. Read-only."""
     running = _CACHE_REBUILD_TASK is not None and not _CACHE_REBUILD_TASK.done()
     keys = [d["key"] for d in await db.dashboard_cache.find({}, {"_id": 0, "key": 1}).to_list(200)]
+    import price_read_limits as _prl
     return {**_CACHE_REBUILD_STATE, "task_running": running, "policy": CACHE_MISS_POLICY,
+            "recent_read_failures": list(_prl.LAST_FAILURES),
             "cache_entries": len(keys), "cache_keys_sample": keys[:12],
             "budgets": {"request_timeout_s": __import__("price_read_limits").REQUEST_TIMEOUT_SECONDS,
                         "background_timeout_s": __import__("price_read_limits").BACKGROUND_TIMEOUT_SECONDS,

@@ -50,10 +50,14 @@ async def close_read_cursor(cursor):
         logger.warning("Snapshot cursor cleanup did not complete within its budget")
 
 
-def unavailable(code):
+# Last few read failures with their cause, for /api/admin/cache-rebuild-status.
+LAST_FAILURES = []
+
+
+def unavailable(code, **diagnostics):
     return HTTPException(503, detail={
         "code": code, "message": "Price results are temporarily unavailable. Please retry.",
-        "retryable": True,
+        "retryable": True, **diagnostics,
     }, headers={"Retry-After": "5"})
 
 
@@ -65,12 +69,22 @@ async def bounded_read(operation, background=False):
     mode_token = _background.set(background or _background.get())
     timeout = BACKGROUND_TIMEOUT_SECONDS if _background.get() else REQUEST_TIMEOUT_SECONDS
     timer = asyncio.get_running_loop().call_later(timeout, marker.__setitem__, "expired", True)
+    import time as _time
+    started = _time.monotonic()
+    op_name = getattr(operation, "__qualname__", None) or getattr(getattr(operation, "cr_code", None), "co_qualname", None) or type(operation).__name__
     try:
         return await asyncio.wait_for(operation, timeout=timeout)
     except (TimeoutError, PyMongoError) as exc:
         code = "price_query_timeout" if isinstance(exc, TimeoutError) or exc.timeout else "price_database_unavailable"
-        logger.exception("Price analytics read failed: %s (budget %ss, background=%s)", code, timeout, _background.get())
-        raise unavailable(code) from exc
+        info = {"code": code, "cause": f"{type(exc).__name__}: {str(exc)[:200]}", "operation": op_name,
+                "budget_s": timeout, "background": bool(_background.get()),
+                "elapsed_s": round(_time.monotonic() - started, 2),
+                "at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()}
+        LAST_FAILURES.append(info)
+        del LAST_FAILURES[:-12]
+        logger.exception("Price analytics read failed: %s", info)
+        raise unavailable(code, cause=info["cause"], operation=op_name, budget_s=timeout,
+                          background=info["background"], elapsed_s=info["elapsed_s"]) from exc
     finally:
         timer.cancel()
         _background.reset(mode_token)
