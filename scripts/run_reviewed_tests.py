@@ -27,6 +27,9 @@ environment.update(MONGO_URL=url, DALEEL_TEST_MONGO_URL=url,
                    SUPER_ADMIN_EMAIL="fixture-admin@example.test", SUPER_ADMIN_PASSWORD=secrets.token_urlsafe(32),
                    CORS_ORIGINS="https://allowed.example.test", SEED_DEMO_DATA="false",
                    ALLOW_PUBLIC_REGISTRATION="false", APP_ENV="test",
+                   # Tests exercise the live compute path; the production
+                   # cache-miss policy (rebuild → 503) must not leak in from .env.
+                   CACHE_MISS_POLICY="live",
                    PYTHONPATH=os.pathsep.join([str(ROOT / "backend"), str(ROOT / "backend/tests")]))
 groups = {
     "reviewed-core": ["test_findings_v2_regression", "test_iteration37_integration_real_mongo", "test_codex_review_gates"],
