@@ -74,6 +74,48 @@ def test_cache_miss_policy_blocks_live_compute_only_on_the_request_path(monkeypa
     assert started == [1]
 
 
+def test_revision_read_retries_once_on_a_timeout():
+    import my_products_cache as mpc
+    from pymongo.errors import ExecutionTimeout, OperationFailure
+
+    class _Versions:
+        def __init__(self, failures):
+            self.failures, self.calls = failures, 0
+
+        async def find_one(self, q, proj=None, max_time_ms=None):
+            self.calls += 1
+            assert max_time_ms == mpc.REVISION_READ_MAX_MS
+            if self.calls <= self.failures:
+                raise ExecutionTimeout("operation exceeded time limit")
+            return {"revision": 42}
+
+    class _DB:
+        def __init__(self, failures):
+            self.data_versions = _Versions(failures)
+
+    assert asyncio.run(mpc.revision(_DB(1))) == 42          # one timeout, then success
+    try:
+        asyncio.run(mpc.revision(_DB(2)))                   # two timeouts → raised
+    except ExecutionTimeout:
+        pass
+    else:
+        raise AssertionError("expected the second timeout to propagate")
+
+    class _Broken(_DB):
+        def __init__(self):
+            super().__init__(0)
+
+            async def boom(q, proj=None, max_time_ms=None):
+                raise OperationFailure("not a timeout")
+            self.data_versions.find_one = boom
+    try:
+        asyncio.run(mpc.revision(_Broken()))
+    except OperationFailure:
+        pass
+    else:
+        raise AssertionError("non-timeout errors must not be retried")
+
+
 def test_page_cache_pack_roundtrip_and_chunking():
     os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27017")
     os.environ.setdefault("DB_NAME", "test_read_budgets")

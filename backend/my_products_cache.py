@@ -26,9 +26,26 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+REVISION_READ_MAX_MS = 15000
+
+
 async def revision(db):
-    doc = await db.data_versions.find_one({"_id": "observations"}, {"_id": 0, "revision": 1}, max_time_ms=2000)
-    return (doc or {}).get("revision", 0)
+    """Current observation revision. A one-document read, but it runs right
+    after a heavy aggregation and the database may still be busy: with a
+    2 s limit it timed out on production and turned a finished 30 s rebuild
+    into price_query_timeout. One retry, generous limit."""
+    last = None
+    for attempt in range(2):
+        try:
+            doc = await db.data_versions.find_one({"_id": "observations"}, {"_id": 0, "revision": 1},
+                                                  max_time_ms=REVISION_READ_MAX_MS)
+            return (doc or {}).get("revision", 0)
+        except PyMongoError as exc:
+            last = exc
+            if not getattr(exc, "timeout", False) or attempt:
+                raise
+            await asyncio.sleep(1)
+    raise last
 
 
 def valid(doc, source_revision, max_age, now):
