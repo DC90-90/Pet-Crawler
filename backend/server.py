@@ -1368,6 +1368,52 @@ async def admin_recover_captures_status(run_id: Optional[str] = Query(None), _=D
     return {"run": run, "pending_batches": pending}
 
 
+_INDEX_BUILD_TASK = None
+
+
+@router.post("/admin/ensure-indexes")
+async def admin_ensure_indexes(user=Depends(require_super_admin)):
+    """Build the write- and read-path indexes in the background on a client
+    with no socket timeout, one index at a time, reporting every outcome.
+
+    Production was found with no `event_id` index on 8.45M snapshots, so every
+    snapshot write scanned the whole collection and persistence timed out; the
+    boot-time build fails silently under the 45 s request client (11 Oct 2026).
+    """
+    global _INDEX_BUILD_TASK
+    import index_builds
+    if _INDEX_BUILD_TASK is not None and not _INDEX_BUILD_TASK.done():
+        return {"ok": True, "status": "already_running", "state": index_builds.STATE}
+    run_id = str(uuid.uuid4())
+    await db.index_builds.insert_one({"id": run_id, "started_at": datetime.now(timezone.utc).isoformat(),
+                                      "started_by": user.get("email"), "status": "running", "results": {}})
+
+    async def record(key, result):
+        await db.index_builds.update_one({"id": run_id}, {"$set": {f"results.{key.replace('.', '_')}": result}})
+
+    async def _run():
+        client_ = index_builds.long_running_client()
+        try:
+            await index_builds.run(client_[os.environ["DB_NAME"]], record=record)
+            await db.index_builds.update_one({"id": run_id}, {"$set": {"status": "finished", "finished_at": datetime.now(timezone.utc).isoformat()}})
+        except Exception as exc:
+            logger.exception("[Indexes] build run failed")
+            await db.index_builds.update_one({"id": run_id}, {"$set": {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}})
+        finally:
+            client_.close()
+
+    _INDEX_BUILD_TASK = asyncio.create_task(_run())
+    return {"ok": True, "run_id": run_id, "status": "started", "indexes": [index_builds.label(c, k) for c, k, _ in index_builds.REGISTRY],
+            "poll": "/api/admin/ensure-indexes/status"}
+
+
+@router.get("/admin/ensure-indexes/status")
+async def admin_ensure_indexes_status(_=Depends(require_super_admin)):
+    import index_builds
+    run = await db.index_builds.find_one({}, {"_id": 0}, sort=[("started_at", -1)])
+    return {"run": run, "process_state": index_builds.STATE, "current": await index_builds.report(db)}
+
+
 class RematchIn(BaseModel):
     store_id: Optional[str] = None      # None → all stores
 
@@ -11987,6 +12033,9 @@ async def _boot_sequence():
         import integrity_indexes
         await integrity_indexes.ensure(db)
     except Exception as e:
+        # Visible in /api/health boot.errors; POST /api/admin/ensure-indexes
+        # builds them without the request client's socket timeout.
+        BOOT_STATE["errors"].append(f"integrity_indexes: {type(e).__name__}: {str(e)[:200]}")
         logger.warning(f"Integrity index creation skipped: {e}")
     # Idempotent indexes (safe to run on every startup; no-op if already present)
     # iter73y — one registry, one independent attempt per index. Previously a
