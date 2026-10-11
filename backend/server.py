@@ -1499,22 +1499,14 @@ async def admin_refresh_caches(user=Depends(require_super_admin)):
     page keeps showing the old (wrong) number for hours. This endpoint makes
     the rebuild an explicit, immediate operation.
     """
-    out = {}
+    # The rebuild takes minutes at production scale, longer than any ingress
+    # timeout; it runs in the background and this call returns at once.
+    # Progress: GET /api/admin/cache-rebuild-status.
     cache_clear()
-    try:
-        out["dashboard_cache"] = "recomputed" if await maybe_recompute_dashboard_cache(
-            db, force=True) else "skipped"
-    except Exception as exc:
-        out["dashboard_cache"] = f"failed: {type(exc).__name__}: {str(exc)[:160]}"
-        logger.exception("[Admin refresh-caches] dashboard cache failed")
-    try:
-        out["page_caches"] = "recomputed" if await maybe_recompute_page_caches(
-            db, force=True) else "skipped"
-    except Exception as exc:
-        out["page_caches"] = f"failed: {type(exc).__name__}: {str(exc)[:160]}"
-        logger.exception("[Admin refresh-caches] page caches failed")
-    logger.info("[Admin refresh-caches] user=%s %s", user.get("email"), out)
-    return {"ok": not any(str(v).startswith("failed") for v in out.values()), **out}
+    started = _schedule_cache_rebuild(trigger=f"admin:{user.get('email', '')}")
+    logger.info("[Admin refresh-caches] user=%s started=%s", user.get("email"), started)
+    return {"ok": True, "started": started, "already_running": not started,
+            "status_endpoint": "/api/admin/cache-rebuild-status"}
 
 
 def _plan_summary(explain_doc):
@@ -2672,14 +2664,22 @@ async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     for w in windows:
         t0 = _t.time()
         from price_read_limits import bounded_read
+        _rebuild_mark(f"dashboard:{w}d", "running")
         # Background budget: this is the rebuild that makes the request path
         # a cache hit; under the 20 s request budget it never finished on
         # production and every page fell back to a live compute.
-        ds = await bounded_read(my_products_cache.compute_dataset(db,
-            lambda: _my_products_dataset(db, w, None, None, None, None, None, None, True),
-            max_age=DASHBOARD_CACHE_MAX_AGE_SECS), background=True)
-        await _store_dashboard_cache(db, w, ds)
+        try:
+            ds = await bounded_read(my_products_cache.compute_dataset(db,
+                lambda: _my_products_dataset(db, w, None, None, None, None, None, None, True),
+                max_age=DASHBOARD_CACHE_MAX_AGE_SECS), background=True)
+            await _store_dashboard_cache(db, w, ds)
+        except Exception as exc:
+            stats[w] = {"error": f"{type(exc).__name__}: {str(exc)[:120]}", "secs": round(_t.time() - t0, 2)}
+            _rebuild_mark(f"dashboard:{w}d", stats[w])
+            logger.exception("[DashboardCache] window %sd failed", w)
+            continue
         stats[w] = {"rows": ds["total"], "secs": round(_t.time() - t0, 2)}
+        _rebuild_mark(f"dashboard:{w}d", stats[w])
     _LAST_DASHBOARD_RECOMPUTE = datetime.now(timezone.utc)
     logger.info(f"[DashboardCache] recomputed {list(windows)}: {stats}")
     return stats
@@ -2851,6 +2851,7 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
         for w in windows:
             t0 = _t.time()
             try:
+                _rebuild_mark(f"page:{base}:{w}d", "running")
                 # Background budget: nested bounded reads inherit it.
                 payload = await _bounded(compute(db, w), background=True)
                 await _store_page_cache(db, base, w, payload)
@@ -2858,6 +2859,7 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
             except Exception as e:
                 stats[f"{base}#{w}"] = f"ERROR: {str(e)[:80]}"
                 logger.exception(f"[PageCache] recompute failed for {base} @ {w}d")
+            _rebuild_mark(f"page:{base}:{w}d", stats[f"{base}#{w}"])
     for base, compute in _SINGLE_CACHE_SPECS:
         t0 = _t.time()
         try:
@@ -2881,6 +2883,14 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
 #             and still showed a timeout.
 CACHE_MISS_POLICY = os.environ.get("CACHE_MISS_POLICY", "live").strip().lower()
 _CACHE_REBUILD_TASK = None
+# Observable progress of the current/last background rebuild (admin endpoint).
+_CACHE_REBUILD_STATE = {"status": "idle", "started_at": None, "finished_at": None, "trigger": None,
+                        "steps": {}, "error": None}
+
+
+def _rebuild_mark(step, value):
+    _CACHE_REBUILD_STATE["steps"][step] = value
+    _CACHE_REBUILD_STATE["updated_at"] = datetime.now(timezone.utc).isoformat()
 
 
 def _cache_miss_live_allowed():
@@ -2888,7 +2898,7 @@ def _cache_miss_live_allowed():
     return CACHE_MISS_POLICY != "rebuild" or in_background()
 
 
-def _schedule_cache_rebuild():
+def _schedule_cache_rebuild(trigger="request_miss"):
     """Start one background rebuild of the dashboard and page caches if none is
     running. Returns True when a rebuild was started."""
     global _CACHE_REBUILD_TASK
@@ -2896,12 +2906,39 @@ def _schedule_cache_rebuild():
         return False
 
     async def _run():
-        await maybe_recompute_dashboard_cache(db, force=True)
-        await maybe_recompute_page_caches(db, force=True)
+        _CACHE_REBUILD_STATE.update(status="running", started_at=datetime.now(timezone.utc).isoformat(),
+                                    finished_at=None, trigger=trigger, steps={}, error=None)
+        try:
+            price_cohort.reset_cohort_memo()
+            _rebuild_mark("dashboard", "running")
+            ds = await maybe_recompute_dashboard_cache(db, force=True)
+            _rebuild_mark("dashboard", ds or "failed_or_skipped")
+            _rebuild_mark("pages", "running")
+            pg = await maybe_recompute_page_caches(db, force=True)
+            _rebuild_mark("pages", pg or "failed_or_skipped")
+            _CACHE_REBUILD_STATE["status"] = "done"
+        except Exception as exc:
+            _CACHE_REBUILD_STATE.update(status="failed", error=f"{type(exc).__name__}: {str(exc)[:200]}")
+            logger.exception("[Cache] background rebuild failed")
+        finally:
+            _CACHE_REBUILD_STATE["finished_at"] = datetime.now(timezone.utc).isoformat()
 
     _CACHE_REBUILD_TASK = asyncio.create_task(_run())
-    logger.info("[Cache] background rebuild started on request miss (policy=rebuild)")
+    logger.info("[Cache] background rebuild started (trigger=%s)", trigger)
     return True
+
+
+@router.get("/admin/cache-rebuild-status")
+async def cache_rebuild_status(user=Depends(require_super_admin)):
+    """Progress of the background cache rebuild: phase, per-window timings,
+    last error. Read-only."""
+    running = _CACHE_REBUILD_TASK is not None and not _CACHE_REBUILD_TASK.done()
+    keys = [d["key"] for d in await db.dashboard_cache.find({}, {"_id": 0, "key": 1}).to_list(200)]
+    return {**_CACHE_REBUILD_STATE, "task_running": running, "policy": CACHE_MISS_POLICY,
+            "cache_entries": len(keys), "cache_keys_sample": keys[:12],
+            "budgets": {"request_timeout_s": __import__("price_read_limits").REQUEST_TIMEOUT_SECONDS,
+                        "background_timeout_s": __import__("price_read_limits").BACKGROUND_TIMEOUT_SECONDS,
+                        "cohort_history_days": price_cohort.cohort_history_days()}}
 
 
 def _cache_miss_or_rebuild():

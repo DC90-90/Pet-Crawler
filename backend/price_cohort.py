@@ -170,9 +170,68 @@ def freshness_transition(value, now):
     return now+timedelta(days=max_offer_age_days())  # Already-stale/missing dates do not become fresh.
 
 
+import copy as _copy
+import hashlib as _hashlib
+import time as _time
+
+# One cohort build per data revision. A cache rebuild used to run the same
+# 90-day snapshot scan once per time window and again for every cached page
+# (10+ full passes over 8.45M production snapshots); the cohort depends only
+# on the observations, the own catalogue and the competitor scope, so it is
+# computed once and reused while the revision is unchanged.
+COHORT_MEMO_TTL_SECONDS = 900
+_cohort_memo = {}
+_cohort_inflight = {}
+
+
+def _own_signature(own_rows, own_price_fn):
+    h = _hashlib.sha256()
+    for r in sorted(own_rows, key=lambda r: str(r.get("sku") or "")):
+        h.update(f"{r.get('sku')}|{r.get('barcode')}|{own_price_fn(r) if own_price_fn else ''}|{r.get('present_on_store')}|{r.get('quantity_observed_at') or r.get('last_synced_at')}".encode("utf-8", "replace"))
+    return h.hexdigest()
+
+
+async def _data_revision(db):
+    doc = await db.data_versions.find_one({"_id": "observations"}, {"_id": 0, "revision": 1})
+    return (doc or {}).get("revision", 0)
+
+
+def reset_cohort_memo():
+    _cohort_memo.clear()
+    _cohort_inflight.clear()
+
+
 async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, competitor_store_ids=None, parents=None):
-    return await bounded_read(_build_cohorts(db, own_rows, own_store_id, own_price_fn, now,
-                                          competitor_store_ids, parents))
+    import asyncio
+    raw = getattr(db, "raw", db)
+    revision = await _data_revision(db)
+    key = (id(raw.client), raw.name, revision, own_store_id,
+           tuple(sorted(competitor_store_ids)) if competitor_store_ids is not None else None,
+           _own_signature(own_rows, own_price_fn))
+    hit = _cohort_memo.get(key)
+    if hit and hit[1] > _time.monotonic():
+        return _copy.deepcopy(hit[0])
+    if key in _cohort_inflight:
+        result = await asyncio.shield(_cohort_inflight[key])
+        return _copy.deepcopy(result)
+
+    async def compute():
+        result = await bounded_read(_build_cohorts(db, own_rows, own_store_id, own_price_fn, now,
+                                                  competitor_store_ids, parents))
+        if await _data_revision(db) == revision:
+            if len(_cohort_memo) >= 8:
+                _cohort_memo.pop(next(iter(_cohort_memo)))
+            _cohort_memo[key] = (result, _time.monotonic() + COHORT_MEMO_TTL_SECONDS)
+        return result
+
+    task = asyncio.create_task(compute())
+    _cohort_inflight[key] = task
+    try:
+        result = await asyncio.shield(task)
+    finally:
+        if _cohort_inflight.get(key) is task:
+            _cohort_inflight.pop(key, None)
+    return _copy.deepcopy(result)
 
 
 async def _build_cohorts(db, own_rows, own_store_id, own_price_fn, now, competitor_store_ids, parents):
