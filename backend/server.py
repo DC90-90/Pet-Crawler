@@ -1414,6 +1414,36 @@ async def admin_ensure_indexes_status(_=Depends(require_super_admin)):
     return {"run": run, "process_state": index_builds.STATE, "current": await index_builds.report(db)}
 
 
+@router.get("/admin/page-cache-probe")
+async def admin_page_cache_probe(base: str = Query("market-share/dataset"), days: Optional[int] = Query(30),
+                                 _=Depends(require_super_admin)):
+    """Why does this page miss its cache? Reports the key this process computes,
+    whether the entry exists, its age, stored vs current revision, the blob
+    encoding and whether it decodes. Read-only."""
+    from investigation_status import build_identity
+    key = _page_cache_key(base, days)
+    doc = await db.dashboard_cache.find_one({"key": key})
+    revision = await db.data_versions.find_one({"_id": "observations"}, {"_id": 0}) or {}
+    out = {"key": key, "code_digest": build_identity()["code_digest"][:12], "process": os.getpid(),
+           "current_revision": revision.get("revision"), "current_observed_at": str(revision.get("observed_at")),
+           "exists": doc is not None, "max_age_secs": DASHBOARD_CACHE_MAX_AGE_SECS,
+           "entries_for_base": [d["key"] for d in await db.dashboard_cache.find({"base": base}, {"_id": 0, "key": 1}).to_list(50)]}
+    if doc is not None:
+        ca = doc.get("computed_at")
+        out.update(computed_at=str(ca), source_revision=doc.get("source_revision"), encoding=doc.get("encoding"),
+                   size_bytes=doc.get("size_bytes"), chunks=doc.get("chunks"),
+                   age_secs=round((datetime.now(timezone.utc) - ca).total_seconds(), 1) if isinstance(ca, datetime) else None,
+                   revision_matches=doc.get("source_revision") == revision.get("revision", 0))
+        try:
+            payload = await _load_page_cache_payload(db, doc)
+            out["decodes"] = payload is not None
+            out["payload_keys"] = sorted(payload.keys())[:12] if isinstance(payload, dict) else type(payload).__name__
+        except Exception as exc:
+            out["decodes"] = False
+            out["decode_error"] = f"{type(exc).__name__}: {str(exc)[:160]}"
+    return out
+
+
 class RematchIn(BaseModel):
     store_id: Optional[str] = None      # None → all stores
 

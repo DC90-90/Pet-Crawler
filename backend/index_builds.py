@@ -13,7 +13,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from pymongo.errors import DuplicateKeyError, OperationFailure
+from pymongo.errors import AutoReconnect, ConnectionFailure, DuplicateKeyError, NetworkTimeout, OperationFailure
 
 logger = logging.getLogger(__name__)
 
@@ -40,27 +40,54 @@ def label(coll, keys):
     return f"{coll}:" + "_".join(f"{k}_{d}" for k, d in keys)
 
 
-async def build_one(db, coll, keys, options):
+def expected_name(keys):
+    return "_".join(f"{k}_{d}" for k, d in keys)
+
+
+async def wait_for_index(db, coll, name, max_wait_s, poll_s=15):
+    """A build whose connection dropped keeps running on the server (MongoDB
+    4.4+); wait for the index to be listed and report how long it took."""
+    started = time.perf_counter()
+    while time.perf_counter() - started < max_wait_s:
+        await asyncio.sleep(poll_s)
+        try:
+            if name in await db[coll].index_information():
+                return round(time.perf_counter() - started, 1)
+        except Exception:  # noqa: BLE001 — keep waiting
+            pass
+    return None
+
+
+async def build_one(db, coll, keys, options, disconnect_wait_s=1800):
     """Create one index; a unique index that meets duplicates falls back to a
     non-unique one so the write path still stops scanning, and the result says
     so. Returns a result dict, never raises."""
     started = time.perf_counter()
+    elapsed = lambda: round(time.perf_counter() - started, 1)  # noqa: E731
     try:
         name = await db[coll].create_index(keys, **options)
-        return {"status": "ok", "name": name, "secs": round(time.perf_counter() - started, 1)}
+        return {"status": "ok", "name": name, "secs": elapsed()}
+    except (NetworkTimeout, AutoReconnect, ConnectionFailure) as exc:
+        failed_after = elapsed()
+        waited = await wait_for_index(db, coll, expected_name(keys), disconnect_wait_s)
+        if waited is not None:
+            return {"status": "ok_after_disconnect", "name": expected_name(keys), "secs": failed_after + waited,
+                    "note": f"connection dropped after {failed_after}s ({type(exc).__name__}); the server finished the build"}
+        return {"status": "failed", "secs": failed_after + disconnect_wait_s,
+                "error": f"{type(exc).__name__}: {str(exc)[:160]}; index not listed {disconnect_wait_s}s later"}
     except (DuplicateKeyError, OperationFailure) as exc:
         duplicates = isinstance(exc, DuplicateKeyError) or getattr(exc, "code", None) in (11000, 11001)
         if not (options.get("unique") and duplicates):
-            return {"status": "failed", "error": f"{type(exc).__name__}({getattr(exc, 'code', None)}): {str(exc)[:160]}"}
+            return {"status": "failed", "secs": elapsed(), "error": f"{type(exc).__name__}({getattr(exc, 'code', None)}): {str(exc)[:160]}"}
         fallback = {k: v for k, v in options.items() if k != "unique"}
         try:
             name = await db[coll].create_index(keys, **fallback)
-            return {"status": "ok_non_unique", "name": name, "secs": round(time.perf_counter() - started, 1),
+            return {"status": "ok_non_unique", "name": name, "secs": elapsed(),
                     "note": "duplicates exist; built without the unique constraint"}
         except Exception as exc2:  # noqa: BLE001 — reported, never raised
-            return {"status": "failed", "error": f"{type(exc2).__name__}: {str(exc2)[:160]}"}
+            return {"status": "failed", "secs": elapsed(), "error": f"{type(exc2).__name__}: {str(exc2)[:160]}"}
     except Exception as exc:  # noqa: BLE001 — reported, never raised
-        return {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+        return {"status": "failed", "secs": elapsed(), "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
 
 
 async def run(db, registry=REGISTRY, record=None):
@@ -91,7 +118,9 @@ def long_running_client():
 
 
 async def report(db):
-    """Current index names and estimated counts for the registry collections."""
+    """Current index names and estimated counts for the registry collections,
+    plus any index build the server reports as in progress (where the
+    deployment's privileges allow $currentOp)."""
     out = {}
     for coll in sorted({c for c, _, _ in REGISTRY}):
         try:
@@ -99,4 +128,13 @@ async def report(db):
                          "estimated_count": await db[coll].estimated_document_count()}
         except Exception as exc:  # noqa: BLE001
             out[coll] = {"error": f"{type(exc).__name__}: {str(exc)[:120]}"}
+    try:
+        ops = await db.client.admin.aggregate([
+            {"$currentOp": {"allUsers": True}},
+            {"$match": {"$or": [{"command.createIndexes": {"$exists": True}}, {"msg": {"$regex": "Index Build"}}]}},
+            {"$project": {"ns": 1, "msg": 1, "progress": 1, "secs_running": 1, "command.createIndexes": 1}},
+        ]).to_list(20)
+        out["index_builds_in_progress"] = ops
+    except Exception as exc:  # noqa: BLE001
+        out["index_builds_in_progress"] = f"unavailable: {type(exc).__name__}: {str(exc)[:100]}"
     return out

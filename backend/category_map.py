@@ -154,9 +154,14 @@ async def load(db, max_age_hours=6):
     """CategoryMap for this request. Rebuilds the persisted rows when they are
     missing or older than `max_age_hours`; reviewed rows are never touched."""
     own_id, canonicals = await canonical_taxonomy(db)
-    latest = await db.category_map.find_one({}, {"_id": 0, "updated_at": 1}, sort=[("updated_at", -1)])
-    stale = (latest is None or latest.get("updated_at") is None or
-             datetime.now(timezone.utc) - latest["updated_at"].replace(tzinfo=timezone.utc) > timedelta(hours=max_age_hours))
+    # The build marker, not the newest row: with no categorised products yet
+    # (production before its first new-format crawl) there were no rows, so
+    # every load rebuilt and every rebuild bumped the observation revision,
+    # which invalidated the page caches being built around it (11 Oct 2026).
+    meta = await db.data_versions.find_one({"_id": "category_map"}, {"_id": 0, "built_at": 1})
+    built_at = (meta or {}).get("built_at")
+    stale = (built_at is None or
+             datetime.now(timezone.utc) - built_at.replace(tzinfo=timezone.utc) > timedelta(hours=max_age_hours))
     if stale:
         await rebuild(db, canonicals=canonicals, own_store_id=own_id)
     rows = await db.category_map.find({}, {"_id": 0}).to_list(20000)
@@ -187,6 +192,9 @@ async def rebuild(db, canonicals=None, own_store_id=None):
             "store_id": sid, "store_category": name, "canonical": canonical, "method": method,
             "products_count": n, "updated_at": now}}, upsert=True)
         written += 1
+    # An automatic refresh records when it ran and never bumps the observation
+    # revision: only a human mapping (set_mapping) changes what the pages say.
+    await db.data_versions.update_one({"_id": "category_map"}, {"$set": {"built_at": now, "pairs": len(counts), "written": written}}, upsert=True)
     return {"pairs": len(counts), "written": written, "reviewed_kept": len(reviewed), "canonicals": len(canonicals)}
 
 
