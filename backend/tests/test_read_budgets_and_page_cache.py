@@ -116,20 +116,38 @@ def test_page_cache_pack_roundtrip_and_chunking():
             self.doc = doc
 
     class _Versions:
-        async def find_one(self, q):
+        async def find_one(self, q, proj=None):
             return {"revision": 7}
 
     class _DB:
         def __init__(self):
             self.dashboard_cache, self.dashboard_cache_chunks, self.data_versions = _Head(), _Chunks(), _Versions()
 
+        def __getitem__(self, name):
+            return getattr(self, name)
+
     db = _DB()
     import server as s
-    s.PAGE_CACHE_INLINE_LIMIT, s.PAGE_CACHE_CHUNK_BYTES = 1000, 700  # force chunking for the test
-    asyncio.run(s._store_page_cache(db, "market-share/dataset", 30, payload))
-    head = db.dashboard_cache.doc
-    assert head["encoding"] == "zlib-json" and head["chunks"] >= 2 and "payload_zlib" not in head
-    assert asyncio.run(s._load_page_cache_payload(db, head)) == payload
-    # A missing chunk is a miss, never a partial payload.
-    db.dashboard_cache_chunks.docs.pop((head["key"], 0))
-    assert asyncio.run(s._load_page_cache_payload(db, head)) is None
+    import cache_blobs
+    cache_blobs.INLINE_LIMIT, cache_blobs.CHUNK_BYTES = 1000, 700  # force chunking for the test
+    try:
+        asyncio.run(s._store_page_cache(db, "market-share/dataset", 30, payload))
+        head = db.dashboard_cache.doc
+        assert head["encoding"] == "zlib-json" and head["chunks"] >= 2 and "payload_zlib" not in head
+        assert asyncio.run(s._load_page_cache_payload(db, head)) == payload
+        # A missing chunk is a miss, never a partial payload.
+        db.dashboard_cache_chunks.docs.pop((head["key"], 0))
+        assert asyncio.run(s._load_page_cache_payload(db, head)) is None
+        # The My Products dashboard envelope uses the same store: head keeps the
+        # validity fields, the dataset travels compressed.
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        dataset = {**payload, "total": len(payload["rows"]), "categories": [], "_source_revision": 7,
+                   "_computed_at": now, "_valid_until": now + timedelta(hours=1)}
+        asyncio.run(s._store_dashboard_cache(db, 30, dataset))
+        head = db.dashboard_cache.doc
+        assert head["cache_schema"] and head["source_revision"] == 7 and "dataset" not in head and head["chunks"] >= 2
+        loaded = asyncio.run(cache_blobs.read_blob(db, head))
+        assert loaded["total"] == len(payload["rows"]) and loaded["rows"][0]["sku"] == "S0"
+    finally:
+        cache_blobs.INLINE_LIMIT, cache_blobs.CHUNK_BYTES = 12 * 1024 * 1024, 12 * 1024 * 1024

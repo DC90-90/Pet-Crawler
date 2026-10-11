@@ -99,6 +99,14 @@ async def _serve(db, key, compute, max_age):
     async def load():
         try:
             doc = await asyncio.wait_for(db.dashboard_cache.find_one({"key": key}, {"_id": 0}, max_time_ms=2000), 2.5)
+            if doc is not None and "dataset" not in doc:
+                # Compressed / chunked storage (cache_blobs); None when incomplete.
+                import cache_blobs
+                dataset = await asyncio.wait_for(cache_blobs.read_blob(db, doc), 10)
+                # Keep the envelope fields plus the decoded dataset; the raw
+                # blob must not travel into the in-memory copy (not JSON-safe).
+                doc = ({k: v for k, v in doc.items() if k not in ("payload_zlib", "chunks")} | {"dataset": dataset}
+                       if dataset is not None else None)
         except (TimeoutError, PyMongoError):
             logger.warning("Optional dashboard cache read failed; computing from source")
             doc = None

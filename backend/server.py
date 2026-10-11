@@ -2643,12 +2643,13 @@ async def _store_dashboard_cache(db, days, dataset):
     if revision.get("revision", 0) != dataset["_source_revision"]:
         from price_read_limits import unavailable
         raise unavailable("price_source_changed")
-    await db.dashboard_cache.replace_one(
-        {"key": _dashboard_cache_key(days)},
-        {"key": _dashboard_cache_key(days), "window_days": days,
-         **jsonable_encoder(my_products_cache.envelope(dataset)), "source_observed_at": revision.get("observed_at")},
-        upsert=True,
-    )
+    # The dataset (≈3,000 rows with sellers) exceeds the 16 MB document limit
+    # on production, so it is stored compressed/chunked; the envelope fields
+    # stay on the head document for the validity checks.
+    envelope = jsonable_encoder(my_products_cache.envelope(dataset))
+    head = {k: v for k, v in envelope.items() if k != "dataset"}
+    await cache_blobs.write_blob(db, _dashboard_cache_key(days), envelope["dataset"],
+                                 {**head, "window_days": days, "source_observed_at": revision.get("observed_at")})
     return now
 
 
@@ -2717,62 +2718,25 @@ def _page_cache_key(base: str, days=None) -> str:
     return f"{base}:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:{ledger.ksa_day_str(datetime.now(timezone.utc))}:days={days}"
 
 
-PAGE_CACHE_INLINE_LIMIT = 12 * 1024 * 1024   # BSON document ceiling is 16 MB; keep headroom
-PAGE_CACHE_CHUNK_BYTES = 12 * 1024 * 1024
+import cache_blobs
 
-
-def _page_cache_pack(payload):
-    """JSON → zlib bytes. Market Share's dataset exceeded 16 MB as one BSON
-    document on production (DocumentTooLarge), so large payloads are stored
-    compressed and, beyond the inline limit, as ordered chunks."""
-    import json
-    import zlib
-    return zlib.compress(json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"), 6)
-
-
-def _page_cache_unpack(blob):
-    import json
-    import zlib
-    return json.loads(zlib.decompress(bytes(blob)).decode("utf-8"))
+# Kept as thin names for tests and older call sites; the implementation
+# lives in cache_blobs (shared with the My Products dashboard cache).
+_page_cache_pack = cache_blobs.pack
+_page_cache_unpack = cache_blobs.unpack
 
 
 async def _store_page_cache(db, base, days, payload):
-    from bson import Binary
     now = datetime.now(timezone.utc)
     revision = await db.data_versions.find_one({"_id": "observations"}) or {}
-    key = _page_cache_key(base, days)
-    blob = _page_cache_pack(jsonable_encoder(payload))
-    doc = {"key": key, "base": base, "window_days": days, "computed_at": now,
-           "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at"),
-           "encoding": "zlib-json", "size_bytes": len(blob)}
-    # Chunks are written before the head document so a reader never sees a
-    # head that points at chunks that do not exist yet.
-    await db.dashboard_cache_chunks.delete_many({"key": key})
-    if len(blob) <= PAGE_CACHE_INLINE_LIMIT:
-        doc["payload_zlib"] = Binary(blob)
-    else:
-        parts = [blob[i:i + PAGE_CACHE_CHUNK_BYTES] for i in range(0, len(blob), PAGE_CACHE_CHUNK_BYTES)]
-        for n, part in enumerate(parts):
-            await db.dashboard_cache_chunks.replace_one(
-                {"key": key, "n": n}, {"key": key, "n": n, "computed_at": now, "payload_zlib": Binary(part)}, upsert=True)
-        doc["chunks"] = len(parts)
-    await db.dashboard_cache.replace_one({"key": key}, doc, upsert=True)
+    await cache_blobs.write_blob(db, _page_cache_key(base, days), jsonable_encoder(payload), {
+        "base": base, "window_days": days, "computed_at": now,
+        "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at")})
     return now
 
 
 async def _load_page_cache_payload(db, doc):
-    """Payload for a page-cache head document: inline JSON (legacy), inline
-    zlib, or ordered chunks. None when any part is missing."""
-    if "payload" in doc:
-        return doc["payload"]
-    if doc.get("payload_zlib") is not None:
-        return _page_cache_unpack(doc["payload_zlib"])
-    if doc.get("chunks"):
-        parts = await db.dashboard_cache_chunks.find({"key": doc["key"]}, {"_id": 0, "n": 1, "payload_zlib": 1}).sort("n", 1).to_list(1000)
-        if len(parts) != doc["chunks"] or [p["n"] for p in parts] != list(range(doc["chunks"])):
-            return None
-        return _page_cache_unpack(b"".join(bytes(p["payload_zlib"]) for p in parts))
-    return None
+    return await cache_blobs.read_blob(db, doc)
 
 
 async def _serve_page_cache(db, base, days, compute, cacheable=True):

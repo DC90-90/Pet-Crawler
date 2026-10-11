@@ -159,10 +159,13 @@ def test_recompute_populates_all_windows():
         await _seed(db)
         stats = await server.recompute_dashboard_cache(db)
         assert set(stats.keys()) == {7, 14, 30, 90}
+        import cache_blobs
         for w in (7, 14, 30, 90):
             doc = await db.dashboard_cache.find_one({"key": server._dashboard_cache_key(w)})
-            assert doc and doc["window_days"] == w and isinstance(doc["dataset"], dict)
-            assert doc["dataset"]["total"] == 40
+            # The dataset is stored compressed (cache_blobs) under the 16 MB limit.
+            dataset = await cache_blobs.read_blob(db, doc)
+            assert doc and doc["window_days"] == w and isinstance(dataset, dict)
+            assert dataset["total"] == 40
         print("PASS: recompute populated all standard windows")
     asyncio.run(main())
 
