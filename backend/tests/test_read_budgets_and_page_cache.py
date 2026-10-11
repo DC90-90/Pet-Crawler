@@ -116,6 +116,45 @@ def test_revision_read_retries_once_on_a_timeout():
         raise AssertionError("non-timeout errors must not be retried")
 
 
+def test_rebuild_stands_down_when_another_process_holds_the_lease(monkeypatch):
+    os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27017")
+    os.environ.setdefault("DB_NAME", "test_read_budgets")
+    os.environ.setdefault("JWT_SECRET", "x" * 32)
+    os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
+    from cryptography.fernet import Fernet
+    os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    import server
+    import job_control
+
+    class _Leases:
+        async def find_one(self, q, proj=None):
+            return {"owner": "other-process", "expires_at": "later"}
+
+    class _DB:
+        job_leases = _Leases()
+
+    async def deny(db, key, owner, hours=3):
+        assert key == server.CACHE_REBUILD_LEASE
+        return False
+    recomputed = []
+
+    async def recompute(db, force=False):
+        recomputed.append(1)
+    monkeypatch.setattr(job_control, "acquire", deny)
+    monkeypatch.setattr(server, "db", _DB())
+    monkeypatch.setattr(server, "maybe_recompute_dashboard_cache", recompute)
+    monkeypatch.setattr(server, "maybe_recompute_page_caches", recompute)
+    monkeypatch.setattr(server, "_CACHE_REBUILD_TASK", None)
+
+    async def run():
+        assert server._schedule_cache_rebuild(trigger="test") is True
+        await server._CACHE_REBUILD_TASK
+    asyncio.run(run())
+    assert server._CACHE_REBUILD_STATE["status"] == "skipped"
+    assert server._CACHE_REBUILD_STATE["steps"]["lease_held_by"] == "other-process"
+    assert recomputed == []
+
+
 def test_page_cache_pack_roundtrip_and_chunking():
     os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27017")
     os.environ.setdefault("DB_NAME", "test_read_budgets")

@@ -2855,6 +2855,7 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
 #             the request budget, so every visit burned 20 s of database time
 #             and still showed a timeout.
 CACHE_MISS_POLICY = os.environ.get("CACHE_MISS_POLICY", "live").strip().lower()
+CACHE_REBUILD_LEASE = "cache-rebuild"   # db.job_leases key shared by every backend process
 _CACHE_REBUILD_TASK = None
 # Observable progress of the current/last background rebuild (admin endpoint).
 _CACHE_REBUILD_STATE = {"status": "idle", "started_at": None, "finished_at": None, "trigger": None,
@@ -2879,10 +2880,23 @@ def _schedule_cache_rebuild(trigger="request_miss"):
         return False
 
     async def _run():
+        import job_control
         _CACHE_REBUILD_STATE.update(status="running", started_at=datetime.now(timezone.utc).isoformat(),
                                     finished_at=None, trigger=trigger, steps={}, error=None)
+        # Production runs several backend processes; without a database lease
+        # each one rebuilt the same caches at the same time and they timed each
+        # other out. One lease, one builder; the others report and stand down.
+        owner = f"{os.getpid()}:{uuid.uuid4().hex[:8]}"
         try:
+            if not await job_control.acquire(db, CACHE_REBUILD_LEASE, owner, hours=1):
+                holder = await db.job_leases.find_one({"_id": CACHE_REBUILD_LEASE}, {"_id": 0})
+                _CACHE_REBUILD_STATE.update(status="skipped", error=None,
+                                            steps={"lease_held_by": (holder or {}).get("owner"),
+                                                   "lease_expires_at": str((holder or {}).get("expires_at"))})
+                logger.info("[Cache] rebuild skipped: lease held by %s", (holder or {}).get("owner"))
+                return
             price_cohort.reset_cohort_memo()
+            _rebuild_mark("lease_owner", owner)
             _rebuild_mark("dashboard", "running")
             ds = await maybe_recompute_dashboard_cache(db, force=True)
             _rebuild_mark("dashboard", ds or "failed_or_skipped")
@@ -2895,6 +2909,10 @@ def _schedule_cache_rebuild(trigger="request_miss"):
             logger.exception("[Cache] background rebuild failed")
         finally:
             _CACHE_REBUILD_STATE["finished_at"] = datetime.now(timezone.utc).isoformat()
+            try:
+                await job_control.release(db, CACHE_REBUILD_LEASE, owner)
+            except Exception:
+                logger.exception("[Cache] lease release failed (expires on its own)")
 
     _CACHE_REBUILD_TASK = asyncio.create_task(_run())
     logger.info("[Cache] background rebuild started (trigger=%s)", trigger)
@@ -2907,8 +2925,12 @@ async def cache_rebuild_status(user=Depends(require_super_admin)):
     last error. Read-only."""
     running = _CACHE_REBUILD_TASK is not None and not _CACHE_REBUILD_TASK.done()
     keys = [d["key"] for d in await db.dashboard_cache.find({}, {"_id": 0, "key": 1}).to_list(200)]
+    lease = await db.job_leases.find_one({"_id": CACHE_REBUILD_LEASE}, {"_id": 0})
+    if lease:
+        lease = {"owner": lease.get("owner"), "expires_at": str(lease.get("expires_at"))}
     import price_read_limits as _prl
     return {**_CACHE_REBUILD_STATE, "task_running": running, "policy": CACHE_MISS_POLICY,
+            "process": os.getpid(), "lease": lease,
             "recent_read_failures": list(_prl.LAST_FAILURES),
             "cache_entries": len(keys), "cache_keys_sample": keys[:12],
             "budgets": {"request_timeout_s": __import__("price_read_limits").REQUEST_TIMEOUT_SECONDS,
