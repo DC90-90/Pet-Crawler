@@ -49,3 +49,27 @@ The auto-mode safety classifier refused every edit that relaxes a gate, even tho
 - First supervised crawl from a Saudi IP; verify 20 SKUs by hand against storefronts.
 - Enable 3×/day Zid crawls, 1×/day Salla.
 - Zid partner-app OAuth for exact own orders.
+
+## 11 Oct 2026 (evening) — database starvation under the 90-day legacy scan
+
+Symptom: every analytics page showed "Price analysis is being prepared", and
+the backfill crawl finished four stores with 0 snapshots stored
+("Observation persistence failed: NetworkTimeout").
+
+Cause: the cohort, market-share, insight and matcher reads scanned 90 days of
+the 8.45M-row snapshot collection (almost all legacy v1 rows) on every cache
+rebuild, in more than one backend process. The database starved: a
+one-document revision read exceeded 15 s and the crawler's own writes exceeded
+the 45 s socket timeout.
+
+Fix:
+- `observation_contract.v2_since()` / `since_bound()`: v2 observations only
+  exist since 2026-10-07 (env `OBSERVATIONS_V2_SINCE` to override), so every
+  v2-only read starts there instead of 90 days back.
+- `crawl_persistence.retry_transient`: transient database errors during
+  persistence are retried (5/20/60 s) instead of discarding the store.
+- `my_products_cache.revision` uses the background budget inside a rebuild.
+- `POST /api/admin/recover-captures` replays retained captures (with their
+  original observed_at) without re-crawling; `GET .../status` to poll.
+- Tests pin `OBSERVATIONS_V2_SINCE=2000-01-01` (conftest + reviewed runner)
+  because fixtures seed older history.

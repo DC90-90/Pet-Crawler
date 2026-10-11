@@ -12,7 +12,7 @@ from weakref import WeakKeyDictionary
 from pymongo.errors import PyMongoError
 
 from price_cohort import aware
-from price_read_limits import bounded_read, unavailable
+from price_read_limits import bounded_read, unavailable, in_background, query_max_ms
 from release_database import GuardedDatabase
 
 SCHEMA = "my-products-read-v1"
@@ -35,14 +35,16 @@ async def revision(db):
     2 s limit it timed out on production and turned a finished 30 s rebuild
     into price_query_timeout. One retry, generous limit."""
     last = None
-    for attempt in range(2):
+    # A background rebuild may wait as long as its own queries do.
+    attempts, limit = (3, max(REVISION_READ_MAX_MS, query_max_ms())) if in_background() else (2, REVISION_READ_MAX_MS)
+    for attempt in range(attempts):
         try:
             doc = await db.data_versions.find_one({"_id": "observations"}, {"_id": 0, "revision": 1},
-                                                  max_time_ms=REVISION_READ_MAX_MS)
+                                                  max_time_ms=limit)
             return (doc or {}).get("revision", 0)
         except PyMongoError as exc:
             last = exc
-            if not getattr(exc, "timeout", False) or attempt:
+            if not getattr(exc, "timeout", False) or attempt == attempts - 1:
                 raise
             await asyncio.sleep(1)
     raise last

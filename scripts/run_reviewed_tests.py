@@ -30,6 +30,7 @@ environment.update(MONGO_URL=url, DALEEL_TEST_MONGO_URL=url,
                    # Tests exercise the live compute path; the production
                    # cache-miss policy (rebuild → 503) must not leak in from .env.
                    CACHE_MISS_POLICY="live",
+                   OBSERVATIONS_V2_SINCE="2000-01-01T00:00:00+00:00",
                    PYTHONPATH=os.pathsep.join([str(ROOT / "backend"), str(ROOT / "backend/tests")]))
 groups = {
     "reviewed-core": ["test_findings_v2_regression", "test_iteration37_integration_real_mongo", "test_codex_review_gates"],

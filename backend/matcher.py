@@ -628,10 +628,11 @@ def _dedupe_matches(matches):
 
 async def _build_competitor_lookups(db, own_store_id):
     from price_cohort import FIELDS
+    from observation_contract import since_bound
     since = datetime.now(timezone.utc)-timedelta(days=MATCH_WINDOW_DAYS)
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
     rows = await db.product_snapshots.aggregate([
-        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}}},
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since_bound(since)}}},
         {"$sort": {"crawled_at": -1}}, {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
         {"$replaceRoot": {"newRoot": "$row"}}, {"$project": FIELDS},
     ], allowDiskUse=True).to_list(200000)

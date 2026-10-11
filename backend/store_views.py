@@ -5,6 +5,7 @@ import ledger
 from evidence_ledger import sales_map
 from price_cohort import exclusion, identity_keys, FIELDS
 from snapshot_reads import latest_pipeline, complete_latest
+from observation_contract import since_bound
 
 # Unlike cohort observations (annotated from the parent registry), store views
 # also consume persisted exclusion flags. Do not lose them in projections.
@@ -17,7 +18,7 @@ async def latest(db, store_id=None, since=None, projection=None, days=30):
     # in `days` is not a current listing for any store view. Callers whose
     # output already excludes older evidence pass a tighter explicit `since`.
     cutoff = since if since is not None else datetime.now(timezone.utc) - timedelta(days=days)
-    query = {"observation_version": 2, "is_synthetic": False, "crawled_at": {"$gte": cutoff}}
+    query = {"observation_version": 2, "is_synthetic": False, "crawled_at": {"$gte": since_bound(cutoff)}}
     if store_id:
         query["store_id"] = store_id
     return await complete_latest(db, latest_pipeline(query, projection))
@@ -139,7 +140,7 @@ async def market_summary(db, days, price_fn):
     spreads = [c["max"]-c["min"] for c in cohorts.values() if len(c["sellers"]) >= 2]
     since = datetime.now(timezone.utc)-timedelta(days=days)
     previous, drops = {}, 0
-    async for row in db.product_snapshots.find({"observation_version": 2, "is_synthetic": False, "comparable": True, "crawled_at": {"$gte": since}}, {"_id": 0, "offer_id": 1, "price": 1}).sort("crawled_at", 1):
+    async for row in db.product_snapshots.find({"observation_version": 2, "is_synthetic": False, "comparable": True, "crawled_at": {"$gte": since_bound(since)}}, {"_id": 0, "offer_id": 1, "price": 1}).sort("crawled_at", 1):
         oid, price = row["offer_id"], row.get("price")
         if price is not None:
             if oid in previous and 0 < price < previous[oid]:

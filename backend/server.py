@@ -56,6 +56,7 @@ from zid_orders import sync_own_store_orders, aggregate_orders, KSA_TZ as ORDERS
 import zid_oauth  # iter79 — Zid partner-app OAuth (unlocks the Orders API)
 import market_share  # iter79 — Market Share aggregation
 import category_map  # Oct 2026 — one taxonomy across stores for category share
+from observation_contract import since_bound as _v2_since_bound
 import price_cohort
 import my_products_cache
 import comparison_views
@@ -1298,6 +1299,73 @@ async def admin_backfill_status(run_id: Optional[str] = Query(None),
     if not run:
         return {"run": None, "message": "no backfill has been run yet"}
     return {"run": run}
+
+
+@router.post("/admin/recover-captures")
+async def admin_recover_captures(user=Depends(require_super_admin)):
+    """Replay crawl captures whose persistence failed, without re-crawling.
+
+    Every crawl checkpoints its raw rows before persisting them; when the
+    database was too busy to accept the writes (11 Oct 2026: four stores
+    crawled, zero snapshots stored) the captures stay in `crawl_checkpoints`
+    with their ORIGINAL observed_at. This replays them store by store in the
+    background under the same per-store lease a crawl takes, then bumps the
+    observation revision. Progress is recorded in `recovery_runs`.
+    """
+    from crawl_persistence import recover
+    pending = await db.crawl_checkpoints.aggregate([
+        {"$match": {"state": {"$in": ["captured", "enriched", "recovery_required"]}}},
+        {"$group": {"_id": "$store_id", "batches": {"$sum": 1}}}]).to_list(100)
+    if not pending:
+        return {"ok": True, "status": "nothing_to_recover", "stores": []}
+    stores = await db.stores.find({"id": {"$in": [p["_id"] for p in pending]}}, {"_id": 0, "id": 1, "name": 1}).to_list(100)
+    batches = {p["_id"]: p["batches"] for p in pending}
+    run_id = str(uuid.uuid4())
+    run = {"id": run_id, "started_at": datetime.now(timezone.utc).isoformat(), "started_by": user.get("email"),
+           "status": "running",
+           "stores": [{"store_id": s["id"], "name": s["name"], "batches": batches[s["id"]], "status": "queued"} for s in stores]}
+    await db.recovery_runs.insert_one(dict(run))
+
+    async def _run():
+        for s in stores:
+            owner = str(uuid.uuid4())
+            if not await job_control.acquire(db, f"store:{s['id']}", owner):
+                await db.recovery_runs.update_one({"id": run_id, "stores.store_id": s["id"]},
+                                                  {"$set": {"stores.$.status": "deferred", "stores.$.error": "store_job_already_running"}})
+                continue
+            await db.recovery_runs.update_one({"id": run_id, "stores.store_id": s["id"]},
+                                              {"$set": {"stores.$.status": "recovering", "stores.$.started_at": datetime.now(timezone.utc).isoformat()}})
+            try:
+                recovered = await recover(db, s)
+                await db.recovery_runs.update_one({"id": run_id, "stores.store_id": s["id"]},
+                                                  {"$set": {"stores.$.status": "done", "stores.$.recovered_batches": recovered,
+                                                            "stores.$.finished_at": datetime.now(timezone.utc).isoformat()}})
+            except Exception as exc:
+                logger.exception("[Recovery] %s failed", s["name"])
+                detail = getattr(exc, "result", None)
+                await db.recovery_runs.update_one({"id": run_id, "stores.store_id": s["id"]},
+                                                  {"$set": {"stores.$.status": "failed", "stores.$.error": str(exc)[:300],
+                                                            "stores.$.detail": detail if isinstance(detail, dict) else None,
+                                                            "stores.$.finished_at": datetime.now(timezone.utc).isoformat()}})
+            finally:
+                await job_control.release(db, f"store:{s['id']}", owner)
+        await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}}, upsert=True)
+        cache_clear()
+        await db.recovery_runs.update_one({"id": run_id}, {"$set": {"status": "finished", "finished_at": datetime.now(timezone.utc).isoformat()}})
+        logger.info("[Recovery] run %s finished", run_id)
+
+    asyncio.create_task(_run())
+    return {"ok": True, "run_id": run_id, "status": "started",
+            "stores": [{"name": s["name"], "batches": batches[s["id"]]} for s in stores],
+            "poll": "/api/admin/recover-captures/status"}
+
+
+@router.get("/admin/recover-captures/status")
+async def admin_recover_captures_status(run_id: Optional[str] = Query(None), _=Depends(require_super_admin)):
+    q = {"id": run_id} if run_id else {}
+    run = await db.recovery_runs.find_one(q, {"_id": 0}, sort=[("started_at", -1)])
+    pending = await db.crawl_checkpoints.count_documents({"state": {"$in": ["captured", "enriched", "recovery_required"]}})
+    return {"run": run, "pending_batches": pending}
 
 
 class RematchIn(BaseModel):
@@ -5663,7 +5731,7 @@ def _discount_match(since, store_id):
                               "onError": 0, "onNull": 0}}
     _num_price = {"$convert": {"input": "$price", "to": "double",
                                "onError": 0, "onNull": 0}}
-    m = {"crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False, "comparable": True,
+    m = {"crawled_at": {"$gte": _v2_since_bound(since)}, "observation_version": 2, "is_synthetic": False, "comparable": True,
          "confidence_score": {"$gte": 85},
          "$or": [
              {"discount_pct": {"$gt": 0}},
@@ -5880,7 +5948,7 @@ async def discount_aggression(user=Depends(get_user)):
         {"is_active": True}, {"_id": 0, "id": 1, "name": 1, "platform": 1})}
     if not stores:
         return []
-    base = {"crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False, "comparable": True,
+    base = {"crawled_at": {"$gte": _v2_since_bound(since)}, "observation_version": 2, "is_synthetic": False, "comparable": True,
             "confidence_score": {"$gte": 85}}
 
     # iter73 — row-level effective discount: honour `discount_pct` when > 0,
@@ -7160,7 +7228,7 @@ async def generate_market_digest():
     prev_start = since - timedelta(days=7)
 
     # Section 1: Top 5 Price Drops
-    snaps_week = await db.product_snapshots.find({"crawled_at": {"$gte": since}, "observation_version": 2, "is_synthetic": False, "comparable": True, "confidence_score": {"$gte": 85}}, {"_id": 0}).sort("crawled_at", 1).to_list(100000)
+    snaps_week = await db.product_snapshots.find({"crawled_at": {"$gte": _v2_since_bound(since)}, "observation_version": 2, "is_synthetic": False, "comparable": True, "confidence_score": {"$gte": 85}}, {"_id": 0}).sort("crawled_at", 1).to_list(100000)
     by_sku_store = {}
     for s in snaps_week:
         by_sku_store.setdefault((s["offer_id"], s["store_id"]), []).append(s)

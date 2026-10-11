@@ -1,6 +1,30 @@
 """Durable raw capture before optional enrichment; idempotent recovery after interruption."""
+import asyncio
+import logging
 from copy import deepcopy
 from datetime import datetime, timezone
+
+from pymongo.errors import AutoReconnect, ConnectionFailure, ExecutionTimeout, NetworkTimeout
+
+logger = logging.getLogger(__name__)
+# A busy database (cache rebuilds, index builds) made single writes exceed the
+# socket timeout and the whole store's crawl was marked failed with nothing
+# persisted (11 Oct 2026). Every write below is idempotent (event_id upserts,
+# keyed checkpoints), so a transient failure is retried, never skipped.
+TRANSIENT_ERRORS = (NetworkTimeout, AutoReconnect, ConnectionFailure, ExecutionTimeout)
+RETRY_WAITS = (5, 20, 60)
+
+
+async def retry_transient(operation, label):
+    for attempt, wait in enumerate((*RETRY_WAITS, None)):
+        try:
+            return await operation()
+        except TRANSIENT_ERRORS as exc:
+            if wait is None:
+                raise
+            logger.warning("Transient database error during %s (%s); retry %d in %ss",
+                           label, type(exc).__name__, attempt + 1, wait)
+            await asyncio.sleep(wait)
 
 class RecoveryIncomplete(RuntimeError):
     def __init__(self, recovered, unresolved):
@@ -37,8 +61,10 @@ async def recover(db, store):
     async for capture in db.crawl_checkpoints.find({"store_id": store["id"], "state": {"$in": ["captured", "enriched", "recovery_required"]}}).sort("observed_at", 1):
         # The original timestamp and immutable payload survive; no re-dating or fake full-crawl success.
         try:
-            _, snaps = await process_crawled_products(db, store, capture.get("enriched_rows", capture["raw_rows"]), captured_at(capture),
-                                                    tier=capture["tier"], confidence=capture["confidence"])
+            _, snaps = await retry_transient(
+                lambda: process_crawled_products(db, store, capture.get("enriched_rows", capture["raw_rows"]), captured_at(capture),
+                                                 tier=capture["tier"], confidence=capture["confidence"]),
+                f"recover {store.get('name')} {capture['_id']}")
             await db.crawl_checkpoints.update_one({"_id": capture["_id"]}, {"$set": {
                 "state": "persisted" if snaps else "quarantined", "recovered": bool(snaps)}, "$unset": {"recovery_error": ""}})
             count += bool(snaps)
@@ -69,9 +95,12 @@ async def persist(db, store, rows, observed_at, log, tier=1, confidence=95, **en
             if saved["state"] == "persisted":
                 snaps += saved.get("snapshot_count", 0)
                 continue
-            n, s = await process_crawled_products(db, store, saved.get("enriched_rows", saved["raw_rows"]), captured_at(saved), tier=tier, confidence=confidence)
+            n, s = await retry_transient(
+                lambda: process_crawled_products(db, store, saved.get("enriched_rows", saved["raw_rows"]), captured_at(saved), tier=tier, confidence=confidence),
+                f"persist {store.get('name')} chunk {offset}")
             new += n; snaps += s
-            await db.crawl_checkpoints.update_one({"_id": key}, {"$set": {"state": "persisted" if s else "quarantined", "snapshot_count": s}, "$unset": {"recovery_error": ""}})
+            await retry_transient(lambda: db.crawl_checkpoints.update_one({"_id": key}, {"$set": {"state": "persisted" if s else "quarantined", "snapshot_count": s}, "$unset": {"recovery_error": ""}}),
+                                  f"checkpoint {key}")
     except Exception as exc:
         issue = await mark_unresolved(db, key, exc)
         log.update(error=f"Observation persistence failed: {type(exc).__name__}", complete=False, recovery_required=issue)

@@ -1,7 +1,9 @@
 """Evidence contract v2. Unknown is None; discovery keys never carry prices."""
 import hashlib
 import json
+import os
 import re
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 VERSION = 2
@@ -171,3 +173,29 @@ def normalize_offer(raw, store_name):
                 variant_skus=[sku], variant_barcodes=[barcode] if barcode else [],
                 observation_version=VERSION, is_synthetic=False, data_origin="store_observation",
                 comparable=not reasons, quarantine_reasons=reasons, present_on_store=not hidden)
+
+
+# Observation contract v2 went live on 2026-10-07 (commit 558861e); nothing
+# written before that date carries observation_version 2, so every v2 read can
+# stop at this bound instead of scanning months of legacy snapshots. On
+# production (8.45M snapshots) the unbounded 90-day cohort scan starved the
+# database until even the crawl's own writes timed out (11 Oct 2026).
+OBSERVATIONS_V2_SINCE_DEFAULT = "2026-10-07T00:00:00+00:00"
+
+
+def v2_since():
+    raw = os.environ.get("OBSERVATIONS_V2_SINCE") or OBSERVATIONS_V2_SINCE_DEFAULT
+    try:
+        ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        ts = datetime.fromisoformat(OBSERVATIONS_V2_SINCE_DEFAULT)
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
+def since_bound(since):
+    """Lower crawl-date bound for reads that only use v2 observations."""
+    if since is None:
+        return v2_since()
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    return max(since, v2_since())

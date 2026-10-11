@@ -4,6 +4,7 @@ from observation_contract import gtin, money, stable_id, TRUSTED_PRICE_BASES
 from pack_guard import slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers, discount_escapes
 from price_read_limits import query_max_ms, bounded_read
 from cohort_reads import read_cohort_snapshots
+from observation_contract import since_bound
 
 POLICY_VERSION = "offers-v3-parent-aware-current-7d"
 FIELDS = {k: 1 for k in ("sku", "barcode", "store_id", "store_name", "offer_id", "listing_id", "variant_id", "name_ar", "name_en", "price", "currency", "price_basis", "in_stock", "qty_available", "product_url", "crawled_at", "observation_version", "confidence_score", "comparable", "is_synthetic", "present_on_store", "variant_skus", "variant_barcodes")}
@@ -145,7 +146,7 @@ def snapshot_pipeline(active, now):
     # Project BEFORE $$ROOT grouping so unused crawl payloads cannot fill it.
     # Latest selection still precedes all identity/stock/eligibility filtering.
     return [
-        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": now-timedelta(days=cohort_history_days())}}},
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since_bound(now-timedelta(days=cohort_history_days()))}}},
         {"$sort": {"crawled_at": -1}},
         {"$project": FIELDS},
         {"$group": {"_id": {"$ifNull": ["$offer_id", {"store": "$store_id", "sku": "$sku"}]},

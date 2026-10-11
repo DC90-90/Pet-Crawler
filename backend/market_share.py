@@ -41,6 +41,7 @@ from price_cohort import FIELDS, build_cohorts, identity_agrees
 from stock_evidence import own_stock
 from price_cohort import exclusion
 from snapshot_reads import complete_latest
+from observation_contract import since_bound
 from pack_guard import (
     slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers,
 )
@@ -193,7 +194,7 @@ def _latest_snapshot_pipeline(active, since):
     # Keep the established post-group projection: moving this many fields
     # before grouping added work for every historical row in local benchmarks.
     return [
-        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since}, "offer_id": {"$type": "string"}}},
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since_bound(since)}, "offer_id": {"$type": "string"}}},
         {"$sort": {"crawled_at": -1}}, {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
         {"$replaceRoot": {"newRoot": "$row"}}, {"$project": FIELDS},
     ]
