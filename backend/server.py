@@ -2631,7 +2631,11 @@ MIN_SNAPSHOT_PAIRS_FOR_SALES = 2  # need at least 2 valid deltas before any sale
 # BSON round-trip can't perturb a value), and the endpoint applies the identical
 # sort + pagination on top.
 DASHBOARD_CACHE_STD_WINDOWS = (7, 14, 30, 90)
-DASHBOARD_CACHE_MAX_AGE_SECS = 300  # live prices must not inherit a day-old cache
+# A cached dataset is served only while its source revision still matches
+# (every crawl and sync bumps the revision, which triggers a rebuild). The
+# age ceiling is a second guard; 300 s made the cache unusable between the
+# twice-daily data changes and pushed every request onto the live path.
+DASHBOARD_CACHE_MAX_AGE_SECS = int(os.environ.get("DASHBOARD_CACHE_MAX_AGE_SECS", "21600"))
 _LAST_DASHBOARD_RECOMPUTE = None           # module-level debounce for crawl bursts
 
 
@@ -2668,8 +2672,12 @@ async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     for w in windows:
         t0 = _t.time()
         from price_read_limits import bounded_read
+        # Background budget: this is the rebuild that makes the request path
+        # a cache hit; under the 20 s request budget it never finished on
+        # production and every page fell back to a live compute.
         ds = await bounded_read(my_products_cache.compute_dataset(db,
-            lambda: _my_products_dataset(db, w, None, None, None, None, None, None, True)))
+            lambda: _my_products_dataset(db, w, None, None, None, None, None, None, True),
+            max_age=DASHBOARD_CACHE_MAX_AGE_SECS), background=True)
         await _store_dashboard_cache(db, w, ds)
         stats[w] = {"rows": ds["total"], "secs": round(_t.time() - t0, 2)}
     _LAST_DASHBOARD_RECOMPUTE = datetime.now(timezone.utc)
@@ -2709,16 +2717,62 @@ def _page_cache_key(base: str, days=None) -> str:
     return f"{base}:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:{ledger.ksa_day_str(datetime.now(timezone.utc))}:days={days}"
 
 
+PAGE_CACHE_INLINE_LIMIT = 12 * 1024 * 1024   # BSON document ceiling is 16 MB; keep headroom
+PAGE_CACHE_CHUNK_BYTES = 12 * 1024 * 1024
+
+
+def _page_cache_pack(payload):
+    """JSON → zlib bytes. Market Share's dataset exceeded 16 MB as one BSON
+    document on production (DocumentTooLarge), so large payloads are stored
+    compressed and, beyond the inline limit, as ordered chunks."""
+    import json
+    import zlib
+    return zlib.compress(json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"), 6)
+
+
+def _page_cache_unpack(blob):
+    import json
+    import zlib
+    return json.loads(zlib.decompress(bytes(blob)).decode("utf-8"))
+
+
 async def _store_page_cache(db, base, days, payload):
+    from bson import Binary
     now = datetime.now(timezone.utc)
     revision = await db.data_versions.find_one({"_id": "observations"}) or {}
-    await db.dashboard_cache.replace_one(
-        {"key": _page_cache_key(base, days)},
-        {"key": _page_cache_key(base, days), "base": base, "window_days": days,
-         "computed_at": now, "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at"), "payload": jsonable_encoder(payload)},
-        upsert=True,
-    )
+    key = _page_cache_key(base, days)
+    blob = _page_cache_pack(jsonable_encoder(payload))
+    doc = {"key": key, "base": base, "window_days": days, "computed_at": now,
+           "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at"),
+           "encoding": "zlib-json", "size_bytes": len(blob)}
+    # Chunks are written before the head document so a reader never sees a
+    # head that points at chunks that do not exist yet.
+    await db.dashboard_cache_chunks.delete_many({"key": key})
+    if len(blob) <= PAGE_CACHE_INLINE_LIMIT:
+        doc["payload_zlib"] = Binary(blob)
+    else:
+        parts = [blob[i:i + PAGE_CACHE_CHUNK_BYTES] for i in range(0, len(blob), PAGE_CACHE_CHUNK_BYTES)]
+        for n, part in enumerate(parts):
+            await db.dashboard_cache_chunks.replace_one(
+                {"key": key, "n": n}, {"key": key, "n": n, "computed_at": now, "payload_zlib": Binary(part)}, upsert=True)
+        doc["chunks"] = len(parts)
+    await db.dashboard_cache.replace_one({"key": key}, doc, upsert=True)
     return now
+
+
+async def _load_page_cache_payload(db, doc):
+    """Payload for a page-cache head document: inline JSON (legacy), inline
+    zlib, or ordered chunks. None when any part is missing."""
+    if "payload" in doc:
+        return doc["payload"]
+    if doc.get("payload_zlib") is not None:
+        return _page_cache_unpack(doc["payload_zlib"])
+    if doc.get("chunks"):
+        parts = await db.dashboard_cache_chunks.find({"key": doc["key"]}, {"_id": 0, "n": 1, "payload_zlib": 1}).sort("n", 1).to_list(1000)
+        if len(parts) != doc["chunks"] or [p["n"] for p in parts] != list(range(doc["chunks"])):
+            return None
+        return _page_cache_unpack(b"".join(bytes(p["payload_zlib"]) for p in parts))
+    return None
 
 
 async def _serve_page_cache(db, base, days, compute, cacheable=True):
@@ -2738,7 +2792,7 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
         doc = await db.dashboard_cache.find_one({"key": _page_cache_key(base, days)})
     except Exception:
         doc = None
-    if doc is not None and doc.get("computed_at") is not None and "payload" in doc:
+    if doc is not None and doc.get("computed_at") is not None and ("payload" in doc or doc.get("payload_zlib") is not None or doc.get("chunks")):
         ca = doc["computed_at"]
         if not isinstance(ca, datetime):
             try:
@@ -2751,8 +2805,15 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
             age = (now - ca).total_seconds()
             revision = await db.data_versions.find_one({"_id": "observations"}) or {}
             if 0 <= age <= DASHBOARD_CACHE_MAX_AGE_SECS and doc.get("source_revision") == revision.get("revision", 0):
-                return doc["payload"], {"source": "cache", "computed_at": ca.isoformat(),
-                                        "age_seconds": round(age, 1), "stale": False}
+                try:
+                    payload = await _load_page_cache_payload(db, doc)
+                except Exception:
+                    logger.exception("[PageCache] unreadable cache entry for %s — computing live", base)
+                    payload = None
+                if payload is not None:
+                    return payload, {"source": "cache", "computed_at": ca.isoformat(),
+                                     "age_seconds": round(age, 1), "stale": False}
+    _cache_miss_or_rebuild()
     body = await compute()
     return body, {"source": "live_fallback", "computed_at": now.isoformat(),
                   "age_seconds": 0.0, "stale": False}
@@ -2785,11 +2846,13 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     import time as _t
     global _LAST_PAGE_CACHE_RECOMPUTE
     stats = {}
+    from price_read_limits import bounded_read as _bounded
     for base, compute in _WINDOW_CACHE_SPECS:
         for w in windows:
             t0 = _t.time()
             try:
-                payload = await compute(db, w)
+                # Background budget: nested bounded reads inherit it.
+                payload = await _bounded(compute(db, w), background=True)
                 await _store_page_cache(db, base, w, payload)
                 stats[f"{base}#{w}"] = round(_t.time() - t0, 2)
             except Exception as e:
@@ -2798,7 +2861,7 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     for base, compute in _SINGLE_CACHE_SPECS:
         t0 = _t.time()
         try:
-            payload = await compute(db)
+            payload = await _bounded(compute(db), background=True)
             await _store_page_cache(db, base, None, payload)
             stats[base] = round(_t.time() - t0, 2)
         except Exception as e:
@@ -2807,6 +2870,48 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     _LAST_PAGE_CACHE_RECOMPUTE = datetime.now(timezone.utc)
     logger.info(f"[PageCache] recomputed insights/price-intel: {stats}")
     return stats
+
+
+# What a request does when its cache entry is missing or stale.
+#   live    — compute on the request path (fine for small databases, tests, preview)
+#   rebuild — answer 503 "price_cache_rebuilding" at once and start ONE
+#             background rebuild under the background budget. On production
+#             (8.45M snapshots, 11 Oct 2026) the live path can never finish in
+#             the request budget, so every visit burned 20 s of database time
+#             and still showed a timeout.
+CACHE_MISS_POLICY = os.environ.get("CACHE_MISS_POLICY", "live").strip().lower()
+_CACHE_REBUILD_TASK = None
+
+
+def _cache_miss_live_allowed():
+    from price_read_limits import in_background
+    return CACHE_MISS_POLICY != "rebuild" or in_background()
+
+
+def _schedule_cache_rebuild():
+    """Start one background rebuild of the dashboard and page caches if none is
+    running. Returns True when a rebuild was started."""
+    global _CACHE_REBUILD_TASK
+    if _CACHE_REBUILD_TASK is not None and not _CACHE_REBUILD_TASK.done():
+        return False
+
+    async def _run():
+        await maybe_recompute_dashboard_cache(db, force=True)
+        await maybe_recompute_page_caches(db, force=True)
+
+    _CACHE_REBUILD_TASK = asyncio.create_task(_run())
+    logger.info("[Cache] background rebuild started on request miss (policy=rebuild)")
+    return True
+
+
+def _cache_miss_or_rebuild():
+    """Raise the 'rebuilding' unavailable result (and kick the rebuild) when the
+    policy forbids a live compute on the request path."""
+    if _cache_miss_live_allowed():
+        return
+    _schedule_cache_rebuild()
+    from price_read_limits import unavailable
+    raise unavailable("price_cache_rebuilding")
 
 
 async def maybe_recompute_page_caches(db, min_interval_secs=600, force=False):
@@ -3483,8 +3588,12 @@ async def my_products(
         and days in DASHBOARD_CACHE_STD_WINDOWS
     )
 
-    dataset, cache_meta = await my_products_cache.serve(db, _dashboard_cache_key(days),
-        lambda: _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only),
+    async def _compute_on_miss():
+        if _cacheable:
+            _cache_miss_or_rebuild()
+        return await _my_products_dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only)
+
+    dataset, cache_meta = await my_products_cache.serve(db, _dashboard_cache_key(days), _compute_on_miss,
         max_age=DASHBOARD_CACHE_MAX_AGE_SECS, cacheable=_cacheable)
 
     # Sort (presentation) + pagination — identical to the pre-cache endpoint, so

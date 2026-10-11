@@ -3,7 +3,7 @@
 No row cap, stale-result fallback or implicit historical window. Callers opt
 into a time range only where their existing output already rejects older data.
 """
-from price_read_limits import SNAPSHOT_QUERY_MAX_MS, bounded_read, close_read_cursor, read_budget_expired
+from price_read_limits import query_max_ms, bounded_read, close_read_cursor, read_budget_expired
 import asyncio
 from pymongo.errors import PyMongoError
 
@@ -22,7 +22,7 @@ def latest_pipeline(query, projection=None):
 async def complete_latest(db, pipeline):
     async def read():
         cursor = db.product_snapshots.aggregate(pipeline, allowDiskUse=True,
-                    maxTimeMS=SNAPSHOT_QUERY_MAX_MS)
+                    maxTimeMS=query_max_ms())
         try:
             return [row async for row in cursor]
         except (PyMongoError, TimeoutError, asyncio.CancelledError) as exc:

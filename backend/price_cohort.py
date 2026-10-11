@@ -2,7 +2,7 @@
 from datetime import datetime, timezone, timedelta
 from observation_contract import gtin, money, stable_id, TRUSTED_PRICE_BASES
 from pack_guard import slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers, discount_escapes
-from price_read_limits import SNAPSHOT_QUERY_MAX_MS, bounded_read
+from price_read_limits import query_max_ms, bounded_read
 from cohort_reads import read_cohort_snapshots
 
 POLICY_VERSION = "offers-v3-parent-aware-current-7d"
@@ -129,12 +129,23 @@ def select_cohort(own, rows, own_price, *, now=None, history=()):
                 cutoff=(now-timedelta(days=max_offer_age_days())).isoformat(), currency="SAR", stock_policy="in_stock_only")
 
 
+def cohort_history_days():
+    """How far back the cohort read looks for discount corroboration and the
+    historical maximum price. 180 days scanned ~1M production snapshots per
+    request; 90 keeps a full quarter of history at half the cost."""
+    import os
+    try:
+        return max(max_offer_age_days() + 1, int(os.environ.get("COHORT_HISTORY_DAYS", "90")))
+    except ValueError:
+        return 90
+
+
 def snapshot_pipeline(active, now):
-    # Keep the full 180-day discount corroboration/excluded-seller history.
+    # Keep the discount corroboration/excluded-seller history window.
     # Project BEFORE $$ROOT grouping so unused crawl payloads cannot fill it.
     # Latest selection still precedes all identity/stock/eligibility filtering.
     return [
-        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": now-timedelta(days=180)}}},
+        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": now-timedelta(days=cohort_history_days())}}},
         {"$sort": {"crawled_at": -1}},
         {"$project": FIELDS},
         {"$group": {"_id": {"$ifNull": ["$offer_id", {"store": "$store_id", "sku": "$sku"}]},
@@ -192,7 +203,7 @@ async def _build_cohorts(db, own_rows, own_store_id, own_price_fn, now, competit
     if competitor_store_ids is not None:
         active = [sid for sid in active if sid in competitor_store_ids]
     rows = await read_cohort_snapshots(db, active, now, snapshot_pipeline,
-                                      max_time_ms=SNAPSHOT_QUERY_MAX_MS)
+                                      max_time_ms=query_max_ms())
     valid_until = min([freshness_transition(stamp, now) for r in own_rows
                        for stamp in (r.get("last_synced_at"), r.get("quantity_observed_at") or r.get("last_synced_at"))],
                       default=now+timedelta(days=max_offer_age_days()))
@@ -202,7 +213,7 @@ async def _build_cohorts(db, own_rows, own_store_id, own_price_fn, now, competit
     for row in rows:
         oldest = aware(row.pop("history_oldest_at", None))
         valid_until = min(valid_until, freshness_transition(row.get("crawled_at"), now),
-                          oldest+timedelta(days=180) if oldest else valid_until)
+                          oldest+timedelta(days=cohort_history_days()) if oldest else valid_until)
         row = annotate(apply_brand_review(row, reviewed), parents)
         candidates = set(manual_by_offer.get((row["store_id"], row.get("offer_id")), ()))
         for key in identity_keys(row):
