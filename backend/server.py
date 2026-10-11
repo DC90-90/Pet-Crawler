@@ -2629,6 +2629,10 @@ DASHBOARD_CACHE_STD_WINDOWS = (7, 14, 30, 90)
 # twice-daily data changes and pushed every request onto the live path.
 DASHBOARD_CACHE_MAX_AGE_SECS = int(os.environ.get("DASHBOARD_CACHE_MAX_AGE_SECS", "21600"))
 _LAST_DASHBOARD_RECOMPUTE = None           # module-level debounce for crawl bursts
+# One rebuild at a time: the boot warm-up, a request miss and a crawl
+# completion all used to start their own full pass over the snapshot
+# collection concurrently, each slowing the others past their budgets.
+_REBUILD_LOCK = asyncio.Lock()
 
 
 def _dashboard_cache_key(days: int) -> str:
@@ -2662,7 +2666,8 @@ async def recompute_dashboard_cache(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     import time as _t
     global _LAST_DASHBOARD_RECOMPUTE
     stats = {}
-    for w in windows:
+    async with _REBUILD_LOCK:
+      for w in windows:
         t0 = _t.time()
         from price_read_limits import bounded_read
         _rebuild_mark(f"dashboard:{w}d", "running")
@@ -2811,7 +2816,8 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     global _LAST_PAGE_CACHE_RECOMPUTE
     stats = {}
     from price_read_limits import bounded_read as _bounded
-    for base, compute in _WINDOW_CACHE_SPECS:
+    async with _REBUILD_LOCK:
+      for base, compute in _WINDOW_CACHE_SPECS:
         for w in windows:
             t0 = _t.time()
             try:
@@ -2824,7 +2830,7 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
                 stats[f"{base}#{w}"] = f"ERROR: {str(e)[:80]}"
                 logger.exception(f"[PageCache] recompute failed for {base} @ {w}d")
             _rebuild_mark(f"page:{base}:{w}d", stats[f"{base}#{w}"])
-    for base, compute in _SINGLE_CACHE_SPECS:
+      for base, compute in _SINGLE_CACHE_SPECS:
         t0 = _t.time()
         try:
             payload = await _bounded(compute(db), background=True)
@@ -12001,15 +12007,10 @@ async def _boot_sequence():
         # iter30 — backfill the metric rollup/coverage collections FIRST so the
         # page-cache warm-up below reads populated metrics (drops/gaps/spread).
         await _maybe_backfill_store_metrics(db)
-        try:
-            await recompute_dashboard_cache(db)
-        except Exception:
-            logger.exception("[DashboardCache] startup warm-up failed (will populate on first request)")
-        # iter26 — warm the Insights / Price-Intel caches too.
-        try:
-            await recompute_page_caches(db)
-        except Exception:
-            logger.exception("[PageCache] startup warm-up failed (will populate on first request)")
+        # One tracked rebuild (dashboard, then pages), visible on
+        # /api/admin/cache-rebuild-status; a request miss arriving meanwhile
+        # joins it instead of starting a second full pass.
+        _schedule_cache_rebuild(trigger="boot")
     asyncio.create_task(_warm_dashboard_cache())
 
     # ── Playwright Chromium AGGRESSIVE self-heal (Feb 2026 production deploy fix v2) ─
