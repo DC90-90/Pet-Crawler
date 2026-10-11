@@ -1789,8 +1789,16 @@ def get_next_run(store_id):
 async def list_stores(user=Depends(get_user)):
     stores = await db.stores.find({}, {"_id": 0}).sort("name", 1).to_list(100)
     for s in stores:
-        s["product_count"] = await db.product_snapshots.distinct("sku", {"store_id": s["id"]})
-        s["product_count"] = len(s["product_count"])
+        # Was `distinct("sku")` over the whole snapshot collection per store:
+        # at 8.45M snapshots that answered 500 after 10 s on production. The
+        # catalogue size is the number of offers known for the store, with the
+        # last crawl's count as the fallback.
+        try:
+            s["product_count"] = await db.products.count_documents({"store_id": s["id"]}, maxTimeMS=3000)
+        except Exception:
+            last_log = await db.crawl_logs.find_one({"store_id": s["id"], "products_found": {"$gt": 0}},
+                                                    {"_id": 0, "products_found": 1}, sort=[("completed_at", -1)])
+            s["product_count"] = int((last_log or {}).get("products_found") or 0)
         s["next_crawl_at"] = get_next_run(s["id"])
         # Daily cron schedule (Feb 2026) — every store crawls once per day at
         # its assigned 04:00–04:55 KSA slot. Surface the assigned slot so the
