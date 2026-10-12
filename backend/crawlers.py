@@ -1107,16 +1107,16 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
         norm["offer_id"] = offer_id
         if not norm["comparable"]:
             await db.observation_quarantine.update_one(
-                {"event_id": stable_id(offer_id, now.isoformat())},
-                {"$setOnInsert": {**norm, "store_id": store["id"], "observed_at": now,
+                {"_id": stable_id(offer_id, now.isoformat())},
+                {"$setOnInsert": {**norm, "event_id": stable_id(offer_id, now.isoformat()), "store_id": store["id"], "observed_at": now,
                                    "ingested_at": datetime.now(timezone.utc)}}, upsert=True)
             marker = {**norm, "store_id": store["id"], "store_name": store["name"],
                       "event_id": stable_id(offer_id, now.isoformat()), "crawled_at": now,
                       "qty_available": norm.get("qty"), "confidence_score": confidence,
                       "quarantined": True, "source_tier": tier}
-            inserted = await db.product_snapshots.update_one({"event_id": marker["event_id"]}, {"$setOnInsert": marker}, upsert=True)
+            inserted = await db.product_snapshots.update_one({"_id": marker["event_id"]}, {"$setOnInsert": marker}, upsert=True)
             from evidence_ledger import record
-            persisted = marker if inserted.upserted_id else await db.product_snapshots.find_one({'event_id': marker['event_id']}, {'_id': 0})
+            persisted = marker if inserted.upserted_id else await db.product_snapshots.find_one({'_id': marker['event_id']}, {'_id': 0})
             await record(db, persisted)
             continue
         product_url = _absolutize_url(norm.get("product_url"), store_domain)
@@ -1232,9 +1232,14 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "confidence_score": confidence,
             "crawled_at": now,
         }
-        result = await db.product_snapshots.update_one({"event_id": snapshot["event_id"]}, {"$setOnInsert": snapshot}, upsert=True)
+        # Keyed on _id (always indexed), not on the event_id field: production's
+        # 8.45M-row collection has no event_id index (Atlas drops the connection
+        # while building it), so every upsert scanned the whole collection and
+        # competitor persistence timed out from 9 Oct 2026. The event_id is the
+        # document _id, so the idempotent replay guarantee is unchanged.
+        result = await db.product_snapshots.update_one({"_id": snapshot["event_id"]}, {"$setOnInsert": snapshot}, upsert=True)
         from evidence_ledger import record
-        persisted = snapshot if result.upserted_id else await db.product_snapshots.find_one({'event_id': snapshot['event_id']}, {'_id': 0})
+        persisted = snapshot if result.upserted_id else await db.product_snapshots.find_one({'_id': snapshot['event_id']}, {'_id': 0})
         await record(db, persisted)
         # Replay the persisted evidence, not a retry's potentially changed payload.
         # Daily ledger writes are idempotent; retry must repair a prior interrupted write.
