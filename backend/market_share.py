@@ -62,6 +62,11 @@ REASON_NO_SIGNAL = "store_publishes_no_sales_signal"
 REASON_ONE_CRAWL = "fewer_than_two_crawls_in_window"
 REASON_NO_SELLER_DATA = "no_seller_in_this_market_has_sales_data"
 REASON_NOT_CRAWLED = "store_not_crawled_in_window"
+# The store does publish stock or a sold counter, but this product has not
+# been observed twice with valid evidence inside the window yet. This used to
+# fall through to REASON_NO_SIGNAL, which told the user that stores with exact
+# Zid stock "publish neither a sold counter nor stock levels" (12 Oct 2026).
+REASON_NO_INTERVAL = "no_observed_interval_for_product"
 
 # Match strength per identity key class — the strongest key that linked a
 # competitor listing to one of our products.
@@ -280,7 +285,9 @@ def _resolve_units(pair, sales, store_signals, is_own, own_units):
     if sg.get("days_observed", 0) < 2:
         return None, None, SRC_NONE, REASON_ONE_CRAWL
     # Store-wide capability is not evidence that this product was observed twice.
-    return None, None, SRC_NONE, REASON_NO_SIGNAL
+    if sg.get("signal", "none") == "none":
+        return None, None, SRC_NONE, REASON_NO_SIGNAL
+    return None, None, SRC_NONE, REASON_NO_INTERVAL
 
 
 def _row_confidence(sellers, my_source, fresh_days=FRESH_DAYS, now=None):
@@ -680,6 +687,12 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     my_products = []
     for sku, mp in my_by_sku.items():
         sellers = mine.get(sku, [])
+        # A variant parent (the size-group page) is not a sellable item: its
+        # sizes are their own rows. Shown as a product it had no price, stock
+        # or category and inflated the catalogue count (327 rows on 12 Oct
+        # 2026). Kept when a competitor is linked to it, so no evidence is lost.
+        if mp.get("known_variant_parent") and not any(not x.get("is_own") for x in sellers):
+            continue
         cat_row = mp
         name_ar = mp.get("name_ar") or cat_row.get("name_ar") or ""
         name_en = mp.get("name_en") or cat_row.get("name_en") or ""
@@ -948,7 +961,7 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
             "generated_at": now,
         },
         "kpis": summarize(my_products, missing, store_rows,
-                          catalog_total=len(my_by_sku),
+                          catalog_total=len(my_products),
                           orders_connected=orders_by_sku is not None,
                           missing_total=missing_total,
                           brands=len(brand_rows), categories=len(category_rows)),

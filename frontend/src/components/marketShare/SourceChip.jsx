@@ -36,6 +36,7 @@ export const SOURCE_META = {
 export const REASON_TEXT = {
   store_publishes_no_sales_signal: "This store publishes neither a sold counter nor stock levels",
   fewer_than_two_crawls_in_window: "Only one crawl in this window — a change needs two",
+  no_observed_interval_for_product: "Not yet observed twice in this window — sales are measured between two clean crawls of the same product",
   no_seller_in_this_market_has_sales_data: "No eligible observation intervals for this product in the selected window",
   store_not_crawled_in_window: "Store was not crawled in this window",
 };

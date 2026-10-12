@@ -151,7 +151,9 @@ def test_resolve_units_does_not_infer_product_zero_from_store_capability():
         ("storeA", "SKU-X"), {}, {"storeA": {"days_observed": 10, "signal": "stock"}}, False, None
     )
     assert units is None and rev is None and source == market_share.SRC_NONE
-    assert reason == market_share.REASON_NO_SIGNAL
+    # The store publishes stock, so the honest reason is that THIS product has
+    # no observed interval yet, not that the store has no signal (12 Oct 2026).
+    assert reason == market_share.REASON_NO_INTERVAL
 
 
 def test_share_summary_withholds_when_numerator_missing():
