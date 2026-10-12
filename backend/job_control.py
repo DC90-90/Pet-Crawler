@@ -5,18 +5,63 @@ from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
 
 
+# A lease is held for LEASE_TTL and renewed every LEASE_RENEW_SECS by the
+# process that holds it, up to the caller's maximum (`hours`). A holder that
+# dies (every release restarts the backend) stops renewing, so its lease frees
+# within LEASE_TTL instead of blocking cache rebuilds for an hour and store
+# crawls for three (12 Oct 2026).
+LEASE_TTL = timedelta(minutes=10)
+LEASE_RENEW_SECS = 60
+_renewals = {}   # (key, owner) -> asyncio.Task
+
+
 async def acquire(db, key, owner, hours=3):
     now = datetime.now(timezone.utc)
+    limit = now + timedelta(hours=hours)
     try:
         result = await db.job_leases.update_one(
             {"_id": key, "$or": [{"expires_at": {"$lte": now}}, {"owner": owner}]},
-            {"$set": {"owner": owner, "expires_at": now+timedelta(hours=hours)}}, upsert=True)
-        return bool(result.upserted_id or result.modified_count)
+            {"$set": {"owner": owner, "expires_at": min(limit, now + LEASE_TTL), "max_until": limit,
+                      "renewed_at": now}}, upsert=True)
+        held = bool(result.upserted_id or result.modified_count)
     except DuplicateKeyError:
         return False
+    if held:
+        _start_renewal(db, key, owner, limit)
+    return held
+
+
+def _start_renewal(db, key, owner, limit):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    previous = _renewals.pop((key, owner), None)
+    if previous is not None:
+        previous.cancel()
+
+    async def renew():
+        while True:
+            await asyncio.sleep(LEASE_RENEW_SECS)
+            now = datetime.now(timezone.utc)
+            if now >= limit:
+                return
+            try:
+                result = await db.job_leases.update_one(
+                    {"_id": key, "owner": owner},
+                    {"$set": {"expires_at": min(limit, now + LEASE_TTL), "renewed_at": now}})
+            except Exception:  # noqa: BLE001 — retry on the next tick
+                continue
+            if not result.matched_count:
+                return   # released or taken over
+
+    _renewals[(key, owner)] = loop.create_task(renew())
 
 
 async def release(db, key, owner):
+    task = _renewals.pop((key, owner), None)
+    if task is not None:
+        task.cancel()
     await db.job_leases.delete_one({"_id": key, "owner": owner})
 
 
