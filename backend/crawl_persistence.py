@@ -54,11 +54,38 @@ async def checkpoint(db, store, rows, observed_at, run_id, tier, confidence):
     return keys
 
 
+SEALED_REASON = "sealed_history_requires_reconciliation"
+
+
+def _sealed_only_result(type_name, result):
+    if type_name != "LedgerIncomplete" or not isinstance(result, dict) or result.get("skipped"):
+        return False
+    errors = result.get("errors") or []
+    return bool(errors or result.get("rejected_sealed")) and all(e.get("reason") == SEALED_REASON for e in errors)
+
+
+def sealed_ledger_only(exc):
+    """Only the daily ledger refused the replay because that KSA day is sealed;
+    the capture's snapshots and observation events are stored."""
+    return _sealed_only_result(type(exc).__name__, getattr(exc, "result", None))
+
+
+def awaiting_reconciliation(capture):
+    """A capture already replayed once whose only problem is a sealed ledger
+    day. It stays `recovery_required` (sealed history changes only through an
+    explicit reconciliation) but is not replayed again on every crawl: each
+    replay rewrote nothing and cost minutes per store (12 Oct 2026)."""
+    issue = capture.get("recovery_error") or {}
+    return capture.get("state") == "recovery_required" and _sealed_only_result(issue.get("type"), issue.get("detail"))
+
+
 async def recover(db, store):
     from crawlers import process_crawled_products
     count = 0
     unresolved = []
     async for capture in db.crawl_checkpoints.find({"store_id": store["id"], "state": {"$in": ["captured", "enriched", "recovery_required"]}}).sort("observed_at", 1):
+        if awaiting_reconciliation(capture):
+            continue
         # The original timestamp and immutable payload survive; no re-dating or fake full-crawl success.
         try:
             _, snaps = await retry_transient(

@@ -4136,8 +4136,17 @@ async def _crawl_store_waterfall_locked(db, store):
     if store.get("is_own_store"):
         return await sync_own_store_prices(db, store=store)
 
-    from crawl_persistence import recover
-    await recover(db, store)
+    from crawl_persistence import recover, RecoveryIncomplete
+    recovery_issue = None
+    try:
+        await recover(db, store)
+    except RecoveryIncomplete as exc:
+        # Unresolved earlier captures stay retained and visible; they must not
+        # stop today's crawl (12 Oct 2026: every store's crawl would abort on
+        # the same old batches). Ledger ordering is handled by late_observations.
+        recovery_issue = exc.result
+        logger.warning("[Crawl] %s: %d earlier captures still need recovery; crawling anyway",
+                       store.get("name"), len(exc.result.get("unresolved") or []))
     platform = store.get("platform", "").lower()
     tier1_only = bool(store.get("tier1_only"))
     storefront_strategy = bool(store.get("use_storefront_categories"))
