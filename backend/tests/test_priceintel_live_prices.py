@@ -212,7 +212,7 @@ def test_dashboard_gap_agrees_with_my_products_for_the_same_pair():
 # ── the recompute path picks the new logic up (cache, task item 6) ──────────
 
 def test_dashboard_cache_spec_recomputes_through_the_new_compute():
-    assert any(base == "price-intel/dashboard" for base, _f in server._SINGLE_CACHE_SPECS)
+    assert any(base == "price-intel/dashboard:{scope}" for base, _f in server._SINGLE_CACHE_SPECS)
     import inspect
     src = inspect.getsource(server._price_intel_dashboard_compute)
     assert "_resolve_match_prices" in src

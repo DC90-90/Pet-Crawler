@@ -1421,6 +1421,9 @@ async def admin_page_cache_probe(base: str = Query("market-share/dataset"), days
     whether the entry exists, its age, stored vs current revision, the blob
     encoding and whether it decodes. Read-only."""
     from investigation_status import build_identity
+    if base in ("market-share/dataset", "price-intel/dashboard"):
+        base = f"{base}:{await _default_scope_id(db)}"
+        days = None if base.startswith("price-intel/") else days
     key = _page_cache_key(base, days)
     doc = await db.dashboard_cache.find_one({"key": key})
     revision = await db.data_versions.find_one({"_id": "observations"}, {"_id": 0}) or {}
@@ -1430,6 +1433,8 @@ async def admin_page_cache_probe(base: str = Query("market-share/dataset"), days
            "entries_for_base": [d["key"] for d in await db.dashboard_cache.find({"base": base}, {"_id": 0, "key": 1}).to_list(50)]}
     if doc is not None:
         ca = doc.get("computed_at")
+        if isinstance(ca, datetime) and ca.tzinfo is None:
+            ca = ca.replace(tzinfo=timezone.utc)
         out.update(computed_at=str(ca), source_revision=doc.get("source_revision"), encoding=doc.get("encoding"),
                    size_bytes=doc.get("size_bytes"), chunks=doc.get("chunks"),
                    age_secs=round((datetime.now(timezone.utc) - ca).total_seconds(), 1) if isinstance(ca, datetime) else None,
@@ -2977,6 +2982,13 @@ _WINDOW_CACHE_SPECS = []   # list of (base, compute(db, days))
 _SINGLE_CACHE_SPECS = []   # list of (base, compute(db))
 
 
+async def _default_scope_id(db):
+    """scope_id of the default 'all tracked competitors' comparison, exactly as
+    the request path computes it (comparison_scope.resolve)."""
+    from comparison_scope import resolve
+    return (await resolve(db, "all", None))["scope_id"]
+
+
 async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     """Recompute + store every Insights / Price-Intel cache entry. Each spec is
     a bounded aggregation (iter26 hardening); a failure in one endpoint is
@@ -2985,8 +2997,10 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
     global _LAST_PAGE_CACHE_RECOMPUTE
     stats = {}
     from price_read_limits import bounded_read as _bounded
+    default_scope = await _default_scope_id(db)
     async with _REBUILD_LOCK:
       for base, compute in _WINDOW_CACHE_SPECS:
+        base = base.replace("{scope}", default_scope)
         for w in windows:
             t0 = _t.time()
             try:
@@ -3002,6 +3016,7 @@ async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
                 logger.exception(f"[PageCache] recompute failed for {base} @ {w}d")
             _rebuild_mark(f"page:{base}:{w}d", stats[f"{base}#{w}"])
       for base, compute in _SINGLE_CACHE_SPECS:
+        base = base.replace("{scope}", default_scope)
         t0 = _t.time()
         try:
             before = await db.data_versions.find_one({"_id": "observations"}) or {}
@@ -11920,10 +11935,14 @@ _WINDOW_CACHE_SPECS.extend([
     ("insights/restock-opportunities", lambda db, d: _insights_restock_compute(db, d)),
     ("insights/sales", lambda db, d: _insights_sales_compute(db, d, None, None, None, "revenue_desc", _CACHE_USER)),
     # iter79 — one dataset per window feeds all six Market Share endpoints
-    ("market-share/dataset", lambda db, d: _market_share_compute(db, d)),
+    # The request path keys these by comparison scope ("...:<scope_id>"); the
+    # rebuild stored them without it, so Market Share and the Price Intel
+    # dashboard never found their cache (12 Oct 2026). "{scope}" is resolved
+    # to the default all-competitors scope at rebuild time.
+    ("market-share/dataset:{scope}", lambda db, d: _market_share_compute(db, d)),
 ])
 _SINGLE_CACHE_SPECS.extend([
-    ("price-intel/dashboard", lambda db: _price_intel_dashboard_compute(db)),
+    ("price-intel/dashboard:{scope}", lambda db: _price_intel_dashboard_compute(db)),
     # iter38 — live store ranking, recomputed on the same post-crawl hooks
     ("price-intel/store-ranking", lambda db: _store_ranking_compute(db)),
 ])
