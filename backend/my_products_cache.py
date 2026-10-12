@@ -60,12 +60,18 @@ def valid(doc, source_revision, max_age, now):
                 and ds.get("total") == len(ds["rows"]) and "kpis" in ds and "categories" in ds)
 
 
-async def compute_dataset(db, compute, max_age=300):
-    """Reject revision races rather than bless mixed-version or expired prices."""
+async def compute_dataset(db, compute, max_age=300, tolerate_race=False):
+    """Reject revision races rather than bless mixed-version or expired prices.
+
+    `tolerate_race` (background rebuilds only): crawls store prices for hours
+    a day and every stored price bumps the revision, so a strict rebuild never
+    completed while a crawl ran (12 Oct 2026). The result is then kept, stamped
+    with the revision read BEFORE the compute: it can never pass for the
+    current revision and is only ever served as a labelled previous result."""
     started = utcnow()
     before = await revision(db)
     dataset = await compute()
-    if await revision(db) != before:
+    if not tolerate_race and await revision(db) != before:
         raise unavailable("price_source_changed")
     until = min(aware(dataset.get("_valid_until")) or started, started+timedelta(seconds=max_age))
     if utcnow() >= until:
@@ -82,7 +88,27 @@ def envelope(dataset):
 def metadata(doc, source):
     return {"source": source, "computed_at": aware(doc["computed_at"]).isoformat(),
             "age_seconds": round((utcnow()-aware(doc["computed_at"])).total_seconds(), 1),
-            "stale": False, "valid_until": aware(doc["valid_until"]).isoformat()}
+            "stale": source == PREVIOUS_REVISION, "valid_until": aware(doc["valid_until"]).isoformat()}
+
+
+# A complete result computed for an earlier observation revision. Every stored
+# competitor price bumps the revision, so while crawls run (hours a day) the
+# strict check found no valid entry and every page answered "being prepared"
+# (12 Oct 2026). Such a result is still served — whole, never partial, inside
+# its age limit and its own pricing-freshness horizon (valid_until) — labelled
+# stale with its computed_at, while the current revision rebuilds.
+PREVIOUS_REVISION = "cache_previous_revision"
+
+
+def usable_previous(doc, max_age, now):
+    return bool(doc) and valid(doc, doc.get("source_revision"), max_age, now)
+
+
+def previous_key_pattern(key):
+    """Same build, policy and window on any KSA day: keys end ':YYYY-MM-DD:days=N'."""
+    import re
+    prefix, _day, window = key.rsplit(":", 2)
+    return "^" + re.escape(prefix + ":") + r"\d{4}-\d{2}-\d{2}" + re.escape(":" + window) + "$"
 
 
 def _remember(entries, key, doc):
@@ -98,7 +124,7 @@ def _remember(entries, key, doc):
     entries[key] = (doc, size)
 
 
-async def _serve(db, key, compute, max_age):
+async def _serve(db, key, compute, max_age, on_stale=None):
     entries, flights = _loops.setdefault(asyncio.get_running_loop(), (OrderedDict(), {}))
     # Client identity prevents cross-database/cluster reuse in tests and workers.
     raw = db.raw if isinstance(db, GuardedDatabase) else db
@@ -115,9 +141,18 @@ async def _serve(db, key, compute, max_age):
             raise unavailable("price_source_changed")
         return doc["dataset"], metadata(doc, "memory_coalesced")
 
+    previous_day = [False]
+
     async def load():
         try:
             doc = await asyncio.wait_for(db.dashboard_cache.find_one({"key": key}, {"_id": 0}, max_time_ms=2000), 2.5)
+            if doc is None and on_stale is not None:
+                # An earlier KSA day's entry: its sales window differs from
+                # today's, so it is only ever served as a labelled previous result.
+                previous_day[0] = True
+                doc = await asyncio.wait_for(db.dashboard_cache.find_one(
+                    {"key": {"$regex": previous_key_pattern(key)}}, {"_id": 0},
+                    sort=[("computed_at", -1)], max_time_ms=2000), 2.5)
             if doc is not None and "dataset" not in doc:
                 # Compressed / chunked storage (cache_blobs); None when incomplete.
                 import cache_blobs
@@ -130,7 +165,10 @@ async def _serve(db, key, compute, max_age):
             logger.warning("Optional dashboard cache read failed; computing from source")
             doc = None
         source = "cache"
-        if not valid(doc, source_revision, max_age, utcnow()):
+        if previous_day[0] or not valid(doc, source_revision, max_age, utcnow()):
+            if on_stale is not None and usable_previous(doc, max_age, utcnow()):
+                on_stale()
+                return doc, PREVIOUS_REVISION
             doc = envelope(await compute_dataset(db, compute, max_age))
             source = "live_fallback"
         elif await revision(db) != source_revision:
@@ -159,8 +197,11 @@ async def _serve(db, key, compute, max_age):
     return doc["dataset"], metadata(doc, sources[0])
 
 
-async def serve(db, key, compute, max_age=300, cacheable=True):
+async def serve(db, key, compute, max_age=300, cacheable=True, on_stale=None):
+    """`on_stale`: when given, a complete result for an earlier revision is
+    served (labelled stale) and `on_stale()` is called to start the rebuild;
+    without it a revision change is a miss, as before."""
     if cacheable:
-        return await bounded_read(_serve(db, key, compute, max_age))
+        return await bounded_read(_serve(db, key, compute, max_age, on_stale))
     dataset = await bounded_read(compute_dataset(db, compute, max_age))
     return dataset, metadata(envelope(dataset), "live_uncacheable")
