@@ -17,12 +17,18 @@ const PLATFORMS = ["salla", "zid", "shopify", "woocommerce", "custom"];
 
 function CrawlStatusBadge({ status }) {
   if (!status) return <Badge variant="outline" className="text-[10px] text-gray-400">No crawl</Badge>;
+  const ok = { icon: CheckCircle2, cls: "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20" };
+  const warn = { icon: AlertCircle, cls: "bg-yellow-50 text-yellow-700 border-yellow-200" };
   const map = {
-    success: { icon: CheckCircle2, cls: "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/20" },
+    success: ok,
+    // The own-store sync reports "complete"; it was drawn with the failure icon.
+    complete: ok,
     failed: { icon: XCircle, cls: "bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/20" },
-    unsupported: { icon: AlertCircle, cls: "bg-yellow-50 text-yellow-700 border-yellow-200" },
+    unsupported: warn,
+    partial: warn,
   };
-  const cfg = map[status] || map.failed;
+  // An unknown status is shown neutrally, never as a failure.
+  const cfg = map[status] || { icon: AlertCircle, cls: "bg-white/5 text-gray-300 border-white/15" };
   const Icon = cfg.icon;
   return (
     <Badge variant="outline" className={`text-[10px] capitalize gap-1 ${cfg.cls}`}>
