@@ -2948,14 +2948,29 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
                     return payload, {"source": "cache", "computed_at": ca.isoformat(),
                                      "age_seconds": round(age, 1), "stale": False}
     if not _cache_miss_live_allowed():
+        if "id" not in _DEFAULT_SCOPE_ID:
+            try:
+                await _default_scope_id(db)
+            except Exception:
+                logger.exception("[PageCache] default comparison scope unavailable")
         try:
             payload, meta = await _previous_page_cache(db, base, days)
         except Exception:
             logger.exception("[PageCache] previous entry for %s unreadable", base)
             payload, meta = None, None
         if payload is not None:
-            _on_stale_serve()
+            if _is_standard_page_key(base, days):
+                _on_stale_serve()
+            else:
+                _schedule_page_build(db, base, days, compute)
             return payload, meta
+        if not _is_standard_page_key(base, days):
+            # A view the standard rebuild never builds (another competitor
+            # selection, "include today"): used to answer "being prepared"
+            # forever. Build just this entry in the background.
+            _schedule_page_build(db, base, days, compute)
+            from price_read_limits import unavailable
+            raise unavailable("price_cache_rebuilding")
     _cache_miss_or_rebuild()
     body = await compute()
     return body, {"source": "live_fallback", "computed_at": now.isoformat(),
@@ -2986,7 +3001,9 @@ async def _default_scope_id(db):
     """scope_id of the default 'all tracked competitors' comparison, exactly as
     the request path computes it (comparison_scope.resolve)."""
     from comparison_scope import resolve
-    return (await resolve(db, "all", None))["scope_id"]
+    scope_id = (await resolve(db, "all", None))["scope_id"]
+    _DEFAULT_SCOPE_ID["id"] = scope_id
+    return scope_id
 
 
 async def recompute_page_caches(db, windows=DASHBOARD_CACHE_STD_WINDOWS):
@@ -3167,6 +3184,63 @@ async def _previous_page_cache(db, base, days):
         return None, None
     return payload, {"source": "cache_previous_revision", "computed_at": ca.isoformat(),
                      "age_seconds": round(age, 1), "stale": True}
+
+
+_ON_DEMAND_TASKS = {}          # page cache key -> asyncio.Task (this process)
+_ON_DEMAND_LIMIT = 4
+
+
+def _is_standard_page_key(base, days):
+    """Built by the standard rebuild: a registry base under the default scope
+    and a standard window."""
+    for spec_base, _f in _WINDOW_CACHE_SPECS:
+        if days in DASHBOARD_CACHE_STD_WINDOWS and _scope_pattern_matches(spec_base, base):
+            return True
+    for spec_base, _f in _SINGLE_CACHE_SPECS:
+        if days is None and _scope_pattern_matches(spec_base, base):
+            return True
+    return False
+
+
+def _scope_pattern_matches(spec_base, base):
+    if "{scope}" not in spec_base:
+        return spec_base == base
+    prefix = spec_base.split("{scope}")[0]
+    return base.startswith(prefix) and base == prefix + _DEFAULT_SCOPE_ID.get("id", "")
+
+
+_DEFAULT_SCOPE_ID = {}
+
+
+def _schedule_page_build(db, base, days, compute):
+    """Build one page cache entry in the background (background budget, never
+    alongside the full rebuild: it takes the same lock). Deduplicated per key
+    and capped per process. Returns True when a build is running for the key."""
+    key = _page_cache_key(base, days)
+    task = _ON_DEMAND_TASKS.get(key)
+    if task is not None and not task.done():
+        return True
+    for k in [k for k, t in _ON_DEMAND_TASKS.items() if t.done()]:
+        _ON_DEMAND_TASKS.pop(k, None)
+    if len(_ON_DEMAND_TASKS) >= _ON_DEMAND_LIMIT:
+        return False
+
+    async def _run():
+        from price_read_limits import bounded_read
+        async with _REBUILD_LOCK:
+            before = await db.data_versions.find_one({"_id": "observations"}) or {}
+            payload = await bounded_read(compute(), background=True)
+            await _store_page_cache(db, base, days, payload, revision=before)
+        logger.info("[PageCache] on-demand build stored %s", key)
+
+    async def _guarded():
+        try:
+            await _run()
+        except Exception:
+            logger.exception("[PageCache] on-demand build failed for %s", key)
+
+    _ON_DEMAND_TASKS[key] = asyncio.create_task(_guarded())
+    return True
 
 
 def _cache_miss_or_rebuild():
@@ -11424,6 +11498,12 @@ async def _market_share_dataset(db, days, include_today=False, comparison_mode="
         return await _serve_page_cache(db, "market-share/dataset:" + scope["scope_id"], days,
                                        compute,
                                        days in _INSIGHTS_STD)
+    if not _cache_miss_live_allowed():
+        # Production: computing this on the request path overloaded the server
+        # until every backend process restarted (12 Oct 2026, ~10:10 UTC). It is
+        # built on demand in the background like any other uncached view.
+        return await _serve_page_cache(db, "market-share/dataset-today:" + scope["scope_id"], days,
+                                       compute, days in _INSIGHTS_STD)
     revision = await db.data_versions.find_one({"_id": "observations"}) or {}
     key = (str(db.name), days, ledger.ksa_day_str(datetime.now(timezone.utc)), scope["scope_id"], revision.get("revision", 0))
     hit = _MS_LIVE_CACHE.get(key)

@@ -135,7 +135,8 @@ def test_page_cache_serves_previous_entry_under_the_rebuild_policy(monkeypatch):
         try:
             await db.data_versions.insert_one({"_id": "observations", "revision": 7})
             payload = {"rows": [1, 2, 3], "kpis": {"x": 1}}
-            await server._store_page_cache(db, "market-share/dataset", 30, payload)
+            base = "market-share/dataset:" + await server._default_scope_id(db)
+            await server._store_page_cache(db, base, 30, payload)
             await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 9}})
             starts = []
             monkeypatch.setattr(server, "_schedule_cache_rebuild", lambda **kw: starts.append(kw) or True)
@@ -143,7 +144,7 @@ def test_page_cache_serves_previous_entry_under_the_rebuild_policy(monkeypatch):
             async def compute():
                 raise AssertionError("must not compute on the request path")
             monkeypatch.setattr(server, "CACHE_MISS_POLICY", "rebuild")
-            body, meta = await server._serve_page_cache(db, "market-share/dataset", 30, compute)
+            body, meta = await server._serve_page_cache(db, base, 30, compute)
             assert body == payload and meta["stale"] is True and meta["source"] == "cache_previous_revision"
             assert starts and starts[0]["trigger"] == "stale_serve" and starts[0]["min_gap_secs"] > 0
             # Live policy keeps the strict behaviour (computes).
@@ -151,7 +152,7 @@ def test_page_cache_serves_previous_entry_under_the_rebuild_policy(monkeypatch):
 
             async def live():
                 return {"live": True}
-            body, meta = await server._serve_page_cache(db, "market-share/dataset", 30, live)
+            body, meta = await server._serve_page_cache(db, base, 30, live)
             assert body == {"live": True}
         finally:
             await client.drop_database(db.name)

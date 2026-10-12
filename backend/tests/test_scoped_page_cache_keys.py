@@ -65,3 +65,50 @@ def test_rebuilt_entries_are_found_by_the_request_path(monkeypatch):
             await client.drop_database(db.name)
             client.close()
     asyncio.run(scenario())
+
+
+def test_uncovered_views_are_built_on_demand_not_on_the_request(monkeypatch):
+    """A competitor selection or 'include today' is not part of the standard
+    rebuild: under the rebuild policy the request answers 'rebuilding' at once
+    and one background build stores the entry; the next request is a hit."""
+    server = _server()
+    from motor.motor_asyncio import AsyncIOMotorClient
+    from test_p0_my_products_baseline import _loopback_mongo_url
+
+    async def scenario():
+        client = AsyncIOMotorClient(_loopback_mongo_url())
+        db = client["ondemand_" + uuid.uuid4().hex]
+        try:
+            await db.stores.insert_many([
+                {"id": "own", "name": "Own", "is_own_store": True, "is_active": True},
+                {"id": "c1", "name": "C1", "is_active": True},
+                {"id": "c2", "name": "C2", "is_active": True},
+            ])
+            await db.data_versions.insert_one({"_id": "observations", "revision": 1})
+            monkeypatch.setattr(server, "CACHE_MISS_POLICY", "rebuild")
+            full_rebuilds, computed = [], []
+            monkeypatch.setattr(server, "_schedule_cache_rebuild", lambda *a, **k: full_rebuilds.append(1) or True)
+
+            async def compute_ms(db_, days, include_today=False, comparison_mode="all", competitor_ids=None):
+                computed.append((days, include_today, comparison_mode, competitor_ids))
+                return {"days": days, "today": include_today, "mode": comparison_mode}
+            monkeypatch.setattr(server, "_market_share_compute", compute_ms)
+            from fastapi import HTTPException
+            for kwargs in ({"include_today": True}, {"comparison_mode": "selected", "competitor_ids": "c1"}):
+                try:
+                    await server._market_share_dataset(db, 30, **kwargs)
+                except HTTPException as exc:
+                    assert exc.detail["code"] == "price_cache_rebuilding"
+                else:
+                    raise AssertionError("first request must not compute on the request path")
+                for task in list(server._ON_DEMAND_TASKS.values()):
+                    await task
+                body, meta = await server._market_share_dataset(db, 30, **kwargs)
+                assert meta["source"] == "cache"
+            assert full_rebuilds == []                       # never the whole rebuild for these
+            assert computed == [(30, True, "all", None), (30, False, "selected", "c1")]
+        finally:
+            server._ON_DEMAND_TASKS.clear()
+            await client.drop_database(db.name)
+            client.close()
+    asyncio.run(scenario())
