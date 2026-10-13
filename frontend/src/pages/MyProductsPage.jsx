@@ -72,6 +72,35 @@ function KpiInfoTooltip({ content, label }) {
   );
 }
 
+
+// Review flags from the backend (13 Oct 2026): a product the storefront does
+// not show, and an own price far from every competitor's for the same barcode
+// (usually a wrong barcode or a piece-vs-pack mismatch). Shown, never auto-fixed.
+function OwnFlags({ p, isRTL }) {
+  const flags = [];
+  if (p.my_stock_status === "hidden_on_store") {
+    flags.push({ key: "hidden", text: isRTL ? "غير ظاهر في متجرك" : "Not visible on your store",
+      tip: isRTL ? "المنتج موجود في لوحة زد لكنه لا يظهر للمتسوقين" : "In your Zid catalogue but not shown to shoppers" });
+  }
+  if (p.identity_check) {
+    flags.push({ key: "identity", text: isRTL ? "تحقق من المنتج" : "Check product identity",
+      tip: p.identity_check === "own_price_far_below_market"
+        ? (isRTL ? "سعرك أقل بكثير من كل المنافسين لنفس الباركود — تحقق من الباركود أو الحجم" : "Your price is far below every competitor for this barcode — check the barcode or pack size")
+        : (isRTL ? "سعرك أعلى بكثير من كل المنافسين لنفس الباركود — تحقق من الباركود أو الحجم" : "Your price is far above every competitor for this barcode — check the barcode or pack size") });
+  }
+  if (!flags.length) return null;
+  return (
+    <span className="inline-flex flex-wrap gap-1 mt-1">
+      {flags.map((f) => (
+        <span key={f.key} title={f.tip} data-testid={`own-flag-${f.key}-${p.sku}`}
+          className="text-[9px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
+          {f.text}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export default function MyProductsPage() {
   const release = useRelease();
   const { t, isRTL } = useI18n();
@@ -384,6 +413,7 @@ export default function MyProductsPage() {
                                 {isRTL ? "تمت المزامنة" : "Auto-synced"}
                               </span>
                             )}
+                            <OwnFlags p={p} isRTL={isRTL} />
                             {p.market_position && (
                               <div className="mt-1">
                                 <MarketPositionBadge mp={p.market_position} testIdPrefix={`mp-${p.sku}`} />
@@ -408,6 +438,7 @@ export default function MyProductsPage() {
                                 {isRTL ? "تمت المزامنة" : "Auto-synced"}
                               </span>
                             )}
+                            <OwnFlags p={p} isRTL={isRTL} />
                             {p.market_position && (
                               <div className="mt-1">
                                 <MarketPositionBadge mp={p.market_position} testIdPrefix={`mp-${p.sku}`} />

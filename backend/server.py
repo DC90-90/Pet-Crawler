@@ -1236,18 +1236,32 @@ async def admin_backfill(payload: BackfillIn, user=Depends(require_super_admin))
     if not stores:
         raise HTTPException(404, "No matching stores")
 
+    run_id = await _start_backfill_run(stores, payload.rematch, started_by=user.get("email"))
+    return {"ok": True, "run_id": run_id, "status": "started",
+            "stores": [s["name"] for s in stores],
+            "poll": "/api/admin/backfill/status"}
+
+
+async def _start_backfill_run(stores, rematch, started_by, resumed_from=None, resume_count=0):
+    """Record a backfill run (owned by this process's boot) and start it."""
+    import process_watch
     run_id = str(uuid.uuid4())
     run = {
         "id": run_id,
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "started_by": user.get("email"),
+        "started_by": started_by,
         "status": "running",
-        "rematch_requested": payload.rematch,
+        "rematch_requested": rematch,
+        "boot_id": process_watch.BOOT_ID,
+        "resumed_from": resumed_from, "resume_count": resume_count,
         "stores": [{"store_id": s["id"], "name": s["name"], "status": "queued"} for s in stores],
     }
     await db.backfill_runs.insert_one(dict(run))
+    asyncio.create_task(_execute_backfill(run_id, stores, rematch))
+    return run_id
 
-    async def _run():
+
+async def _execute_backfill(run_id, stores, rematch):
         for s in stores:
             await db.backfill_runs.update_one(
                 {"id": run_id, "stores.store_id": s["id"]},
@@ -1276,7 +1290,7 @@ async def admin_backfill(payload: BackfillIn, user=Depends(require_super_admin))
                     {"$set": {"stores.$.status": "failed", "stores.$.error": str(exc)[:300],
                               "stores.$.finished_at": datetime.now(timezone.utc).isoformat()}})
         cache_clear()
-        if payload.rematch:
+        if rematch:
             await db.backfill_runs.update_one({"id": run_id}, {"$set": {"status": "rematching"}})
             try:
                 summary = await run_matching_for_all(db)
@@ -1291,10 +1305,54 @@ async def admin_backfill(payload: BackfillIn, user=Depends(require_super_admin))
                                       "finished_at": datetime.now(timezone.utc).isoformat()}})
         logger.info("[Backfill] run %s finished", run_id)
 
-    asyncio.create_task(_run())
-    return {"ok": True, "run_id": run_id, "status": "started",
-            "stores": [s["name"] for s in stores],
-            "poll": "/api/admin/backfill/status"}
+
+BACKFILL_MAX_RESUMES = 3
+
+
+async def _resume_interrupted_backfills(delay_secs=90):
+    """A backend restart kills a running backfill (12-13 Oct 2026: four
+    unplanned restarts). After boot, a run whose owning process stopped
+    heartbeating is marked interrupted and its unfinished stores start again
+    in a new run (at most BACKFILL_MAX_RESUMES times, so a store that crashes
+    the process cannot loop forever). One process resumes each run (lease)."""
+    import process_watch
+    await asyncio.sleep(delay_secs)
+    try:
+        alive = await process_watch.alive_boot_ids(db)
+        async for run in db.backfill_runs.find({"status": {"$in": ["running", "rematching"]}}, {"_id": 0}):
+            owner = run.get("boot_id")
+            if owner is None or owner in alive:
+                continue           # legacy run without an owner, or still running somewhere
+            lease_owner = f"{process_watch.BOOT_ID}:{uuid.uuid4().hex[:6]}"
+            if not await job_control.acquire(db, f"backfill-resume:{run['id']}", lease_owner, hours=1):
+                continue
+            remaining_ids = [x["store_id"] for x in run.get("stores", []) if x.get("status") in ("queued", "crawling")]
+            needs_rematch = bool(run.get("rematch_requested")) and "rematch" not in run
+            count = int(run.get("resume_count") or 0) + 1
+            update = {"status": "interrupted", "interrupted_at": datetime.now(timezone.utc).isoformat()}
+            if (remaining_ids or needs_rematch) and count <= BACKFILL_MAX_RESUMES:
+                stores = await db.stores.find({"id": {"$in": remaining_ids}}, {"_id": 0}).to_list(50)
+                order = {sid: i for i, sid in enumerate(remaining_ids)}
+                stores.sort(key=lambda st: order.get(st["id"], 0))
+                new_id = await _start_backfill_run(stores, run.get("rematch_requested", False), "auto-resume",
+                                                   resumed_from=run["id"], resume_count=count)
+                update["resumed_as"] = new_id
+                logger.info("[Backfill] resumed interrupted run %s as %s (%d stores)", run["id"], new_id, len(stores))
+            elif count > BACKFILL_MAX_RESUMES:
+                update["resume_stopped"] = f"interrupted {count - 1} times; not resumed again"
+            await db.backfill_runs.update_one({"id": run["id"]}, {"$set": update})
+    except Exception:
+        logger.exception("[Backfill] resume of interrupted runs failed")
+
+
+@router.get("/admin/process-history")
+async def admin_process_history(_=Depends(require_super_admin)):
+    """Recent backend processes: start, last heartbeat, how long they lived,
+    memory at the last heartbeat and worst event-loop stall. A process that
+    stopped heartbeating was restarted; its last row shows its state."""
+    import process_watch
+    return {"current_boot": process_watch.BOOT_ID, "memory_now": process_watch.memory(),
+            "processes": await process_watch.history(db)}
 
 
 @router.get("/admin/backfill/status")
@@ -12202,10 +12260,23 @@ async def startup():
     asyncio.create_task(_boot())
 
 
+def _heartbeat_extra():
+    running = _CACHE_REBUILD_TASK is not None and not _CACHE_REBUILD_TASK.done()
+    return {"rebuild_running": running, "rebuild_step": next((k for k, v in _CACHE_REBUILD_STATE.get("steps", {}).items()
+                                                             if v == "running"), None) if running else None,
+            "boot_status": BOOT_STATE.get("status")}
+
+
 async def _boot():
     BOOT_STATE.update({"status": "running", "phase": "waiting_for_mongo", "errors": []})
     try:
+        import process_watch
+        process_watch.start(db, _heartbeat_extra)
+    except Exception:
+        logger.exception("[Boot] process heartbeat could not start")
+    try:
         await _boot_sequence()
+        asyncio.create_task(_resume_interrupted_backfills())
         BOOT_STATE["status"] = "done" if BOOT_STATE["phase"] != "waiting_for_mongo" else "mongo_unreachable"
     except Exception as exc:
         BOOT_STATE["status"] = "aborted"

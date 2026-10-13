@@ -8,6 +8,34 @@ from evidence_ledger import sales_map
 from observation_contract import gtin
 from stock_evidence import own_stock
 
+# The own-store sync compares the merchant catalogue with the public storefront;
+# a product the storefront does not show is priced on a merchant_hidden_* basis.
+# Its page returns 404 for shoppers (verified 13 Oct 2026: Applaws 2 kg,
+# Farmina GI 2 kg, Farmina Quinoa 1.5 kg), so it is not a live offer of ours.
+HIDDEN_FROM_STOREFRONT = ("merchant_hidden_from_storefront_inc_vat", "merchant_hidden_non_taxable")
+
+
+def hidden_on_storefront(mp):
+    return str(mp.get("price_basis") or "") in HIDDEN_FROM_STOREFRONT
+
+
+def identity_check(own_price, cohort):
+    """A shared barcode with an own price far from every competitor's usually
+    means the wrong barcode on one side or a pack/size mismatch (13 Oct 2026:
+    a Royal Canin adult food carrying the Persian 400 g barcode at 17.25 vs
+    33-34.5; Caviara piece vs pack at 6.04 vs 11.96). Flagged for review,
+    never corrected automatically."""
+    prices = sorted(s["price"] for s in (cohort or {}).get("sellers", []) if s.get("price"))
+    if not own_price or len(prices) < 2:
+        return None
+    mid = prices[len(prices) // 2] if len(prices) % 2 else (prices[len(prices) // 2 - 1] + prices[len(prices) // 2]) / 2
+    ratio = own_price / mid
+    if ratio < 0.6:
+        return "own_price_far_below_market"
+    if ratio > 1.6:
+        return "own_price_far_above_market"
+    return None
+
 
 def verified_barcode(product):
     return str(product.get("barcode")) if gtin(product.get("barcode")) else str(product.get("sku")) if gtin(product.get("sku")) else None
@@ -47,7 +75,8 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
                "category_candidate": mp.get("category"), "category": mp.get("category") if mp.get("category_source") in ("reviewed", "store_supplied", "import_file") else None,
                **stock, "my_quantity": stock["quantity"], "my_units_sold": units, "my_revenue_est": value,
                "qty_sold_est": units, "revenue_est": value, "my_stock_signal": get_stock_signal(stock["quantity"], stock["in_stock"]),
-               "my_stock_status": "not_listed" if mp.get("present_on_store") is False else "own_catalog",
+               "my_stock_status": "not_listed" if mp.get("present_on_store") is False else "hidden_on_store" if hidden_on_storefront(mp) else "own_catalog",
+               "identity_check": identity_check(price, c),
                "num_competitors": len({s["store_id"] for s in c["sellers"]+c["excluded"]}), "num_priced_competitors": len(c["sellers"]),
                "num_sellers": len(c["sellers"]), "competitor_min_price": c["min"], "competitor_max_price": c["max"],
                "vs_my_price_pct": round((c["min"]-price)/price*100, 1) if c["min"] and price else None,

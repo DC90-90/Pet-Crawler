@@ -693,7 +693,8 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         # 2026). Kept when a competitor is linked to it, so no evidence is lost.
         # Likewise a catalogue row that is no longer listed on the own store
         # (old import SKUs; 68 on 12 Oct 2026) has no price, stock or share.
-        if ((mp.get("known_variant_parent") or mp.get("present_on_store") is False)
+        if ((mp.get("known_variant_parent") or mp.get("present_on_store") is False
+                or str(mp.get("price_basis") or "").startswith("merchant_hidden"))
                 and not any(not x.get("is_own") for x in sellers)):
             continue
         cat_row = mp
