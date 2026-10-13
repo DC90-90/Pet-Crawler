@@ -2,7 +2,7 @@
 from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException
 import ledger
-from evidence_ledger import sales_map
+from evidence_ledger import sales_map, measured_days
 from price_cohort import exclusion, identity_keys, FIELDS
 from snapshot_reads import latest_pipeline, complete_latest
 from observation_contract import since_bound
@@ -110,6 +110,7 @@ async def ranking(db, orders_fn):
         rows.append({"store_id": sid, "name": store["name"], "domain": store.get("domain"), "platform": store.get("platform"),
                      "is_own_store": bool(store.get("is_own_store")), "products": n, "in_stock_pct": stock_pct,
                      "revenue_30d": revenue, "revenue_status": "ledger" if orders is not None else "computed" if signals else "not_measurable",
+                     "revenue_days_measured": None if orders is not None else len(measured_days(sales, sid)), "revenue_days_expected": 30,
                      "revenue_basis": basis, "revenue_tier": "exact" if orders is not None else "estimated" if signals else "unavailable",
                      "revenue_rank_value": None, "revenue_rank_basis": "none", "sales_status": basis, "sales_sample": len(signals),
                      "overlap": 0, "strength_score": None, "revenue_approx": None, "revenue_est_salla": None,

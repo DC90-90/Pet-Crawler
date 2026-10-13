@@ -58,4 +58,14 @@ async def sales_map(db, start, end, sealed=True):
         a["units"] += r["units"]
         a["revenue"] += r.get("revenue") or 0
         a["intervals"] += 1
+        a.setdefault("days", set()).add(r["date"])
+    # Which KSA days the figure actually covers: a "14-day" total built from
+    # one observed day must say so (13 Oct 2026: 5,457.74 SAR shown as 14d).
+    for a in out.values():
+        a["days"] = sorted(a.get("days") or ())
     return out
+
+
+def measured_days(sales, store_id):
+    """Distinct KSA days with at least one measured interval for a store."""
+    return sorted({d for (sid, _k), v in sales.items() if sid == store_id for d in v.get("days", ())})

@@ -4,7 +4,7 @@ from fastapi import HTTPException
 import ledger
 from comparison_views import context, position
 from core.utils import get_stock_signal
-from evidence_ledger import sales_map
+from evidence_ledger import sales_map, measured_days
 from observation_contract import gtin
 from stock_evidence import own_stock
 
@@ -97,7 +97,9 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
                      "my_orders_count": orders["orders_count"] if orders is not None else None,
                      "my_revenue_source": "zid_orders" if orders is not None else "inventory_proxy" if measurable else "unavailable",
                      "market_revenue": None, "avg_market_share": None, "share_sample_size": 0,
-                     "sales_evidence_products": len(measurable), "sales_window": {"from": start, "to": end}}}
+                     "sales_evidence_products": len(measurable), "sales_window": {"from": start, "to": end},
+                     "sales_days_measured": None if orders is not None else len(measured_days(sales, own.get("id"))),
+                     "sales_days_expected": max(1, round((end - start).total_seconds() / 86400))}}
 
 
 async def detail(db, sku, days, price_fn, competitor_store_ids=None):

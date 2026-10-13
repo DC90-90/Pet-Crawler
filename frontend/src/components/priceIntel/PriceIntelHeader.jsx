@@ -123,7 +123,16 @@ function ScoreBar({ value, color = "#1E988E" }) {
 function RevenueCell({ row, isRTL }) {
   // MEASURED revenue — unchanged, solid teal, no tag.
   if (row.revenue_30d != null) {
-    return <span className="metric-number text-[#6AC1B5]">{row.revenue_30d.toLocaleString()} SAR <small>{row.revenue_basis === "orders_exact" ? "orders" : "inventory proxy"}</small></span>;
+    return (
+      <span className="metric-number text-[#6AC1B5]">
+        {row.revenue_30d.toLocaleString()} SAR <small>{row.revenue_basis === "orders_exact" ? "orders" : "inventory proxy"}</small>
+        {row.revenue_days_measured != null && row.revenue_days_measured < (row.revenue_days_expected || 30) && (
+          <small className="block text-[#F59E0B]" data-testid={`ranking-days-${row.store_id}`}>
+            measured on {row.revenue_days_measured} of {row.revenue_days_expected || 30} days
+          </small>
+        )}
+      </span>
+    );
   }
 
   // iter59 — TIER 2: MEASURED (APPROX.) from the Salla sold badge. This is a
@@ -346,6 +355,13 @@ export function MarketPositionWidget({ ranking, rankingComputedAt, myKpis, summa
             <p className="text-xl font-bold text-[#1E988E] metric-number">
               {myKpis?.my_revenue != null ? `${myKpis.my_revenue.toLocaleString()} SAR` : "—"}
             </p>
+            {!isLedger && myKpis?.my_revenue != null && myKpis?.sales_days_measured != null && myKpis.sales_days_measured < (myKpis.sales_days_expected || 14) && (
+              <p className="text-[10px] text-[#F59E0B]" data-testid="pi-revenue-days">
+                {isRTL
+                  ? `مقاس على ${myKpis.sales_days_measured} من ${myKpis.sales_days_expected} يوم فقط — ليس إجمالي الفترة`
+                  : `Measured on ${myKpis.sales_days_measured} of ${myKpis.sales_days_expected} days only — not the period total`}
+              </p>
+            )}
             {isLedger && myKpis?.my_orders_count != null && (
               <p className="text-[9px] text-[#6AC1B5]">{myKpis.my_orders_count.toLocaleString()} {isRTL ? "طلب · سجل زد" : "orders · Zid ledger"}</p>
             )}
