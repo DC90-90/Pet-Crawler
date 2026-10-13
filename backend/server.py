@@ -180,7 +180,13 @@ BOOT_STATE = {"status": "pending", "phase": None, "errors": []}
 app = FastAPI(title="Daleel API")
 router = APIRouter(prefix="/api")
 
-scheduler = AsyncIOScheduler()
+# APScheduler's default misfire grace is 1 s: a crawl whose trigger fired while
+# the event loop was busy (a cache rebuild runs for seconds at a time) was
+# skipped for the day. On 13 Oct 2026 six of eleven stores missed their 04:00
+# KSA slot that way. A late start up to an hour is still that day's crawl;
+# missed runs coalesce into one, and one instance per job at a time (the store
+# lease already prevents overlap across processes).
+scheduler = AsyncIOScheduler(job_defaults={"misfire_grace_time": 3600, "coalesce": True, "max_instances": 1})
 crawl_paused = False
 
 # ── Rate Limiter ────────────────────────────────────────────
