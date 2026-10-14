@@ -32,7 +32,7 @@ from sales_evidence import PLACEHOLDERS
 
 logger = logging.getLogger(__name__)
 
-VERSION = 1
+VERSION = 2                   # 2: measured zero-sale intervals (ledger_sales_observed)
 MAX_GAP_DAYS = 2              # same 48 h limit as interval facts
 STOCK_CAP_PER_DAY = 30        # same cap as sales_evidence (30 units / 24 h)
 COUNTER_CAP_PER_DAY = 50      # same cap as sales_evidence for sold counters
@@ -78,14 +78,23 @@ def _intervals(by_date, exact_stock):
             if not sa or not sb:          # absent or not yet reported: no interval
                 continue
             units = sb - sa
-            if units <= 0 or units > COUNTER_CAP_PER_DAY * gap:
+            if units == 0:
+                yield b, 0, 0.0, "sold_counter_diff", None     # measured: sold nothing
+                continue
+            if units < 0 or units > COUNTER_CAP_PER_DAY * gap:
                 continue
             yield b, units, units * price if price else 0.0, "sold_counter_diff", None
         else:
             qa, qb = _num(ra.get("qty_available")), _num(rb.get("qty_available"))
-            if qa is None or qb is None or qb >= qa:
+            if qa is None or qb is None:
                 continue
             if not exact_stock and (qa in PLACEHOLDERS or qa > 200 or qb in PLACEHOLDERS):
+                continue
+            if qb >= qa:
+                # Exact stock read on both days with no drop is a measured zero
+                # (a restock hides sales, so only an unchanged level counts).
+                if exact_stock and qb == qa and qa > 0:
+                    yield b, 0, 0.0, "stock_depletion", None
                 continue
             units = qa - qb
             if units > STOCK_CAP_PER_DAY * gap:
@@ -139,20 +148,27 @@ def compute(rows, sealed, start_date, end_date, stores, offer_index):
                        "names": [(stores.get(s) or {}).get("name", s) for s in order]})
 
     facts, deduped = {}, defaultdict(lambda: {"units": 0, "revenue": 0.0})
+    observed = {}                       # (store, offer or sku) -> dates read on both days, no sale
     group_of = {sid: g for g in groups for sid in g["members"]}
     seen_by_group = defaultdict(set)
     store_order = sorted(events, key=lambda s: group_of[s]["members"].index(s) if s in group_of else 0)
     for sid in store_order:
         g = group_of.get(sid)
         for date, sku, units, revenue, source, key in events[sid]:
+            oid = offer_index.get((sid, sku))
             if g and key and key[1] >= DEDUPE_MIN_QTY:
                 bucket = seen_by_group[g["lead"]]
                 if key in bucket:
                     deduped[sid]["units"] += units
                     deduped[sid]["revenue"] += revenue
-                    continue
-                bucket.add(key)
-            oid = offer_index.get((sid, sku))
+                    units = 0               # counted under the lead; measured here as zero
+                else:
+                    bucket.add(key)
+            if not units:
+                o = observed.setdefault((sid, oid or sku), {"store_id": sid, "sku": sku, "offer_id": oid,
+                                                             "source": source, "dates": set()})
+                o["dates"].add(date)
+                continue
             fid = (sid, oid or sku, date)
             f = facts.setdefault(fid, {"store_id": sid, "sku": sku, "offer_id": oid, "date": date,
                                        "units": 0.0, "revenue": 0.0, "source": source})
@@ -161,7 +177,11 @@ def compute(rows, sealed, start_date, end_date, stores, offer_index):
     for g in groups:
         g["deduped"] = {(stores.get(s) or {}).get("name", s): {"units": round(deduped[s]["units"]), "revenue": round(deduped[s]["revenue"], 2)}
                         for s in g["members"] if s in deduped}
-    return list(facts.values()), groups
+    # A store whose readings never move in the window is not a live signal
+    # (Hobba: static stock numbers), so its unchanged readings are not zeros.
+    moving = {sid for sid, evs in events.items() if any(e[2] > 0 for e in evs)}
+    obs = [{**o, "dates": sorted(o["dates"])} for o in observed.values() if o["store_id"] in moving]
+    return list(facts.values()), groups, obs
 
 
 async def offer_index(db):
@@ -188,20 +208,25 @@ async def rebuild(db, days=BUILD_DAYS, now=None):
     rows = await db.daily_ledger.find({"ksa_date": {"$gte": read_from, "$lte": end_date}},
                                       _ROW_FIELDS).batch_size(5000).to_list(None)
     index = await offer_index(db)
-    facts, groups = await asyncio.to_thread(compute, rows, sealed, start_date, end_date, stores, index)
+    facts, groups, observed = await asyncio.to_thread(compute, rows, sealed, start_date, end_date, stores, index)
     build = f"{now.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
     docs = [{"_id": stable_id(VERSION, build, f["store_id"], f["offer_id"] or f["sku"], f["date"]), "build": build,
              **f, "units": round(f["units"], 2), "revenue": round(f["revenue"], 2)} for f in facts]
+    obs_docs = [{"_id": stable_id(VERSION, build, o["store_id"], o["offer_id"] or o["sku"]), "build": build,
+                 **o, "first": o["dates"][0], "last": o["dates"][-1]} for o in observed]
     try:
         await db.ledger_sales_daily.create_index([("build", 1), ("date", 1)])
+        await db.ledger_sales_observed.create_index([("build", 1), ("last", 1)])
     except Exception:  # noqa: BLE001 — reads still work on a small collection
         logger.warning("[LedgerSales] index creation failed", exc_info=True)
-    for i in range(0, len(docs), 5000):
-        await db.ledger_sales_daily.insert_many(docs[i:i + 5000], ordered=False)
+    for coll, rows_out in ((db.ledger_sales_daily, docs), (db.ledger_sales_observed, obs_docs)):
+        for i in range(0, len(rows_out), 5000):
+            await coll.insert_many(rows_out[i:i + 5000], ordered=False)
     await db.ledger_sales_meta.update_one({"_id": "current"}, {"$set": {
         "build": build, "built_at": now, "start_date": start_date, "end_date": end_date,
-        "facts": len(docs), "groups": groups, "version": VERSION}}, upsert=True)
+        "facts": len(docs), "observed": len(obs_docs), "groups": groups, "version": VERSION}}, upsert=True)
     await db.ledger_sales_daily.delete_many({"build": {"$ne": build}})
+    await db.ledger_sales_observed.delete_many({"build": {"$ne": build}})
     # Cached pages are keyed on the observation revision: new evidence, new pages.
     await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}}, upsert=True)
     logger.info("[LedgerSales] build %s: %d facts %s..%s, shared groups %s", build, len(docs),
@@ -214,8 +239,9 @@ async def rebuild_if_stale(db, now=None):
     import ledger
     import job_control
     now = now or datetime.now(timezone.utc)
-    meta = await db.ledger_sales_meta.find_one({"_id": "current"}, {"_id": 0, "end_date": 1})
-    if meta and meta.get("end_date") == ledger.ksa_day_str(now - timedelta(days=1)):
+    meta = await db.ledger_sales_meta.find_one({"_id": "current"}, {"_id": 0, "end_date": 1, "version": 1})
+    if (meta and meta.get("version") == VERSION
+            and meta.get("end_date") == ledger.ksa_day_str(now - timedelta(days=1))):
         return None
     owner = uuid.uuid4().hex
     if not await job_control.acquire(db, LEASE_KEY, owner, hours=1):
@@ -248,6 +274,20 @@ async def sales_map(db, start, end, sealed=True):
         a["intervals"] += 1
         a["days"].add(r["date"])
         a["by_day"][r["date"]] = a["by_day"].get(r["date"], 0) + r["revenue"]
+    # Offers read on two consecutive days without a sale: a measured zero, so
+    # market share can tell "sold nothing" from "cannot see this seller".
+    lo, hi = q["date"]["$gte"], q["date"]["$lte"]
+    async for r in db.ledger_sales_observed.find({"build": m["build"], "last": {"$gte": lo}, "first": {"$lte": hi}},
+                                                  {"_id": 0}):
+        dates = [d for d in r["dates"] if lo <= d <= hi]
+        if not dates:
+            continue
+        key = (r["store_id"], r.get("offer_id") or r["sku"])
+        a = out.setdefault(key, {"sku": r["sku"], "offer_id": r.get("offer_id"), "units": 0, "revenue": 0.0,
+                                 "source": r["source"], "intervals": 0, "value_basis": "shelf_price_proxy",
+                                 "days": set(), "by_day": {}})
+        a["intervals"] += len(dates)
+        a["days"].update(dates)
     for a in out.values():
         a["days"] = sorted(a["days"])
         a["revenue"] = round(a["revenue"], 2)

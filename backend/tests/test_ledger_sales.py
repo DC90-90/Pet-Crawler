@@ -27,7 +27,7 @@ def _day(n):
 
 def _run(rows, start=_day(0), end=_day(30)):
     sealed = {(r["store_id"], r["ksa_date"]) for r in rows}
-    facts, groups = ledger_sales.compute(rows, sealed, start, end, STORES, {})
+    facts, groups, _observed = ledger_sales.compute(rows, sealed, start, end, STORES, {})
     per = {}
     for f in facts:
         p = per.setdefault(f["store_id"], [0, 0.0])
@@ -71,6 +71,17 @@ def test_shared_stock_is_counted_once_for_the_lead():
     assert per["o"][0] == 40
 
 
+def test_unchanged_in_stock_reading_is_a_measured_zero_only_for_a_live_store():
+    rows = [_row("z", "sold", _day(0), 9), _row("z", "sold", _day(1), 8),      # z is live (a sale)
+            _row("z", "flat", _day(0), 5), _row("z", "flat", _day(1), 5),      # read twice, no sale -> zero
+            _row("z", "oos", _day(0), 0), _row("z", "oos", _day(1), 0),        # 0 -> 0 proves nothing
+            _row("z", "restock", _day(0), 2), _row("z", "restock", _day(1), 6),  # a restock can hide sales
+            _row("o", "static", _day(0), 4), _row("o", "static", _day(1), 4)]  # store never moves: no zeros
+    sealed = {(r["store_id"], r["ksa_date"]) for r in rows}
+    _facts, _groups, observed = ledger_sales.compute(rows, sealed, _day(0), _day(30), STORES, {})
+    assert [(o["store_id"], o["sku"], o["dates"]) for o in observed] == [("z", "flat", [_day(1)])]
+
+
 def test_rebuild_and_sales_map_through_the_evidence_ledger(monkeypatch):
     import evidence_ledger
     import ledger
@@ -85,7 +96,8 @@ def test_rebuild_and_sales_map_through_the_evidence_ledger(monkeypatch):
         try:
             await db.stores.insert_one({"id": "z", "name": "Zid A", "platform": "zid"})
             await db.daily_ledger.insert_many([_row("z", "a", "2026-10-11", 10, price=20), _row("z", "a", "2026-10-12", 6, price=20),
-                                               _row("z", "a", "2026-10-13", 5, price=20)])
+                                               _row("z", "a", "2026-10-13", 5, price=20),
+                                               _row("z", "b", "2026-10-12", 3), _row("z", "b", "2026-10-13", 3)])
             await db.daily_ledger_store.insert_many([{"store_id": "z", "ksa_date": d, "sealed_at": now}
                                                      for d in ("2026-10-11", "2026-10-12", "2026-10-13")])
             await db.observation_events.insert_one({"store_id": "z", "sku": "a", "offer_id": "offer-a", "observed_at": now})
@@ -100,3 +112,5 @@ def test_rebuild_and_sales_map_through_the_evidence_ledger(monkeypatch):
     assert first["facts"] == 2 and again is None
     row = sales[("z", "offer-a")]
     assert row["units"] == 5 and row["revenue"] == 100.0 and row["days"] == ["2026-10-12", "2026-10-13"]
+    zero = sales[("z", "b")]                                             # measured: sold nothing
+    assert zero["units"] == 0 and zero["revenue"] == 0 and zero["days"] == ["2026-10-13"]
