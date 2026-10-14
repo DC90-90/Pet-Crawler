@@ -41,6 +41,16 @@ groups = {
     "four-correctness": ["test_four_correctness_regressions"],
     "matcher-parent-pool": ["test_matcher_parent_pool_regression"],
     "release-safety": ["test_release_safety"],
+    # Oct 2026 production recovery: read budgets, cache keys and stale serving,
+    # write path without the event_id index, leases, scheduler, crawl attempts,
+    # heartbeats/resume, identity flags and measured-day revenue labels.
+    "recovery-oct-2026": ["test_v2_since_bound", "test_read_budgets_and_page_cache", "test_cohort_memo",
+                          "test_index_builds", "test_cache_loop_fixes", "test_stale_previous_revision",
+                          "test_scoped_page_cache_keys", "test_snapshot_write_by_id", "test_recover_sealed_ledger",
+                          "test_market_share_reasons", "test_lease_renewal", "test_scheduler_misfire",
+                          "test_process_watch_and_resume", "test_identity_check", "test_measured_days",
+                          "test_crawl_attempts", "test_store_categories", "test_category_map",
+                          "test_pagination_rate_limit", "test_zid_variant_supplement"],
 }
 report_dir = ROOT / "test_reports/pytest"
 report_dir.mkdir(parents=True, exist_ok=True)
