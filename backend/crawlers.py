@@ -4110,7 +4110,51 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
 
 
 # ── Waterfall Orchestrator ───────────────────────────────────
-async def crawl_store_waterfall(db, store):
+async def crawl_store_waterfall(db, store, trigger="unspecified"):
+    """Every attempt is recorded in crawl_attempts the moment it starts and
+    updated when it ends, whatever the outcome. Crawl logs are written only
+    by a finished crawl, so on 14 Oct 2026 eight scheduled crawls left no
+    trace at all (not even a failure)."""
+    attempt_id = str(uuid.uuid4())
+    started = datetime.now(timezone.utc)
+    try:
+        import process_watch
+        boot_id = process_watch.BOOT_ID
+    except Exception:  # noqa: BLE001
+        boot_id = None
+    try:
+        await db.crawl_attempts.insert_one({"_id": attempt_id, "store_id": store.get("id"), "store_name": store.get("name"),
+                                            "trigger": trigger, "boot_id": boot_id, "started_at": started, "status": "running"})
+    except Exception:  # noqa: BLE001 — bookkeeping never blocks a crawl
+        logger.warning("[Crawl] attempt record could not be written", exc_info=True)
+
+    async def finish(status, **fields):
+        try:
+            now = datetime.now(timezone.utc)
+            await db.crawl_attempts.update_one({"_id": attempt_id}, {"$set": {
+                "status": status, "finished_at": now, "secs": round((now - started).total_seconds(), 1), **fields}})
+        except Exception:  # noqa: BLE001
+            logger.warning("[Crawl] attempt record could not be updated", exc_info=True)
+
+    try:
+        result = await _crawl_store_waterfall_attempt(db, store)
+    except asyncio.CancelledError:
+        await asyncio.shield(finish("cancelled"))
+        raise
+    except asyncio.TimeoutError:
+        await finish("timed_out", error="exceeded 2.5 h")
+        raise
+    except Exception as exc:
+        await finish("failed", error=f"{type(exc).__name__}: {str(exc)[:300]}")
+        raise
+    result = result or {}
+    await finish(result.get("status") or ("done" if result.get("products_found") else "empty"),
+                 error=result.get("error"), products_found=result.get("products_found"),
+                 snapshots_created=result.get("snapshots_created"))
+    return result
+
+
+async def _crawl_store_waterfall_attempt(db, store):
     from release_control import require_permit, feature
     await require_permit(db)
     if store.get("use_proxy") and not await feature(db, "proxy_crawling"):

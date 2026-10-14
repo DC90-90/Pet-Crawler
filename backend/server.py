@@ -1268,7 +1268,7 @@ async def _execute_backfill(run_id, stores, rematch):
                 {"$set": {"stores.$.status": "crawling",
                           "stores.$.started_at": datetime.now(timezone.utc).isoformat()}})
             try:
-                res = await crawl_store_waterfall(db, s)
+                res = await crawl_store_waterfall(db, s, trigger="backfill")
                 await db.backfill_runs.update_one(
                     {"id": run_id, "stores.store_id": s["id"]},
                     {"$set": {
@@ -1343,6 +1343,23 @@ async def _resume_interrupted_backfills(delay_secs=90):
             await db.backfill_runs.update_one({"id": run["id"]}, {"$set": update})
     except Exception:
         logger.exception("[Backfill] resume of interrupted runs failed")
+
+
+@router.get("/admin/crawl-attempts")
+async def admin_crawl_attempts(limit: int = Query(60, ge=1, le=500), store: Optional[str] = Query(None),
+                               _=Depends(require_super_admin)):
+    """Every crawl attempt, newest first, with its trigger (schedule, backfill,
+    manual), the process that ran it and how it ended. 'running' with a dead
+    process means the attempt was cut off by a restart."""
+    import process_watch
+    q = {"store_name": {"$regex": f"^{re.escape(store)}$", "$options": "i"}} if store else {}
+    alive = await process_watch.alive_boot_ids(db)
+    rows = await db.crawl_attempts.find(q).sort("started_at", -1).to_list(limit)
+    for r in rows:
+        r["id"] = r.pop("_id")
+        if r.get("status") == "running" and r.get("boot_id") and r["boot_id"] not in alive:
+            r["status"] = "cut_off_by_restart"
+    return {"attempts": rows}
 
 
 @router.get("/admin/process-history")
@@ -1916,7 +1933,7 @@ async def scheduled_crawl_job(store_id: str):
         return
     platform = store.get("platform", "").lower()
     logger.info(f"[Scheduler] Cron fired: {store.get('domain')} at {datetime.now(timezone.utc).isoformat()}")
-    result = await crawl_store_waterfall(db, store)
+    result = await crawl_store_waterfall(db, store, trigger="schedule")
     # Perf sprint Feb 2026 — invalidate insights/discounts TTL cache so the new
     # snapshots show up immediately on the dashboard instead of waiting up to 60s.
     cache_clear()
@@ -2088,7 +2105,7 @@ async def trigger_crawl(store_id: str, user=Depends(get_user)):
     store = await db.stores.find_one({"id": store_id}, {"_id": 0})
     if not store:
         raise HTTPException(404, "Store not found")
-    result = await crawl_store_waterfall(db, store)
+    result = await crawl_store_waterfall(db, store, trigger="manual")
     cache_clear()  # invalidate insight/discount TTL cache after new snapshots land
     return {
         "message": f"Crawl {'completed' if result.get('tier_used') else 'attempted'} for {store['name']}",
