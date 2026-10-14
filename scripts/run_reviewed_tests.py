@@ -50,7 +50,7 @@ groups = {
                           "test_market_share_reasons", "test_lease_renewal", "test_scheduler_misfire",
                           "test_process_watch_and_resume", "test_identity_check", "test_measured_days",
                           "test_crawl_attempts", "test_store_categories", "test_category_map",
-                          "test_pagination_rate_limit", "test_zid_variant_supplement"],
+                          "test_pagination_rate_limit", "test_zid_variant_supplement", "test_full_export"],
 }
 report_dir = ROOT / "test_reports/pytest"
 report_dir.mkdir(parents=True, exist_ok=True)

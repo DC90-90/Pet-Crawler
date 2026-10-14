@@ -1127,6 +1127,48 @@ async def admin_archive_run(background: BackgroundTasks,
     return {"ok": True, "date": day, "force": force, "status": "started"}
 
 
+# ── Full export (14 Oct 2026) — every collection as raw BSON, for the owner ──
+@router.post("/admin/export/run")
+async def admin_export_run(collections: Optional[str] = Query(None, description="Comma list; default all"),
+                           user=Depends(require_super_admin)):
+    import full_export
+    if not archive._emergent_key():
+        raise HTTPException(400, "EMERGENT_LLM_KEY is not configured — storage unavailable")
+    only = {c.strip() for c in collections.split(",") if c.strip()} if collections else None
+    run_id = await full_export.start(db, user.get("email"), only)
+    if run_id is None:
+        raise HTTPException(409, "An export is already running")
+    logger.info("[Export] run %s started by %s", run_id, user.get("email"))
+    return {"ok": True, "run_id": run_id, "status": "started", "poll": "/api/admin/export/status"}
+
+
+@router.get("/admin/export/status")
+async def admin_export_status(run_id: Optional[str] = Query(None), user=Depends(require_super_admin)):
+    query = {"id": run_id} if run_id else {}
+    runs = await db.export_runs.find(query, {"_id": 0}).sort("started_at", -1).to_list(5)
+    files = []
+    if runs:
+        files = await db.export_files.find({"run_id": runs[0]["id"]}, {"_id": 0}).sort(
+            [("collection", 1), ("part", 1)]).to_list(5000)
+    return {"runs": runs, "files": files, "file_count": len(files),
+            "bytes": sum(f.get("bytes", 0) for f in files)}
+
+
+@router.get("/admin/export/download")
+async def admin_export_download(path: str = Query(...), user=Depends(require_super_admin)):
+    rec = await db.export_files.find_one({"path": path}, {"_id": 0})
+    if not rec:
+        raise HTTPException(404, "Export file not found")
+    try:
+        data, _ctype = await asyncio.to_thread(archive.get_object, path)
+    except Exception as e:
+        logger.exception("[Export] download failed for %s", path)
+        raise HTTPException(502, f"Storage read failed: {e}")
+    name = path.split("/")[-1] if rec["collection"] == "_manifest" else f"{rec['collection']}.{path.split('/')[-1]}"
+    return Response(content=data, media_type="application/gzip" if name.endswith(".gz") else "application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{rec["run_id"]}_{name}"'})
+
+
 async def scheduled_archive():
     """Daily: archive the KSA day that just closed."""
     day = archive.previous_ksa_day()
