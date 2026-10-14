@@ -82,6 +82,35 @@ def test_unchanged_in_stock_reading_is_a_measured_zero_only_for_a_live_store():
     assert [(o["store_id"], o["sku"], o["dates"]) for o in observed] == [("z", "flat", [_day(1)])]
 
 
+def test_a_store_day_missing_from_the_ledger_is_completed_from_snapshots():
+    """11 Oct 2026: snapshots saved, ledger rows not; the hole broke the chain."""
+    from motor.motor_asyncio import AsyncIOMotorClient
+    from test_p0_my_products_baseline import _loopback_mongo_url
+    from archive import ksa_day_bounds_utc
+
+    async def scenario():
+        client = AsyncIOMotorClient(_loopback_mongo_url())
+        db = client["lh_" + uuid.uuid4().hex]
+        try:
+            skus = [f"p{i}" for i in range(60)]
+            rows = [_row("z", s, d, q) for s in skus for d, q in (("2026-10-10", 20), ("2026-10-12", 14))]
+            noon = ksa_day_bounds_utc("2026-10-11")[0] + timedelta(hours=9)
+            await db.product_snapshots.insert_many(
+                [{"store_id": "z", "sku": s, "crawled_at": noon, "qty_available": 17, "price": 10.0, "is_synthetic": False} for s in skus]
+                + [{"store_id": "z", "sku": "p0", "crawled_at": noon - timedelta(hours=2), "qty_available": 19, "price": 10.0}])
+            filled, pairs = await ledger_sales.fill_ledger_holes(db, rows, ["z"], "2026-10-10", "2026-10-12")
+            return rows, filled, pairs
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+    rows, filled, pairs = asyncio.run(scenario())
+    assert pairs == [("z", "2026-10-11")] and len(filled) == 60
+    assert {r["qty_available"] for r in filled} == {17}                  # the day's LAST reading
+    sealed = {(r["store_id"], r["ksa_date"]) for r in rows + filled}
+    facts, _g, _o = ledger_sales.compute(rows + filled, sealed, "2026-10-11", "2026-10-12", STORES, {})
+    assert sum(f["units"] for f in facts) == 60 * 6                       # 20 -> 17 -> 14, every SKU
+
+
 def test_rebuild_and_sales_map_through_the_evidence_ledger(monkeypatch):
     import evidence_ledger
     import ledger

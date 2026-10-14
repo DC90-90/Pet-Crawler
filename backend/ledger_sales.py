@@ -32,7 +32,9 @@ from sales_evidence import PLACEHOLDERS
 
 logger = logging.getLogger(__name__)
 
-VERSION = 2                   # 2: measured zero-sale intervals (ledger_sales_observed)
+VERSION = 3                   # 2: measured zeros; 3: ledger holes completed from snapshots
+HOLE_FRACTION = 0.9           # a store-day below 90% of the store's median ledger rows is a hole
+HOLE_MIN_ROWS = 50
 MAX_GAP_DAYS = 2              # same 48 h limit as interval facts
 STOCK_CAP_PER_DAY = 30        # same cap as sales_evidence (30 units / 24 h)
 COUNTER_CAP_PER_DAY = 50      # same cap as sales_evidence for sold counters
@@ -184,6 +186,51 @@ def compute(rows, sealed, start_date, end_date, stores, offer_index):
     return list(facts.values()), groups, obs
 
 
+async def fill_ledger_holes(db, rows, store_ids, read_from, end_date):
+    """Closing rows for store-days the ledger missed, from the raw snapshots.
+
+    The 9-11 Oct 2026 persistence failures left store-days whose snapshots were
+    saved but whose ledger rows were not (Petsy, Hamtaro, CutePets on 11 Oct;
+    Mowkly on 30 Sep; ...). A hole breaks the day-over-day chain, which
+    understated competitor sales by 7-14% against a recount from the raw
+    snapshots. A store-day with fewer than HOLE_FRACTION of the store's median
+    ledger rows is completed from that day's last snapshot per SKU; SKUs the
+    ledger already has for that day are left as they are."""
+    from statistics import median
+    from archive import ksa_day_bounds_utc
+    count, have = defaultdict(int), defaultdict(set)
+    for r in rows:
+        count[(r["store_id"], r["ksa_date"])] += 1
+        have[(r["store_id"], r["ksa_date"])].add(r["sku"])
+    first = datetime.fromisoformat(read_from)
+    days = [(first + timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range((datetime.fromisoformat(end_date) - first).days + 1)]
+    filled, pairs = [], []
+    for sid in store_ids:
+        seen = [count[(sid, d)] for d in days if count[(sid, d)]]
+        if not seen or median(seen) < HOLE_MIN_ROWS:
+            continue
+        for day in days:
+            if count[(sid, day)] >= HOLE_FRACTION * median(seen):
+                continue
+            start, end = ksa_day_bounds_utc(day)
+            last = {}
+            async for s in db.product_snapshots.find(
+                    {"store_id": sid, "crawled_at": {"$gte": start, "$lt": end}, "is_synthetic": {"$ne": True}},
+                    {"_id": 0, "sku": 1, "crawled_at": 1, "qty_available": 1, "sold_count": 1, "price": 1}):
+                if s.get("sku") and s["sku"] not in have[(sid, day)]:
+                    prev = last.get(s["sku"])
+                    if prev is None or s["crawled_at"] > prev["crawled_at"]:
+                        last[s["sku"]] = s
+            for sku, s in last.items():
+                filled.append({"store_id": sid, "sku": sku, "ksa_date": day, "qty_available": s.get("qty_available"),
+                               "sold_count_cumulative": s.get("sold_count"), "close_price": s.get("price"),
+                               "filled_from": "snapshots"})
+            if last:
+                pairs.append((sid, day))
+    return filled, pairs
+
+
 async def offer_index(db):
     """(store_id, sku) -> latest offer_id, from the immutable observation events."""
     out = {}
@@ -207,6 +254,9 @@ async def rebuild(db, days=BUILD_DAYS, now=None):
         {"_id": 0, "store_id": 1, "ksa_date": 1})}
     rows = await db.daily_ledger.find({"ksa_date": {"$gte": read_from, "$lte": end_date}},
                                       _ROW_FIELDS).batch_size(5000).to_list(None)
+    filled, filled_pairs = await fill_ledger_holes(db, rows, list(stores), read_from, end_date)
+    rows += filled
+    sealed |= set(filled_pairs)        # completed days only: end_date is yesterday
     index = await offer_index(db)
     facts, groups, observed = await asyncio.to_thread(compute, rows, sealed, start_date, end_date, stores, index)
     build = f"{now.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
@@ -224,7 +274,9 @@ async def rebuild(db, days=BUILD_DAYS, now=None):
             await coll.insert_many(rows_out[i:i + 5000], ordered=False)
     await db.ledger_sales_meta.update_one({"_id": "current"}, {"$set": {
         "build": build, "built_at": now, "start_date": start_date, "end_date": end_date,
-        "facts": len(docs), "observed": len(obs_docs), "groups": groups, "version": VERSION}}, upsert=True)
+        "facts": len(docs), "observed": len(obs_docs), "groups": groups, "version": VERSION,
+        "filled_store_days": [{"store": (stores.get(s) or {}).get("name", s), "date": d} for s, d in sorted(filled_pairs)],
+        "filled_rows": len(filled)}}, upsert=True)
     await db.ledger_sales_daily.delete_many({"build": {"$ne": build}})
     await db.ledger_sales_observed.delete_many({"build": {"$ne": build}})
     # Cached pages are keyed on the observation revision: new evidence, new pages.
