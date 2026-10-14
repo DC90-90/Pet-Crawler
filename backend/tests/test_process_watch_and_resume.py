@@ -91,3 +91,30 @@ def test_interrupted_backfill_resumes_remaining_stores(monkeypatch):
     assert runs["alive-run"]["status"] == "running"          # its process is alive
     assert runs["legacy-run"]["status"] == "running"         # no owner recorded: left alone
     assert runs["looping-run"]["status"] == "interrupted" and "resume_stopped" in runs["looping-run"]
+
+
+def test_a_stall_is_recorded_with_its_context(monkeypatch):
+    """A blocked event loop is recorded with what the process was doing
+    (14 Oct 2026: a 63 s stall restarted a production backend)."""
+    import time
+    import process_watch
+    monkeypatch.setattr(process_watch, "SPIKE_MS", 200)
+    monkeypatch.setattr(process_watch, "HEARTBEAT_SECS", 3600)
+    monkeypatch.setattr(process_watch, "_task", None)
+    monkeypatch.setitem(process_watch._state, "spikes", [])
+
+    async def scenario():
+        client, db = _db()
+        try:
+            process_watch.start(db, lambda: {"rebuild_step": "page:market-share/dataset:S:30d", "crawls_running": ["Zarafa"]})
+            await asyncio.sleep(0.1)
+            time.sleep(1.5)                    # block the loop like a synchronous compute would
+            await asyncio.sleep(1.2)           # let the probe wake up and record
+            return list(process_watch._state["spikes"])
+        finally:
+            process_watch._task.cancel()
+            await client.drop_database(db.name)
+            client.close()
+    spikes = asyncio.run(scenario())
+    assert spikes and spikes[-1]["lag_ms"] >= 200
+    assert spikes[-1]["rebuild_step"].startswith("page:market-share") and spikes[-1]["crawls_running"] == ["Zarafa"]

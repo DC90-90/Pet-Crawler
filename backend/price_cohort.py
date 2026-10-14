@@ -211,10 +211,10 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
            _own_signature(own_rows, own_price_fn))
     hit = _cohort_memo.get(key)
     if hit and hit[1] > _time.monotonic():
-        return _copy.deepcopy(hit[0])
+        return await asyncio.to_thread(_copy.deepcopy, hit[0])
     if key in _cohort_inflight:
         result = await asyncio.shield(_cohort_inflight[key])
-        return _copy.deepcopy(result)
+        return await asyncio.to_thread(_copy.deepcopy, result)
 
     async def compute():
         result = await bounded_read(_build_cohorts(db, own_rows, own_store_id, own_price_fn, now,
@@ -232,7 +232,7 @@ async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, comp
     finally:
         if _cohort_inflight.get(key) is task:
             _cohort_inflight.pop(key, None)
-    return _copy.deepcopy(result)
+    return await asyncio.to_thread(_copy.deepcopy, result)
 
 
 async def _build_cohorts(db, own_rows, own_store_id, own_price_fn, now, competitor_store_ids, parents):

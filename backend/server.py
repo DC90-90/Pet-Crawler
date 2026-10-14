@@ -2890,7 +2890,7 @@ async def _store_dashboard_cache(db, days, dataset, tolerate_race=False):
     # The dataset (≈3,000 rows with sellers) exceeds the 16 MB document limit
     # on production, so it is stored compressed/chunked; the envelope fields
     # stay on the head document for the validity checks.
-    envelope = jsonable_encoder(my_products_cache.envelope(dataset))
+    envelope = await asyncio.to_thread(jsonable_encoder, my_products_cache.envelope(dataset))
     head = {k: v for k, v in envelope.items() if k != "dataset"}
     await cache_blobs.write_blob(db, _dashboard_cache_key(days), envelope["dataset"],
                                  {**head, "window_days": days, "source_observed_at": revision.get("observed_at")})
@@ -2980,7 +2980,8 @@ async def _store_page_cache(db, base, days, payload, revision=None):
     now = datetime.now(timezone.utc)
     if revision is None:
         revision = await db.data_versions.find_one({"_id": "observations"}) or {}
-    await cache_blobs.write_blob(db, _page_cache_key(base, days), jsonable_encoder(payload), {
+    encoded = await asyncio.to_thread(jsonable_encoder, payload)
+    await cache_blobs.write_blob(db, _page_cache_key(base, days), encoded, {
         "base": base, "window_days": days, "computed_at": now,
         "source_revision": revision.get("revision", 0), "source_observed_at": revision.get("observed_at")})
     return now
@@ -12279,8 +12280,11 @@ async def startup():
 
 def _heartbeat_extra():
     running = _CACHE_REBUILD_TASK is not None and not _CACHE_REBUILD_TASK.done()
-    return {"rebuild_running": running, "rebuild_step": next((k for k, v in _CACHE_REBUILD_STATE.get("steps", {}).items()
-                                                             if v == "running"), None) if running else None,
+    steps = [k for k, v in _CACHE_REBUILD_STATE.get("steps", {}).items() if v == "running"] if running else []
+    import crawlers as _cr
+    return {"rebuild_running": running, "rebuild_step": steps[-1] if steps else None,
+            "crawls_running": sorted(set(_cr.RUNNING_CRAWLS.values())),
+            "page_builds_running": sum(1 for t in _ON_DEMAND_TASKS.values() if not t.done()),
             "boot_status": BOOT_STATE.get("status")}
 
 

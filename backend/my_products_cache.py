@@ -111,11 +111,15 @@ def previous_key_pattern(key):
     return "^" + re.escape(prefix + ":") + r"\d{4}-\d{2}-\d{2}" + re.escape(":" + window) + "$"
 
 
-def _remember(entries, key, doc):
-    # A cache budget is NOT a result cap: oversized datasets are returned whole.
+def _size_of(doc):
     from bson import BSON
     from fastapi.encoders import jsonable_encoder
-    size = len(BSON.encode(jsonable_encoder(doc)))
+    return len(BSON.encode(jsonable_encoder(doc)))
+
+
+def _remember(entries, key, doc, size=None):
+    # A cache budget is NOT a result cap: oversized datasets are returned whole.
+    size = _size_of(doc) if size is None else size
     if size > MAX_CACHE_BYTES:
         return
     entries.pop(key, None)
@@ -173,7 +177,7 @@ async def _serve(db, key, compute, max_age, on_stale=None):
             source = "live_fallback"
         elif await revision(db) != source_revision:
             raise unavailable("price_source_changed")
-        _remember(entries, scoped_key, doc)
+        _remember(entries, scoped_key, doc, size=await asyncio.to_thread(_size_of, doc))
         return doc, source
 
     async def shared_load():

@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 BOOT_ID = uuid.uuid4().hex[:12]
 STARTED_AT = datetime.now(timezone.utc)
 HEARTBEAT_SECS = 60
-_state = {"max_lag_ms": 0.0, "last_lag_ms": 0.0, "peak_rss_mb": None}
+_state = {"max_lag_ms": 0.0, "last_lag_ms": 0.0, "peak_rss_mb": None, "spikes": [], "extra": None}
+SPIKE_MS = 2000      # a stall this long is recorded with what was running
+MAX_SPIKES = 20
 _task = None
 
 
@@ -76,6 +78,16 @@ async def _lag_probe():
         lag = (time.perf_counter() - started - 1) * 1000
         _state["last_lag_ms"] = round(lag, 1)
         _state["max_lag_ms"] = max(_state["max_lag_ms"], round(lag, 1))
+        if lag >= SPIKE_MS:
+            # Recorded after the stall ends: what the process was doing then
+            # (rebuild step, running crawls) points at the code that blocked.
+            context = {}
+            try:
+                context = (_state["extra"] or (lambda: {}))() or {}
+            except Exception:  # noqa: BLE001
+                pass
+            _state["spikes"].append({"at": datetime.now(timezone.utc), "lag_ms": round(lag, 1), **context})
+            del _state["spikes"][:-MAX_SPIKES]
 
 
 async def _beat(db, extra):
@@ -83,7 +95,8 @@ async def _beat(db, extra):
         try:
             now = datetime.now(timezone.utc)
             doc = {"boot_id": BOOT_ID, "pid": os.getpid(), "started_at": STARTED_AT, "last_at": now,
-                   **memory(), "loop_lag_ms": _state["last_lag_ms"], "max_loop_lag_ms": _state["max_lag_ms"]}
+                   **memory(), "loop_lag_ms": _state["last_lag_ms"], "max_loop_lag_ms": _state["max_lag_ms"],
+                   "lag_spikes": list(_state["spikes"])}
             try:
                 doc.update(extra() or {})
             except Exception:  # noqa: BLE001 — the heartbeat never fails on its extras
@@ -99,6 +112,7 @@ def start(db, extra=None):
     if _task is not None and not _task.done():
         return
     loop = asyncio.get_running_loop()
+    _state["extra"] = extra
     loop.create_task(_lag_probe())
     _task = loop.create_task(_beat(db, extra or (lambda: {})))
 

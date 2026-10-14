@@ -4110,6 +4110,9 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
 
 
 # ── Waterfall Orchestrator ───────────────────────────────────
+RUNNING_CRAWLS = {}   # attempt id -> store name, this process (for stall diagnostics)
+
+
 async def crawl_store_waterfall(db, store, trigger="unspecified"):
     """Every attempt is recorded in crawl_attempts the moment it starts and
     updated when it ends, whatever the outcome. Crawl logs are written only
@@ -4136,6 +4139,7 @@ async def crawl_store_waterfall(db, store, trigger="unspecified"):
         except Exception:  # noqa: BLE001
             logger.warning("[Crawl] attempt record could not be updated", exc_info=True)
 
+    RUNNING_CRAWLS[attempt_id] = store.get("name")
     try:
         result = await _crawl_store_waterfall_attempt(db, store)
     except asyncio.CancelledError:
@@ -4147,6 +4151,8 @@ async def crawl_store_waterfall(db, store, trigger="unspecified"):
     except Exception as exc:
         await finish("failed", error=f"{type(exc).__name__}: {str(exc)[:300]}")
         raise
+    finally:
+        RUNNING_CRAWLS.pop(attempt_id, None)
     result = result or {}
     await finish(result.get("status") or ("done" if result.get("products_found") else "empty"),
                  error=result.get("error"), products_found=result.get("products_found"),
