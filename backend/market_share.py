@@ -31,6 +31,7 @@ A share computed over 2 of 5 sellers is a share of what we can see, and the row
 says so — it is never presented as a share of the whole market.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -607,6 +608,24 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         if p.get("offer_id"):
             catalog[p["offer_id"]] = p
 
+    # Everything below is CPU work on ~60k offers: run it in a thread so the
+    # event loop keeps answering (14 Oct 2026: this block stalled the loop for
+    # 55-59 s per window, failing health checks and restarting production).
+    return await asyncio.to_thread(
+        _assemble_dataset, days=days, own_store_id=own_store_id, own_price_fn=own_price_fn,
+        brand_fn=brand_fn, orders_by_sku=orders_by_sku, window_start=window_start,
+        window_end=window_end, sealed=sealed, now=now, category_map=category_map,
+        prev_start=prev_start, prev_end=prev_end, stores=stores, sales=sales,
+        prev_sales=prev_sales, signals=signals, snaps=snaps, my_by_sku=my_by_sku,
+        cohorts=cohorts, cohort_links=cohort_links, cohort_exclusions=cohort_exclusions,
+        own_key_index=own_key_index, alias=alias, variant_links=variant_links, catalog=catalog)
+
+
+def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_sku,
+                      window_start, window_end, sealed, now, category_map, prev_start,
+                      prev_end, stores, sales, prev_sales, signals, snaps, my_by_sku,
+                      cohorts, cohort_links, cohort_exclusions, own_key_index, alias,
+                      variant_links, catalog):
     # ── group every (sku, store) observation under a canonical product ──────
     mine = {}                   # my_sku -> {"sellers": [...]}
     others = {}                 # canonical key -> {"sellers": [...], "names": set}
