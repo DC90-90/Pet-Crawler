@@ -1,4 +1,5 @@
 """Immutable offer events and idempotent, algorithm-versioned interval facts."""
+import os
 from datetime import datetime, timezone, timedelta
 from observation_contract import stable_id
 from sales_evidence import interval, VERSION
@@ -36,7 +37,17 @@ async def record(db, snapshot):
         await db.data_versions.update_one({'_id': 'observations'}, {'$inc': {'revision': 1}, '$max': {'observed_at': event['observed_at']}}, upsert=True)
 
 
+def sales_source():
+    """Which evidence feeds every revenue view. "ledger" (default since 14 Oct
+    2026): day-over-day changes in the sealed daily ledger, which covers every
+    day since 1 Aug 2026. "v2": interval facts, which only exist from 12 Oct."""
+    return os.environ.get("SALES_SOURCE", "ledger").strip().lower()
+
+
 async def sales_map(db, start, end, sealed=True):
+    if sales_source() == "ledger":
+        import ledger_sales
+        return await ledger_sales.sales_map(db, start, end, sealed=sealed)
     q = {"date": {"$gte": ksa_day_str(start), "$lte": ksa_day_str(end-timedelta(seconds=1))}, "algorithm_version": VERSION,
          "units": {"$ne": None}}  # unavailable intervals are never summed; filter them in the query, not in Python
     out = {}

@@ -31,6 +31,7 @@ environment.update(MONGO_URL=url, DALEEL_TEST_MONGO_URL=url,
                    # cache-miss policy (rebuild → 503) must not leak in from .env.
                    CACHE_MISS_POLICY="live",
                    OBSERVATIONS_V2_SINCE="2000-01-01T00:00:00+00:00",
+                   SALES_SOURCE="v2",
                    PYTHONPATH=os.pathsep.join([str(ROOT / "backend"), str(ROOT / "backend/tests")]))
 groups = {
     "reviewed-core": ["test_findings_v2_regression", "test_iteration37_integration_real_mongo", "test_codex_review_gates"],
@@ -50,7 +51,8 @@ groups = {
                           "test_market_share_reasons", "test_lease_renewal", "test_scheduler_misfire",
                           "test_process_watch_and_resume", "test_identity_check", "test_measured_days",
                           "test_crawl_attempts", "test_store_categories", "test_category_map",
-                          "test_pagination_rate_limit", "test_zid_variant_supplement", "test_full_export"],
+                          "test_pagination_rate_limit", "test_zid_variant_supplement", "test_full_export",
+                          "test_ledger_sales"],
 }
 report_dir = ROOT / "test_reports/pytest"
 report_dir.mkdir(parents=True, exist_ok=True)

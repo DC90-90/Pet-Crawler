@@ -2,7 +2,7 @@
 from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException
 import ledger
-from evidence_ledger import sales_map, measured_days
+from evidence_ledger import sales_map, measured_days, sales_source
 from price_cohort import exclusion, identity_keys, FIELDS
 from snapshot_reads import latest_pipeline, complete_latest
 from observation_contract import since_bound
@@ -45,7 +45,11 @@ async def profile(db, store_id, orders_fn):
     daily = {}
     sealed_days = {r["ksa_date"]: r["sealed_at"] async for r in db.daily_ledger_store.find(
         {"store_id": store_id, "ksa_date": {"$gte": ledger.ksa_day_str(start), "$lt": ledger.ksa_day_str(end)}, "sealed_at": {"$ne": None}}, {"_id": 0})}
-    if orders is None:
+    if orders is None and sales_source() == "ledger":
+        for r in sales.values():
+            for date, v in (r.get("by_day") or {}).items():
+                daily[date] = daily.get(date, 0) + v
+    elif orders is None:
         async for fact in db.sales_facts_v2.find({"store_id": store_id, "date": {"$in": list(sealed_days)}, "units": {"$ne": None}, "algorithm_version": 2}, {"_id": 0}):
             if fact["created_at"].replace(tzinfo=timezone.utc) <= sealed_days[fact["date"]].replace(tzinfo=timezone.utc):
                 daily[fact["date"]] = daily.get(fact["date"], 0) + (fact.get("revenue") or 0)
@@ -90,6 +94,10 @@ async def ranking(db, orders_fn):
     stores = await db.stores.find({"is_active": {"$ne": False}}, {"_id": 0}).to_list(None)
     start, end = ledger.sealed_ksa_window(30)
     sales = await sales_map(db, start, end)
+    groups = []
+    if sales_source() == "ledger":
+        import ledger_sales
+        groups = (await ledger_sales.meta(db)).get("groups") or []
     now = datetime.now(timezone.utc)
     rows, all_offers = [], await latest(db, since=now-timedelta(days=7), projection=ELIGIBILITY_FIELDS)
     valid = [s for s in all_offers if exclusion(s, now=now) is None]
@@ -112,6 +120,9 @@ async def ranking(db, orders_fn):
                      "revenue_30d": revenue, "revenue_status": "ledger" if orders is not None else "computed" if signals else "not_measurable",
                      "revenue_days_measured": None if orders is not None else len(measured_days(sales, sid)), "revenue_days_expected": 30,
                      "revenue_basis": basis, "revenue_tier": "exact" if orders is not None else "estimated" if signals else "unavailable",
+                     # Storefronts that draw on one stock: a shared sale is counted once, for the lead.
+                     "shared_stock_with": [n for g in groups if sid in g.get("members", ()) for m, n in zip(g["members"], g["names"]) if m != sid],
+                     "shared_stock_lead": any(g.get("lead") == sid for g in groups),
                      "revenue_rank_value": None, "revenue_rank_basis": "none", "sales_status": basis, "sales_sample": len(signals),
                      "overlap": 0, "strength_score": None, "revenue_approx": None, "revenue_est_salla": None,
                      "rank_basis": "verified_offer_coverage", "components": {

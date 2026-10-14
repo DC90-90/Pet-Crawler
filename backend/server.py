@@ -1127,6 +1127,30 @@ async def admin_archive_run(background: BackgroundTasks,
     return {"ok": True, "date": day, "force": force, "status": "started"}
 
 
+# ── Ledger sales (14 Oct 2026) — revenue evidence for the whole window ──
+async def _ledger_sales_refresh(delay_secs=0):
+    import ledger_sales
+    if delay_secs:
+        await asyncio.sleep(delay_secs)
+    try:
+        await ledger_sales.rebuild_if_stale(db)
+    except Exception:
+        logger.exception("[LedgerSales] refresh failed")
+
+
+@router.get("/admin/ledger-sales/status")
+async def admin_ledger_sales_status(user=Depends(require_super_admin)):
+    import ledger_sales
+    return await ledger_sales.meta(db)
+
+
+@router.post("/admin/ledger-sales/rebuild")
+async def admin_ledger_sales_rebuild(user=Depends(require_super_admin)):
+    import ledger_sales
+    res = await ledger_sales.rebuild(db)
+    return {k: v for k, v in res.items()}
+
+
 # ── Full export (14 Oct 2026) — every collection as raw BSON, for the owner ──
 @router.post("/admin/export/run")
 async def admin_export_run(collections: Optional[str] = Query(None, description="Comma list; default all"),
@@ -12447,6 +12471,12 @@ async def _boot_sequence():
                 logger.exception("[Ledger] scheduled day-seal failed")
         scheduler.add_job(_scheduled_ledger_seal, CronTrigger(hour=21, minute=30, timezone="UTC"),
                           id="ledger_day_seal", replace_existing=True)
+
+        # 14 Oct 2026 — revenue evidence from the sealed ledger, rebuilt once per
+        # newly sealed KSA day (hourly check; a no-op until the next seal).
+        scheduler.add_job(_ledger_sales_refresh, CronTrigger(minute=45, timezone="UTC"),
+                          id="ledger_sales_refresh", replace_existing=True)
+        asyncio.create_task(_ledger_sales_refresh(delay_secs=120))
 
         # iter78 — archive the closed KSA day to object storage. 03:00 UTC = 06:00
         # Riyadh: after the crawl window AND after the 21:30 UTC seal.

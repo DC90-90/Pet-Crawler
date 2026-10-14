@@ -131,6 +131,13 @@ function RevenueCell({ row, isRTL }) {
             measured on {row.revenue_days_measured} of {row.revenue_days_expected || 30} days
           </small>
         )}
+        {row.shared_stock_with?.length > 0 && (
+          <small className="block text-[#F59E0B]" data-testid={`ranking-shared-${row.store_id}`}>
+            {isRTL
+              ? `مخزون مشترك مع ${row.shared_stock_with.join("، ")}${row.shared_stock_lead ? " — المبيعات المشتركة محسوبة هنا مرة واحدة" : " — المبيعات المشتركة محسوبة لدى المتجر الرئيسي"}`
+              : `shared stock with ${row.shared_stock_with.join(", ")}${row.shared_stock_lead ? " — shared sales counted here once" : " — shared sales counted under the lead store"}`}
+          </small>
+        )}
       </span>
     );
   }
