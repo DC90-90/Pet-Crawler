@@ -26,6 +26,7 @@ def test_export_round_trips_every_collection(monkeypatch):
     store = {}
     monkeypatch.setattr(archive, "put_object", lambda path, data, ctype: store.__setitem__(path, data) or {"path": path, "size": len(data)})
     monkeypatch.setattr(full_export, "CHUNK_DOCS", 3)
+    monkeypatch.setattr(full_export, "PAGE_DOCS", 2)          # pages resume from the last _id
 
     async def scenario():
         client, db = _db()
@@ -53,5 +54,5 @@ def test_export_round_trips_every_collection(monkeypatch):
     snap_parts = sorted((f for f in files if f["collection"] == "product_snapshots"), key=lambda f: f["part"])
     assert [f["docs"] for f in snap_parts] == [3, 3, 2]
     raw = b"".join(gzip.decompress(store[f["path"]]) for f in snap_parts)
-    assert list(bson.decode_all(raw)) == snaps                          # exact types, ids, dates
+    assert list(bson.decode_all(raw)) == snaps                          # exact types, ids, dates, every _id type
     assert any(f["collection"] == "_manifest" for f in files)

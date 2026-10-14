@@ -35,7 +35,9 @@ SKIP = {"cache_blobs", "dashboard_cache", "otp_requests", "zid_oauth_states",
         "job_leases", "export_runs", "export_files", "users"}
 CHUNK_DOCS = 50_000
 CHUNK_RAW_BYTES = 48 * 1024 * 1024
-BATCH_SIZE = 2000
+PAGE_DOCS = 5000
+PAGE_RETRY_WAITS = (0, 5, 20, 60)
+ID_TYPES = ("objectId", "string", "int", "long", "double", "decimal", "binData", "date", "object", "bool")
 COLLECTION_ATTEMPTS = 3
 LEASE_KEY = "full-export"
 _tasks = {}
@@ -59,6 +61,16 @@ async def _put(path, blob, content_type):
     raise RuntimeError(f"storage write failed: {path}")
 
 
+async def _page(raw, query):
+    for wait in PAGE_RETRY_WAITS:
+        await asyncio.sleep(wait)
+        try:
+            return await raw.find(query).sort("_id", 1).limit(PAGE_DOCS).to_list(PAGE_DOCS)
+        except Exception:  # noqa: BLE001 — timeouts and dropped connections are retried
+            logger.warning("[Export] page read failed, retrying", exc_info=True)
+    return await raw.find(query).sort("_id", 1).limit(PAGE_DOCS).to_list(PAGE_DOCS)
+
+
 async def _export_collection(db, run_id, name):
     raw = db.get_collection(name, codec_options=CodecOptions(document_class=RawBSONDocument))
     files, parts, raw_bytes, docs, part = [], [], 0, 0, 0
@@ -78,12 +90,24 @@ async def _export_collection(db, run_id, name):
         parts, raw_bytes = [], 0
         await db.export_runs.update_one({"id": run_id}, {"$set": {"current": name, "current_docs": docs}})
 
-    async for doc in raw.find({}, batch_size=BATCH_SIZE):
-        parts.append(doc.raw)
-        raw_bytes += len(doc.raw)
-        docs += 1
-        if len(parts) >= CHUNK_DOCS or raw_bytes >= CHUNK_RAW_BYTES:
-            await flush()
+    # Short pages in _id order, not one long cursor: production's operation
+    # timeout and dropped connections killed a single 8.5M-document cursor
+    # three times (14 Oct 2026). A failed page is retried from the last _id.
+    # `$gt` compares within one BSON type, so each _id type is paged separately.
+    for id_type in ID_TYPES:
+        last = None
+        while True:
+            query = {"_id": {"$type": id_type}} if last is None else {"_id": {"$type": id_type, "$gt": last}}
+            page = await _page(raw, query)
+            if not page:
+                break
+            for doc in page:
+                parts.append(doc.raw)
+                raw_bytes += len(doc.raw)
+                docs += 1
+                if len(parts) >= CHUNK_DOCS or raw_bytes >= CHUNK_RAW_BYTES:
+                    await flush()
+            last = page[-1]["_id"]
     if parts:
         await flush()
     # Parts left over from an earlier, longer attempt are no longer part of this export.
@@ -107,6 +131,7 @@ async def run(db, run_id, owner, only=None):
             for attempt in range(1, COLLECTION_ATTEMPTS + 1):
                 try:
                     info.update(await _export_collection(db, run_id, name))
+                    info["count_after"] = await db[name].estimated_document_count()
                     info["status"] = "done"
                     info.pop("error", None)
                     break
