@@ -136,12 +136,15 @@ def test_stored_cache_computes_under_the_background_budget_and_reports_failures(
                 raised = None
             except HTTPException as exc:
                 raised = exc.status_code
-            return ok, raised, in_background()
+            st = await api_cache.status(db)
+            return ok, raised, in_background(), st
         finally:
             await client.drop_database(db.name)
             client.close()
-    ok, raised, after = asyncio.run(scenario())
+    ok, raised, after, st = asyncio.run(scenario())
     assert ok == {"ok": 1} and seen == [True] and raised == 503 and after is False
+    assert [f["key"] for f in st["failures"]] == ["bad"] and "HTTPException" in st["failures"][0]["error"]
+    assert [r["key"] for r in st["stored"]] == ["bg"]
 
 
 def test_large_json_is_encoded_off_the_loop_with_cache_headers():

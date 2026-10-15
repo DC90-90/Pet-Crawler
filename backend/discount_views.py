@@ -1,6 +1,6 @@
 """Current discounts belong to specific verified offers, not global SKUs."""
 from datetime import datetime, timezone, timedelta
-from price_cohort import exclusion
+from price_cohort import exclusion, FIELDS
 from store_views import latest
 
 # A current discount is a current price: every tracked store is crawled daily.
@@ -8,13 +8,17 @@ from store_views import latest
 # connection's 10 s operation limit, and the Discounts page failed (15 Oct 2026).
 CURRENT_DAYS = 7
 META_BATCH = 1000
+PROJECTION = {**FIELDS, "original_price": 1, "sale_price": 1, "discount_pct": 1, "image_url": 1}
 
 
 async def top(db, days, store_id=None, category=None, limit=30, by_amount=False):
     active = set(await db.stores.distinct("id", {"is_active": {"$ne": False}}))
     limit = max(1, min(int(limit), 500))
     candidates = []
-    for s in await latest(db, store_id, days=CURRENT_DAYS):
+    # Compact projection: the latest-per-offer sort over whole snapshot
+    # documents took >10 s (the connection's operation limit) where Market
+    # Share's projected read of the same window does not.
+    for s in await latest(db, store_id, days=CURRENT_DAYS, projection=PROJECTION):
         price, original = s.get("price"), s.get("original_price")
         if s["store_id"] in active and exclusion(s) is None and price and original and original > price:
             candidates.append(s)

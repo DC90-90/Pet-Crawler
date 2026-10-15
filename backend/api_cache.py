@@ -30,6 +30,7 @@ MAX_STALE_SECS = 7 * 24 * 3600
 SKIP_PARAMS = {"user", "_", "request", "response", "db"}
 _memo = {}          # key -> (value, computed_ts)
 _inflight = {}      # key -> asyncio.Task
+_errors = {}        # key -> last failure (this process)
 
 
 def _encode(value):
@@ -42,10 +43,17 @@ async def _compute_and_store(db, key, compute):
     # for this only on the first visit ever; everyone else gets the stored copy.
     from price_read_limits import _background
     token = _background.set(True)
+    started = time.time()
     try:
         value = await compute()
+    except BaseException as exc:
+        _errors[key] = {"at": time.time(), "after_s": round(time.time() - started, 1),
+                        "error": f"{type(exc).__name__}: {str(exc)[:400]}"}
+        logger.warning("[ApiCache] compute failed for %s", key, exc_info=True)
+        raise
     finally:
         _background.reset(token)
+    _errors.pop(key, None)
     text = await asyncio.to_thread(_encode, value)
     now = time.time()
     clean = json.loads(text)
@@ -110,3 +118,13 @@ def stored(fresh_secs, db_getter, key_prefix=""):
 
 def clear_memo():
     _memo.clear()
+
+
+async def status(db):
+    """Stored answers (age) and this process's last failures, for the admin."""
+    now = time.time()
+    stored = [{"key": d["_id"], "age_s": round(now - float(d.get("computed_ts") or 0)), "bytes": len(d.get("json") or "")}
+              async for d in db[COLLECTION].find({}, {"_id": 1, "computed_ts": 1, "json": 1})]
+    return {"stored": sorted(stored, key=lambda r: r["key"]),
+            "failures": [{"key": k, **v, "age_s": round(now - v["at"])} for k, v in _errors.items()],
+            "inflight": sorted(_inflight)}

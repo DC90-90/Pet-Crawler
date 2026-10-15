@@ -1139,6 +1139,12 @@ async def _ledger_sales_refresh(delay_secs=0):
         logger.exception("[LedgerSales] refresh failed")
 
 
+@router.get("/admin/api-cache/status")
+async def admin_api_cache_status(user=Depends(require_super_admin)):
+    import os as _os
+    return {"process": _os.getpid(), **await api_cache.status(db)}
+
+
 @router.get("/admin/ledger-sales/status")
 async def admin_ledger_sales_status(user=Depends(require_super_admin)):
     import ledger_sales
