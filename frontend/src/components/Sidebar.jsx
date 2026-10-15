@@ -1,20 +1,19 @@
 import { NavLink } from "react-router-dom";
 import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, BarChart3, Store, LogOut, Languages, Bell, Percent, Zap, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X } from "lucide-react";
+import { Package, Store, LogOut, Languages, Bell, Tag, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X, LayoutDashboard, Lightbulb } from "lucide-react";
 import { useState, useEffect } from "react";
 
-// Feb 2026 — Insights + Price Intel merged into a single "Price & Market Intel"
-// entry. The item shows when the user has EITHER `insights` OR `price_intel`
-// in their allowed_pages (super_admin always sees it).
+// 15 Oct 2026 — one menu, each figure in one place. A page shows when the user
+// may see any of its sections (pageKeys); the sections themselves check again.
 const navItems = [
-  { to: "/", pageKey: "my_products", icon: Package, labelKey: "nav_products", label: "Dashboard" },
-  { to: "/insights", pageKeys: ["insights", "price_intel"], icon: BarChart3, labelKey: "nav_intel", label: "Price & Market Intel" },
-  { to: "/market-share", pageKey: "market_share", icon: PieChart, labelKey: "nav_market_share", label: "Market Share" },
-  { to: "/scanner", pageKey: "scanner", icon: Zap, labelKey: "nav_scanner", label: "Scanner" },
-  { to: "/discounts", pageKey: "discounts", icon: Percent, labelKey: "nav_discounts", label: "Discounts" },
+  { to: "/", pageKey: "my_products", icon: LayoutDashboard, labelKey: "nav_overview", label: "Overview" },
+  { to: "/products", pageKey: "my_products", icon: Package, labelKey: "nav_products", label: "My Products" },
+  { to: "/pricing", pageKeys: ["insights", "price_intel", "scanner", "discounts"], icon: Tag, labelKey: "nav_pricing", label: "Pricing" },
+  { to: "/market-share", pageKey: "market_share", icon: PieChart, labelKey: "nav_market", label: "Market" },
+  { to: "/opportunities", pageKeys: ["insights", "price_intel", "market_share"], icon: Lightbulb, labelKey: "nav_opportunities", label: "Opportunities" },
+  { to: "/stores", pageKey: "stores", icon: Store, labelKey: "nav_competitors", label: "Competitors" },
   { to: "/alerts", pageKey: "alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },
-  { to: "/stores", pageKey: "stores", icon: Store, labelKey: "nav_stores", label: "Stores" },
   { to: "/import", pageKey: "import", icon: Upload, labelKey: "nav_import", label: "Import" },
 ];
 
@@ -79,7 +78,7 @@ export default function Sidebar({ mobileOpen = false, onClose, onCollapse }) {
           .map((item) => (
             <NavLink
               key={item.to}
-              to={item.to === "/insights" && !canAccessPage(user, "insights") ? "/price-intel" : item.to}
+              to={item.to}
               onClick={onClose}
               end={item.to === "/"}
               data-testid={`nav-${item.labelKey}`}

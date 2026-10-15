@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
+import { RequestError } from "@/components/RequestError";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -19,10 +20,12 @@ const fetchData = (path, params) => async () => {
   }
 };
 
-export default function DiscountsPage() {
+export default function DiscountsPage({ embedded = false }) {
   const { t } = useI18n();
   const [storeFilter, setStoreFilter] = useState("all");
-  const [catFilter, setCatFilter] = useState("all");
+  // The old category filter offered generic keys (cat_food, …) that never
+  // match the stores' own category names, so it always emptied the lists.
+  const catFilter = "all";
 
   const params = {
     store_id: storeFilter !== "all" ? storeFilter : undefined,
@@ -49,23 +52,21 @@ export default function DiscountsPage() {
   const stores = Array.isArray(storesData) ? storesData : (storesData?.stores || []);
   const loading = results.some((r) => r.isLoading);
 
-  if (loading) return <div className="p-6 text-sm text-[#A1E4DB]">{t("loading")}</div>;
+  if (loading) return <div className={`${embedded ? "" : "p-6 "}text-sm text-[#A1E4DB]`}>{t("loading")}</div>;
+  const failed = results.find((r) => r.isError);
 
   return (
-    <div className="p-6 space-y-5" data-testid="discounts-page">
+    <div className={embedded ? "space-y-5" : "p-6 space-y-5"} data-testid="discounts-page">
+      {failed && <RequestError id="discounts-request" error={failed.error} onRetry={() => results.filter((r) => r.isError).forEach((r) => r.refetch())} />}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Discounts</h1>
+          {!embedded && <h1 className="text-2xl font-bold tracking-tight text-white">Discounts</h1>}
           <p className="text-sm text-[#A1E4DB] mt-0.5">Track competitor discount strategies</p>
         </div>
         <div className="flex gap-2">
           <Select value={storeFilter} onValueChange={setStoreFilter}>
             <SelectTrigger className="w-[150px] h-8 text-xs rounded-md" data-testid="disc-store-filter"><SelectValue placeholder="All Stores" /></SelectTrigger>
             <SelectContent><SelectItem value="all">All Stores</SelectItem>{stores.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-          </Select>
-          <Select value={catFilter} onValueChange={setCatFilter}>
-            <SelectTrigger className="w-[150px] h-8 text-xs rounded-md" data-testid="disc-cat-filter"><SelectValue placeholder="All Categories" /></SelectTrigger>
-            <SelectContent><SelectItem value="all">All Categories</SelectItem>{["cat_food","dog_food","accessories","grooming","healthcare","litter","toys"].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
           </Select>
         </div>
       </div>

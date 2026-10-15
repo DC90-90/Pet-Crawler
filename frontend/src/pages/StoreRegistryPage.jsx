@@ -156,7 +156,7 @@ export default function StoreRegistryPage() {
     <div className="p-6 space-y-5" data-testid="store-registry-page">
       <div className="flex flex-wrap gap-3 items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_stores")}</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_competitors")}</h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">Manage tracked competitor stores</p>
         </div>
         <div className="flex flex-wrap gap-2">

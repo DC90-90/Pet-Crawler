@@ -15,7 +15,6 @@ import ProductDetailPanel from "@/components/ProductDetailPanel";
 import { MineBadge } from "@/components/MineBadge";
 import { MarketPositionBadge } from "@/components/MarketPosition";
 import { SkuLine } from "@/components/SkuLine";
-import DataFreshnessBanner from "@/components/DataFreshnessBanner";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
 
@@ -250,7 +249,6 @@ export default function MyProductsPage() {
 
       {/* Data Freshness Banner (Feb 2026) — surfaces crawl-staleness so the user
          knows whether the dashboard reflects today's market or last month's snapshot. */}
-      <DataFreshnessBanner />
 
       {/* iter25 — honest cache freshness: when these KPIs were served from the
          precomputed dashboard cache, show when it was last recomputed. */}
@@ -267,7 +265,7 @@ export default function MyProductsPage() {
          the data-quality bar so a low avg_market_share isn't read as "we're losing"
          when the truth is "we don't have competitor data on most of the catalogue") */}
       <TooltipProvider>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         {[
           { key: "kpi_products", tipKey: "kpi_products_tip", val: kpis.total_products ?? "-", icon: TrendingUp, accent: "#1E988E" },
           { key: "kpi_units_sold", tipKey: "kpi_units_sold_tip", val: kpis.total_units_sold?.toLocaleString() ?? "—", icon: TrendingUp, accent: "#10B981" },
@@ -277,7 +275,9 @@ export default function MyProductsPage() {
           { key: kpis.my_revenue_source === "zid_orders" ? "kpi_my_revenue_real" : "kpi_my_revenue", tipKey: "kpi_my_revenue_tip", val: kpis.my_revenue == null ? "—" : `${kpis.my_revenue.toLocaleString()} ${t("sar")}`, sub: kpis.my_revenue_source === "zid_orders" && kpis.my_orders_count != null ? `${kpis.my_orders_count.toLocaleString()} ${t("kpi_orders")}` : (kpis.my_revenue_source === "inventory_proxy" ? "Inventory-value proxy" : "Unavailable"), icon: TrendingUp, accent: "#10B981" },
           { key: "kpi_market_share", tipKey: "kpi_market_share_tip", val: kpis.avg_market_share == null ? "—" : `${kpis.avg_market_share}%`, sub: kpis.share_sample_size ? `${isRTL ? "عبر" : "across"} ${kpis.share_sample_size} products` : (isRTL ? "أدلة غير كافية" : "Insufficient sales evidence"), icon: TrendingDown, accent: "#F59E0B" },
           { key: "kpi_market_coverage", tipKey: "kpi_market_coverage_tip", val: kpis.market_coverage_pct == null ? "—" : `${kpis.market_coverage_pct}%`, sub: kpis.matched_products == null || kpis.total_products == null ? "Unavailable" : `${kpis.matched_products} / ${kpis.total_products}`, icon: TrendingUp, accent: (kpis.market_coverage_pct ?? 0) < 20 ? "#EF4444" : "#10B981" },
-        ].filter(k => !release.price_comparison_only || ["kpi_products", "kpi_market_coverage"].includes(k.key)).map((k, i) => (
+        // Revenue, units and market share live on the Overview (one source,
+        // one value); this page keeps the catalogue's own measures.
+        ].filter(k => ["kpi_products", "kpi_market_coverage"].includes(k.key)).map((k, i) => (
           <div key={k.key} className="kpi-card animate-fadeIn" style={{ animationDelay: `${i * 80}ms` }} data-testid={`kpi-${k.key}`}>
             <div className="flex items-center justify-between mb-2">
               <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[#A1E4DB] inline-flex items-center gap-1">

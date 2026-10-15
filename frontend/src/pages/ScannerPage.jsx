@@ -32,7 +32,7 @@ const explainExclusion = (x) => {
 };
 
 
-export default function ScannerPage() {
+export default function ScannerPage({ embedded = false }) {
   const scope = useComparisonScope();
   const [error, setError] = useState(false);
   const requestId = useRef(0);
@@ -78,10 +78,10 @@ export default function ScannerPage() {
     s.is_own ? "#FF3B30" : s.is_lowest ? "#16A34A" : s.is_highest ? "#F59E0B" : "#002DF5";
 
   return (
-    <div className="p-6 space-y-5" data-testid="scanner-page">
+    <div className={embedded ? "space-y-5" : "p-6 space-y-5"} data-testid="scanner-page">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Price Opportunity Scanner</h1>
+          {!embedded && <h1 className="text-2xl font-bold tracking-tight text-white">Price Opportunity Scanner</h1>}
           <p className="text-sm text-[#A1E4DB] mt-0.5" data-testid="scanner-evidence-note">Current, in-stock offers for the same product</p>
         </div>
         <div className="flex gap-2 items-center">
@@ -99,7 +99,7 @@ export default function ScannerPage() {
       </div>
 
       <ComparisonScope scope={scope} prefix="scanner" />
-      <DataFreshnessBanner />
+      {!embedded && <DataFreshnessBanner />}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -163,6 +163,7 @@ export default function ScannerPage() {
       </div>
 
       {/* Competitors priced above market — kept separate from MY opportunities */}
+      {compTotal > 0 && (
       <div className="glass-card rounded-md overflow-hidden" data-testid="competitors-overpriced-card">
         <button
           onClick={() => setShowComps((v) => !v)}
@@ -207,6 +208,8 @@ export default function ScannerPage() {
         )}
       </div>
 
+      )}
+
       {/* iter78 — nothing is dropped silently: what the pack guard removed from
           the market low, and why */}
       <div className="glass-card rounded-md overflow-hidden" data-testid="excluded-prices-card">
@@ -217,7 +220,7 @@ export default function ScannerPage() {
           <div className="flex items-center gap-1.5">
             {showExcluded ? <ChevronDown className="w-4 h-4 text-[#A1E4DB]" /> : <ChevronRight className="w-4 h-4 text-[#A1E4DB]" />}
             <Filter className="w-4 h-4 text-[#A1E4DB]" />
-            <h3 className="text-sm font-semibold text-white">Excluded From Market Low ({excludedTotal})</h3>
+            <h3 className="text-sm font-semibold text-white">Prices left out of the comparison ({excludedTotal?.toLocaleString?.() ?? excludedTotal})</h3>
           </div>
           <span className="text-[10px] text-[#A1E4DB]">different pack size, or far below every other seller</span>
         </button>
@@ -247,8 +250,11 @@ export default function ScannerPage() {
         )}
       </div>
 
-      {/* Well Positioned + Undercut */}
+      {/* Well Positioned + Undercut — "Well positioned" is the Pricing page's
+          "Where I'm cheapest" tab when embedded; empty lists are not shown. */}
+      {(!embedded || undercut.length > 0) && (
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {!embedded && (
         <div className="glass-card rounded-md p-5">
           <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-1.5"><Shield className="w-4 h-4 text-green-500" />Well Positioned ({well_positioned.length})</h3>
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
@@ -261,6 +267,8 @@ export default function ScannerPage() {
             {well_positioned.length === 0 && <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p>}
           </div>
         </div>
+        )}
+        {undercut.length > 0 && (
         <div className="glass-card rounded-md p-5">
           <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-1.5"><Zap className="w-4 h-4 text-[#1E988E]" />Undercut Opportunities ({undercut.length})</h3>
           <div className="space-y-2 max-h-[250px] overflow-y-auto">
@@ -270,10 +278,11 @@ export default function ScannerPage() {
                 <div className="text-end"><p className="text-xs font-semibold text-[#1E988E]">{u.price} ﷼</p><p className="text-[10px] text-[#A1E4DB]">mkt avg {u.market_avg} ﷼</p></div>
               </div>
             ))}
-            {undercut.length === 0 && <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p>}
           </div>
         </div>
+        )}
       </div>
+      )}
 
       {/* Detail Sheet */}
       <Sheet open={!!selectedOpp} onOpenChange={(o) => { if (!o) setSelectedOpp(null); }}>

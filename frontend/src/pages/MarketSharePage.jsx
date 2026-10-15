@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api, { API_BASE } from "@/lib/api";
 import { toast } from "sonner";
 import { CATEGORY_LABELS } from "@/lib/i18n";
@@ -6,7 +7,6 @@ import { PieChart, Download, RefreshCw, Filter, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ShareOverview from "@/components/marketShare/ShareOverview";
 import MyProductsShare from "@/components/marketShare/MyProductsShare";
-import MissingProducts from "@/components/marketShare/MissingProducts";
 import BrandShare from "@/components/marketShare/BrandShare";
 import CategoryShare from "@/components/marketShare/CategoryShare";
 import Methodology from "@/components/marketShare/Methodology";
@@ -18,8 +18,8 @@ const RANGES = [7, 14, 30, 90];
 const TABS = [
   ["overview", "Overview"],
   ["my-products", "My Products"],
-  ["breakdown", "Competitor Breakdown"],
-  ["missing", "Missing Products"],
+  // "Competitor Breakdown" showed the same table as "My Products"; missing
+  // products live on the Opportunities page (one list, one count).
   ["brands", "Brands"],
   ["categories", "Categories"],
   ["methodology", "Methodology"],
@@ -28,6 +28,7 @@ const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c);
 
 export default function MarketSharePage() {
   const scope = useComparisonScope();
+  const navigate = useNavigate();
   const [optionsError, setOptionsError] = useState(false);
   const [days, setDays] = useState(30);
   const [tab, setTab] = useState("overview");
@@ -223,25 +224,12 @@ export default function MarketSharePage() {
 
       {tab === "overview" && (
         <ShareOverview days={days} includeToday={includeToday} filters={filters}
-          onPickProduct={pickProduct} onGoto={setTab} key={`ov-${nonce}-${includeToday}`} />
+          onPickProduct={pickProduct} onGoto={(id) => (id === "missing" ? navigate("/opportunities?tab=missing") : setTab(id))}
+          key={`ov-${nonce}-${includeToday}`} />
       )}
       {tab === "my-products" && (
         <MyProductsShare days={days} includeToday={includeToday} filters={filters}
           onPickProduct={pickProduct} key={`mp-${nonce}-${includeToday}`} />
-      )}
-      {tab === "breakdown" && (
-        <div className="space-y-3" data-testid="ms-breakdown-tab">
-          <p className="text-[11px] text-[#A1E4DB]">
-            Pick any product to see exactly which competitors sell it, at what price, and how each
-            one performs. Every seller is listed — including stores whose sales cannot be measured.
-          </p>
-          <MyProductsShare days={days} includeToday={includeToday} filters={filters}
-            onPickProduct={pickProduct} key={`bd-${nonce}-${includeToday}`} />
-        </div>
-      )}
-      {tab === "missing" && (
-        <MissingProducts days={days} includeToday={includeToday} filters={filters}
-          onPickProduct={pickProduct} key={`mi-${nonce}-${includeToday}`} />
       )}
       {tab === "brands" && <BrandShare days={days} includeToday={includeToday} filters={filters} key={`br-${nonce}-${includeToday}`} />}
       {tab === "categories" && <CategoryShare days={days} includeToday={includeToday} filters={filters} key={`ca-${nonce}-${includeToday}`} />}

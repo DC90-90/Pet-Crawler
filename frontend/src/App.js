@@ -18,15 +18,16 @@ import { Menu } from "lucide-react";
 // demand the first time it's navigated to. Cuts initial JS bundle from ~600KB
 // to ~80KB (only the login page + sidebar shell load up-front).
 const MyProductsPage = lazy(() => import("@/pages/MyProductsPage"));
-// Feb 2026 — Insights and Price Intel merged into a single IntelPage.
-// Both `/insights` and `/price-intel` mount the same component so existing
-// bookmarks keep working.
-const IntelPage = lazy(() => import("@/pages/IntelPage"));
+// 15 Oct 2026 — information architecture: every figure appears once.
+// Overview (home) · My Products · Pricing (overpriced, cheapest, comparison,
+// price wars, discounts) · Market · Opportunities · Competitors. The old
+// Price & Market Intel, Scanner and Discounts addresses redirect into Pricing.
+const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
+const PricingPage = lazy(() => import("@/pages/PricingPage"));
+const OpportunitiesPage = lazy(() => import("@/pages/OpportunitiesPage"));
 const StoreRegistryPage = lazy(() => import("@/pages/StoreRegistryPage"));
 const AlertsPage = lazy(() => import("@/pages/AlertsPage"));
 const CompetitorProfilePage = lazy(() => import("@/pages/CompetitorProfilePage"));
-const DiscountsPage = lazy(() => import("@/pages/DiscountsPage"));
-const ScannerPage = lazy(() => import("@/pages/ScannerPage"));
 // iter79 — Market Share tab (measured shares, gaps, brands, categories)
 const MarketSharePage = lazy(() => import("@/pages/MarketSharePage"));
 const SettingsPage = lazy(() => import("@/pages/SettingsPage"));
@@ -113,11 +114,12 @@ function AuthProvider({ children }) {
   );
 }
 
-function ProtectedRoute({ children, pageKey }) {
+function ProtectedRoute({ children, pageKey, pageKeys }) {
   const { user, checking } = useAuth();
   if (checking) return <div className="flex items-center justify-center min-h-screen bg-[#090E1C]"><div className="w-8 h-8 rounded-full border-2 border-[#1E988E] border-t-transparent animate-spin" /></div>;
   if (!user) return <Navigate to="/login" replace />;
   if (pageKey && !canAccessPage(user, pageKey)) return <Navigate to="/no-access" replace />;
+  if (pageKeys && !pageKeys.some((k) => canAccessPage(user, k))) return <Navigate to="/no-access" replace />;
   return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
 }
 
@@ -174,21 +176,21 @@ function AppLayout() {
         </div>
         <div className="flex-1 min-w-0">
         <ReleaseBoundary><Routes>
-          <Route path="/" element={<ProtectedRoute pageKey="my_products"><MyProductsPage /></ProtectedRoute>} />
-          <Route path="/insights" element={<ProtectedRoute pageKey="insights"><IntelPage /></ProtectedRoute>} />
+          <Route path="/" element={<ProtectedRoute pageKey="my_products"><OverviewPage /></ProtectedRoute>} />
+          <Route path="/products" element={<ProtectedRoute pageKey="my_products"><MyProductsPage /></ProtectedRoute>} />
+          <Route path="/pricing" element={<ProtectedRoute pageKeys={["insights", "price_intel", "scanner", "discounts"]}><PricingPage /></ProtectedRoute>} />
+          <Route path="/opportunities" element={<ProtectedRoute pageKeys={["insights", "price_intel", "market_share"]}><OpportunitiesPage /></ProtectedRoute>} />
+          <Route path="/insights" element={<Navigate to="/pricing" replace />} />
+          <Route path="/price-intel" element={<Navigate to="/pricing" replace />} />
+          <Route path="/scanner" element={<Navigate to="/pricing?tab=overpriced" replace />} />
+          <Route path="/discounts" element={<Navigate to="/pricing?tab=discounts" replace />} />
           <Route path="/alerts" element={<ProtectedRoute pageKey="alerts"><AlertsPage /></ProtectedRoute>} />
-          <Route path="/discounts" element={<ProtectedRoute pageKey="discounts"><DiscountsPage /></ProtectedRoute>} />
-          <Route path="/scanner" element={<ProtectedRoute pageKey="scanner"><ScannerPage /></ProtectedRoute>} />
           <Route path="/market-share" element={<ProtectedRoute pageKey="market_share"><MarketSharePage /></ProtectedRoute>} />
           <Route path="/stores" element={<ProtectedRoute pageKey="stores"><StoreRegistryPage /></ProtectedRoute>} />
           <Route path="/stores/:storeId" element={<ProtectedRoute pageKey="stores"><CompetitorProfilePage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute pageKey="settings"><ReleaseSettings /></ProtectedRoute>} />
           <Route path="/settings/coverage" element={<ProtectedRoute pageKey="settings"><CoverageReportPage /></ProtectedRoute>} />
           <Route path="/import" element={<ProtectedRoute pageKey="import"><ImportPage /></ProtectedRoute>} />
-          {/* Backward compat: `/price-intel` bookmarks land on the same merged page.
-              Uses `price_intel` page key so users historically granted only that
-              permission still reach the intel page. */}
-          <Route path="/price-intel" element={<ProtectedRoute pageKey="price_intel"><IntelPage /></ProtectedRoute>} />
           <Route path="/users" element={<SuperAdminRoute><UsersPage /></SuperAdminRoute>} />
           <Route path="/no-access" element={<ProtectedRoute><NoAccessPage /></ProtectedRoute>} />
         </Routes></ReleaseBoundary>
