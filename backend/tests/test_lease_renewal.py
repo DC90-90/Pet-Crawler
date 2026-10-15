@@ -46,3 +46,26 @@ def test_live_holder_renews_and_dead_holder_expires(monkeypatch):
             await client.drop_database(db.name)
             client.close()
     asyncio.run(scenario())
+
+
+def test_shutdown_releases_every_lease_this_process_holds():
+    """A release stops a process mid-rebuild; its leases must not block the new
+    processes for the TTL (15 Oct 2026)."""
+    from motor.motor_asyncio import AsyncIOMotorClient
+    from test_p0_my_products_baseline import _loopback_mongo_url
+
+    async def scenario():
+        client = AsyncIOMotorClient(_loopback_mongo_url())
+        db = client["lease_" + uuid.uuid4().hex]
+        try:
+            assert await job_control.acquire(db, "cache-rebuild", "me:1", hours=1)
+            assert await job_control.acquire(db, "crawl:x", "me:2", hours=3)
+            await job_control.release_all(db)
+            free = [await job_control.acquire(db, k, "next", hours=1) for k in ("cache-rebuild", "crawl:x")]
+            await job_control.release_all(db)
+            return free, dict(job_control._renewals)
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+    free, left = asyncio.run(scenario())
+    assert free == [True, True] and left == {}

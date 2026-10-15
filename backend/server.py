@@ -12690,4 +12690,11 @@ async def _boot_sequence():
 async def shutdown():
     if scheduler.running:
         scheduler.shutdown(wait=False)
+    # A release stops this process mid-rebuild; its leases would block the new
+    # processes' rebuild for up to LEASE_TTL (pages "being prepared" for 10 more
+    # minutes after every Republish, 15 Oct 2026). Hand them back now.
+    try:
+        await asyncio.wait_for(job_control.release_all(db), 5)
+    except Exception:
+        logger.warning("[Shutdown] lease release failed; leases expire on their own", exc_info=True)
     client.close()

@@ -65,6 +65,12 @@ async def release(db, key, owner):
     await db.job_leases.delete_one({"_id": key, "owner": owner})
 
 
+async def release_all(db):
+    """Release every lease this process holds (graceful shutdown)."""
+    for key, owner in list(_renewals):
+        await release(db, key, owner)
+
+
 async def queue(db, kind, key=None):
     run_id = key or str(uuid.uuid4())
     now = datetime.now(timezone.utc)
