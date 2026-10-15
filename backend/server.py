@@ -2932,6 +2932,12 @@ DASHBOARD_CACHE_STD_WINDOWS = (7, 14, 30, 90)
 # age ceiling is a second guard; 300 s made the cache unusable between the
 # twice-daily data changes and pushed every request onto the live path.
 DASHBOARD_CACHE_MAX_AGE_SECS = int(os.environ.get("DASHBOARD_CACHE_MAX_AGE_SECS", "21600"))
+# How old a previous result may be and still be served (labelled stale, with its
+# computed_at) while the current one rebuilds. 6 h, the fresh limit, was too
+# short: after an overnight platform restart the last rebuild was 11 h old and
+# Ranking, Market Share and Price Intel answered "being prepared" for the whole
+# 15-minute rebuild (15 Oct 2026). A labelled older page beats an empty one.
+STALE_SERVE_MAX_AGE_SECS = int(os.environ.get("STALE_SERVE_MAX_AGE_SECS", "172800"))
 _LAST_DASHBOARD_RECOMPUTE = None           # module-level debounce for crawl bursts
 # One rebuild at a time: the boot warm-up, a request miss and a crawl
 # completion all used to start their own full pass over the snapshot
@@ -3325,7 +3331,7 @@ async def _previous_page_cache(db, base, days):
         return None, None
     ca = ca if ca.tzinfo else ca.replace(tzinfo=timezone.utc)
     age = (datetime.now(timezone.utc) - ca).total_seconds()
-    if not 0 <= age <= DASHBOARD_CACHE_MAX_AGE_SECS:
+    if not 0 <= age <= STALE_SERVE_MAX_AGE_SECS:
         return None, None
     payload = await _load_page_cache_payload(db, doc)
     if payload is None:
