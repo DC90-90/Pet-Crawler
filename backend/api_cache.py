@@ -26,7 +26,7 @@ from fastapi.encoders import jsonable_encoder
 logger = logging.getLogger(__name__)
 
 COLLECTION = "api_cache"
-MAX_STALE_SECS = 48 * 3600
+MAX_STALE_SECS = 7 * 24 * 3600
 SKIP_PARAMS = {"user", "_", "request", "response", "db"}
 _memo = {}          # key -> (value, computed_ts)
 _inflight = {}      # key -> asyncio.Task
@@ -37,7 +37,15 @@ def _encode(value):
 
 
 async def _compute_and_store(db, key, compute):
-    value = await compute()
+    # Runs as background work: the request read budget (15-20 s) made the
+    # Discounts query fail outright under load (15 Oct 2026). A visitor waits
+    # for this only on the first visit ever; everyone else gets the stored copy.
+    from price_read_limits import _background
+    token = _background.set(True)
+    try:
+        value = await compute()
+    finally:
+        _background.reset(token)
     text = await asyncio.to_thread(_encode, value)
     now = time.time()
     clean = json.loads(text)

@@ -112,3 +112,44 @@ def test_list_rows_drop_fields_no_list_renders():
     assert "excluded_sellers" in row                       # the cached row itself is untouched
     plain = {"sku": "2"}
     assert server._list_row(plain) is plain
+
+
+def test_stored_cache_computes_under_the_background_budget_and_reports_failures():
+    import api_cache
+    from fastapi import HTTPException
+    from price_read_limits import in_background
+    api_cache.clear_memo()
+    seen = []
+
+    async def scenario():
+        client, db = _db()
+        try:
+            async def compute():
+                seen.append(in_background())
+                return {"ok": 1}
+
+            async def failing():
+                raise HTTPException(503, "busy")
+            ok = await api_cache.get(db, "bg", compute, 60)
+            try:
+                await api_cache.get(db, "bad", failing, 60)
+                raised = None
+            except HTTPException as exc:
+                raised = exc.status_code
+            return ok, raised, in_background()
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+    ok, raised, after = asyncio.run(scenario())
+    assert ok == {"ok": 1} and seen == [True] and raised == 503 and after is False
+
+
+def test_large_json_is_encoded_off_the_loop_with_cache_headers():
+    import json
+    import server
+    from fastapi import Response
+    resp = Response()
+    server._apply_cache_headers(resp, {"source": "cache", "computed_at": "2026-10-15T10:00:00", "age_seconds": 5, "stale": False})
+    out = asyncio.run(server._json_off_loop(lambda: {"full_table": [{"sku": "1", "price": 2.5}], "name": "منتج"}, resp))
+    assert json.loads(out.body) == {"full_table": [{"sku": "1", "price": 2.5}], "name": "منتج"}
+    assert out.headers["x-cache-source"] == "cache" and out.media_type == "application/json"

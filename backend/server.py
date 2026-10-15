@@ -8,7 +8,7 @@ from fastapi.encoders import jsonable_encoder
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re, time, shutil, asyncio, math
+import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re, time, shutil, asyncio, math, json
 from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel
 from typing import Optional, List
@@ -11317,6 +11317,19 @@ def _list_row(row):
     return {k: v for k, v in row.items() if k not in _LIST_ONLY_DROP}
 
 
+async def _json_off_loop(build, response=None):
+    """Build and encode a large JSON body in a worker thread. FastAPI encodes a
+    returned dict on the event loop: the ~3 MB Price Intel body stalled every
+    other request for 3-4 s (15 Oct 2026). Headers already set on `response`
+    (X-Cache-*) are carried over."""
+    def encode():
+        return json.dumps(jsonable_encoder(build()), ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    content = await asyncio.to_thread(encode)
+    headers = {k: v for k, v in (response.headers.items() if response is not None else [])
+               if k.lower() not in ("content-length", "content-type")}
+    return Response(content=content, media_type="application/json", headers=headers)
+
+
 @router.get("/price-intel/dashboard")
 async def price_intel_dashboard(response: Response = None, comparison_mode: str = "all", competitor_ids: Optional[str] = None, user=Depends(get_user)):
     from comparison_scope import resolve
@@ -11324,9 +11337,12 @@ async def price_intel_dashboard(response: Response = None, comparison_mode: str 
     body, meta = await _serve_page_cache(db, "price-intel/dashboard:" + scope["scope_id"], None,
                                          lambda: comparison_views.intel(db, _effective_own_price, scope["competitor_ids"] if scope["mode"] == "selected" else None), True)
     _apply_cache_headers(response, meta)
-    lists = {k: [_list_row(r) for r in v] for k, v in body.items()
-             if k in ("full_table", "my_advantages", "action_required", "unverified") and isinstance(v, list)}
-    return {**body, **lists, "comparison_scope": scope}
+
+    def _slim():
+        lists = {k: [_list_row(r) for r in v] for k, v in body.items()
+                 if k in ("full_table", "my_advantages", "action_required", "unverified") and isinstance(v, list)}
+        return {**body, **lists, "comparison_scope": scope}
+    return await _json_off_loop(_slim, response)
 
 
 @router.get("/price-intel/store-ranking")
