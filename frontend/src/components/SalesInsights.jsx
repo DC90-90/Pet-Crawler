@@ -70,8 +70,14 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
   });
 
   const kpis = data?.kpis || {};
-  const products = data?.products || [];
+  const allProducts = data?.products || [];
   const topBrands = data?.top_brands || [];
+  // Render in pages: all ~3,000 rows at once (≈100k DOM nodes) froze the
+  // browser on Price Intel (15 Oct 2026). Search and sort still cover every row.
+  const PAGE_ROWS = 100;
+  const [shown, setShown] = useState(PAGE_ROWS);
+  useEffect(() => { setShown(PAGE_ROWS); }, [params]);
+  const products = allProducts.slice(0, shown);
 
   const sortOptions = [
     { value: "revenue_desc", label: t("si_sort_revenue_desc") },
@@ -239,6 +245,20 @@ export default function SalesInsights({ days, dateFrom, dateTo }) {
                 })}
               </TableBody>
             </Table>
+            {allProducts.length > shown && (
+              <div className="flex justify-center py-3">
+                <button
+                  type="button"
+                  onClick={() => setShown((n) => n + PAGE_ROWS)}
+                  className="text-xs px-3 py-1.5 rounded-md bg-white/5 border border-white/10 text-[#A1E4DB] hover:bg-white/10"
+                  data-testid="si-show-more"
+                >
+                  {isRTL
+                    ? `عرض المزيد (${allProducts.length - shown} متبقٍ)`
+                    : `Show more (${allProducts.length - shown} more)`}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
