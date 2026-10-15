@@ -12,16 +12,20 @@ PROJECTION = {**FIELDS, "original_price": 1, "sale_price": 1, "discount_pct": 1,
 
 
 async def top(db, days, store_id=None, category=None, limit=30, by_amount=False):
-    active = set(await db.stores.distinct("id", {"is_active": {"$ne": False}}))
+    active = await db.stores.distinct("id", {"is_active": {"$ne": False}})
     limit = max(1, min(int(limit), 500))
     candidates = []
-    # Compact projection: the latest-per-offer sort over whole snapshot
-    # documents took >10 s (the connection's operation limit) where Market
-    # Share's projected read of the same window does not.
-    for s in await latest(db, store_id, days=CURRENT_DAYS, projection=PROJECTION):
-        price, original = s.get("price"), s.get("original_price")
-        if s["store_id"] in active and exclusion(s) is None and price and original and original > price:
-            candidates.append(s)
+    # One compact read per store: a single all-store latest-per-offer read
+    # sorted whole snapshot documents for >10 s, past the connection's
+    # operation limit (15 Oct 2026). Per store it is ~0.1-0.3 s on the
+    # (store_id, crawled_at) index, with a projection.
+    for sid in ([store_id] if store_id else active):
+        if sid not in active:
+            continue
+        for s in await latest(db, sid, days=CURRENT_DAYS, projection=PROJECTION):
+            price, original = s.get("price"), s.get("original_price")
+            if exclusion(s) is None and price and original and original > price:
+                candidates.append(s)
 
     # Catalogue metadata in batches, not one query per offer.
     meta = {}
@@ -51,7 +55,8 @@ async def top(db, days, store_id=None, category=None, limit=30, by_amount=False)
     for r in rows:
         first, count = r["crawled_at"], 0
         async for h in db.product_snapshots.find(
-                {"offer_id": r["offer_id"], "crawled_at": {"$gte": since}, "observation_version": 2},
+                # store_id first: rides the (store_id, offer_id, crawled_at) index.
+                {"store_id": r["store_id"], "offer_id": r["offer_id"], "crawled_at": {"$gte": since}, "observation_version": 2},
                 {"_id": 0, "comparable": 1, "price": 1, "original_price": 1, "crawled_at": 1}).sort("crawled_at", -1):
             if not h.get("comparable") or not h.get("price") or not h.get("original_price") or h["original_price"] <= h["price"]:
                 break
