@@ -216,8 +216,10 @@ def test_page_cache_pack_roundtrip_and_chunking():
         head = db.dashboard_cache.doc
         assert head["encoding"] == "zlib-json" and head["chunks"] >= 2 and "payload_zlib" not in head
         assert asyncio.run(s._load_page_cache_payload(db, head)) == payload
-        # A missing chunk is a miss, never a partial payload.
+        # A missing chunk is a miss, never a partial payload (for a process that
+        # has not decoded this entry yet: one that has keeps the complete copy).
         db.dashboard_cache_chunks.docs.pop((head["key"], 0))
+        cache_blobs.memo_clear()
         assert asyncio.run(s._load_page_cache_payload(db, head)) is None
         # The My Products dashboard envelope uses the same store: head keeps the
         # validity fields, the dataset travels compressed.

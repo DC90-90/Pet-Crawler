@@ -61,6 +61,7 @@ import price_cohort
 import my_products_cache
 import comparison_views
 import job_control
+import api_cache
 from access_policy import enforce as enforce_access
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -2211,7 +2212,7 @@ async def scheduler_status(user=Depends(get_user)):
 
 
 @router.get("/data-freshness")
-@ttl_cache(60)
+@api_cache.stored(120, lambda: db)
 async def data_freshness(user=Depends(get_user)):
     """Aggregated crawl-data freshness for the dashboard banner.
 
@@ -2238,21 +2239,20 @@ async def data_freshness(user=Depends(get_user)):
     # Each read below rides the (store_id, crawled_at) index.
     async def _store_freshness(sid):
         latest = []
-        cnt = 0
         try:
             latest = await db.product_snapshots.find(
                 {"store_id": sid}, {"_id": 0, "store_name": 1, "crawled_at": 1},
             ).sort("crawled_at", -1).limit(1).max_time_ms(
                 SELLER_QUERY_MAX_MS).to_list(1)
-            cnt = await db.product_snapshots.count_documents(
-                {"store_id": sid}, maxTimeMS=SELLER_QUERY_MAX_MS)
+            # (15 Oct 2026) No per-store count: it scanned every snapshot of
+            # every store (8.6M) on each refresh, 3-5 s, and no page shows it.
         except Exception:
             logger.warning("[data-freshness] store=%s read skipped", sid,
                            exc_info=True)
         return sid, {
             "store_name": latest[0].get("store_name") if latest else None,
             "latest": latest[0].get("crawled_at") if latest else None,
-            "snapshot_count": cnt,
+            "snapshot_count": None,
         }
 
     latest_by_store = dict(await asyncio.gather(
@@ -3077,10 +3077,13 @@ async def _serve_page_cache(db, base, days, compute, cacheable=True):
         return await compute(), {"source": "live_uncacheable", "computed_at": None, "age_seconds": None, "stale": False}
     doc = None
     try:
-        doc = await db.dashboard_cache.find_one({"key": _page_cache_key(base, days)})
+        doc = await db.dashboard_cache.find_one({"key": _page_cache_key(base, days)}, cache_blobs.HEAD_PROJECTION)
     except Exception:
         doc = None
-    if doc is not None and doc.get("computed_at") is not None and ("payload" in doc or doc.get("payload_zlib") is not None or doc.get("chunks")):
+    # The head is read without its payload (cache_blobs.HEAD_PROJECTION); an
+    # inline zlib entry is recognised by its encoding.
+    if doc is not None and doc.get("computed_at") is not None and ("payload" in doc or doc.get("payload_zlib") is not None
+                                                                   or doc.get("chunks") or doc.get("encoding") == "zlib-json"):
         ca = doc["computed_at"]
         if not isinstance(ca, datetime):
             try:
@@ -3323,7 +3326,7 @@ async def _previous_page_cache(db, base, days):
     prefix = f"{base}:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:"
     doc = await db.dashboard_cache.find_one(
         {"base": base, "window_days": days, "key": {"$regex": "^" + _re.escape(prefix)}},
-        sort=[("computed_at", -1)])
+        cache_blobs.HEAD_PROJECTION, sort=[("computed_at", -1)])
     if doc is None or doc.get("computed_at") is None:
         return None, None
     ca = doc["computed_at"]
@@ -4095,7 +4098,7 @@ async def my_products(
     result = list(dataset["rows"])
     reverse = sort_order == "desc"
     result.sort(key=lambda x: x.get(sort_by, 0) or 0, reverse=reverse)
-    paged = result[offset: offset + limit]
+    paged = [_list_row(r) for r in result[offset: offset + limit]]
     return {"kpis": dataset["kpis"], "products": paged, "total": dataset["total"],
             "limit": limit, "offset": offset, "categories": dataset["categories"],
             "cache": cache_meta}
@@ -6142,7 +6145,7 @@ def _latest_per_pair_stage():
 
 
 @router.get("/discounts/top-pct")
-@ttl_cache(60)
+@api_cache.stored(1800, lambda: db)
 async def top_discounts_pct(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
     from discount_views import top
     return await top(db, days, store_id, category, limit)
@@ -6201,7 +6204,7 @@ async def _retired_top_discounts_pct(days, store_id, category, limit, user=None)
 
 
 @router.get("/discounts/top-amount")
-@ttl_cache(60)
+@api_cache.stored(1800, lambda: db)
 async def top_discounts_amount(days: int = Query(90), store_id: Optional[str] = Query(None), category: Optional[str] = Query(None), limit: int = Query(30), user=Depends(get_user)):
     from discount_views import top
     return await top(db, days, store_id, category, limit, by_amount=True)
@@ -6253,7 +6256,7 @@ async def _retired_top_discounts_amount(days, store_id, category, limit, user=No
 
 
 @router.get("/discounts/timeline")
-@ttl_cache(60)
+@api_cache.stored(1800, lambda: db)
 async def discount_timeline(user=Depends(get_user)):
     since = datetime.now(timezone.utc) - timedelta(days=_DISCOUNT_MAX_DAYS)
     # iter73 — accept the same "row-level arithmetic proves a discount" fallback
@@ -6318,7 +6321,7 @@ async def discount_timeline(user=Depends(get_user)):
 
 
 @router.get("/discounts/aggression")
-@ttl_cache(60)
+@api_cache.stored(1800, lambda: db)
 async def discount_aggression(user=Depends(get_user)):
     """Store discount-aggression leaderboard.
 
@@ -6484,7 +6487,7 @@ async def _detect_pack_variants(db, skus, since):
 
 
 @router.get("/scanner/opportunities")
-@ttl_cache(60)
+@api_cache.stored(1800, lambda: db)
 async def price_opportunities(days: int = Query(14), comparison_mode: str = "all", competitor_ids: Optional[str] = None, user=Depends(get_user)):
     from comparison_scope import resolve
     scope = await resolve(db, comparison_mode, competitor_ids)
@@ -11301,6 +11304,19 @@ async def insights_sales(days: int = Query(30),
     return body
 
 
+# Fields no list view renders: full descriptions, the per-product excluded
+# sellers (the Market Share product view has its own) and raw store category
+# tags. They made My Products 700 KB per 100 rows and the Price Intel
+# dashboard 8.4 MB (15 Oct 2026). Detail views read their own endpoints.
+_LIST_ONLY_DROP = frozenset({"description_ar", "description_en", "excluded_sellers", "store_categories"})
+
+
+def _list_row(row):
+    if not isinstance(row, dict) or _LIST_ONLY_DROP.isdisjoint(row):
+        return row
+    return {k: v for k, v in row.items() if k not in _LIST_ONLY_DROP}
+
+
 @router.get("/price-intel/dashboard")
 async def price_intel_dashboard(response: Response = None, comparison_mode: str = "all", competitor_ids: Optional[str] = None, user=Depends(get_user)):
     from comparison_scope import resolve
@@ -11308,7 +11324,9 @@ async def price_intel_dashboard(response: Response = None, comparison_mode: str 
     body, meta = await _serve_page_cache(db, "price-intel/dashboard:" + scope["scope_id"], None,
                                          lambda: comparison_views.intel(db, _effective_own_price, scope["competitor_ids"] if scope["mode"] == "selected" else None), True)
     _apply_cache_headers(response, meta)
-    return {**body, "comparison_scope": scope}
+    lists = {k: [_list_row(r) for r in v] for k, v in body.items()
+             if k in ("full_table", "my_advantages", "action_required", "unverified") and isinstance(v, list)}
+    return {**body, **lists, "comparison_scope": scope}
 
 
 @router.get("/price-intel/store-ranking")

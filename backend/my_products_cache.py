@@ -149,13 +149,13 @@ async def _serve(db, key, compute, max_age, on_stale=None):
 
     async def load():
         try:
-            doc = await asyncio.wait_for(db.dashboard_cache.find_one({"key": key}, {"_id": 0}, max_time_ms=2000), 2.5)
+            doc = await asyncio.wait_for(db.dashboard_cache.find_one({"key": key}, {"_id": 0, "payload_zlib": 0}, max_time_ms=2000), 2.5)
             if doc is None and on_stale is not None:
                 # An earlier KSA day's entry: its sales window differs from
                 # today's, so it is only ever served as a labelled previous result.
                 previous_day[0] = True
                 doc = await asyncio.wait_for(db.dashboard_cache.find_one(
-                    {"key": {"$regex": previous_key_pattern(key)}}, {"_id": 0},
+                    {"key": {"$regex": previous_key_pattern(key)}}, {"_id": 0, "payload_zlib": 0},
                     sort=[("computed_at", -1)], max_time_ms=2000), 2.5)
             if doc is not None and "dataset" not in doc:
                 # Compressed / chunked storage (cache_blobs); None when incomplete.
