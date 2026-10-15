@@ -155,12 +155,9 @@ async def ensure_stores(db):
         {"$set": {"use_proxy": False}},
     )
 
-    # Diagnostic recovery (Feb 2026) — Caty was deactivated earlier due to persistent
-    # 404s. Re-enable it now that it's routed through the Saudi proxy.
-    await db.stores.update_one(
-        {"domain": "caty-store.com"},
-        {"$set": {"is_active": True}},
-    )
+    # (15 Oct 2026) No boot step changes is_active: a Feb 2026 "re-enable Caty"
+    # here undid the owner's deactivation (storefront closed) on every restart.
+    # Whether a store is tracked is the operator's setting on the Stores page.
 
     # ── iter76 data hygiene ──────────────────────────────────────────────────
     # The API-contract regression suite creates stores on *.example.com (RFC
