@@ -1134,6 +1134,7 @@ async def _ledger_sales_refresh(delay_secs=0):
     if delay_secs:
         await asyncio.sleep(delay_secs)
     try:
+        await ledger_sales.ensure_indexes(db)
         await ledger_sales.rebuild_if_stale(db)
     except Exception:
         logger.exception("[LedgerSales] refresh failed")
@@ -2088,6 +2089,14 @@ def get_next_run(store_id):
     return None
 
 # ── Store Routes ────────────────────────────────────────────
+@router.get("/stores/brands")
+async def store_brands(user=Depends(get_user)):
+    """Names, domains and platforms only — for store logos and per-store tabs.
+    /stores counts every store's catalogue, too slow to call from each card."""
+    return await db.stores.find({}, {"_id": 0, "id": 1, "name": 1, "domain": 1, "platform": 1,
+                                     "is_active": 1, "is_own_store": 1}).sort("name", 1).to_list(200)
+
+
 @router.get("/stores")
 async def list_stores(user=Depends(get_user)):
     stores = await db.stores.find({}, {"_id": 0}).sort("name", 1).to_list(100)
@@ -4517,7 +4526,8 @@ async def _retired_product_history(sku, days, user=None):
 
 
 @router.get("/products/{sku}/full")
-async def get_product_full(sku: str, days: int = Query(30), user=Depends(get_user)):
+async def get_product_full(sku: str, days: int = Query(30, ge=1, le=60), user=Depends(get_user)):
+    # le=60: the materialized ledger sales cover the last 70 sealed days.
     from catalog_views import detail
     return await detail(db, sku, int(days), _effective_own_price)
 
@@ -5886,6 +5896,13 @@ async def create_filter(data: SavedFilterIn, user=Depends(get_user)):
     await db.saved_filters.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+@router.delete("/saved-filters/{filter_id}")
+async def delete_filter(filter_id: str, user=Depends(get_user)):
+    res = await db.saved_filters.delete_one({"id": filter_id, "user_id": user["id"]})
+    if not res.deleted_count:
+        raise HTTPException(404, "Saved view not found")
+    return {"deleted": filter_id}
 
 # ── Discounts ────────────────────────────────────────────────
 # iter58 — all four endpoints 500'd (or, for /aggression, hung) in production.
@@ -9998,8 +10015,10 @@ STORE_CLEANUP_KEEP_LIST = [
     ("Mowkly", "mowkly.com"),
     ("Panda Store", "matjarpanda.com"),
     ("Pets houses", "pets-houses.com"),
+    ("Alkarawan", "alkarawanstore.com"),     # added 16 Oct 2026
+    ("Catshoop", "catshoop1.com"),           # added 16 Oct 2026
 ]
-STORE_CLEANUP_EXPECTED_KEEP = 11
+STORE_CLEANUP_EXPECTED_KEEP = 13
 STORE_CLEANUP_MAX_DELETE = 50          # catastrophe cap
 
 
@@ -11893,6 +11912,8 @@ async def market_share_missing(days: int = Query(30),
                                brand: Optional[str] = Query(None),
                                store_id: Optional[str] = Query(None),
                                quality: Optional[str] = Query(None),
+                               animal: Optional[str] = Query(None, description="Tab: cat|dog|bird|fish|small_pet|other"),
+                               ptype: Optional[str] = Query(None, description="Tab: dry_food|wet_food|litter|treats|...|other"),
                                sort: str = Query("opportunity_desc"),
                                include_today: bool = Query(False),
                                limit: int = Query(100, ge=1, le=500),
@@ -11900,10 +11921,17 @@ async def market_share_missing(days: int = Query(30),
                                response: Response = None, user=Depends(get_user)):
     ds, meta = await _market_share_dataset(db, days, include_today, comparison_mode, competitor_ids)
     _apply_cache_headers(response, meta)
+    import category_map
     rows = _ms_filter(ds.get("missing_products") or [], search=search, category=category,
                       brand=brand, store_id=store_id, quality=quality)
+    # Tab badges count every animal/type under the other filters; the list
+    # then narrows to the chosen tabs (16 Oct 2026).
+    facets = {"animal": category_map.facet_counts(category_map.facet_filter(rows, ptype=ptype))["animal"],
+              "type": category_map.facet_counts(category_map.facet_filter(rows, animal=animal))["type"]}
+    rows = category_map.facet_filter(rows, animal, ptype)
     rows = sorted(rows, key=_MS_SORTS.get(sort, _MS_SORTS["opportunity_desc"]))
     return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "total": len(rows),
+            "facets": facets,
             "total_untruncated": ds.get("missing_products_total"),
             "rows": rows[offset:offset + limit],
             "opportunity_value": round(sum(r.get("market_revenue") or 0 for r in rows), 2)}

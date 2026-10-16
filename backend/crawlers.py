@@ -3049,7 +3049,8 @@ def _zid_merchant_rows(items):
             # coerced, so "unknown" can be tagged instead of
             # silently inflating a price.
             "is_taxable": _zid_is_taxable(p),
-            "img_url": ((p.get("images") or [{}])[0] or {}).get("origin") or ((p.get("images") or [{}])[0] or {}).get("image") or "",
+            # `images[0].image` is a dict of sizes on Zid; it was stored as-is.
+            "img_url": __import__("observation_contract").image_url(p),
             "product_url": p.get("html_url") or "",
             "_zid_id": p.get("id"),
             "_zid_is_infinite": bool(p.get("is_infinite")),
@@ -3811,6 +3812,9 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
             "present_on_store": True,
             "last_seen_on_store": sync_ts,
         }
+        if norm.get("img_url"):
+            # Own products saved before the Zid image fix (16 Oct 2026) have none.
+            update_doc["image_url"] = norm["img_url"]
         if category_fields:
             # A reviewed category is a human decision and is never overwritten;
             # store-supplied tags are refreshed every sync.

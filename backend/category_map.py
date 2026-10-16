@@ -215,3 +215,63 @@ async def listing(db, store_id=None):
     return {"canonicals": canonicals, "rows": rows,
             "unmapped": sum(1 for r in rows if not r.get("canonical")),
             "unmapped_products": sum(r.get("products_count") or 0 for r in rows if not r.get("canonical"))}
+
+
+# Tabs on the market lists (16 Oct 2026): one animal and one product type per
+# offer, from its store category and its name. Exact words only (the prefix
+# match above files "canary" under cans); an Arabic word may carry up to two
+# leading particles (للقطط, بالدجاج). An offer naming two animals has none.
+# Singular forms after a particle (للقط, القط) — "قط" alone is too short for
+# the suffix rule ("فقط" means "only"), so they are listed whole.
+_FACET_EXTRA = {"bird": ("كناري", "بادجي", "كوكتيل", "canary", "budgie"),
+                "cat": ("للقط", "القط", "بالقط", "قط", "كات", "kitty"),
+                "dog": ("للكلب", "الكلب", "دوق", "دوج"),
+                "small_pet": ("سلحفاه", "turtle"), "toys": ("لعبه",),
+                "wet_food": ("شوربه", "ستيك", "جيلي", "مرق", "soup", "gravy", "jelly"),
+                "dry_food": ("كيبل", "حبوب")}
+FACET_TYPES = ("litter", "dry_food", "wet_food", "treats", "health", "grooming", "toys",
+               "housing", "bowls", "collars", "accessories")
+
+
+def _has(words, term):
+    nt = normalize(term)
+    if " " in nt:
+        return f" {nt} " in f" {' '.join(words)} "
+    arabic = not nt.isascii()
+    for w in words:
+        if w == nt or (not arabic and w == nt + "s"):
+            return True
+        if arabic and len(nt) >= 3 and (w.endswith(nt) and len(w) - len(nt) <= 3
+                                        or w.startswith(nt) and len(w) - len(nt) == 1):   # لعب → لعبه
+            return True
+    return False
+
+
+def facets(*texts):
+    words = normalize(" ".join(str(t or "") for t in texts)).split()
+    tags = {name for name, terms in _GROUPS.items() if any(_has(words, t) for t in terms + _FACET_EXTRA.get(name, ()))}
+    animals = tags & _ANIMALS
+    # "Cat food with tuna and white fish": fish/bird words in a cat or dog
+    # product are flavours, not the animal.
+    if animals & {"cat", "dog"}:
+        animals &= {"cat", "dog"}
+    return {"facet_animal": next(iter(animals)) if len(animals) == 1 else None,
+            "facet_type": next((t for t in FACET_TYPES if t in tags), None)}
+
+
+def facet_counts(rows):
+    """{"animal": {cat: n, ...}, "type": {...}} over rows, for the tab badges."""
+    out = {"animal": {}, "type": {}}
+    for r in rows:
+        for axis in ("animal", "type"):
+            v = r.get(f"facet_{axis}") or "other"
+            out[axis][v] = out[axis].get(v, 0) + 1
+    return out
+
+
+def facet_filter(rows, animal=None, ptype=None):
+    if animal not in (None, "", "all"):
+        rows = [r for r in rows if (r.get("facet_animal") or "other") == animal]
+    if ptype not in (None, "", "all"):
+        rows = [r for r in rows if (r.get("facet_type") or "other") == ptype]
+    return rows

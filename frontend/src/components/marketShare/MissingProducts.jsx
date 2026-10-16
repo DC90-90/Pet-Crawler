@@ -4,6 +4,7 @@ import { RequestError } from "@/components/RequestError";
 import { CATEGORY_LABELS } from "@/lib/i18n";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { FacetTabs } from "@/components/MarketTabs";
 import { ConfidenceBadge, Unavailable, TrendCell, SourceChip, fmtMoney, fmtNum, REASON_TEXT } from "./SourceChip";
 
 const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c || "—");
@@ -15,9 +16,12 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
+  const [animal, setAnimal] = useState("all");
+  const [ptype, setPtype] = useState("all");
+  const [facets, setFacets] = useState(null);
   const limit = 50;
 
-  useEffect(() => { setPage(0); }, [filters, days]);
+  useEffect(() => { setPage(0); }, [filters, days, animal, ptype]);
 
   useEffect(() => {
     let live = true;
@@ -25,21 +29,24 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
     setError(false); setData(null);
     const { catalog, min_confidence, ...rest } = filters || {};
     api.get("/market-share/missing-products", {
-      params: { days, sort, include_today: includeToday, limit, offset: page * limit, ...rest },
+      params: { days, sort, include_today: includeToday, limit, offset: page * limit, ...rest,
+                animal: animal === "all" ? undefined : animal, ptype: ptype === "all" ? undefined : ptype },
     })
-      .then((r) => live && setData(r.data))
+      .then((r) => { if (live) { setData(r.data); setFacets(r.data.facets || null); } })
       .catch((failure) => live && setError(failure))
       .finally(() => live && setLoading(false));
     return () => { live = false; };
-  }, [days, sort, page, filters, includeToday, retry]);
+  }, [days, sort, page, filters, includeToday, retry, animal, ptype]);
 
   const rows = data?.rows || [];
   const total = data?.total || 0;
   if (error) return <RequestError id="ms-missing" error={error} onRetry={() => setRetry(n => n + 1)} />;
-  if (loading) return <p data-testid="ms-missing-loading" className="text-sm text-[#A1E4DB]">Loading…</p>;
+  const tabs = facets && <FacetTabs counts={facets} animal={animal} ptype={ptype} onAnimal={setAnimal} onType={setPtype} prefix="ms-missing" />;
+  if (loading) return <div className="space-y-3">{tabs}<p data-testid="ms-missing-loading" className="text-sm text-[#A1E4DB]">Loading…</p></div>;
 
   return (
     <div className="space-y-3" data-testid="ms-missing-products">
+      {tabs}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-[11px] text-[#A1E4DB]" data-testid="ms-missing-count">
           {fmtNum(total)} product(s) competitors sell that I don't

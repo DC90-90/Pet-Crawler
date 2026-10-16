@@ -41,6 +41,30 @@ def verified_barcode(product):
     return str(product.get("barcode")) if gtin(product.get("barcode")) else str(product.get("sku")) if gtin(product.get("sku")) else None
 
 
+def market_share(mine, competitors):
+    """One product's market size and my share, from ledger sales facts.
+
+    mine/competitors: sales evidence ({units, revenue}) or None where a seller
+    cannot be measured. The market size is the sum over measured sellers; the
+    share is given only when every live seller is measured, so it never leaves
+    out a seller whose sales we cannot see (as a share of the measured sellers
+    would). A product nobody sold in the window has no share."""
+    sellers = [mine, *competitors]
+    measured = [e for e in sellers if e is not None]
+    units = round(sum(e.get("units") or 0 for e in measured), 2) if measured else None
+    revenue = round(sum(e.get("revenue") or 0 for e in measured), 2) if measured else None
+    complete = mine is not None and len(measured) == len(sellers)
+    reason = (None if complete and revenue else "own_sales_unmeasured" if mine is None
+              else "competitor_sales_unmeasured" if not complete else "no_sales_in_window")
+    return {"market_units_est": units, "market_revenue_est": revenue,
+            "market_my_revenue_est": round(mine.get("revenue") or 0, 2) if mine is not None else None,
+            "market_sellers_measured": len(measured), "market_sellers_total": len(sellers),
+            "market_size_complete": complete,
+            "market_share_pct": round((mine.get("revenue") or 0) / revenue * 100, 1) if reason is None else None,
+            "market_unit_share_pct": round((mine.get("units") or 0) / units * 100, 1) if reason is None and units else None,
+            "has_market_share": reason is None, "market_share_unavailable_reason": reason}
+
+
 async def dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only, price_fn, orders_fn):
     own, catalog, cohorts = await context(db, price_fn)
     if on_date:
@@ -70,6 +94,9 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
             continue
         evidence = orders["by_sku"].get(sku, {"units": 0, "revenue": 0}) if orders is not None else sales.get((own.get("id"), mp.get("offer_id") or sku))
         units, value = (evidence.get("units"), evidence.get("revenue")) if evidence else (None, None)
+        share = market_share(sales.get((own.get("id"), mp.get("offer_id") or sku)) if price else None,
+                             [sales.get((s["store_id"], s.get("offer_id") or s.get("sku"))) for s in c["sellers"]])
+        pos = price_position(price, [s["price"] for s in c["sellers"]]) or {}
         row = {**mp, "sku": sku, "parent_sku": parent_sku, "price": price or None, "market_price": c["avg"], "is_my_product": True,
                "barcode": verified_barcode(mp),
                "category_candidate": mp.get("category"), "category": mp.get("category") if mp.get("category_source") in ("reviewed", "store_supplied", "import_file") else None,
@@ -80,7 +107,11 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
                "num_competitors": len({s["store_id"] for s in c["sellers"]+c["excluded"]}), "num_priced_competitors": len(c["sellers"]),
                "num_sellers": len(c["sellers"]), "competitor_min_price": c["min"], "competitor_max_price": c["max"],
                "vs_my_price_pct": round((c["min"]-price)/price*100, 1) if c["min"] and price else None,
-               "market_share_pct": None, "has_market_share": False, "market_share_unavailable_reason": "unreconciled_sales_denominator",
+               "vs_lowest_pct": pos.get("vs_lowest_pct"), "vs_median_pct": pos.get("vs_median_pct"),
+               "market_median_price": pos.get("market_median"), "price_rank": pos.get("rank"), "price_rank_of": pos.get("of"),
+               "discount_pct": discount_pct(price, mp.get("original_price")) if mp.get("sale_price") else None,
+               **share, **({"market_share_unavailable_reason": "own_out_of_stock"}
+                           if share["market_share_unavailable_reason"] == "own_sales_unmeasured" and stock["in_stock"] is False else {}),
                "my_share_is_estimate": True, "cohort_id": c["cohort_id"], "price_policy": c["policy_version"],
                "excluded_sellers": c["excluded"], "source_observed_at": c["observed_at"],
                "market_position": position(own, mp, price, c), "source_tier": 0, "confidence_score": 99 if price else 0,
@@ -89,6 +120,9 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
     measurable = [r for r in rows if r["my_units_sold"] is not None]
     matched = sum(r["num_priced_competitors"] > 0 for r in rows)
     value = round(sum(r["my_revenue_est"] or 0 for r in measurable), 2) if measurable else None
+    shared = [r for r in rows if r["has_market_share"]]
+    share_market = round(sum(r["market_revenue_est"] for r in shared), 2) if shared else None
+    share_mine = sum(r["market_my_revenue_est"] for r in shared)
     return {"rows": rows, "total": len(rows), "categories": sorted({r["category"] for r in rows if r.get("category")}),
             "_valid_until": min((c["valid_until"] for c in cohorts.values()), default=datetime.now(timezone.utc)+timedelta(seconds=300)),
             "kpis": {"total_products": len(rows), "matched_products": matched, "market_coverage_pct": round(matched/len(rows)*100, 1) if rows else 0,
@@ -96,10 +130,90 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
                      "my_revenue": orders["revenue"] if orders is not None else value, "total_revenue": value,
                      "my_orders_count": orders["orders_count"] if orders is not None else None,
                      "my_revenue_source": "zid_orders" if orders is not None else "inventory_proxy" if measurable else "unavailable",
-                     "market_revenue": None, "avg_market_share": None, "share_sample_size": 0,
+                     # Over products where every seller's sales are measured.
+                     "market_revenue": share_market,
+                     "avg_market_share": round(share_mine / share_market * 100, 1) if share_market else None,
+                     "share_sample_size": len(shared),
                      "sales_evidence_products": len(measurable), "sales_window": {"from": start, "to": end},
                      "sales_days_measured": None if orders is not None else len(measured_days(sales, own.get("id"))),
                      "sales_days_expected": max(1, round((end - start).total_seconds() / 86400))}}
+
+
+def discount_pct(price, original):
+    return round((1 - price / original) * 100, 1) if price and original and original > price else None
+
+
+def _median(values):
+    v = sorted(values)
+    return None if not v else v[len(v) // 2] if len(v) % 2 else (v[len(v) // 2 - 1] + v[len(v) // 2]) / 2
+
+
+def price_position(price, competitor_prices):
+    """Where my price sits among the eligible competitor prices: rank 1 is the
+    cheapest (ties share the better rank), gaps are relative to each reference."""
+    prices = sorted(p for p in competitor_prices if p)
+    if not price or not prices:
+        return None
+    lowest, avg, med = prices[0], sum(prices) / len(prices), _median(prices)
+
+    def gap(ref):
+        return round((price - ref) / ref * 100, 1)
+    return {"rank": 1 + sum(p < price for p in prices), "of": len(prices) + 1,
+            "vs_lowest_pct": gap(lowest), "vs_avg_pct": gap(avg), "vs_median_pct": gap(med),
+            "market_median": round(med, 2), "market_avg": round(avg, 2), "market_lowest": lowest}
+
+
+async def seller_sales(db, own, mp, sellers, days):
+    """Per-seller sold units and revenue for one product over the last `days`
+    sealed KSA days, from the same ledger facts as every revenue figure.
+
+    Each live seller gets units_sold/revenue_est (0 when measured without a
+    sale) or None when its sales cannot be measured (the store shows neither
+    stock levels nor a sold counter). Market totals cover measured sellers;
+    unit/revenue shares are given only when every live seller is measured,
+    so a share never leaves out a seller we cannot see."""
+    import evidence_ledger
+    import ledger_sales
+    if evidence_ledger.sales_source() != "ledger":
+        return None
+    start, end = ledger.sealed_ksa_window(days)
+    live = [s for s in sellers if s.get("price_status") == "live" and s.get("price")]
+    keys = {s["store_id"]: (s["store_id"], (mp.get("offer_id") or mp.get("sku")) if s.get("is_own_store")
+                            else (s.get("offer_id") or s.get("sku"))) for s in live}
+    found = await ledger_sales.offer_sales(db, keys.values(), start, end)
+    groups = (await ledger_sales.meta(db)).get("groups") or []
+    per_day, measured_days = {}, set()
+    for s in sellers:
+        ev = found.get(keys.get(s["store_id"])) if any(s is x for x in live) else None
+        g = ledger_sales.shared_group_of(groups, s["store_id"])
+        s.update(units_sold=ev["units"] if ev else None, revenue_est=ev["revenue"] if ev else None,
+                 sales_days_measured=ev["days_measured"] if ev else 0, sales_measured=bool(ev),
+                 sales_basis=(ev or {}).get("source"),
+                 shared_stock_with=[n for sid, n in zip(g["members"], g["names"]) if sid != s["store_id"]] if g else [])
+        if ev:
+            measured_days.update(ev["days"])
+            for d, u in ev["by_day"].items():
+                row = per_day.setdefault(d, {"date": d, "units": 0})
+                row["units"] += u
+                row[s.get("store_name") or s["store_id"]] = round(row.get(s.get("store_name") or s["store_id"], 0) + u, 2)
+    measured = [s for s in live if s["sales_measured"]]
+    units = round(sum(s["units_sold"] for s in measured), 2)
+    revenue = round(sum(s["revenue_est"] for s in measured), 2)
+    complete = bool(live) and len(measured) == len(live)
+    for s in live:
+        s.update(unit_share_pct=round(s["units_sold"] / units * 100, 1) if complete and units and s["sales_measured"] else None,
+                 revenue_share_pct=round(s["revenue_est"] / revenue * 100, 1) if complete and revenue and s["sales_measured"] else None)
+    velocity = [{**per_day.get(d, {"date": d, "units": 0}), "units": round(per_day.get(d, {}).get("units", 0), 2)}
+                for d in sorted(measured_days)]
+    mine = next((s for s in live if s.get("is_own_store")), None)
+    return {"units": units, "revenue": revenue, "sellers_live": len(live), "sellers_measured": len(measured),
+            "complete": complete, "days": days, "window": {"from": start, "to": end},
+            "unmeasured_stores": [s.get("store_name") for s in live if not s["sales_measured"]],
+            "my_unit_share_pct": mine.get("unit_share_pct") if mine else None,
+            "my_revenue_share_pct": mine.get("revenue_share_pct") if mine else None,
+            "velocity": {"velocity": velocity, "total_units": units,
+                         "avg_daily": round(units / len(measured_days), 2) if measured_days else None,
+                         "stores": [s.get("store_name") or s["store_id"] for s in measured if s["units_sold"]]}}
 
 
 async def detail(db, sku, days, price_fn, competitor_store_ids=None):
@@ -128,10 +242,18 @@ async def detail(db, sku, days, price_fn, competitor_store_ids=None):
                         "stock_signal": get_stock_signal(stock["quantity"], stock["in_stock"]),
                         "product_url": mp.get("product_url"), "price_status": "live", "confidence_score": 99, "source_tier": 0,
                         "last_crawl_at": mp.get("last_synced_at")})
+    for s in sellers:
+        s.update(discount_pct=discount_pct(s.get("price"), s.get("original_price") if not s.get("is_own_store") else
+                                           mp.get("original_price") if mp.get("sale_price") else None))
+    market = await seller_sales(db, own, mp, sellers, days)
     history, since = {}, datetime.now(timezone.utc)-timedelta(days=days)
-    offer_ids = [s.get("offer_id") for s in c["sellers"] if s.get("offer_id")]
-    async for snap in db.product_snapshots.find({"offer_id": {"$in": offer_ids}, "crawled_at": {"$gte": since}, "observation_version": 2, "comparable": True}, {"_id": 0}).sort("crawled_at", 1):
-        history.setdefault(snap["store_name"], []).append({"date": snap["crawled_at"].isoformat(), "price": snap["price"], "qty": snap.get("qty_available")})
+    pairs = [(s["store_id"], s["offer_id"]) for s in c["sellers"] if s.get("offer_id")] + ([(own.get("id"), mp["offer_id"])] if mp.get("offer_id") else [])
+    # Each (store_id, offer_id) rides the (store_id, offer_id, crawled_at) index;
+    # offer_id alone has no index and scanned a month of snapshots.
+    for sid, oid in pairs:
+        async for snap in db.product_snapshots.find({"store_id": sid, "offer_id": oid, "crawled_at": {"$gte": since}, "observation_version": 2, "comparable": True},
+                                                    {"_id": 0, "store_name": 1, "crawled_at": 1, "price": 1, "qty_available": 1}).sort("crawled_at", 1):
+            history.setdefault(snap["store_name"], []).append({"date": snap["crawled_at"].isoformat(), "price": snap["price"], "qty": snap.get("qty_available")})
     return {**mp, **stock, "price": price or None, "sale_price": mp.get("sale_price") if price else None,
             "barcode": verified_barcode(mp), "source_tier": 0 if price else None, "confidence_score": 99 if price else None,
             "historical_price": (mp.get("historical_price") if mp.get("historical_price") is not None else mp.get("price")) if not price else None,
@@ -139,8 +261,11 @@ async def detail(db, sku, days, price_fn, competitor_store_ids=None):
             "is_my_product": True, "store_prices": sellers, "seller_count": len(c["sellers"]),
             "seller_summary": {"live": len(c["sellers"]), "stale": len(c["excluded"]), "oos": sum(s.get("in_stock") is False for s in c["excluded"])},
             "price_range": {"min": c["min"], "max": c["max"], "avg": c["avg"]} if c["min"] else {},
-            "total_volume": None, "market_position": position(own, mp, price, c), "cohort_id": c["cohort_id"],
-            "history": history, "velocity": {"velocity": [], "avg_daily": None, "total_units": None}, "policy_version": c["policy_version"]}
+            "total_volume": market["units"] if market else None, "market_sales": market,
+            "position": price_position(price, [s["price"] for s in c["sellers"]]),
+            "market_position": position(own, mp, price, c), "cohort_id": c["cohort_id"],
+            "history": history, "velocity": market["velocity"] if market else {"velocity": [], "avg_daily": None, "total_units": None},
+            "policy_version": c["policy_version"]}
 
 
 async def intel_detail(db, sku, price_fn, competitor_store_ids=None):

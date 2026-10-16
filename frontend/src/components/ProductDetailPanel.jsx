@@ -1,321 +1,368 @@
-import { useEffect, useState } from "react";
+/**
+ * Product detail (16 Oct 2026) — one product against every seller:
+ *   position     → my rank by price, gap to the lowest and to the median
+ *   sellers      → price (with the seller's own pre-discount price), units sold
+ *                  and revenue over the period, share of units, stock
+ *   market sales → daily units sold by all measured sellers, per store
+ * Sales come from the sealed daily ledger (the same facts as every revenue
+ * figure). A seller whose store shows neither stock levels nor a sold counter
+ * is marked "not measurable" and no share is shown while one is missing.
+ */
+import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { HistoricalQuantity } from "@/components/HistoricalQuantity";
-import { X, ExternalLink } from "lucide-react";
+import { X, ExternalLink, Bell, ImageOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine, ReferenceArea } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from "recharts";
 import { useSeasonalEvents, SeasonalToggle, SeasonalChartElements } from "@/components/SeasonalAnnotations";
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
-import FreshnessBadge, { isStale } from "@/components/FreshnessBadge";
-import { MarketPositionBar } from "@/components/MarketPosition";
+import FreshnessBadge from "@/components/FreshnessBadge";
+import { StoreLogo } from "@/components/StoreLogo";
 
-const STORE_COLORS = ["#002DF5", "#00C853", "#FF3B30", "#FFB300", "#8B5CF6", "#EC4899", "#06B6D4"];
+const STORE_COLORS = ["#1E988E", "#3B82F6", "#F59E0B", "#EC4899", "#8B5CF6", "#10B981", "#EF4444", "#06B6D4"];
+const PERIODS = [7, 14, 30, 60];
+const fmt = (n, d = 0) => (n == null ? "—" : Number(n).toLocaleString(undefined, { maximumFractionDigits: d }));
+const signed = (n) => (n == null ? "—" : `${n > 0 ? "+" : ""}${n}%`);
 
 function StockBadge({ signal }) {
   const cls = { HIGH: "stock-high", MEDIUM: "stock-medium", LOW: "stock-low", OOS: "stock-oos", AVAIL: "stock-high" };
   const labelMap = { AVAIL: "IN STOCK" };
-  return <span className={`text-xs font-bold ${cls[signal] || ""}`}>{labelMap[signal] || signal}</span>;
+  if (!signal || signal === "UNKNOWN") return <span className="text-[10px] text-[#A1E4DB]/60">—</span>;
+  return <span className={`text-[10px] font-bold ${cls[signal] || ""}`}>{labelMap[signal] || signal}</span>;
 }
 
-function TierBadge({ tier, score }) {
-  const cls = { 1: "tier-1", 2: "tier-2", 3: "tier-3", 4: "bg-emerald-50 text-emerald-700" };
+function Stat({ label, value, sub, tone, testId }) {
   return (
-    <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-1 rounded ${cls[tier] || "tier-2"}`}>
-      {tier === 4 ? "T4 Authenticated" : `Tier ${tier}`} - {score}% confidence
-    </span>
+    <div className="kpi-card !p-3" data-testid={testId}>
+      <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{label}</p>
+      <p className={`text-base font-bold mt-0.5 metric-number ${tone || "text-white"}`}>{value}</p>
+      {sub && <p className="text-[10px] text-[#A1E4DB] mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+function AlertButton({ sku, isRTL }) {
+  const [open, setOpen] = useState(false);
+  const [type, setType] = useState("price_drop");
+  const [threshold, setThreshold] = useState(5);
+  const [busy, setBusy] = useState(false);
+  const types = [
+    ["price_drop", isRTL ? "انخفاض سعر منافس" : "Competitor price drop"],
+    ["price_increase", isRTL ? "ارتفاع سعر منافس" : "Competitor price increase"],
+    ["out_of_stock", isRTL ? "نفاد مخزون منافس" : "Competitor out of stock"],
+    ["back_in_stock", isRTL ? "عودة توفر منافس" : "Competitor back in stock"],
+  ];
+  const create = async () => {
+    setBusy(true);
+    try {
+      await api.post("/alerts", { product_sku: sku, alert_type: type, threshold: ["price_drop", "price_increase"].includes(type) ? Number(threshold) : null });
+      toast.success(isRTL ? "تم إنشاء التنبيه" : "Alert created");
+      setOpen(false);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || (isRTL ? "تعذر إنشاء التنبيه" : "Could not create the alert"));
+    } finally { setBusy(false); }
+  };
+  if (!open) {
+    return (
+      <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => setOpen(true)} data-testid="product-detail-alert-btn">
+        <Bell className="w-3.5 h-3.5" />{isRTL ? "إنشاء تنبيه" : "Create alert"}
+      </Button>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 p-2 rounded-md border border-white/10 bg-black/20" data-testid="product-detail-alert-form">
+      <select value={type} onChange={(e) => setType(e.target.value)} className="h-7 text-xs rounded bg-[#0A2728] border border-[#13625F] text-white px-2">
+        {types.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+      </select>
+      {["price_drop", "price_increase"].includes(type) && (
+        <label className="text-[11px] text-[#A1E4DB] inline-flex items-center gap-1">
+          ≥ <input type="number" min={1} max={90} value={threshold} onChange={(e) => setThreshold(e.target.value)}
+            className="w-12 h-7 text-xs rounded bg-[#0A2728] border border-[#13625F] text-white px-1" />%
+        </label>
+      )}
+      <Button size="sm" className="h-7 text-xs bg-[#1E988E] text-[#090E1C]" disabled={busy} onClick={create}>{isRTL ? "حفظ" : "Save"}</Button>
+      <button onClick={() => setOpen(false)} className="text-[#A1E4DB] hover:text-white" aria-label="close"><X className="w-3.5 h-3.5" /></button>
+    </div>
   );
 }
 
 export default function ProductDetailPanel({ sku, onClose }) {
-  const { t } = useI18n();
+  const { t, isRTL } = useI18n();
   const [product, setProduct] = useState(null);
-  const [history, setHistory] = useState({});
-  const [velocity, setVelocity] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [attempt, setAttempt] = useState(0);
+  const [days, setDays] = useState(30);
+  const [showExcluded, setShowExcluded] = useState(false);
   const seasonal = useSeasonalEvents();
 
-  // iter73y — the request used to have NO timeout and a bare
-  // `.catch(console.error)`, so any backend stall left the panel on
-  // "Loading…" forever with nothing the user could do. Now it fails visibly
-  // and can be retried.
+  // iter73y — a request with no timeout left the panel on "Loading…" forever;
+  // it fails visibly and can be retried.
   useEffect(() => {
     if (!sku) { setProduct(null); setError(null); return; }
     let alive = true;
     setLoading(true);
     setError(null);
-    api.get(`/products/${encodeURIComponent(sku)}/full?days=30`, { timeout: 45000 })
-      .then(({ data }) => {
-        if (!alive) return;
-        setProduct(data);
-        setHistory(data.history || {});
-        setVelocity(data.velocity || null);
-      })
+    api.get(`/products/${encodeURIComponent(sku)}/full`, { params: { days }, timeout: 45000 })
+      .then(({ data }) => { if (alive) setProduct(data); })
       .catch((err) => {
         if (!alive) return;
-        console.error(err);
         setProduct(null);
-        setError(
-          err?.code === "ECONNABORTED"
-            ? t("detail_timeout")
-            : err?.response?.data?.detail || t("detail_failed")
-        );
+        setError(err?.code === "ECONNABORTED" ? t("detail_timeout") : err?.response?.data?.detail || t("detail_failed"));
       })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [sku, attempt]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sku, attempt, days]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Build price history chart data
-  const buildHistoryData = () => {
+  const view = useMemo(() => {
+    if (!product) return null;
+    const all = product.store_prices || [];
+    const live = all.filter((s) => s.price_status === "live" && s.price != null).sort((a, b) => a.price - b.price);
+    const liveStores = new Set(live.map((s) => s.store_id));
+    // An older offer of a store that also has a live one is not another seller.
+    const excluded = all.filter((s) => s.price_status !== "live" && !liveStores.has(s.store_id));
+    const history = product.history || {};
     const dateMap = {};
-    const stores = Object.keys(history);
-    stores.forEach((store) => {
-      history[store].forEach((pt) => {
-        const date = pt.date.split("T")[0];
-        if (!dateMap[date]) dateMap[date] = { date };
-        dateMap[date][store] = pt.price;
-      });
-    });
-    return Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date));
-  };
+    Object.entries(history).forEach(([store, points]) => points.forEach((pt) => {
+      const date = pt.date.split("T")[0];
+      dateMap[date] = { ...(dateMap[date] || { date }), [store]: pt.price };
+    }));
+    const maxPrice = Math.max(...live.map((s) => s.price), 1);
+    return { live, excluded, historyData: Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date)),
+      historyStores: Object.keys(history), maxPrice, market: product.market_sales, pos: product.position,
+      mine: live.find((s) => s.is_own_store) };
+  }, [product]);
 
-  const historyData = buildHistoryData();
-  const storeNames = Object.keys(history);
+  const colorOf = (name) => {
+    const names = view?.historyStores?.length ? view.historyStores : (view?.market?.velocity?.stores || []);
+    const i = names.indexOf(name);
+    return STORE_COLORS[(i < 0 ? names.length : i) % STORE_COLORS.length];
+  };
 
   return (
     <Sheet open={!!sku} onOpenChange={(open) => { if (!open) onClose(); }}>
-      <SheetContent aria-describedby={undefined} className="w-[520px] sm:max-w-[520px] overflow-y-auto p-0" data-testid="product-detail-panel">
-        <SheetHeader className="px-5 py-4 border-b border-white/10 sticky top-0 bg-[#0A2728]/80 z-10">
+      <SheetContent aria-describedby={undefined} className="w-full sm:w-[720px] sm:max-w-[720px] overflow-y-auto p-0" data-testid="product-detail-panel">
+        <SheetHeader className="px-5 py-4 border-b border-white/10 sticky top-0 bg-[#0A2728] z-10">
           <SheetTitle className="text-base font-bold text-white inline-flex items-center gap-2">
             <MineBadge sku={sku} />
             {product?.name_ar || t("loading")}
           </SheetTitle>
         </SheetHeader>
 
-        {loading ? (
+        {loading && !product ? (
           <div className="p-5 text-sm text-[#A1E4DB]" data-testid="product-detail-loading">{t("loading")}</div>
         ) : error ? (
           <div className="p-5 space-y-3" data-testid="product-detail-error">
             <p className="text-sm text-red-300">{error}</p>
-            <Button
-              size="sm"
-              variant="outline"
-              data-testid="product-detail-retry-btn"
-              onClick={() => setAttempt((n) => n + 1)}
-            >
-              {t("retry")}
-            </Button>
+            <Button size="sm" variant="outline" data-testid="product-detail-retry-btn" onClick={() => setAttempt((n) => n + 1)}>{t("retry")}</Button>
           </div>
-        ) : product ? (
-          <div className="p-5 space-y-5">
-            {/* Product Header */}
-            <div>
-              <p className="text-sm text-[#A1E4DB]">{product.name_en}</p>
-              <SkuLine sku={product.sku} barcode={product.barcode} size="sm" className="mt-1" />
-              <div className="flex items-center gap-2 mt-1.5">
-                <Badge variant="secondary" className="text-[10px] capitalize">{product.category}</Badge>
-                <Badge variant="secondary" className="text-[10px]">{product.brand}</Badge>
+        ) : product && view ? (
+          <div className={`p-5 space-y-5 ${loading ? "opacity-60" : ""}`}>
+            {/* Header */}
+            <div className="flex gap-4">
+              <div className="w-24 h-24 shrink-0 rounded-md bg-white flex items-center justify-center overflow-hidden" data-testid="product-detail-image">
+                {product.image_url ? <img src={product.image_url} alt="" className="max-w-full max-h-full object-contain" loading="lazy" />
+                  : <ImageOff className="w-6 h-6 text-gray-400" />}
+              </div>
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <p className="text-sm text-[#A1E4DB]">{product.name_en}</p>
+                <SkuLine sku={product.sku} barcode={product.barcode} size="sm" />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {product.category && <Badge variant="secondary" className="text-[10px] capitalize">{product.category}</Badge>}
+                  {product.brand && <Badge variant="secondary" className="text-[10px]">{product.brand}</Badge>}
+                  {product.product_url && (
+                    <a href={product.product_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#6AC1B5] inline-flex items-center gap-1">
+                      {isRTL ? "صفحة المنتج" : "Product page"}<ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
+                <AlertButton sku={product.sku} isRTL={isRTL} />
               </div>
             </div>
 
-            {/* KPIs */}
-            <div className="text-sm" data-testid="product-detail-own-price">
-              <span className="text-[#A1E4DB]">{t("col_price")}: </span>
-              <span className="font-semibold text-white">{product.price ?? "—"} SAR</span>
-              {product.price_status === "unavailable" && <p className="text-xs text-[#A1E4DB] mt-1" data-testid="product-detail-price-unavailable">{t("current_price_unavailable")}</p>}
-              <HistoricalQuantity quantity={product.historical_quantity} observedAt={product.historical_quantity_at} id="product-own-historical-quantity" />
+            {/* Period */}
+            <div className="flex items-center gap-1" data-testid="product-detail-period">
+              <span className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB] me-2">{isRTL ? "الفترة" : "Period"}</span>
+              {PERIODS.map((d) => (
+                <button key={d} onClick={() => setDays(d)} data-testid={`product-detail-days-${d}`}
+                  className={`text-xs rounded-full h-6 px-2.5 ${days === d ? "bg-[#1E988E] text-[#090E1C]" : "text-[#A1E4DB] hover:bg-white/5"}`}>
+                  {isRTL ? `${d} يوماً` : `${d}D`}
+                </button>
+              ))}
             </div>
-            {product.price_range && (
-              <div className="grid grid-cols-3 gap-3">
-                <div className="kpi-card !p-3">
-                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("price_range")}</p>
-                  <p className="text-sm font-bold text-white mt-0.5" data-testid="product-detail-price-range">{product.price_range.min == null || product.price_range.max == null ? "—" : `${product.price_range.min}–${product.price_range.max}`} SAR</p>
-                </div>
-                <div className="kpi-card !p-3">
-                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("market_avg")}</p>
-                  <p className="text-sm font-bold text-white mt-0.5" data-testid="product-detail-market-average">{product.price_range.avg ?? "—"} SAR</p>
-                </div>
-                <div className="kpi-card !p-3">
-                  <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{t("total_volume")}</p>
-                  <p className="text-sm font-bold text-white mt-0.5" data-testid="product-detail-volume">{product.total_volume ?? "—"}</p>
-                </div>
-              </div>
-            )}
 
-            {/* Market Position bar (Feb 2026) */}
-            {product.market_position && (
-              <div>
-                <MarketPositionBar mp={product.market_position} />
-                {product.market_position.stale_sellers > 0 && (
-                  <p className="text-[10px] text-[#A1E4DB]/70 mt-1" data-testid="mp-stale-note">
-                    {product.market_position.stale_sellers} of {product.market_position.total_sellers} prices are older than 7 days — see "price as of" below.
+            {/* Position */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="product-detail-position">
+              <Stat testId="product-detail-own-price" label={t("col_price")}
+                value={product.price != null ? `${product.price} SAR` : "—"}
+                sub={view.mine?.discount_pct ? <span><s>{view.mine.original_price}</s> · -{view.mine.discount_pct}%</span>
+                  : product.price_status === "unavailable" ? t("current_price_unavailable") : null} />
+              <Stat testId="product-detail-rank" label={isRTL ? "ترتيبي بالسعر" : "My price rank"}
+                value={view.pos ? `#${view.pos.rank} / ${view.pos.of}` : "—"}
+                sub={view.pos ? (isRTL ? "1 = الأرخص" : "1 = cheapest") : null} />
+              <Stat testId="product-detail-vs-lowest" label={isRTL ? "مقابل الأرخص" : "vs lowest"}
+                value={signed(view.pos?.vs_lowest_pct)} tone={view.pos?.vs_lowest_pct > 0 ? "text-[#EF4444]" : "text-[#10B981]"}
+                sub={view.pos ? `${view.pos.market_lowest} SAR` : null} />
+              <Stat testId="product-detail-vs-median" label={isRTL ? "مقابل الوسيط" : "vs median"}
+                value={signed(view.pos?.vs_median_pct)} tone={view.pos?.vs_median_pct > 0 ? "text-[#F59E0B]" : "text-[#10B981]"}
+                sub={view.pos ? `${view.pos.market_median} SAR` : null} />
+            </div>
+            <HistoricalQuantity quantity={product.historical_quantity} observedAt={product.historical_quantity_at} id="product-own-historical-quantity" />
+
+            {/* Market sales */}
+            {view.market && (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="product-detail-market">
+                <Stat testId="product-detail-volume" label={isRTL ? "مبيعات السوق (وحدات)" : "Market units sold"}
+                  value={fmt(view.market.units)} sub={isRTL ? `${days} يوماً` : `last ${days} days`} />
+                <Stat testId="product-detail-market-revenue" label={isRTL ? "إيرادات السوق" : "Market revenue"}
+                  value={`${fmt(view.market.revenue)} SAR`} sub={isRTL ? "تقديرية" : "estimated"} />
+                <Stat testId="product-detail-my-share" label={isRTL ? "حصتي (وحدات)" : "My share (units)"}
+                  value={view.market.my_unit_share_pct != null ? `${view.market.my_unit_share_pct}%` : "—"}
+                  sub={view.market.my_revenue_share_pct != null ? `${view.market.my_revenue_share_pct}% ${isRTL ? "من الإيرادات" : "of revenue"}` : null} />
+                <Stat testId="product-detail-coverage" label={isRTL ? "بائعون مقاسون" : "Sellers measured"}
+                  value={`${view.market.sellers_measured} / ${view.market.sellers_live}`}
+                  tone={view.market.complete ? "text-white" : "text-[#F59E0B]"} />
+                {!view.market.complete && (
+                  <p className="col-span-full text-[10px] text-[#F59E0B]" data-testid="product-detail-unmeasured">
+                    {isRTL ? `لا يمكن قياس مبيعات: ${view.market.unmeasured_stores.join("، ")} — لا تنشر هذه المتاجر المخزون ولا عدد المبيعات، لذلك لا تظهر الحصة.`
+                      : `Sales not measurable at: ${view.market.unmeasured_stores.join(", ")} — these stores publish neither stock nor sales counts, so no share is shown.`}
                   </p>
                 )}
               </div>
             )}
 
-            {/* Confidence Badge */}
-            {product.store_prices?.[0]?.price_status === "live" && product.store_prices[0].source_tier != null && (
-              <div>
-                <TierBadge tier={product.store_prices[0].source_tier} score={product.store_prices[0].confidence_score} />
-              </div>
-            )}
-
-            {/* Price by Store Table */}
+            {/* Sellers */}
             <div>
               <div className="flex items-baseline justify-between mb-2">
                 <h4 className="text-xs font-semibold text-white">
-                  {t("stores_carrying")}
-                  {product.seller_count != null && (
-                    <span className="ms-1.5 font-normal text-[#A1E4DB]" data-testid="seller-count">({product.seller_count})</span>
-                  )}
+                  {t("stores_carrying")} <span className="font-normal text-[#A1E4DB]" data-testid="seller-count">({view.live.length})</span>
                 </h4>
-                {product.seller_summary && (
-                  <span className="text-[10px] text-[#A1E4DB]/70" data-testid="seller-summary">
-                    {product.seller_summary.live} eligible observations
-                    {product.seller_summary.stale > 0 && ` · ${product.seller_summary.stale} stale`}
-                    {product.seller_summary.oos > 0 && ` · ${product.seller_summary.oos} OOS`}
-                  </span>
-                )}
+                <span className="text-[10px] text-[#A1E4DB]/70">{isRTL ? "مرتبة من الأرخص" : "cheapest first"}</span>
               </div>
-              <div className="border border-white/10 rounded-md overflow-hidden">
-                <Table className="dense-table product-detail-offers" data-testid="product-detail-offer-table">
-                  <TableHeader>
-                    <TableRow className="bg-[#0A2728]/80/5">
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Store</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Price</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">30-day Trend</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Stock</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Tier</TableHead>
-                      <TableHead className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">Freshness</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {product.store_prices?.map((sp) => {
-                      const series = (history?.[sp.store_name] || []).map((h) => h.price).filter((p) => p > 0);
-                      const minP = series.length ? Math.min(...series) : 0;
-                      const maxP = series.length ? Math.max(...series) : 0;
-                      const range = maxP - minP || 1;
-                      const points = series.length > 1
-                        ? series.map((p, i) => `${(i / (series.length - 1)) * 100},${30 - ((p - minP) / range) * 28 - 1}`).join(" ")
-                        : "";
-                      const trendPct = series.length > 1 ? Math.round(((series[series.length - 1] - series[0]) / series[0]) * 100) : 0;
-                      // iter60 — staleness comes from the backend (7-day rule,
-                      // same one that labels the row) and only DIMS the row. It
-                      // never removes it: the client needs to know who carries
-                      // the product even when our last look is old.
-                      const stale = sp.is_stale != null ? sp.is_stale : isStale(sp.crawled_at);
-                      return (
-                      <TableRow key={sp.store_id} style={stale ? { opacity: 0.7 } : undefined} data-stale={stale} data-testid={`store-row-${sp.store_id}`}>
-                        <TableCell className="text-xs font-medium" data-label="Store">
-                          {sp.product_url ? (
-                            <a href={sp.product_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-white hover:text-[#6AC1B5] transition-colors" data-testid={`store-link-${sp.store_id}`} title={sp.product_url}>
-                              {sp.store_name}
-                              <ExternalLink className="w-3 h-3 opacity-60" />
-                            </a>
-                          ) : (sp.store_name)}
-                          {sp.excluded_reason && <p className="mt-1 text-[10px] text-amber-400" data-testid={`detail-offer-exclusion-${sp.store_id}`}>{sp.excluded_reason.replaceAll("_", " ")}</p>}
-                          {sp.is_own_store && (
-                            <span className="ms-1.5 inline-flex items-center text-[8px] font-bold tracking-[0.1em] uppercase px-1 py-0.5 rounded bg-[#1E988E]/15 text-[#1E988E] border border-[#1E988E]/30" data-testid={`my-store-tag-${sp.store_id}`}>My Store</span>
-                          )}
-                          {sp.match_source === "matched" && sp.sku && (
-                            <div className="text-[9px] text-[#A1E4DB]/60 font-mono mt-0.5" data-testid={`store-matched-sku-${sp.store_id}`} title="Linked by the matching engine, not by an identical SKU">
-                              matched · {sp.sku}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell data-label="Price" data-testid={`detail-offer-price-${sp.store_id}`}>
-                          <span className="text-xs font-semibold">{sp.price ?? "—"} SAR</span>
-                          {stale && sp.price_as_of && (
-                            <div className="text-[9px] text-[#FBBF24]/90 mt-0.5" data-testid={`store-price-asof-${sp.store_id}`}>
-                              as of {sp.price_as_of}
-                            </div>
-                          )}
-                          {sp.discount_pct > 0 && <span className="text-[10px] text-green-600 ms-1">-{sp.discount_pct}%</span>}
-                          {sp.tier4_member_price && sp.tier4_member_price !== sp.price && (
-                            <div className="text-[10px] text-emerald-600 font-medium mt-0.5">Member: {sp.tier4_member_price} SAR</div>
-                          )}
-                          {sp.tier4_flash_sale && (
-                            <Badge variant="outline" className="text-[8px] mt-0.5 bg-red-50 text-red-600 border-red-200">Flash Sale{sp.tier4_flash_price ? ` ${sp.tier4_flash_price} SAR` : ""}</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell data-label="30-day trend">
-                          {points ? (
-                            <div className="inline-flex items-center gap-2" data-testid={`store-trend-${sp.store_id}`}>
-                              <svg width="100" height="30" viewBox="0 0 100 30" className="overflow-visible">
-                                <polyline fill="none" stroke={trendPct > 5 ? "#EF4444" : trendPct < -5 ? "#10B981" : "#6AC1B5"} strokeWidth="1.5" points={points} />
-                              </svg>
-                              <span className={`text-[10px] font-mono ${trendPct > 0 ? "text-red-400" : trendPct < 0 ? "text-emerald-400" : "text-[#A1E4DB]"}`}>{trendPct > 0 ? "+" : ""}{trendPct}%</span>
-                            </div>
-                          ) : (<span className="text-[10px] text-[#A1E4DB]/60">—</span>)}
-                        </TableCell>
-                        <TableCell data-stock-status={sp.stock_status} data-label="Stock" data-testid={`detail-offer-stock-${sp.store_id}`}>
+              <div className="border border-white/10 rounded-md overflow-x-auto">
+                <table className="w-full text-xs" data-testid="product-detail-offer-table">
+                  <thead>
+                    <tr className="text-[9px] uppercase tracking-[0.12em] text-[#A1E4DB] border-b border-white/10">
+                      <th className="text-start p-2">{isRTL ? "المتجر" : "Store"}</th>
+                      <th className="text-start p-2">{isRTL ? "السعر" : "Price"}</th>
+                      <th className="text-end p-2">{isRTL ? `مبيع (${days}ي)` : `Sold (${days}d)`}</th>
+                      <th className="text-end p-2">{isRTL ? "الإيرادات" : "Revenue"}</th>
+                      <th className="text-end p-2">{isRTL ? "الحصة" : "Share"}</th>
+                      <th className="text-start p-2">{isRTL ? "المخزون" : "Stock"}</th>
+                      <th className="text-start p-2">{isRTL ? "آخر قراءة" : "Seen"}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {view.live.map((sp) => (
+                      <tr key={sp.store_id} className={`border-b border-white/5 ${sp.is_own_store ? "bg-[#1E988E]/10" : ""}`} data-testid={`store-row-${sp.store_id}`}>
+                        <td className="p-2">
+                          <span className="inline-flex items-center gap-1.5">
+                            <StoreLogo storeId={sp.store_id} name={sp.store_name} size={18} />
+                            {sp.product_url ? (
+                              <a href={sp.product_url} target="_blank" rel="noopener noreferrer" className="text-white hover:text-[#6AC1B5] inline-flex items-center gap-1" data-testid={`store-link-${sp.store_id}`}>
+                                {sp.store_name}<ExternalLink className="w-3 h-3 opacity-60" />
+                              </a>
+                            ) : <span className="text-white">{sp.store_name}</span>}
+                            {sp.is_own_store && <span className="text-[8px] font-bold uppercase px-1 rounded bg-[#1E988E]/20 text-[#1E988E]" data-testid={`my-store-tag-${sp.store_id}`}>{isRTL ? "متجري" : "Me"}</span>}
+                          </span>
+                          {sp.shared_stock_with?.length > 0 && <p className="text-[9px] text-[#F59E0B] mt-0.5">{isRTL ? `مخزون مشترك مع ${sp.shared_stock_with.join("، ")}` : `shares stock with ${sp.shared_stock_with.join(", ")}`}</p>}
+                        </td>
+                        <td className="p-2" data-testid={`detail-offer-price-${sp.store_id}`}>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-white whitespace-nowrap">{sp.price} SAR</span>
+                            <span className="hidden md:block h-1.5 rounded-full bg-[#1E988E]/60" style={{ width: `${Math.max(6, (sp.price / view.maxPrice) * 60)}px` }} />
+                          </div>
+                          {sp.discount_pct ? <p className="text-[10px] text-[#10B981]"><s className="text-[#A1E4DB]">{sp.original_price}</s> -{sp.discount_pct}%</p> : null}
+                        </td>
+                        <td className="p-2 text-end text-white metric-number" data-testid={`detail-offer-units-${sp.store_id}`}>
+                          {sp.sales_measured ? fmt(sp.units_sold) : <span className="text-[10px] text-[#A1E4DB]/70" title={isRTL ? "لا ينشر المتجر المخزون ولا عدد المبيعات" : "Store publishes neither stock nor a sold count"}>{isRTL ? "غير قابل للقياس" : "n/a"}</span>}
+                        </td>
+                        <td className="p-2 text-end text-[#A1E4DB] metric-number">{sp.sales_measured ? fmt(sp.revenue_est) : "—"}</td>
+                        <td className="p-2 text-end text-white metric-number">{sp.unit_share_pct != null ? `${sp.unit_share_pct}%` : "—"}</td>
+                        <td className="p-2" data-testid={`detail-offer-stock-${sp.store_id}`}>
                           <StockBadge signal={sp.stock_signal} />
-                          <HistoricalQuantity quantity={sp.historical_quantity} observedAt={sp.historical_quantity_at} id={`detail-historical-qty-${sp.store_id}-${sp.offer_id || sp.sku}`} />
-                          {sp.tier4_qty_exact != null && (
-                            <span className="text-[10px] text-emerald-600 ms-1 font-medium">{sp.tier4_qty_exact} exact</span>
-                          )}
-                        </TableCell>
-                        <TableCell data-label="Tier"><span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${sp.source_tier === 4 ? "bg-emerald-50 text-emerald-700" : `tier-${sp.source_tier}`}`}>{sp.source_tier == null ? "—" : `T${sp.source_tier}`}</span></TableCell>
-                        <TableCell data-label="Last observation"><FreshnessBadge crawledAt={sp.last_crawl_at || sp.crawled_at} testIdPrefix={`store-fresh-${sp.store_id}`} /></TableCell>
-                      </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
+                          {sp.qty_available != null && sp.qty_available > 0 && <span className="ms-1 text-[10px] text-[#A1E4DB] font-mono">{sp.qty_available}</span>}
+                        </td>
+                        <td className="p-2"><FreshnessBadge crawledAt={sp.last_crawl_at || sp.crawled_at} testIdPrefix={`store-fresh-${sp.store_id}`} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
+              {view.excluded.length > 0 && (
+                <div className="mt-2">
+                  <button className="text-[10px] text-[#A1E4DB] hover:text-white" onClick={() => setShowExcluded((v) => !v)} data-testid="product-detail-excluded-toggle">
+                    {showExcluded ? "▾" : "▸"} {isRTL ? `${view.excluded.length} متجر خارج المقارنة (نفد المخزون أو قراءة قديمة)` : `${view.excluded.length} stores not compared (out of stock or old reading)`}
+                  </button>
+                  {showExcluded && (
+                    <div className="mt-1 space-y-1">
+                      {view.excluded.map((sp, i) => (
+                        <div key={`${sp.store_id}-${i}`} className="flex items-center justify-between text-[11px] text-[#A1E4DB] px-2 py-1 rounded bg-white/[0.03]">
+                          <span className="inline-flex items-center gap-1.5"><StoreLogo storeId={sp.store_id} name={sp.store_name} size={14} />{sp.store_name}</span>
+                          <span data-testid={`detail-offer-exclusion-${sp.store_id}`}>{(sp.excluded_reason || "").replaceAll("_", " ")}{sp.historical_price ? ` · ${sp.historical_price} SAR` : ""}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
-            {/* Price History Chart */}
-            {historyData.length > 0 && (
+            {/* Daily units sold, per store */}
+            {view.market?.velocity?.velocity?.length > 0 && (
+              <div data-testid="product-detail-velocity">
+                <h4 className="text-xs font-semibold text-white mb-2">
+                  {isRTL ? "المبيعات اليومية في السوق" : "Daily units sold in the market"}
+                  <span className="font-normal text-[#A1E4DB]"> ({view.market.velocity.avg_daily} {t("units_day")})</span>
+                </h4>
+                <div className="border border-white/10 rounded-md p-3">
+                  <ResponsiveContainer width="100%" height={170}>
+                    <BarChart data={view.market.velocity.velocity}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                      <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#A1E4DB" }} tickFormatter={(d) => d.slice(5)} />
+                      <YAxis tick={{ fontSize: 9, fill: "#A1E4DB" }} allowDecimals={false} />
+                      <Tooltip contentStyle={{ fontSize: 11, background: "#0A2728", border: "1px solid rgba(255,255,255,0.1)" }} />
+                      <Legend wrapperStyle={{ fontSize: 10 }} />
+                      {view.market.velocity.stores.map((name) => <Bar key={name} dataKey={name} stackId="u" fill={colorOf(name)} />)}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {/* Price history */}
+            {view.historyData.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <h4 className="text-xs font-semibold text-white">{t("chart_price_history")}</h4>
                   <SeasonalToggle show={seasonal.show} toggle={seasonal.toggle} />
                 </div>
                 <div className="border border-white/10 rounded-md p-3">
-                  <ResponsiveContainer width="100%" height={180}>
-                    <LineChart data={historyData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                      <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={(d) => d.slice(5)} />
-                      <YAxis tick={{ fontSize: 9 }} />
-                      <Tooltip contentStyle={{ fontSize: 11 }} />
+                  <ResponsiveContainer width="100%" height={190}>
+                    <LineChart data={view.historyData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                      <XAxis dataKey="date" tick={{ fontSize: 9, fill: "#A1E4DB" }} tickFormatter={(d) => d.slice(5)} />
+                      <YAxis tick={{ fontSize: 9, fill: "#A1E4DB" }} domain={["auto", "auto"]} />
+                      <Tooltip contentStyle={{ fontSize: 11, background: "#0A2728", border: "1px solid rgba(255,255,255,0.1)" }} />
                       <Legend wrapperStyle={{ fontSize: 10 }} />
                       <SeasonalChartElements show={seasonal.show} />
-                      {storeNames.map((store, i) => (
-                        <Line key={store} type="monotone" dataKey={store} stroke={STORE_COLORS[i % STORE_COLORS.length]} strokeWidth={2} dot={false} connectNulls />
+                      {view.historyStores.map((store) => (
+                        <Line key={store} type="stepAfter" dataKey={store} stroke={colorOf(store)} strokeWidth={store === product.store_prices?.find((s) => s.is_own_store)?.store_name ? 3 : 1.5} dot={false} connectNulls />
                       ))}
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               </div>
             )}
-
-            {/* Velocity Chart */}
-            {velocity && velocity.velocity?.length > 0 && (
-              <div>
-                <h4 className="text-xs font-semibold text-white mb-2">
-                  {t("chart_velocity")} <span className="font-normal text-[#A1E4DB]">({velocity.avg_daily} {t("units_day")} avg)</span>
-                </h4>
-                <div className="border border-white/10 rounded-md p-3">
-                  <ResponsiveContainer width="100%" height={140}>
-                    <BarChart data={velocity.velocity}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
-                      <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={(d) => d.slice(5)} />
-                      <YAxis tick={{ fontSize: 9 }} />
-                      <Tooltip contentStyle={{ fontSize: 11 }} />
-                      <Bar dataKey="units" fill="#002DF5" radius={[2, 2, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            )}
+            <p className="text-[10px] text-[#A1E4DB]/70">
+              {isRTL ? "المبيعات تقديرية من التغير اليومي في المخزون أو عدّاد المبيعات العام للمتجر، وليست فواتير."
+                : "Sales are estimated from day-to-day stock changes or the store's public sold counter, not from invoices."}
+            </p>
           </div>
         ) : null}
       </SheetContent>

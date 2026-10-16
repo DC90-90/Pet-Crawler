@@ -39,6 +39,7 @@ from core.utils import barcode_keys, canonical_barcode, get_stock_signal
 from ledger import ksa_day_str
 from evidence_ledger import sales_map
 from price_cohort import FIELDS, build_cohorts, identity_agrees
+from category_map import facets as category_facets
 from stock_evidence import own_stock
 from price_cohort import exclusion
 from snapshot_reads import complete_latest
@@ -930,6 +931,7 @@ def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_s
             "unavailable_reason": None if with_sales else REASON_NO_SELLER_DATA,
             "in_stock_sellers": sum(1 for s in sellers if s["in_stock"]),
             "sellers": sorted(sellers, key=lambda s: (s.get("price") or 0)),
+            **category_facets(category, name_ar, name_en),
         })
 
     # opportunity score — a transparent RANKING heuristic over the rows we can

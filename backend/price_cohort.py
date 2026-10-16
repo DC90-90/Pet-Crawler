@@ -12,6 +12,8 @@ FIELDS["_id"] = 0
 FIELDS["brand"] = 1
 FIELDS["brand_source"] = 1
 FIELDS["data_origin"] = 1
+# The pre-discount price a seller shows next to its price (product detail view).
+FIELDS["original_price"] = 1
 
 
 def max_offer_age_days():
@@ -204,7 +206,12 @@ def reset_cohort_memo():
 
 async def build_cohorts(db, own_rows, own_store_id, own_price_fn, now=None, competitor_store_ids=None, parents=None):
     import asyncio
-    raw = getattr(db, "raw", db)
+    from release_database import GuardedDatabase
+    # Not getattr(db, "raw", db): on a plain Motor database `db.raw` is a
+    # collection named "raw" and `.client` a new sub-collection on every call,
+    # so the key never repeated and every request rebuilt the cohort (7-12 s
+    # on the production copy, 16 Oct 2026).
+    raw = db.raw if isinstance(db, GuardedDatabase) else db
     revision = await _data_revision(db)
     key = (id(raw.client), raw.name, revision, own_store_id,
            tuple(sorted(competitor_store_ids)) if competitor_store_ids is not None else None,

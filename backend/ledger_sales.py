@@ -241,6 +241,18 @@ async def offer_index(db):
     return out
 
 
+async def ensure_indexes(db):
+    try:
+        await db.ledger_sales_daily.create_index([("build", 1), ("date", 1)])
+        await db.ledger_sales_observed.create_index([("build", 1), ("last", 1)])
+        # One product's sellers (the product detail view) read by offer.
+        for coll in (db.ledger_sales_daily, db.ledger_sales_observed):
+            await coll.create_index([("build", 1), ("offer_id", 1)])
+            await coll.create_index([("build", 1), ("sku", 1)])
+    except Exception:  # noqa: BLE001 — reads still work on a small collection
+        logger.warning("[LedgerSales] index creation failed", exc_info=True)
+
+
 async def rebuild(db, days=BUILD_DAYS, now=None):
     """Materialize the window ending with the last sealed KSA day."""
     import ledger
@@ -264,11 +276,7 @@ async def rebuild(db, days=BUILD_DAYS, now=None):
              **f, "units": round(f["units"], 2), "revenue": round(f["revenue"], 2)} for f in facts]
     obs_docs = [{"_id": stable_id(VERSION, build, o["store_id"], o["offer_id"] or o["sku"]), "build": build,
                  **o, "first": o["dates"][0], "last": o["dates"][-1]} for o in observed]
-    try:
-        await db.ledger_sales_daily.create_index([("build", 1), ("date", 1)])
-        await db.ledger_sales_observed.create_index([("build", 1), ("last", 1)])
-    except Exception:  # noqa: BLE001 — reads still work on a small collection
-        logger.warning("[LedgerSales] index creation failed", exc_info=True)
+    await ensure_indexes(db)
     for coll, rows_out in ((db.ledger_sales_daily, docs), (db.ledger_sales_observed, obs_docs)):
         for i in range(0, len(rows_out), 5000):
             await coll.insert_many(rows_out[i:i + 5000], ordered=False)
@@ -344,6 +352,49 @@ async def sales_map(db, start, end, sealed=True):
         a["days"] = sorted(a["days"])
         a["revenue"] = round(a["revenue"], 2)
     return out
+
+
+async def offer_sales(db, offers, start, end):
+    """Ledger sales of a few specific offers over a window. offers: [(store_id,
+    offer_id or sku)], the same keys as sales_map. Returns {key: {units,
+    revenue, days_measured, by_day}}. An offer missing from the result was not
+    measured (no stock level or sold counter on two consecutive sealed days); a
+    measured offer without sales has units 0. Same facts as sales_map, read by
+    offer instead of for the whole market."""
+    from ledger import ksa_day_str
+    m = await meta(db)
+    wanted = {(s, o) for s, o in offers if s and o}
+    if not m or not wanted:
+        return {}
+    lo, hi = ksa_day_str(start), ksa_day_str(end - timedelta(seconds=1))
+    ids = sorted({o for _, o in wanted})
+    by_id = {"$or": [{"offer_id": {"$in": ids}}, {"sku": {"$in": ids}}]}
+    out = {}
+
+    def key(r):
+        k = (r["store_id"], r.get("offer_id") or r["sku"])      # sales_map's key
+        return k if k in wanted else None
+
+    def slot(k, r):
+        return out.setdefault(k, {"units": 0.0, "revenue": 0.0, "days": set(), "by_day": {}, "source": r.get("source")})
+    async for r in db.ledger_sales_daily.find({"build": m["build"], "date": {"$gte": lo, "$lte": hi}, **by_id},
+                                              {"_id": 0, "store_id": 1, "offer_id": 1, "sku": 1, "date": 1,
+                                               "units": 1, "revenue": 1, "source": 1}):
+        k = key(r)
+        if k is None:
+            continue
+        a = slot(k, r)
+        a["units"] += r["units"]
+        a["revenue"] += r["revenue"]
+        a["days"].add(r["date"])
+        a["by_day"][r["date"]] = a["by_day"].get(r["date"], 0) + r["units"]
+    async for r in db.ledger_sales_observed.find({"build": m["build"], "last": {"$gte": lo}, "first": {"$lte": hi}, **by_id},
+                                                 {"_id": 0, "store_id": 1, "offer_id": 1, "sku": 1, "dates": 1, "source": 1}):
+        k, dates = key(r), [d for d in r["dates"] if lo <= d <= hi]
+        if k is not None and dates:
+            slot(k, r)["days"].update(dates)
+    return {k: {"units": round(a["units"], 2), "revenue": round(a["revenue"], 2), "days_measured": len(a["days"]),
+                "days": sorted(a["days"]), "by_day": a["by_day"], "source": a["source"]} for k, a in out.items()}
 
 
 def shared_group_of(groups, store_id):

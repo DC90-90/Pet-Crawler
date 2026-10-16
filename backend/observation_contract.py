@@ -104,6 +104,26 @@ def expand_variants(raw):
         yield row
 
 
+def image_url(raw):
+    """First product image as a URL string.
+
+    Salla: images [{url}] / [{src}]; Zid storefront: images [{id, image:
+    {full_size, large, medium, small, thumbnail}}] (verified on mowkly.com,
+    16 Oct 2026 — before this, every Zid store saved no image); merchant
+    rows built by the crawler carry `img_url`."""
+    images = raw.get("images") or raw.get("image") or raw.get("main_image") or []
+    first = images[0] if isinstance(images, list) and images else images
+    if isinstance(first, dict):
+        nested = first.get("image") if isinstance(first.get("image"), dict) else {}
+        first = (first.get("url") or first.get("src") or first.get("origin")
+                 or nested.get("medium") or nested.get("large") or nested.get("full_size") or nested.get("small")
+                 or (first.get("image") if isinstance(first.get("image"), str) else ""))
+    if isinstance(first, str) and first.startswith(("http://", "https://", "//")):
+        return first
+    fallback = raw.get("img_url")
+    return fallback if isinstance(fallback, str) and fallback.startswith(("http://", "https://", "//")) else ""
+
+
 def normalize_offer(raw, store_name):
     """Normalize one specific offer, NOT a multi-variant listing."""
     listing = str(raw.get("_listing_id") or raw.get("id") or raw.get("sku") or "")
@@ -150,9 +170,7 @@ def normalize_offer(raw, store_name):
     sold = observed_int(sold_raw)
     capped = bool(raw.get("sold_count_capped")) or bool(re.search(r"\+|أكثر|اكثر|more than", str(sold_raw), re.I))
     barcode = next((str(raw[k]).strip() for k in ("barcode", "gtin", "ean", "upc", "sku") if gtin(raw.get(k))), "")
-    images = raw.get("images") or raw.get("image") or []
-    image = images[0] if isinstance(images, list) and images else images if isinstance(images, (dict, str)) else {}
-    image = (image.get("url") or image.get("src") or image.get("origin") or "") if isinstance(image, dict) else image
+    image = image_url(raw)
     urls = raw.get("urls") or {}
     url = (urls.get("customer") or urls.get("store")) if isinstance(urls, dict) else None
     name = raw.get("name") or raw.get("title") or ""

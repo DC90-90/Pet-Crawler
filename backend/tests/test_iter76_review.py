@@ -2,7 +2,7 @@
 Iter76 stability review — validates:
 - store ranking (was 500'ing with KeyError: 'units_sold')
 - 90-day insights endpoints (leaderboard/top-sellers/trending/summary)
-- /api/stores contains no *.example.com (11 real stores)
+- /api/stores contains no *.example.com (13 real stores)
 - POST /api/stores rejects *.example.com with 400
 - POST /api/stores accepts a normal domain (created + cleaned up)
 - /api/admin/proxy-health reports proxy_enabled=false + tls_impersonation_available=true
@@ -77,7 +77,7 @@ def test_stores_list_no_example_domains(client):
     bad = [d for d in domains if re.search(r"(^|\.)example\.com$", d or "")]
     assert not bad, f"example.com domains present: {bad}"
     # expected exactly 11 real stores
-    assert len(stores) == 11, f"expected 11 stores, got {len(stores)}: {domains}"
+    assert len(stores) == 13, f"expected 13 stores, got {len(stores)}: {domains}"
 
 
 # ---------------- POST /api/stores validation ----------------

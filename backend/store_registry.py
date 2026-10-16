@@ -56,8 +56,17 @@ REQUIRED_STORES = [
     # returns "This API is deprecated". Tier 1 is complete and cheap, so the
     # Playwright category walk is demoted to a fallback (use_storefront_categories
     # False). caty-store is the reverse: /en/ 404s and the bare route works.
-    {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products"},
-    {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products"},
+    #
+    # Oct 16 2026 — reverted to the category crawl for the four Salla stores.
+    # The /en/ walk is 15 items a page and is cut off by HTTP 429 after the
+    # retry waits: Zarafa saved 2,250 / 2,970 / 3,885 / 1,500 of ~3,900
+    # products on 11-14 Oct, and a partial walk still counted as success. The
+    # category crawl (store id from the HTML + api.salla.dev, no browser)
+    # saved 4,176-4,186 a day with no throttling up to 9 Oct.
+    {"name": "CutePets", "domain": "cutepets.com.sa", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products",
+     "use_storefront_categories": True},
+    {"name": "Hamtaro", "domain": "hamtaro.sa", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products",
+     "use_storefront_categories": True},
     # iter40 — platform corrected salla→zid: mowkly.com serves a Zid-style
     # /api/v1/products API (page pagination, quantity exposed) and produces
     # measurable sales signals; the old "salla" tag made the ranking's
@@ -68,10 +77,26 @@ REQUIRED_STORES = [
     {"name": "Hobba", "domain": "hobbapet.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
     {"name": "Petsy", "domain": "petsysa.com", "platform": "zid", "priority": 2, "working_endpoint": "/api/v1/products"},
     {"name": "Panda Store", "domain": "matjarpanda.com", "platform": "zid", "priority": 1, "working_endpoint": "/api/v1/products"},
-    {"name": "Caty", "domain": "caty-store.com", "platform": "salla", "priority": 2, "working_endpoint": "/api/v1/products"},
-    {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products"},
+    # Oct 16 2026 — Caty is a Zid store (its saved payloads carry Zid fields:
+    # html_url, is_infinite, sold_products_count, exact quantity). Inactive
+    # while its storefront is closed (owner's setting); measurable from stock
+    # changes once it reopens.
+    {"name": "Caty", "domain": "caty-store.com", "platform": "zid", "priority": 2, "working_endpoint": "/api/v1/products"},
+    {"name": "Zarafa", "domain": "zarafaksa.com", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products",
+     "use_storefront_categories": True},
     {"name": "Lana Pets", "domain": "lanapets.com", "platform": "salla", "priority": 1, "working_endpoint": "/en/api/v1/products",
+     "use_storefront_categories": True,
      "discovery": "re-verified Jul 2026: live, carries Royal Canin/Schesir/Applaws/Kit Cat"},
+
+    # ── Added 16 Oct 2026 (tracked by the client's other tool; verified live) ──
+    # Alkarawan publishes Salla's sold counter (sold_enabled=1), so its sales
+    # are measurable like Hamtaro's. Catshoop publishes prices only.
+    {"name": "Alkarawan", "domain": "alkarawanstore.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products",
+     "use_storefront_categories": True,
+     "discovery": "16 Oct 2026: Salla store 1898378167, /en/api/v1/products returns sold_quantity"},
+    {"name": "Catshoop", "domain": "catshoop1.com", "platform": "salla", "priority": 2, "working_endpoint": "/en/api/v1/products",
+     "use_storefront_categories": True,
+     "discovery": "16 Oct 2026: Salla store 1462494601, prices only (sold counter off)"},
 ]
 
 
@@ -85,6 +110,7 @@ LEGACY_ACTIVE_DOMAINS = {
     "pets-houses.com", "cutecat.com.sa", "cutepets.com.sa", "hamtaro.sa",
     "mowkly.com", "aleef.com", "hobbapet.com", "petsysa.com",
     "matjarpanda.com", "caty-store.com", "zarafaksa.com", "lanapets.com",
+    "alkarawanstore.com", "catshoop1.com",
 }
 
 

@@ -28,3 +28,19 @@ if not os.environ.get("REACT_APP_BACKEND_URL", "").strip():
                 if val:
                     os.environ["REACT_APP_BACKEND_URL"] = val
                 break
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_cohort_memo():
+    """The cohort memo is keyed on the observation revision, which production
+    writes bump; fixtures that insert snapshots directly do not, so each test
+    starts from an empty memo (16 Oct 2026: the memo key now repeats)."""
+    try:
+        import price_cohort
+        price_cohort.reset_cohort_memo()
+    except Exception:  # noqa: BLE001 — a suite that cannot import it does not use it
+        pass
+    yield

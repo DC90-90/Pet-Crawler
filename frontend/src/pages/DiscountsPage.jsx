@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
 import { RequestError } from "@/components/RequestError";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MineBadge } from "@/components/MineBadge";
+import { SkuLine } from "@/components/SkuLine";
+import { StoreLogo } from "@/components/StoreLogo";
+import { FacetTabs, StoreTabs, facetCounts, facetMatch, storesOf } from "@/components/MarketTabs";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
 
 const SCORE_COLORS = ["#FF3B30", "#FF6D00", "#FFB300", "#00C853", "#002DF5", "#8B5CF6", "#EC4899"];
@@ -21,35 +23,32 @@ const fetchData = (path, params) => async () => {
 };
 
 export default function DiscountsPage({ embedded = false }) {
-  const { t } = useI18n();
-  const [storeFilter, setStoreFilter] = useState("all");
-  // The old category filter offered generic keys (cat_food, …) that never
-  // match the stores' own category names, so it always emptied the lists.
-  const catFilter = "all";
+  const { t, isRTL } = useI18n();
+  const [store, setStore] = useState("all");
+  const [animal, setAnimal] = useState("all");
+  const [ptype, setPtype] = useState("all");
+  const [sortBy, setSortBy] = useState("pct");
+  const [shown, setShown] = useState(50);
 
-  const params = {
-    store_id: storeFilter !== "all" ? storeFilter : undefined,
-    category: catFilter !== "all" ? catFilter : undefined,
-  };
-
-  // Parallel React Query fetches (60s stale-while-revalidate via App.js default)
+  // 16 Oct 2026 — one list of current discounts for every store; the store,
+  // animal/type and sort tabs work on it in the browser (was two server lists
+  // of 30 and a store dropdown).
   const results = useQueries({
     queries: [
-      { queryKey: ["discounts", "top-pct", storeFilter, catFilter], queryFn: fetchData("/discounts/top-pct", params) },
-      { queryKey: ["discounts", "top-amount", storeFilter, catFilter], queryFn: fetchData("/discounts/top-amount", params) },
+      { queryKey: ["discounts", "current", 300], queryFn: fetchData("/discounts/top-pct", { limit: 300 }) },
       { queryKey: ["discounts", "timeline"], queryFn: fetchData("/discounts/timeline") },
       { queryKey: ["discounts", "aggression"], queryFn: fetchData("/discounts/aggression") },
-      { queryKey: ["stores"], queryFn: fetchData("/stores") },
     ],
   });
 
-  const [pctQ, amtQ, tlQ, aggQ, storesQ] = results;
-  const topPct = pctQ.data || [];
-  const topAmt = amtQ.data || [];
+  const [curQ, tlQ, aggQ] = results;
+  const current = useMemo(() => curQ.data || [], [curQ.data]);
   const timeline = tlQ.data || { timeline: [], stores: [] };
   const aggression = aggQ.data || [];
-  const storesData = storesQ.data;
-  const stores = Array.isArray(storesData) ? storesData : (storesData?.stores || []);
+  const inStore = useMemo(() => current.filter((d) => store === "all" || d.store_id === store), [current, store]);
+  const rows = useMemo(() => inStore.filter((d) => facetMatch(d, animal, ptype))
+    .sort((a, b) => (sortBy === "pct" ? b.discount_pct - a.discount_pct : b.discount_amount_sar - a.discount_amount_sar)), [inStore, animal, ptype, sortBy]);
+  useEffect(() => { setShown(50); }, [store, animal, ptype, sortBy]);
   const loading = results.some((r) => r.isLoading);
 
   if (loading) return <div className={`${embedded ? "" : "p-6 "}text-sm text-[#A1E4DB]`}>{t("loading")}</div>;
@@ -58,17 +57,9 @@ export default function DiscountsPage({ embedded = false }) {
   return (
     <div className={embedded ? "space-y-5" : "p-6 space-y-5"} data-testid="discounts-page">
       {failed && <RequestError id="discounts-request" error={failed.error} onRetry={() => results.filter((r) => r.isError).forEach((r) => r.refetch())} />}
-      <div className="flex items-center justify-between">
-        <div>
-          {!embedded && <h1 className="text-2xl font-bold tracking-tight text-white">Discounts</h1>}
-          <p className="text-sm text-[#A1E4DB] mt-0.5">Track competitor discount strategies</p>
-        </div>
-        <div className="flex gap-2">
-          <Select value={storeFilter} onValueChange={setStoreFilter}>
-            <SelectTrigger className="w-[150px] h-8 text-xs rounded-md" data-testid="disc-store-filter"><SelectValue placeholder="All Stores" /></SelectTrigger>
-            <SelectContent><SelectItem value="all">All Stores</SelectItem>{stores.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-          </Select>
-        </div>
+      <div>
+        {!embedded && <h1 className="text-2xl font-bold tracking-tight text-white">Discounts</h1>}
+        <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "التخفيضات الحالية لدى المنافسين: السعر قبل وبعد، ومنذ متى" : "Competitors' current discounts: price before and after, and since when"}</p>
       </div>
 
       {/* Aggression Leaderboard */}
@@ -79,7 +70,7 @@ export default function DiscountsPage({ embedded = false }) {
             <div key={a.store_id || `${a.store}-${i}`} className="border border-white/10 rounded-md p-3 hover:shadow-sm transition-all" data-testid={`aggression-${a.store}`}>
               <div className="flex items-center justify-between mb-2">
                 <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 bg-[#1E988E] text-white text-[10px] font-bold rounded flex items-center justify-center">{a.store[0]}</div>
+                  <StoreLogo storeId={a.store_id} name={a.store} size={28} />
                   <span className="text-sm font-medium">{a.store}</span>
                 </div>
                 <span className={`text-lg font-bold ${a.score > 30 ? "text-red-500" : a.score > 15 ? "text-yellow-600" : "text-green-600"}`}>{a.score}</span>
@@ -95,45 +86,59 @@ export default function DiscountsPage({ embedded = false }) {
         </div>
       </div>
 
-      {/* Top Discounts Tabs */}
-      <Tabs defaultValue="pct" className="w-full">
-        <TabsList className="bg-[#0A2728]/80/5 p-1 rounded-md">
-          <TabsTrigger value="pct" className="text-xs rounded-md data-[state=active]:bg-[#0A2728]/80 data-[state=active]:shadow-sm">By Percentage</TabsTrigger>
-          <TabsTrigger value="amount" className="text-xs rounded-md data-[state=active]:bg-[#0A2728]/80 data-[state=active]:shadow-sm">By SAR Saved</TabsTrigger>
-        </TabsList>
-        {["pct", "amount"].map((tab) => {
-          const data = tab === "pct" ? topPct : topAmt;
-          return (
-            <TabsContent key={tab} value={tab} className="mt-3">
-              <div className="glass-card rounded-md overflow-hidden">
-                <Table className="dense-table">
-                  <TableHeader><TableRow className="bg-[#0A2728]/80/5">
-                    <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Product</TableHead>
-                    <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Store</TableHead>
-                    <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Original</TableHead>
-                    <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">Sale Price</TableHead>
-                    <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{tab === "pct" ? "Discount %" : "Savings ﷼"}</TableHead>
-                    {tab === "pct" && <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">On Sale</TableHead>}
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {data.length === 0 ? <TableRow><TableCell colSpan={6} className="text-center py-8 text-[#A1E4DB] text-xs">{t("no_data")}</TableCell></TableRow> :
-                    data.map((d, i) => (
-                      <TableRow key={`${d.sku}-${d.store_name}-${i}`}>
-                        <TableCell><div><p className="text-xs font-medium text-white">{d.name_ar}</p><p className="text-[10px] text-[#A1E4DB] font-mono">{d.sku}</p></div></TableCell>
-                        <TableCell><span className="text-xs">{d.store_name}</span></TableCell>
-                        <TableCell><span className="text-xs text-[#A1E4DB] line-through">{d.original_price} ﷼</span></TableCell>
-                        <TableCell><span className="text-xs font-semibold text-green-600">{d.price} ﷼</span></TableCell>
-                        <TableCell><span className="text-xs font-bold text-red-500">{tab === "pct" ? `${d.discount_pct}%` : `${d.savings_sar} ﷼`}</span></TableCell>
-                        {tab === "pct" && <TableCell><span className="text-[10px] text-[#A1E4DB]">{d.days_on_discount ?? d.days_on_sale ?? "—"}d</span></TableCell>}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </TabsContent>
-          );
-        })}
-      </Tabs>
+      {/* Current discounts */}
+      <div className="glass-card rounded-md p-4 space-y-3" data-testid="disc-current">
+        <StoreTabs stores={storesOf(current)} value={store} onChange={setStore} prefix="disc-store" />
+        <FacetTabs counts={facetCounts(inStore)} animal={animal} ptype={ptype} onAnimal={setAnimal} onType={setPtype} prefix="disc" />
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB] me-1">{isRTL ? "ترتيب" : "Sort"}</span>
+          {[["pct", isRTL ? "نسبة الخصم" : "Discount %"], ["amount", isRTL ? "المبلغ الموفّر" : "SAR saved"]].map(([id, label]) => (
+            <button key={id} onClick={() => setSortBy(id)} data-testid={`disc-sort-${id}`}
+              className={`text-xs rounded-full h-6 px-2.5 ${sortBy === id ? "bg-[#1E988E] text-[#090E1C]" : "text-[#A1E4DB] hover:bg-white/5"}`}>{label}</button>
+          ))}
+        </div>
+        <div className="overflow-x-auto">
+          <Table className="dense-table">
+            <TableHeader><TableRow>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{isRTL ? "المنتج" : "Product"}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{isRTL ? "المتجر" : "Store"}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{isRTL ? "قبل" : "Was"}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{isRTL ? "الآن" : "Now"}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{isRTL ? "الخصم" : "Discount"}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB]">{isRTL ? "منذ" : "On sale"}</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {rows.length === 0 ? <TableRow><TableCell colSpan={6} className="text-center py-8 text-[#A1E4DB] text-xs">{t("no_data")}</TableCell></TableRow> :
+              rows.slice(0, shown).map((d, i) => (
+                <TableRow key={`${d.offer_id || d.sku}-${d.store_id}-${i}`} data-testid={`disc-row-${i}`}>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <div className="w-9 h-9 shrink-0 rounded bg-white overflow-hidden flex items-center justify-center">
+                        {d.image_url ? <img src={d.image_url} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : null}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-white truncate max-w-[280px] inline-flex items-center gap-1.5"><MineBadge sku={d.sku} />
+                          {d.product_url ? <a href={d.product_url} target="_blank" rel="noopener noreferrer" className="hover:text-[#6AC1B5]">{d.name_ar || d.name_en}</a> : (d.name_ar || d.name_en)}</p>
+                        <SkuLine sku={d.sku} barcode={d.barcode} />
+                      </div>
+                    </div>
+                  </TableCell>
+                  <TableCell><span className="text-xs inline-flex items-center gap-1.5"><StoreLogo storeId={d.store_id} name={d.store_name} size={16} />{d.store_name}</span></TableCell>
+                  <TableCell><span className="text-xs text-[#A1E4DB] line-through">{d.original_price} ﷼</span></TableCell>
+                  <TableCell><span className="text-xs font-semibold text-[#10B981]">{d.price} ﷼</span></TableCell>
+                  <TableCell><span className="text-xs font-bold text-[#EF4444]">-{d.discount_pct}%</span><span className="block text-[10px] text-[#A1E4DB]">{d.discount_amount_sar} ﷼</span></TableCell>
+                  <TableCell><span className="text-[10px] text-[#A1E4DB]">{d.days_on_discount != null ? (isRTL ? `${d.days_on_discount} يوم` : `${d.days_on_discount}d+`) : "—"}</span></TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        {rows.length > shown && (
+          <button onClick={() => setShown((n) => n + 50)} className="text-xs text-[#6AC1B5] hover:text-white" data-testid="disc-more">
+            {isRTL ? `عرض المزيد (${rows.length - shown})` : `Show more (${rows.length - shown})`}
+          </button>
+        )}
+      </div>
 
       {/* Discount Timeline Heatmap */}
       {timeline.timeline.length > 0 && (

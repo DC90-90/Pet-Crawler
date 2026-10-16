@@ -102,6 +102,9 @@ def test_beso_stale_own_price_never_becomes_zero_in_details(source_db):
         await db.stores.insert_one({"id": "old-comp", "name": "Old competitor", "is_active": True})
         await db.product_snapshots.insert_one({"sku": own["sku"], "store_id": "old-comp", "store_name": "Old competitor",
                                               "price": 69.0, "in_stock": True, "crawled_at": now-timedelta(days=28)})
+        # New observations bump the revision (evidence_ledger does on every write);
+        # the cohort memo is keyed on it.
+        await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}}, upsert=True)
         stale = await catalog_views.intel_detail(db, own["sku"], server._effective_own_price)
         historical = stale["competitors"][0]
         assert historical["competitor_price"] is None

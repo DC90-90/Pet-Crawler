@@ -33,7 +33,7 @@ from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 MONGO = os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017")
 SUPER = {"id": "t", "email": "t@t", "role": "super_admin"}
 
-# the 11 that stay, spelled EXACTLY as the live registry does — deliberately
+# the 13 that stay, spelled EXACTLY as the live registry does — deliberately
 # with scheme/www/trailing-slash noise, which normalization must absorb
 KEEP = [
     ("Aleef", "https://aleef.com/"),
@@ -47,6 +47,8 @@ KEEP = [
     ("Mowkly", "mowkly.com"),
     ("Panda Store", "matjarpanda.com"),
     ("Pets Houses", "pets-houses.com"),          # is_own_store
+    ("Alkarawan", "alkarawanstore.com"),          # added 16 Oct 2026
+    ("Catshoop", "catshoop1.com"),
 ]
 DROP = [("Waggy", "waggy.sa"), ("Cat Fans", "catfansksa.com"),
         ("Cat City", "catcity11.com"), ("CuteCat", "cutecat.com.sa")]
@@ -156,10 +158,10 @@ def test_dry_run_resolves_keep_list_and_writes_nothing():
         rep = await server.store_cleanup_get(dry_run=True, user=SUPER)
 
         assert rep["dry_run"] is True
-        assert rep["live_stores_total"] == 15
+        assert rep["live_stores_total"] == 17
         assert rep["guard"]["ok"] is True, rep["guard"]["reasons"]
-        assert rep["guard"]["keep_list_resolved_stores"] == 11
-        assert len(rep["keep_list"]) == 11
+        assert rep["guard"]["keep_list_resolved_stores"] == 13
+        assert len(rep["keep_list"]) == 13
         assert all(k["matched"] == 1 and k["matched_on"] == "domain" for k in rep["keep_list"])
         # every keep-list row carries the resolved store_id
         assert all(len(k["store_ids"]) == 1 for k in rep["keep_list"])
@@ -183,7 +185,7 @@ def test_dry_run_resolves_keep_list_and_writes_nothing():
         assert "products" in rep["cascade_skipped"] and rep["cascade_skipped"]["products"]
 
         # ZERO writes
-        assert await db.stores.count_documents({}) == 15
+        assert await db.stores.count_documents({}) == 17
         assert await db.product_snapshots.count_documents({}) == 2
         assert not [c for c in await db.list_collection_names()
                     if c.startswith("store_cleanup_backup_")]
@@ -204,7 +206,7 @@ def test_get_is_dry_run_only_and_requires_super_admin():
             raise AssertionError("viewer must be rejected")
         except HTTPException as e:
             assert e.status_code == 403
-        assert await db.stores.count_documents({}) == 15
+        assert await db.stores.count_documents({}) == 17
     asyncio.run(main())
 
 
@@ -240,7 +242,7 @@ def test_own_store_never_in_delete_set():
             raise AssertionError("own-store guard must abort the real run")
         except HTTPException as e:
             assert e.status_code == 409 and "is_own_store" in e.detail, e.detail
-        assert await db.stores.count_documents({}) == 15      # nothing deleted
+        assert await db.stores.count_documents({}) == 17      # nothing deleted
     asyncio.run(main())
 
 
@@ -248,19 +250,19 @@ def test_own_store_never_in_delete_set():
 def test_keep_list_not_eleven_aborts():
     async def main():
         db = AsyncIOMotorClient(MONGO)[_TEST_DB]
-        # a duplicate row for one keep domain -> 12 resolved live stores
+        # a duplicate row for one keep domain -> 14 resolved live stores
         await _seed(db)
         await db.stores.insert_one(_store(900, "Aleef Duplicate", "aleef.com"))
         rep = await server.store_cleanup(dry_run=True, user=SUPER)
-        assert rep["guard"]["keep_list_resolved_stores"] == 12
+        assert rep["guard"]["keep_list_resolved_stores"] == 14
         assert rep["guard"]["ok"] is False
-        assert any("resolved to 12" in r for r in rep["guard"]["reasons"]), rep["guard"]["reasons"]
+        assert any("resolved to 14" in r for r in rep["guard"]["reasons"]), rep["guard"]["reasons"]
         try:
             await server.store_cleanup(dry_run=False, confirm_count=rep["delete_count"], user=SUPER)
             raise AssertionError("keep-list count guard must abort")
         except HTTPException as e:
-            assert e.status_code == 409 and "expected 11" in e.detail, e.detail
-        assert await db.stores.count_documents({}) == 16
+            assert e.status_code == 409 and "expected 13" in e.detail, e.detail
+        assert await db.stores.count_documents({}) == 18
     asyncio.run(main())
 
 
@@ -284,7 +286,7 @@ def test_zero_match_keep_domain_aborts_and_names_it():
             raise AssertionError("zero-match keep-domain must abort")
         except HTTPException as e:
             assert e.status_code == 409 and "hobbapet.com" in e.detail, e.detail
-        assert await db.stores.count_documents({}) == 14
+        assert await db.stores.count_documents({}) == 16
     asyncio.run(main())
 
 
@@ -304,7 +306,7 @@ def test_catastrophe_cap_aborts_above_fifty():
             raise AssertionError("catastrophe cap must abort")
         except HTTPException as e:
             assert e.status_code == 409 and "catastrophe cap" in e.detail
-        assert await db.stores.count_documents({}) == 65
+        assert await db.stores.count_documents({}) == 67
     asyncio.run(main())
 
 
@@ -319,7 +321,7 @@ def test_confirm_count_must_match_exactly():
                 raise AssertionError(f"confirm_count={bad} must be rejected")
             except HTTPException as e:
                 assert e.status_code == 409 and "confirm_count" in e.detail
-        assert await db.stores.count_documents({}) == 15
+        assert await db.stores.count_documents({}) == 17
     asyncio.run(main())
 
 
@@ -352,10 +354,10 @@ def test_real_run_backs_up_before_delete_and_leaves_no_orphans():
         assert bs and bs["sku"] == "SKU-drop"
 
         # ── the delete itself ──
-        assert await db.stores.count_documents({}) == 11
+        assert await db.stores.count_documents({}) == 13
         assert {s["domain"] for s in await db.stores.find({}, {"_id": 0}).to_list(None)} \
             == {d for _, d in KEEP}
-        assert rep["after"]["stores"] == 11
+        assert rep["after"]["stores"] == 13
 
         # ── no orphan store references anywhere ──
         assert rep["orphan_store_references"] == {c: 0 for c in CASCADE_COLLECTIONS}, \
@@ -553,7 +555,7 @@ def test_backup_verification_catches_a_short_copy():
         finally:
             server._copy_in_batches = real_copy
             _unpatch(orig)
-        assert await db.stores.count_documents({}) == 15
+        assert await db.stores.count_documents({}) == 17
     asyncio.run(main())
 
 
@@ -594,7 +596,7 @@ def test_mid_cascade_delete_failure_rolls_back_and_leaves_no_orphans():
         after = {c: await db[c].count_documents({}) for c in CASCADE_COLLECTIONS}
         assert after == before, {k: (before[k], after[k]) for k in before if before[k] != after[k]}
         # stores is last in the cascade, so it was never touched
-        assert await db.stores.count_documents({}) == 15
+        assert await db.stores.count_documents({}) == 17
         # and no orphan references were left behind by the partial cascade
         live_ids = {s["id"] for s in await db.stores.find({}, {"_id": 0, "id": 1}).to_list(None)}
         async for s in db.product_snapshots.find({}, {"_id": 0, "store_id": 1}):
@@ -620,7 +622,7 @@ def test_recompute_failure_does_not_mask_a_successful_delete():
         finally:
             _unpatch(orig)
 
-        assert rep["after"]["stores"] == 11              # the delete stands
+        assert rep["after"]["stores"] == 13              # the delete stands
         assert rep["deleted_counts"]["stores"] == 4
         assert rep["recompute"]["dashboard_cache"].startswith("ERROR: RuntimeError")
         assert "exploded" in rep["recompute"]["dashboard_cache"]
@@ -656,12 +658,12 @@ def test_same_second_rerun_refuses_to_merge_two_backups():
             _unpatch(orig)
             for ts in (ts_now, ts_next):
                 await db[f"store_cleanup_backup_{ts}_product_snapshots"].drop()
-        assert await db.stores.count_documents({}) == 15
+        assert await db.stores.count_documents({}) == 17
     asyncio.run(main())
 
 
 # ── the registry itself ──────────────────────────────────────────────────────
-def test_required_stores_is_exactly_the_eleven_keep_domains():
+def test_required_stores_is_exactly_the_keep_domains():
     """iter48 follow-up — ensure_stores() re-creates every REQUIRED_STORES entry
     on each boot, so a store deleted by the cleanup comes straight back unless
     the registry is pruned too. The registry and the keep-list must agree
@@ -669,12 +671,12 @@ def test_required_stores_is_exactly_the_eleven_keep_domains():
     import store_registry
 
     keep_domains = {server.normalize_store_domain(d) for _, d in server.STORE_CLEANUP_KEEP_LIST}
-    assert len(keep_domains) == server.STORE_CLEANUP_EXPECTED_KEEP == 11
+    assert len(keep_domains) == server.STORE_CLEANUP_EXPECTED_KEEP == 13
 
     registry_domains = [server.normalize_store_domain(s["domain"])
                         for s in store_registry.REQUIRED_STORES]
-    assert len(registry_domains) == 11, registry_domains
-    assert len(set(registry_domains)) == 11, "duplicate domain in REQUIRED_STORES"
+    assert len(registry_domains) == 13, registry_domains
+    assert len(set(registry_domains)) == 13, "duplicate domain in REQUIRED_STORES"
     assert set(registry_domains) == keep_domains, {
         "only_in_registry": sorted(set(registry_domains) - keep_domains),
         "only_in_keep_list": sorted(keep_domains - set(registry_domains)),
@@ -732,22 +734,22 @@ def test_ensure_stores_seeds_only_the_eleven():
         db = AsyncIOMotorClient(MONGO)[_TEST_DB]
         await db.stores.delete_many({})
         added = await ensure_stores(db)
-        assert added == 11, added
+        assert added == 13, added
         live = await db.stores.find({}, {"_id": 0}).to_list(None)
-        assert len(live) == 11
+        assert len(live) == 13
         assert {server.normalize_store_domain(s["domain"]) for s in live} == \
             {server.normalize_store_domain(d) for _, d in server.STORE_CLEANUP_KEEP_LIST}
         assert [s["domain"] for s in live if s.get("is_own_store")] == ["pets-houses.com"]
         # a second boot is still idempotent
         assert await ensure_stores(db) == 0
-        assert await db.stores.count_documents({}) == 11
+        assert await db.stores.count_documents({}) == 13
 
         # and the cleanup now has nothing to do against a freshly booted DB
         server.db = db
         rep = await server.store_cleanup(dry_run=True, user=SUPER)
         assert rep["guard"]["ok"] is True, rep["guard"]["reasons"]
         assert rep["delete_count"] == 0 and rep["delete_set"] == []
-        assert rep["guard"]["keep_list_resolved_stores"] == 11
+        assert rep["guard"]["keep_list_resolved_stores"] == 13
     asyncio.run(main())
 
 

@@ -5,7 +5,8 @@ import { useRelease } from "@/contexts/ReleaseContext";
 import { RequestError } from "@/components/RequestError";
 import { useI18n, catLabel } from "@/lib/i18n";
 import api, { API_BASE } from "@/lib/api";
-import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw, Info } from "lucide-react";
+import { Search, Download, ArrowUpDown, ArrowUp, ArrowDown, TrendingUp, TrendingDown, ExternalLink, RefreshCw, Info, ImageOff } from "lucide-react";
+import { SavedViews } from "@/components/SavedViews";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +18,33 @@ import { MarketPositionBadge } from "@/components/MarketPosition";
 import { SkuLine } from "@/components/SkuLine";
 
 const RANGE_OPTIONS = [7, 14, 30, 90];
+const SALES_COLUMNS = ["qty_sold_est", "revenue_est", "market_revenue_est", "market_share_pct"];
+// 16 Oct 2026 — the columns the client compared with MySKU Watch: gap to the
+// lowest and to the median price, market size and my share per product.
+const COLUMNS = [
+  { key: "name_en", label: "col_product", sortable: true },
+  { key: "sku", label: "col_sku", sortable: false },
+  { key: "price", label: "col_price", sortable: true },
+  { key: "vs_lowest_pct", text: ["vs Lowest", "مقابل الأرخص"], sortable: true,
+    tip: ["My price against the cheapest competitor (+ = I am more expensive)", "سعري مقابل أرخص منافس (+ = أنا أغلى)"] },
+  { key: "vs_median_pct", text: ["vs Median", "مقابل الوسيط"], sortable: true,
+    tip: ["My price against the median competitor price", "سعري مقابل وسيط أسعار المنافسين"] },
+  { key: "qty_sold_est", label: "col_sales", sortable: true },
+  { key: "revenue_est", label: "col_revenue", sortable: true },
+  { key: "market_revenue_est", text: ["Market size", "حجم السوق"], sortable: true,
+    tip: ["Estimated revenue of every seller of this product over the period", "الإيرادات التقديرية لكل بائعي هذا المنتج خلال الفترة"] },
+  { key: "market_share_pct", text: ["My share", "حصتي"], sortable: true,
+    tip: ["My share of the product's revenue — only when every seller's sales are measurable", "حصتي من إيرادات المنتج — فقط عندما تكون مبيعات كل البائعين قابلة للقياس"] },
+  { key: "num_competitors", label: "col_sellers", sortable: true },
+  { key: "my_stock_signal", label: "col_stock", sortable: false },
+];
+const SHARE_REASON = {
+  own_out_of_stock: ["Out of stock in my store", "نفد من متجري"],
+  own_sales_unmeasured: ["My sales not measured", "مبيعاتي غير مقاسة"],
+  competitor_sales_unmeasured: ["A competitor's sales are not measurable", "مبيعات منافس غير قابلة للقياس"],
+  no_sales_in_window: ["No seller sold it in the period", "لم يبعه أي بائع خلال الفترة"],
+};
+const pct = (n) => (n == null ? "—" : `${n > 0 ? "+" : ""}${n}%`);
 
 function StockBadge({ signal }) {
   // iter72 — no signal means UNKNOWN, rendered as a plain dash. Never invent
@@ -37,15 +65,6 @@ function NotInCatalogChip({ isRTL }) {
       data-testid="stock-not-in-catalog"
     >
       {isRTL ? "غير موجود في متجري" : "Not in my catalog"}
-    </span>
-  );
-}
-
-function ConfBadge({ tier, score }) {
-  const cls = { 1: "tier-1", 2: "tier-2", 3: "tier-3", 4: "bg-[#1E988E]/15 text-[#1E988E]" };
-  return (
-    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${cls[tier] || "tier-2"}`}>
-      T{tier} {score}%
     </span>
   );
 }
@@ -329,6 +348,8 @@ export default function MyProductsPage() {
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("search")}
             className="ps-9 h-8 text-sm rounded-xl bg-white/5 border-white/10 text-white placeholder:text-[#A1E4DB]/50 focus:border-[#1E988E]/50" data-testid="product-search-input" />
         </div>
+        <SavedViews page="my-products" current={{ days, onDate, search, category, sortBy, sortOrder }}
+          onApply={(v) => { setDays(v.days ?? 30); setOnDate(v.onDate || ""); setSearch(v.search || ""); setCategory(v.category || "all"); setSortBy(v.sortBy || "revenue_est"); setSortOrder(v.sortOrder || "desc"); }} />
         <Select value={category} onValueChange={setCategory}>
           <SelectTrigger className="w-[150px] h-8 text-xs rounded-xl bg-white/5 border-white/10 text-white" data-testid="filter-category">
             <SelectValue placeholder={t("all_categories")} />
@@ -345,22 +366,12 @@ export default function MyProductsPage() {
         <Table className="dense-table">
           <TableHeader>
             <TableRow>
-              {[
-                { key: "name_en", label: "col_product", sortable: true },
-                { key: "sku", label: "col_sku", sortable: false },
-                { key: "price", label: "col_price", sortable: true },
-                { key: "vs_my_price_pct", label: "col_vs_low", sortable: true },
-                { key: "qty_sold_est", label: "col_sales", sortable: true },
-                { key: "revenue_est", label: "col_revenue", sortable: true },
-                { key: "num_competitors", label: "col_sellers", sortable: true },
-                { key: "my_stock_signal", label: "col_stock", sortable: false },
-                { key: "confidence_score", label: "col_confidence", sortable: true },
-              ].filter(col => !release.price_comparison_only || !["qty_sold_est", "revenue_est"].includes(col.key)).map((col) => (
+              {COLUMNS.filter(col => !release.price_comparison_only || !SALES_COLUMNS.includes(col.key)).map((col) => (
                 <TableHead key={col.key}
                   className={`text-[10px] uppercase tracking-[0.12em] font-semibold text-[#A1E4DB] ${col.sortable ? "cursor-pointer select-none hover:text-white" : ""}`}
-                  onClick={() => col.sortable && handleSort(col.key)}>
+                  onClick={() => col.sortable && handleSort(col.key)} title={col.tip ? (isRTL ? col.tip[1] : col.tip[0]) : undefined}>
                   <span className="flex items-center">
-                    {t(col.label)}
+                    {col.label ? t(col.label) : (isRTL ? col.text[1] : col.text[0])}
                     {col.sortable && <SortIcon field={col.key} sortBy={sortBy} sortOrder={sortOrder} />}
                   </span>
                 </TableHead>
@@ -369,9 +380,9 @@ export default function MyProductsPage() {
           </TableHeader>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#A1E4DB] text-sm">{t("loading")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={COLUMNS.length} className="text-center py-16 text-[#A1E4DB] text-sm">{t("loading")}</TableCell></TableRow>
             ) : data.products.length === 0 ? (
-              <TableRow><TableCell colSpan={9} className="text-center py-16 text-[#A1E4DB] text-sm">{t("no_data")}</TableCell></TableRow>
+              <TableRow><TableCell colSpan={COLUMNS.length} className="text-center py-16 text-[#A1E4DB] text-sm">{t("no_data")}</TableCell></TableRow>
             ) : (
               data.products.map((p) => {
                 const isMine = p.is_my_product;
@@ -385,6 +396,9 @@ export default function MyProductsPage() {
                 >
                   <TableCell>
                     <div className="flex items-start gap-2">
+                      <div className="w-10 h-10 shrink-0 rounded bg-white overflow-hidden flex items-center justify-center" data-testid={`product-image-${p.sku}`}>
+                        {p.image_url ? <img src={p.image_url} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : <ImageOff className="w-4 h-4 text-gray-400" />}
+                      </div>
                       <div className="flex-1 min-w-0">
                         {p.product_url ? (
                           <a
@@ -468,6 +482,7 @@ export default function MyProductsPage() {
                   <TableCell>
                     <div>
                       <span className="text-sm font-semibold text-white metric-number" data-testid={`product-current-price-${p.sku}`}>{p.price ?? "—"} {t("sar")}</span>
+                      {p.discount_pct ? <p className="text-[10px] text-[#10B981]" data-testid={`product-discount-${p.sku}`}><s className="text-[#A1E4DB]">{p.original_price}</s> -{p.discount_pct}%</p> : null}
                       <ObservedAt value={p.price_observed_at || p.last_synced_at} id={`product-observed-at-${p.sku}`} />
                       {p.competitor_min_price != null && p.competitor_max_price != null && p.competitor_min_price !== p.competitor_max_price && (
                         <p className="text-[10px] text-[#A1E4DB]" title={isRTL ? "نطاق سعر المنافسين" : "Competitor price range"}>
@@ -482,20 +497,32 @@ export default function MyProductsPage() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    {p.vs_my_price_pct == null ? (
-                      <span className="text-xs text-[#A1E4DB] opacity-60" title={isRTL ? "لا توجد بيانات منافس" : "No competitor data"}>—</span>
-                    ) : (
-                      <span
-                        className={`text-xs font-semibold ${p.vs_my_price_pct >= 0 ? "text-[#10B981]" : "text-[#EF4444]"}`}
-                        title={p.vs_my_price_pct >= 0 ? (isRTL ? "سعرك أقل من أرخص منافس" : "Your price is below the cheapest competitor") : (isRTL ? "هناك منافس يقدم سعرًا أقل منك" : "A competitor is undercutting you")}
-                        data-testid={`vs-my-price-${p.sku}`}
-                      >
-                        {p.vs_my_price_pct > 0 ? "+" : ""}{p.vs_my_price_pct}%
+                    <span className={`text-xs font-semibold ${p.vs_lowest_pct == null ? "text-[#A1E4DB] opacity-60" : p.vs_lowest_pct > 0 ? "text-[#EF4444]" : "text-[#10B981]"}`}
+                      title={p.vs_lowest_pct == null ? (isRTL ? "لا توجد بيانات منافس" : "No competitor data") : p.vs_lowest_pct > 0 ? (isRTL ? "هناك منافس يقدم سعرًا أقل منك" : "A competitor is undercutting you") : (isRTL ? "أنت الأرخص أو مساوٍ للأرخص" : "You are the cheapest or tied")}
+                      data-testid={`vs-lowest-${p.sku}`}>{pct(p.vs_lowest_pct)}</span>
+                    {p.price_rank != null && <p className="text-[10px] text-[#A1E4DB]">#{p.price_rank} / {p.price_rank_of}</p>}
+                  </TableCell>
+                  <TableCell>
+                    <span className={`text-xs font-semibold ${p.vs_median_pct == null ? "text-[#A1E4DB] opacity-60" : p.vs_median_pct > 0 ? "text-[#F59E0B]" : "text-[#10B981]"}`}
+                      data-testid={`vs-median-${p.sku}`}>{pct(p.vs_median_pct)}</span>
+                  </TableCell>
+                  {!release.price_comparison_only && <><TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-units-${p.sku}`} title={p.sales_basis}>{p.qty_sold_est?.toLocaleString() ?? "—"}</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-value-${p.sku}`} title={p.sales_basis}>{p.revenue_est?.toLocaleString() ?? "—"} {t("sar")}</span></TableCell>
+                  <TableCell data-testid={`market-size-${p.sku}`}>
+                    {p.market_revenue_est == null ? <span className="text-xs text-[#A1E4DB] opacity-60">—</span> : (
+                      <span className={`text-xs metric-number ${p.market_size_complete ? "text-white" : "text-[#A1E4DB]"}`}
+                        title={isRTL ? `${p.market_sellers_measured} من ${p.market_sellers_total} بائعين مقاسين` : `${p.market_sellers_measured} of ${p.market_sellers_total} sellers measured`}>
+                        {p.market_revenue_est.toLocaleString()} {t("sar")}
+                        {!p.market_size_complete && <span className="text-[#F59E0B]">*</span>}
+                        <span className="block text-[10px] text-[#A1E4DB]">{p.market_units_est?.toLocaleString()} {isRTL ? "وحدة" : "units"}</span>
                       </span>
                     )}
                   </TableCell>
-                  {!release.price_comparison_only && <><TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-units-${p.sku}`} title={p.sales_basis}>{p.qty_sold_est?.toLocaleString() ?? "—"}</span></TableCell>
-                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-value-${p.sku}`} title={p.sales_basis}>{p.revenue_est?.toLocaleString() ?? "—"} {t("sar")}</span></TableCell></>}
+                  <TableCell data-testid={`market-share-${p.sku}`}>
+                    {p.market_share_pct != null
+                      ? <span className="text-xs font-semibold text-white">{p.market_share_pct}%</span>
+                      : <span className="text-xs text-[#A1E4DB] opacity-60" title={SHARE_REASON[p.market_share_unavailable_reason]?.[isRTL ? 1 : 0]}>—</span>}
+                  </TableCell></>}
                   <TableCell>
                     <Badge
                       className="text-[11px] rounded-full bg-white/5 border-white/10 text-[#A1E4DB]"
@@ -520,7 +547,6 @@ export default function MyProductsPage() {
                       <HistoricalQuantity quantity={p.historical_quantity} observedAt={p.historical_quantity_at} id={`my-historical-qty-${p.sku}`} />
                     </div>
                   </TableCell>
-                  <TableCell><ConfBadge tier={p.source_tier} score={p.confidence_score} /></TableCell>
                 </TableRow>
                 );
               })

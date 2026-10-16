@@ -6,7 +6,7 @@
  *   Market best sellers      → /insights/top-sellers
  *   Restock opportunities    → /insights/restock-opportunities
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { PackageSearch, TrendingUp, PackageCheck } from "lucide-react";
@@ -20,34 +20,56 @@ import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
 import MissingProducts from "@/components/marketShare/MissingProducts";
 import ProductBreakdown from "@/components/marketShare/ProductBreakdown";
+import { FacetTabs, StoreTabs, facetCounts, facetMatch, storesOf } from "@/components/MarketTabs";
+import { StoreLogo } from "@/components/StoreLogo";
 
 const RANGES = [7, 14, 30, 90];
 
 function BestSellers({ days }) {
-  const { t } = useI18n();
+  const { t, isRTL } = useI18n();
+  const [store, setStore] = useState("all");
+  const [animal, setAnimal] = useState("all");
+  const [ptype, setPtype] = useState("all");
+  const [shown, setShown] = useState(50);
   const q = useQuery({ queryKey: ["opps", "top-sellers", days], queryFn: async () => (await api.get("/insights/top-sellers", { params: { days } })).data });
+  const all = useMemo(() => q.data || [], [q.data]);
+  const inStore = useMemo(() => all.filter((r) => store === "all" || r.store_id === store), [all, store]);
+  const rows = useMemo(() => inStore.filter((r) => facetMatch(r, animal, ptype)), [inStore, animal, ptype]);
+  useEffect(() => { setShown(50); }, [store, animal, ptype, days]);
   if (q.isError) return <RequestError id="best-sellers-request" error={q.error} onRetry={() => q.refetch()} />;
-  const rows = q.data || [];
   return (
-    <div className="glass-card rounded-md p-5" data-testid="opps-best-sellers">
-      <p className="text-xs text-[#A1E4DB] mb-3">Products with the most observed sales across tracked stores in the last {days} days. Products marked as mine are already in your catalogue.</p>
+    <div className="glass-card rounded-md p-5 space-y-3" data-testid="opps-best-sellers">
+      <p className="text-xs text-[#A1E4DB]">
+        {isRTL ? `المنتجات الأكثر مبيعاً في المتاجر المتتبعة خلال آخر ${days} يوماً (لكل متجر على حدة). المبيعات تقديرية من حركة المخزون أو عدّاد المبيعات.`
+          : `Products with the most observed sales in tracked stores over the last ${days} days, per store. Sales are estimated from stock movement or the public sold counter.`}
+      </p>
+      {all.length > 0 && <StoreTabs stores={storesOf(all)} value={store} onChange={setStore} prefix="opps-best-store" />}
+      {all.length > 0 && <FacetTabs counts={facetCounts(inStore)} animal={animal} ptype={ptype} onAnimal={setAnimal} onType={setPtype} prefix="opps-best" />}
       {q.isLoading ? <p className="text-xs text-[#A1E4DB]">{t("loading")}</p> : rows.length === 0 ? <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p> : (
         <div className="divide-y divide-white/5">
-          {rows.map((s, i) => (
-            <div key={`${s.sku}-${s.store_id || i}`} className="flex items-center gap-3 py-2" data-testid={`opps-best-${i}`}>
-              <span className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#1E988E] text-[#090E1C]" : "bg-white/5 text-[#A1E4DB]"}`}>{i + 1}</span>
+          {rows.slice(0, shown).map((s, i) => (
+            <div key={`${s.offer_id || s.sku}-${s.store_id || i}`} className="flex items-center gap-3 py-2" data-testid={`opps-best-${i}`}>
+              <span className={`w-6 h-6 shrink-0 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#1E988E] text-[#090E1C]" : "bg-white/5 text-[#A1E4DB]"}`}>{i + 1}</span>
+              <div className="w-10 h-10 shrink-0 rounded bg-white overflow-hidden flex items-center justify-center">
+                {s.image_url ? <img src={s.image_url} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : null}
+              </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium text-white truncate inline-flex items-center gap-1.5"><MineBadge sku={s.sku} />{s.name_ar || s.name_en}</p>
                 <SkuLine sku={s.sku} barcode={s.barcode} />
-                {s.store_name && <p className="text-[10px] text-[#A1E4DB]">{s.store_name}</p>}
+                {s.store_name && <p className="text-[10px] text-[#A1E4DB] inline-flex items-center gap-1"><StoreLogo storeId={s.store_id} name={s.store_name} size={12} />{s.store_name}{s.avg_price != null && ` · ${s.avg_price} SAR`}</p>}
               </div>
               <div className="text-end shrink-0">
-                <p className="text-xs font-bold text-white">{(s.units_sold ?? s.qty_sold_est ?? 0).toLocaleString()} units</p>
+                <p className="text-xs font-bold text-white">{(s.units_sold ?? s.qty_sold_est ?? 0).toLocaleString()} {isRTL ? "وحدة" : "units"}</p>
                 <p className="text-[10px] text-[#A1E4DB]">{(s.revenue_est ?? 0).toLocaleString()} SAR</p>
               </div>
             </div>
           ))}
         </div>
+      )}
+      {rows.length > shown && (
+        <button onClick={() => setShown((n) => n + 50)} className="text-xs text-[#6AC1B5] hover:text-white" data-testid="opps-best-more">
+          {isRTL ? `عرض المزيد (${rows.length - shown})` : `Show more (${rows.length - shown})`}
+        </button>
       )}
     </div>
   );

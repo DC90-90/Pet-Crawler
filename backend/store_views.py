@@ -1,6 +1,7 @@
 """Store views share sealed facts; no category-velocity or monthly extrapolation."""
 from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException
+import category_map
 import ledger
 from evidence_ledger import sales_map, measured_days, sales_source
 from price_cohort import exclusion, identity_keys, FIELDS
@@ -165,6 +166,10 @@ async def market_summary(db, days, price_fn):
             "market_position_summary": summarize_positions(own, products, cohorts, price_fn)}
 
 
+TOP_SELLERS_LIMIT = 300
+REVIEWED_CATEGORY_SOURCES = ("reviewed", "store_supplied", "import_file")
+
+
 async def top_sellers(db, days, store_id=None):
     start, end = ledger.sealed_ksa_window(days)
     signals = await sales_map(db, start, end)
@@ -182,4 +187,38 @@ async def top_sellers(db, days, store_id=None):
                        "qty_sold_est": r["units"], "revenue_est": r["revenue"],
                        "source_tier": s.get("source_tier"), "confidence_score": s.get("confidence_score"),
                        "num_sellers": 1, "velocity": r["units"], "basis": "inventory_proxy", "avg_price": s.get("price")})
-    return sorted(result, key=lambda r: -r["qty_sold_est"])[:20]
+    # 16 Oct 2026 — enough rows for per-store and per-category tabs (was the
+    # top 20 only), with the reviewed catalogue category, image and barcode.
+    result = sorted(result, key=lambda r: -r["qty_sold_est"])[:TOP_SELLERS_LIMIT]
+    # A ledger fact keyed by SKU (no offer id resolved) is not in the latest
+    # offers map: its store and product names come from the catalogue
+    # (165 of 300 rows had no store name, 16 Oct 2026).
+    names = {s["id"]: s.get("name") async for s in db.stores.find({}, {"_id": 0, "id": 1, "name": 1})}
+    fields = {"_id": 0, "offer_id": 1, "store_id": 1, "sku": 1, "category": 1, "category_source": 1,
+              "image_url": 1, "barcode": 1, "name_ar": 1, "name_en": 1, "product_url": 1}
+    by_offer, by_sku = {}, {}
+    async for m in db.products.find({"offer_id": {"$in": [r["offer_id"] for r in result if r["offer_id"]]}}, fields):
+        by_offer[(m.get("store_id"), m.get("offer_id"))] = m
+    loose = [r for r in result if (r["store_id"], r["offer_id"]) not in by_offer]
+    if loose:
+        async for m in db.products.find({"store_id": {"$in": list({r["store_id"] for r in loose})},
+                                         "sku": {"$in": list({r["sku"] for r in loose})}}, fields):
+            by_sku[(m.get("store_id"), m.get("sku"))] = m
+    for r in result:
+        m = by_offer.get((r["store_id"], r["offer_id"])) or by_sku.get((r["store_id"], r["sku"])) or {}
+        if r["name_ar"] == r["sku"]:
+            r.update(name_ar=m.get("name_ar") or m.get("name_en") or r["sku"], name_en=r["name_en"] or m.get("name_en"))
+        if r["name_ar"] == r["sku"]:
+            # A retired SKU (Mowkly re-keyed its catalogue in Oct 2026): the
+            # name from its last snapshot that carried one.
+            snap = await db.product_snapshots.find_one(
+                {"store_id": r["store_id"], "sku": r["sku"], "name_ar": {"$nin": [None, ""]}},
+                {"_id": 0, "name_ar": 1, "name_en": 1, "product_url": 1}, sort=[("crawled_at", -1)])
+            if snap:
+                r.update(name_ar=snap["name_ar"], name_en=r["name_en"] or snap.get("name_en"))
+                m = {**m, "product_url": m.get("product_url") or snap.get("product_url")}
+        r.update(store_name=r["store_name"] or names.get(r["store_id"]),
+                 category=m.get("category") if m.get("category_source") in REVIEWED_CATEGORY_SOURCES else None,
+                 image_url=m.get("image_url"), barcode=m.get("barcode"), product_url=m.get("product_url"))
+        r.update(category_map.facets(r["category"], r["name_ar"], r["name_en"]))
+    return result

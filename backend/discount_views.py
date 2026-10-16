@@ -2,6 +2,7 @@
 from datetime import datetime, timezone, timedelta
 from price_cohort import exclusion, FIELDS
 from store_views import latest
+import category_map
 
 # A current discount is a current price: every tracked store is crawled daily.
 # Reading 30 days of latest offers took >10 s on production, past the
@@ -46,7 +47,8 @@ async def top(db, days, store_id=None, category=None, limit=30, by_amount=False)
         rows.append({**s, "category": cat, "image_url": metadata.get("image_url"),
                      "discount_pct": round((1-price/original)*100, 1), "discount_amount_sar": round(original-price, 2),
                      "sale_price": price, "effective_price": price, "ongoing": True,
-                     "duration_is_lower_bound": True, "data_origin": "verified_offer"})
+                     "duration_is_lower_bound": True, "data_origin": "verified_offer",
+                     **category_map.facets(cat, s.get("name_ar"), s.get("name_en"))})
     rows.sort(key=lambda r: r["discount_amount_sar"] if by_amount else r["discount_pct"], reverse=True)
     rows = rows[:limit]
 
