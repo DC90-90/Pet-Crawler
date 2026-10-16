@@ -42,8 +42,13 @@ function ActionRequiredTable({ rows, onOpen }) {
 }
 
 function MyAdvantagesTable({ rows, onOpen }) {
+  // All rows are reachable: the table used to stop at 50 of 528 silently.
+  const [shown, setShown] = useState(50);
   return (
     <div className="glass-card overflow-hidden">
+      <p className="px-4 pt-3 text-xs text-[#A1E4DB]" data-testid="advantages-count">
+        {rows.length.toLocaleString()} products where I am the cheapest verified seller, or a competitor is out of stock
+      </p>
       <Table className="dense-table">
         <TableHeader><TableRow>
           <TableHead className="text-[10px] uppercase text-[#A1E4DB]">Product</TableHead>
@@ -55,7 +60,7 @@ function MyAdvantagesTable({ rows, onOpen }) {
         <TableBody>
           {rows.length === 0 ? (
             <TableRow><TableCell colSpan={5} className="text-center py-12 text-[#A1E4DB]">No advantages found yet</TableCell></TableRow>
-          ) : rows.slice(0, 50).map((r, i) => (
+          ) : rows.slice(0, shown).map((r, i) => (
             <TableRow key={`${r.my_sku}-${r.advantage}-${i}`} className="cursor-pointer" onClick={() => onOpen(r.my_sku)}>
               <TableCell><p className="text-sm text-white font-medium truncate max-w-[250px] inline-flex items-center gap-1.5"><MineBadge sku={r.my_sku} />{r.my_name_en || r.my_name_ar}</p><SkuLine sku={r.my_sku} barcode={r.my_barcode} />{r.market_position && <div className="mt-1"><MarketPositionBadge mp={r.market_position} testIdPrefix={`pi-${r.my_sku}`} /></div>}</TableCell>
               <TableCell><span className="text-sm font-semibold text-white metric-number">{r.my_price} SAR</span></TableCell>
@@ -68,6 +73,13 @@ function MyAdvantagesTable({ rows, onOpen }) {
           ))}
         </TableBody>
       </Table>
+      {rows.length > shown && (
+        <div className="flex justify-center py-3">
+          <Button size="sm" variant="ghost" onClick={() => setShown((n) => n + 50)} className="text-xs text-[#A1E4DB]" data-testid="advantages-show-more">
+            Show more ({(rows.length - shown).toLocaleString()} more)
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -75,14 +87,24 @@ function MyAdvantagesTable({ rows, onOpen }) {
 function FullComparisonTable({ rows, onOpen }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  // Products with a current competitor price first; the rest (no competitor
+  // seen) opened the table and buried the comparison (15 Oct 2026).
+  const [onlyMatched, setOnlyMatched] = useState(true);
+  const matched = rows.filter(r => r.cheapest_price != null).length;
   const query = search.trim().toLocaleLowerCase();
-  const filtered = rows.filter(r => !query || [r.my_sku, r.my_barcode, r.my_name_ar, r.my_name_en].some(v => String(v || "").toLocaleLowerCase().includes(query)));
+  const filtered = rows.filter(r => (!onlyMatched || r.cheapest_price != null) && (!query || [r.my_sku, r.my_barcode, r.my_name_ar, r.my_name_en].some(v => String(v || "").toLocaleLowerCase().includes(query))));
   const lastPage = Math.max(0, Math.ceil(filtered.length / 100) - 1);
   const currentPage = Math.min(page, lastPage);
   return (
     <div className="glass-card overflow-hidden" data-testid="full-comparison-table">
       <div className="flex flex-wrap items-center justify-between gap-3 p-3">
-        <Input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} placeholder="Product name, SKU or barcode" aria-label="Search full comparison" className="max-w-sm bg-white/5 border-white/10 text-white" data-testid="full-comparison-search" />
+        <div className="flex flex-wrap items-center gap-3">
+          <Input value={search} onChange={e => { setSearch(e.target.value); setPage(0); }} placeholder="Product name, SKU or barcode" aria-label="Search full comparison" className="max-w-sm bg-white/5 border-white/10 text-white" data-testid="full-comparison-search" />
+          <label className="flex items-center gap-1.5 text-xs text-[#A1E4DB] cursor-pointer" data-testid="full-comparison-matched-only">
+            <input type="checkbox" checked={onlyMatched} onChange={e => { setOnlyMatched(e.target.checked); setPage(0); }} />
+            Only products with a competitor price ({matched.toLocaleString()} of {rows.length.toLocaleString()})
+          </label>
+        </div>
         <div className="flex items-center gap-2 text-xs text-[#A1E4DB]">
           <span data-testid="full-comparison-page-count">{filtered.length} products · {currentPage + 1}/{lastPage + 1}</span>
           <Button size="icon" variant="ghost" title="Previous products" aria-label="Previous products" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)} data-testid="full-comparison-previous"><ChevronLeft className="h-4 w-4" /></Button>

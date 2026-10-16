@@ -73,7 +73,7 @@ export default function OverviewPage() {
           value={ownPosition ? `#${ownPosition}` : "—"}
           sub={ownPosition ? (isRTL ? `من ${measured.length} متاجر قابلة للقياس` : `of ${measured.length} stores with measurable sales`) : null} />
         <Kpi testId="ov-kpi-share" to="/market-share" label={isRTL ? "حصتي من الإيرادات" : "My revenue share"}
-          value={share.my_revenue_share_pct != null ? `${share.my_revenue_share_pct}%` : "—"}
+          value={share.my_revenue_share_pct != null ? `${Number(share.my_revenue_share_pct).toFixed(1)}%` : "—"}
           sub={share.products_contested != null ? (isRTL ? `على ${fmt(share.products_contested)} منتجاً تُقاس فيه مبيعات المنافسين` : `on ${fmt(share.products_contested)} products where competitors' sales are measured`) : null} />
         <Kpi testId="ov-kpi-price" to="/pricing" label={isRTL ? "موقعي السعري" : "My price position"}
           value={priceVerdict}
@@ -89,12 +89,15 @@ export default function OverviewPage() {
             <h3 className="text-xs uppercase tracking-[0.15em] font-semibold text-[#A1E4DB]">{isRTL ? "أين تقع أسعاري" : "Where my prices sit"}</h3>
             <p className="text-[10px] text-[#A1E4DB]">{isRTL ? `${fmt(mps.ranked_products)} منتجاً مقارناً` : `${fmt(mps.ranked_products)} products compared`}</p>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {/* Separate groups that add up to the products compared (the old
+              counts overlapped: the cheapest are also below the median). */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {[
-              ["cheapest", mps.cheapest_count, isRTL ? "الأرخص" : "Cheapest seller", "#10B981"],
-              ["below_median", mps.below_median_count, isRTL ? "أقل من الوسيط" : "Below market median", "#6AC1B5"],
-              ["above_median", mps.above_median_count, isRTL ? "أعلى من الوسيط" : "Above market median", "#FBBF24"],
-              ["most_expensive", mps.most_expensive_count, isRTL ? "الأغلى" : "Most expensive", "#F59E0B"],
+              ["cheapest", mps.bands?.cheapest, isRTL ? "الأرخص" : "Cheapest seller", "#10B981"],
+              ["below_median", mps.bands?.below_median, isRTL ? "أقل من الوسيط" : "Below the median", "#6AC1B5"],
+              ["at_median", mps.bands?.at_median, isRTL ? "عند الوسيط" : "At the median", "#A1E4DB"],
+              ["above_median", mps.bands?.above_median, isRTL ? "أعلى من الوسيط" : "Above the median", "#FBBF24"],
+              ["most_expensive", mps.bands?.most_expensive, isRTL ? "الأغلى" : "Most expensive", "#F59E0B"],
             ].map(([key, count, label, color]) => (
               <div key={key} className="text-start p-3 rounded" style={{ border: "1px solid rgba(255,255,255,0.06)", background: "rgba(0,0,0,0.15)" }}
                 data-testid={`ov-mp-${key}`}>

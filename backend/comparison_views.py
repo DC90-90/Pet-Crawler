@@ -61,6 +61,15 @@ async def position_summary(db, price_fn):
     return summarize_positions(own, products, cohorts, price_fn)
 
 
+def _position_bands(ranked):
+    bands = {"cheapest": 0, "below_median": 0, "at_median": 0, "above_median": 0, "most_expensive": 0}
+    for r in ranked:
+        band = ("cheapest" if r["is_cheapest"] else "most_expensive" if r["is_most_expensive"]
+                else "below_median" if r["below_median"] else "above_median" if r["above_median"] else "at_median")
+        bands[band] += 1
+    return bands
+
+
 def summarize_positions(own, products, cohorts, price_fn):
     ranked = [position(own, p, price_fn(p), cohorts[p["sku"]]) for p in products if p.get("sku") in cohorts]
     ranked = [r for r in ranked if r]
@@ -70,6 +79,10 @@ def summarize_positions(own, products, cohorts, price_fn):
             "below_median_count": sum(r["below_median"] for r in ranked),
             "above_median_count": sum(r["above_median"] for r in ranked),
             "at_median_count": sum(not r["above_median"] and not r["below_median"] for r in ranked),
+            # Exclusive bands that add up to ranked_products: the counts above
+            # overlap (cheapest is also below the median), and a card showing
+            # them side by side summed to 1,648 of 951 products (15 Oct 2026).
+            "bands": _position_bands(ranked),
             "avg_percentile": round(sum(r["percentile"] for r in ranked)/len(ranked), 1) if ranked else None,
             "price_policy": POLICY_VERSION}
 

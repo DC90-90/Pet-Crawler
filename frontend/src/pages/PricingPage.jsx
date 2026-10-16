@@ -1,7 +1,7 @@
 /**
  * Pricing (15 Oct 2026) — every price question in one place, each answered once:
  *   Overpriced          → the Scanner (gap to the cheapest seller, price-gap exposure)
- *   Where I'm cheapest  → products where I am the cheapest verified seller
+ *   My advantages       → cheapest verified seller, or a competitor out of stock
  *   Full comparison     → every matched product, plus match confidence
  *   Price wars          → products where sellers' prices are furthest apart
  *   Discounts           → competitors' current discounts
@@ -23,13 +23,13 @@ import { ComparisonScope, useComparisonScope } from "@/components/ComparisonScop
 import { MineBadge } from "@/components/MineBadge";
 import { SkuLine } from "@/components/SkuLine";
 import { CardPeriod } from "@/components/CardPeriod";
-import { ConfidenceDistribution, ConfidenceGuidePanel } from "@/components/priceIntel/PriceIntelHeader";
 import { PriceIntelTabContent } from "@/components/priceIntel/PriceIntelTabs";
 import { PriceIntelDetailSheet } from "@/components/priceIntel/PriceIntelDetailSheet";
 import ScannerPage from "@/pages/ScannerPage";
 import DiscountsPage from "@/pages/DiscountsPage";
 
 const INTEL_KEYS = ["insights", "price_intel"];
+const WAR_MAX_PCT = 100;
 
 function usePriceDashboard(scope) {
   return useQuery({
@@ -44,7 +44,6 @@ function ComparisonPanel({ view }) {
   const { canEdit } = useReleaseActions();
   const scope = useComparisonScope();
   const q = usePriceDashboard(scope);
-  const [showGuide, setShowGuide] = useState(false);
   const [selectedSku, setSelectedSku] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailError, setDetailError] = useState(false);
@@ -84,9 +83,13 @@ function ComparisonPanel({ view }) {
         <>
           {view === "full" && (
             <div className="space-y-3">
-              <ConfidenceDistribution distribution={data.confidence_distribution} isRTL={isRTL}
-                showGuide={showGuide} onToggleGuide={() => setShowGuide(!showGuide)} />
-              {showGuide && <ConfidenceGuidePanel isRTL={isRTL} />}
+              {/* One plain line instead of the confidence chart, whose data was
+                  empty ("0 total matches" next to 980 matched products). */}
+              <p className="text-xs text-[#A1E4DB]" data-testid="pricing-match-summary">
+                {isRTL
+                  ? `${(data.summary?.matched_products ?? 0).toLocaleString()} من ${(data.summary?.total_products ?? 0).toLocaleString()} منتجاً مطابَقاً مع منافس بالباركود`
+                  : `${(data.summary?.matched_products ?? 0).toLocaleString()} of ${(data.summary?.total_products ?? 0).toLocaleString()} products are matched to a competitor by barcode`}
+              </p>
               {unverified > 0 && (
                 <div className="flex gap-1">
                   {[["full", isRTL ? "كل المنتجات" : "All matched products", ShoppingCart],
@@ -115,10 +118,13 @@ function PriceWars() {
   const { t } = useI18n();
   const q = useQuery({ queryKey: ["pricing", "price-wars"], queryFn: async () => (await api.get("/insights/price-wars")).data });
   if (q.isError) return <RequestError id="price-wars-request" error={q.error} onRetry={() => q.refetch()} />;
-  const wars = q.data || [];
+  const all = q.data || [];
+  const wars = all.filter((w) => (w.spread_pct ?? 0) <= WAR_MAX_PCT).sort((a, b) => (b.spread_pct ?? 0) - (a.spread_pct ?? 0)).slice(0, 100);
+  const packLike = all.length - all.filter((w) => (w.spread_pct ?? 0) <= WAR_MAX_PCT).length;
   return (
     <div className="glass-card rounded-md p-5" data-testid="pricing-price-wars">
-      <p className="text-xs text-[#A1E4DB] mb-1">Products where the same item's prices differ the most between sellers.</p>
+      <p className="text-xs text-[#A1E4DB] mb-1">Products where the same item's prices differ the most between sellers — largest gaps first.</p>
+      {packLike > 0 && <p className="text-[11px] text-[#F59E0B] mb-1" data-testid="price-wars-pack-note">{packLike} products with gaps above {WAR_MAX_PCT}% are left out: such gaps almost always mean a different pack size, not a price war.</p>}
       <CardPeriod window="current" testId="price-wars-period" />
       {q.isLoading ? <p className="text-xs text-[#A1E4DB]">{t("loading")}</p> : wars.length === 0 ? (
         <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p>
@@ -149,7 +155,7 @@ export default function PricingPage() {
   const intel = INTEL_KEYS.some((k) => canAccessPage(user, k));
   const tabs = useMemo(() => [
     { id: "overpriced", label: isRTL ? "أسعاري الأعلى" : "Overpriced", icon: AlertTriangle, show: intel || canAccessPage(user, "scanner") },
-    { id: "cheapest", label: isRTL ? "حيث أنا الأرخص" : "Where I'm cheapest", icon: Award, show: intel },
+    { id: "cheapest", label: isRTL ? "مزاياي" : "My advantages", icon: Award, show: intel },
     { id: "full", label: isRTL ? "المقارنة الكاملة" : "Full comparison", icon: ShoppingCart, show: intel },
     { id: "price-wars", label: isRTL ? "حروب الأسعار" : "Price wars", icon: Swords, show: intel },
     { id: "discounts", label: isRTL ? "تخفيضات المنافسين" : "Competitor discounts", icon: Percent, show: canAccessPage(user, "discounts") },
