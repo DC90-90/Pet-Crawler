@@ -1380,6 +1380,39 @@ async def _execute_backfill(run_id, stores, rematch):
         logger.info("[Backfill] run %s finished", run_id)
 
 
+async def _resume_cut_off_crawls(delay_secs=150):
+    """After a restart, crawl again today's scheduled crawls the restart cut
+    off (an attempt still "running" whose process stopped heartbeating). One
+    process does it (lease); stores run one after another through
+    scheduled_crawl_job, which skips a store already crawled today and caps
+    attempts at CRAWL_RESUME_MAX_PER_DAY (16 Oct 2026)."""
+    import process_watch
+    import ledger
+    await asyncio.sleep(delay_secs)
+    owner = f"{process_watch.BOOT_ID}:{uuid.uuid4().hex[:6]}"
+    if not await job_control.acquire(db, "crawl-resume", owner, hours=6):
+        return
+    try:
+        alive = await process_watch.alive_boot_ids(db)
+        since = ledger.ksa_midnight_utc(ledger.ksa_day_str(datetime.now(timezone.utc)))
+        cut = []
+        async for a in db.crawl_attempts.find({"started_at": {"$gte": since}, "status": "running",
+                                               "trigger": {"$in": ["schedule", "resume"]}},
+                                              {"_id": 1, "store_id": 1, "boot_id": 1}).sort("started_at", 1):
+            if a.get("boot_id") and a["boot_id"] not in alive:
+                await db.crawl_attempts.update_one({"_id": a["_id"]}, {"$set": {"status": "cut_off_by_restart"}})
+                if a["store_id"] not in cut:
+                    cut.append(a["store_id"])
+        for store_id in cut:
+            logger.info("[CrawlResume] crawling %s again after a restart cut it off", store_id)
+            try:
+                await scheduled_crawl_job(store_id, trigger="resume")
+            except Exception:
+                logger.exception("[CrawlResume] %s failed", store_id)
+    finally:
+        await job_control.release(db, "crawl-resume", owner)
+
+
 BACKFILL_MAX_RESUMES = 3
 
 
@@ -1996,8 +2029,30 @@ async def seed_super_admin():
 # guess_category, guess_animal, extract_weight — all imported at top
 
 # ── Scheduler Helpers ────────────────────────────────────────
-async def scheduled_crawl_job(store_id: str):
-    """Run by APScheduler for automated crawls."""
+# 16 Oct 2026 — crawls start 5 min apart but each takes 30-120 min, so 3-4
+# ran at once per process. Their parsing stalled the event loop for 2-9 s at
+# a time; the platform then restarted the pod mid-crawl (Zarafa and Hamtaro
+# cut off on 15 and 16 Oct; Lana, Petsy and Mowkly on 16 Oct). One crawl at a
+# time per process (two backend processes: at most two in the pod).
+CRAWL_SLOTS = asyncio.Semaphore(max(1, int(os.environ.get("CRAWL_CONCURRENCY", "1"))))
+CRAWL_RESUME_MAX_PER_DAY = 3          # attempts per store per KSA day, the first included
+_CRAWL_DONE_STATUSES = ("complete", "done")
+
+
+async def _store_crawl_today(store_id):
+    """(completed today?, attempts today) for one store, by KSA day."""
+    import ledger
+    since = ledger.ksa_midnight_utc(ledger.ksa_day_str(datetime.now(timezone.utc)))
+    rows = await db.crawl_attempts.find(
+        {"store_id": store_id, "started_at": {"$gte": since}, "trigger": {"$in": ["schedule", "resume"]}},
+        {"_id": 0, "status": 1, "products_found": 1}).to_list(50)
+    done = any(r.get("status") in _CRAWL_DONE_STATUSES and (r.get("products_found") or 0) > 0 for r in rows)
+    return done, len(rows)
+
+
+async def scheduled_crawl_job(store_id: str, trigger: str = "schedule"):
+    """Run by APScheduler for automated crawls, and after a restart for the
+    crawls it cut off (trigger="resume")."""
     global crawl_paused
     if crawl_paused:
         logger.info(f"Scheduler: Skipping {store_id} — crawls paused")
@@ -2005,9 +2060,16 @@ async def scheduled_crawl_job(store_id: str):
     store = await db.stores.find_one({"id": store_id}, {"_id": 0})
     if not store or not store.get("is_active", True):
         return
-    platform = store.get("platform", "").lower()
-    logger.info(f"[Scheduler] Cron fired: {store.get('domain')} at {datetime.now(timezone.utc).isoformat()}")
-    result = await crawl_store_waterfall(db, store, trigger="schedule")
+    logger.info(f"[Scheduler] Cron fired ({trigger}): {store.get('domain')} at {datetime.now(timezone.utc).isoformat()}")
+    async with CRAWL_SLOTS:
+        # Both backend processes fire every schedule; while one waited for a
+        # slot the other may have crawled the store.
+        done, attempts = await _store_crawl_today(store_id)
+        if done or (trigger == "resume" and attempts >= CRAWL_RESUME_MAX_PER_DAY):
+            logger.info("[Scheduler] %s: skipped (%s)", store.get("name"),
+                        "already crawled today" if done else f"{attempts} attempts today")
+            return
+        result = await crawl_store_waterfall(db, store, trigger=trigger)
     # Perf sprint Feb 2026 — invalidate insights/discounts TTL cache so the new
     # snapshots show up immediately on the dashboard instead of waiting up to 60s.
     cache_clear()
@@ -12438,6 +12500,7 @@ async def _boot():
     try:
         await _boot_sequence()
         asyncio.create_task(_resume_interrupted_backfills())
+        asyncio.create_task(_resume_cut_off_crawls())
         BOOT_STATE["status"] = "done" if BOOT_STATE["phase"] != "waiting_for_mongo" else "mongo_unreachable"
     except Exception as exc:
         BOOT_STATE["status"] = "aborted"

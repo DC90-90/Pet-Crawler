@@ -59,6 +59,14 @@ KSA_TZ = timezone(timedelta(hours=3))
 PARTIAL_BELOW = 0.5
 
 
+def ksa_midnight_utc(day):
+    """Start of a KSA calendar day ("YYYY-MM-DD") in UTC. catalog_views called
+    this for My Products' day and date-range filters before it existed, so
+    those filters raised AttributeError (found 16 Oct 2026)."""
+    from archive import ksa_day_bounds_utc
+    return ksa_day_bounds_utc(str(day)[:10])[0]
+
+
 def ksa_day_str(dt):
     """The KSA calendar day 'YYYY-MM-DD' of a datetime (naive treated as UTC)."""
     if dt.tzinfo is None:
