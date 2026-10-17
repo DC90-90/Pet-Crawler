@@ -4252,6 +4252,20 @@ async def stock_planner_view(days: int = Query(30, ge=7, le=60), lead_days: int 
     return await stock_planner.planner(db, _effective_own_price, days, lead_days, cover_days)
 
 
+@router.get("/data-quality/coverage")
+@api_cache.stored(300, lambda: db)
+async def data_quality_coverage(user=Depends(get_user)):
+    import data_quality
+    return await data_quality.coverage(db)
+
+
+@router.get("/data-quality/matches")
+@api_cache.stored(1800, lambda: db)
+async def data_quality_matches(user=Depends(get_user)):
+    import data_quality
+    return await data_quality.matches_to_review(db, _effective_own_price)
+
+
 @router.get("/pricing/changes")
 async def pricing_changes(user=Depends(get_user)):
     import zid_prices

@@ -13,6 +13,7 @@ const navItems = [
   { to: "/market-share", pageKey: "market_share", icon: PieChart, labelKey: "nav_market", label: "Market" },
   { to: "/opportunities", pageKeys: ["insights", "price_intel", "market_share"], icon: Lightbulb, labelKey: "nav_opportunities", label: "Opportunities" },
   { to: "/stores", pageKey: "stores", icon: Store, labelKey: "nav_competitors", label: "Competitors" },
+  { to: "/data-quality", pageKey: "stores", icon: ShieldCheck, labelKey: "nav_data_quality", label: "Data quality" },
   { to: "/alerts", pageKey: "alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },
   { to: "/import", pageKey: "import", icon: Upload, labelKey: "nav_import", label: "Import" },
 ];
