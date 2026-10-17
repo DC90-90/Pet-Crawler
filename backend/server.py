@@ -4243,6 +4243,15 @@ async def pricing_apply(data: PriceApplyIn, user=Depends(get_user)):
     return result
 
 
+@router.get("/stock/planner")
+@api_cache.stored(1800, lambda: db)
+async def stock_planner_view(days: int = Query(30, ge=7, le=60), lead_days: int = Query(7, ge=1, le=60),
+                             cover_days: int = Query(30, ge=7, le=120), user=Depends(get_user)):
+    """Days of stock left, reorder quantities and the cost of running out."""
+    import stock_planner
+    return await stock_planner.planner(db, _effective_own_price, days, lead_days, cover_days)
+
+
 @router.get("/pricing/changes")
 async def pricing_changes(user=Depends(get_user)):
     import zid_prices

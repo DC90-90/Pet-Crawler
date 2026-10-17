@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { PackageSearch, TrendingUp, PackageCheck } from "lucide-react";
+import { PackageSearch, TrendingUp, PackageCheck, Boxes } from "lucide-react";
 import api from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useAuth, canAccessPage } from "@/App";
@@ -22,6 +22,7 @@ import MissingProducts from "@/components/marketShare/MissingProducts";
 import ProductBreakdown from "@/components/marketShare/ProductBreakdown";
 import { FacetTabs, StoreTabs, facetCounts, facetMatch, storesOf } from "@/components/MarketTabs";
 import { StoreLogo } from "@/components/StoreLogo";
+import StockPlanner from "@/components/StockPlanner";
 
 const RANGES = [7, 14, 30, 90];
 
@@ -111,6 +112,7 @@ export default function OpportunitiesPage() {
     { id: "missing", label: isRTL ? "منتجات لا أبيعها" : "Products I don't sell", icon: PackageSearch, show: canAccessPage(user, "market_share") },
     { id: "best-sellers", label: isRTL ? "الأكثر مبيعاً في السوق" : "Market best sellers", icon: TrendingUp, show: intel },
     { id: "restock", label: isRTL ? "فرص إعادة التخزين" : "Restock opportunities", icon: PackageCheck, show: intel },
+    { id: "stock-planner", label: isRTL ? "مخطط مخزوني" : "My stock planner", icon: Boxes, show: intel },
   ].filter((x) => x.show), [user, intel, isRTL]);
   const tab = tabs.some((x) => x.id === params.get("tab")) ? params.get("tab") : tabs[0]?.id;
   const filters = useMemo(() => ({ ...scope.params }), [scope.params]);
@@ -122,7 +124,7 @@ export default function OpportunitiesPage() {
           <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_opportunities")}</h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "ما يمكنك إضافته أو إعادة تخزينه" : "What you could add or restock"}</p>
         </div>
-        {tab !== "restock" && (
+        {tab !== "restock" && tab !== "stock-planner" && (
           <div className="flex gap-1" data-testid="opps-range">
             {RANGES.map((d) => (
               <Button key={d} size="sm" variant={days === d ? "default" : "outline"} onClick={() => setDays(d)}
@@ -149,6 +151,7 @@ export default function OpportunitiesPage() {
       )}
       {tab === "best-sellers" && <BestSellers days={days} />}
       {tab === "restock" && <Restock />}
+      {tab === "stock-planner" && <StockPlanner />}
     </div>
   );
 }
