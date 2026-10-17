@@ -27,6 +27,7 @@ const PricingPage = lazy(() => import("@/pages/PricingPage"));
 const OpportunitiesPage = lazy(() => import("@/pages/OpportunitiesPage"));
 const StoreRegistryPage = lazy(() => import("@/pages/StoreRegistryPage"));
 const DataQualityPage = lazy(() => import("@/pages/DataQualityPage"));
+const ReportsPage = lazy(() => import("@/pages/ReportsPage"));
 const AlertsPage = lazy(() => import("@/pages/AlertsPage"));
 const CompetitorProfilePage = lazy(() => import("@/pages/CompetitorProfilePage"));
 // iter79 — Market Share tab (measured shares, gaps, brands, categories)
@@ -189,6 +190,7 @@ function AppLayout() {
           <Route path="/market-share" element={<ProtectedRoute pageKey="market_share"><MarketSharePage /></ProtectedRoute>} />
           <Route path="/stores" element={<ProtectedRoute pageKey="stores"><StoreRegistryPage /></ProtectedRoute>} />
           <Route path="/data-quality" element={<ProtectedRoute pageKey="stores"><DataQualityPage /></ProtectedRoute>} />
+          <Route path="/reports" element={<ProtectedRoute pageKey="my_products"><ReportsPage /></ProtectedRoute>} />
           <Route path="/stores/:storeId" element={<ProtectedRoute pageKey="stores"><CompetitorProfilePage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute pageKey="settings"><ReleaseSettings /></ProtectedRoute>} />
           <Route path="/settings/coverage" element={<ProtectedRoute pageKey="settings"><CoverageReportPage /></ProtectedRoute>} />

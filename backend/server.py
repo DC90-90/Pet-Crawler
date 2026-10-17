@@ -4212,10 +4212,7 @@ async def pricing_settings_put(data: PricingSettingsIn, user=Depends(get_user)):
     return await _pricing_settings()
 
 
-@router.get("/pricing/recommendations")
-async def pricing_recommendations(action: Optional[str] = Query(None), user=Depends(get_user)):
-    """One recommended price per own product from the 30-day My Products
-    dataset (same cohort, same sales) and the owner's margin rules."""
+async def _pricing_recs():
     import pricing_advisor
     dataset, cache_meta = await my_products_cache.serve(
         db, _dashboard_cache_key(30),
@@ -4226,6 +4223,14 @@ async def pricing_recommendations(action: Optional[str] = Query(None), user=Depe
     summary = pricing_advisor.summarize(recs)
     order = {"lower": 0, "raise": 1, "check_cost": 2, "check_identity": 3, "hold": 4, "restock": 5, "no_market": 6}
     recs.sort(key=lambda r: (order.get(r["action"], 9), -abs(r.get("profit_change_30d") or 0), -(r.get("units_30d") or 0)))
+    return recs, summary, settings, cache_meta
+
+
+@router.get("/pricing/recommendations")
+async def pricing_recommendations(action: Optional[str] = Query(None), user=Depends(get_user)):
+    """One recommended price per own product from the 30-day My Products
+    dataset (same cohort, same sales) and the owner's margin rules."""
+    recs, summary, settings, cache_meta = await _pricing_recs()
     if action not in (None, "", "all"):
         recs = [r for r in recs if r["action"] == action]
     return {"settings": settings, "summary": summary, "rows": recs[:1000], "cache": cache_meta}
@@ -4258,6 +4263,106 @@ async def promotions_calendar(days: int = Query(90, ge=14, le=180), user=Depends
     """When each store runs sales, how deep and how long (sealed daily ledger)."""
     import promotions
     return await promotions.calendar(db, days)
+
+
+# ── Daily brief, weekly report and their email delivery (17 Oct 2026) ───────
+class NotificationSettingsIn(BaseModel):
+    daily_enabled: bool = False
+    weekly_enabled: bool = False
+    daily_recipients: list[str] = []
+    weekly_recipients: list[str] = []
+
+
+async def _build_report(kind):
+    """Build and store today's report of `kind` ("daily" | "weekly")."""
+    import reports, stock_planner, data_quality, promotions
+    recs, pricing_summary, _, _ = await _pricing_recs()
+    if kind == "daily":
+        planner = await stock_planner.planner(db, _effective_own_price)
+        report = await reports.daily(db, _effective_own_price, pricing_rows=recs, planner=planner)
+        key = f"daily:{report['day']}"
+    else:
+        planner = await stock_planner.planner(db, _effective_own_price, days=7)
+        cov = (await data_quality.coverage(db))["stores"]
+        cal = await promotions.calendar(db, 14)
+        week_from = reports.last_sealed_day()
+        week_from = (datetime.fromisoformat(week_from) - timedelta(days=6)).strftime("%Y-%m-%d")
+        campaigns = [{"store": s["name"], **c} for s in cal["stores"] for c in s["campaigns"] if c["end"] >= week_from]
+        report = await reports.weekly(db, _effective_own_price, pricing_summary=pricing_summary, planner_week=planner,
+                                      coverage=[{k: c[k] for k in ("name", "active", "products", "sales_measured_days_30", "last_crawl")} for c in cov],
+                                      campaigns=campaigns)
+        key = f"weekly:{report['to']}"
+    await db.reports.update_one({"_id": key}, {"$set": {"report": report, "kind": kind, "built_at": datetime.now(timezone.utc)}}, upsert=True)
+    return key, report
+
+
+async def _scheduled_report(kind):
+    """Build the report once (lease across processes) and email it if enabled."""
+    import notify, reports, job_control as jc
+    owner = uuid.uuid4().hex
+    lease = f"report:{kind}:{reports.last_sealed_day()}"
+    if not await jc.acquire(db, lease, owner, hours=2):
+        return
+    try:
+        key, report = await _build_report(kind)
+        cfg = await notify.settings(db)
+        if cfg.get(f"{kind}_enabled") and cfg.get(f"{kind}_recipients"):
+            if (await db.reports.find_one({"_id": key}, {"sent": 1}) or {}).get("sent"):
+                return
+            subject = ("دليل — الموجز اليومي " + report["day"]) if kind == "daily" else ("دليل — التقرير الأسبوعي " + report["to"])
+            res = await notify.send_email(cfg[f"{kind}_recipients"], subject, reports.render_html(report))
+            await db.reports.update_one({"_id": key}, {"$set": {"sent": res.get("status") == "sent", "delivery": res}})
+    except Exception:
+        logger.exception("[Reports] %s report failed", kind)
+    finally:
+        await jc.release(db, lease, owner)
+
+
+@router.get("/reports/latest")
+async def reports_latest(kind: str = Query("daily", pattern="^(daily|weekly)$"), user=Depends(get_user)):
+    doc = await db.reports.find_one({"kind": kind}, {"_id": 1, "report": 1, "built_at": 1, "delivery": 1}, sort=[("_id", -1)])
+    if not doc:
+        _, report = await _build_report(kind)
+        return {"report": report, "delivery": None}
+    return {"report": doc["report"], "built_at": doc.get("built_at"), "delivery": doc.get("delivery")}
+
+
+@router.post("/reports/rebuild")
+async def reports_rebuild(kind: str = Query("daily", pattern="^(daily|weekly)$"), user=Depends(get_user)):
+    if user.get("role") not in ("super_admin", "admin"):
+        raise HTTPException(403, "Only an admin can rebuild reports")
+    _, report = await _build_report(kind)
+    return {"report": report}
+
+
+@router.get("/notifications/settings")
+async def notifications_settings_get(user=Depends(get_user)):
+    import notify
+    return await notify.settings(db)
+
+
+@router.put("/notifications/settings")
+async def notifications_settings_put(data: NotificationSettingsIn, user=Depends(get_user)):
+    if user.get("role") not in ("super_admin", "admin"):
+        raise HTTPException(403, "Only an admin can change report delivery")
+    import notify
+    clean = lambda xs: sorted({x.strip().lower() for x in xs if x and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", x.strip())})[:20]
+    doc = {**data.model_dump(), "daily_recipients": clean(data.daily_recipients), "weekly_recipients": clean(data.weekly_recipients)}
+    await db.app_settings.update_one({"_id": "notifications"}, {"$set": doc}, upsert=True)
+    return await notify.settings(db)
+
+
+@router.post("/notifications/test")
+async def notifications_test(kind: str = Query("daily", pattern="^(daily|weekly)$"), user=Depends(get_user)):
+    """Email the latest report to its recipients now."""
+    if user.get("role") not in ("super_admin", "admin"):
+        raise HTTPException(403, "Only an admin can send reports")
+    import notify, reports
+    cfg = await notify.settings(db)
+    doc = await db.reports.find_one({"kind": kind}, {"report": 1}, sort=[("_id", -1)])
+    report = doc["report"] if doc else (await _build_report(kind))[1]
+    subject = ("دليل — الموجز اليومي " + report["day"]) if kind == "daily" else ("دليل — التقرير الأسبوعي " + report["to"])
+    return await notify.send_email(cfg.get(f"{kind}_recipients") or [], "[اختبار] " + subject, reports.render_html(report))
 
 
 @router.get("/data-quality/coverage")
@@ -12718,8 +12823,13 @@ async def _boot_sequence():
         # Riyadh: after the crawl window AND after the 21:30 UTC seal.
         scheduler.add_job(scheduled_archive, CronTrigger(hour=3, minute=0, timezone="UTC"),
                           id="nightly_price_archive", replace_existing=True)
-        scheduler.add_job(generate_market_digest, "cron", day_of_week="sun", hour=5, minute=0,
-                          id="weekly_digest", replace_existing=True)
+        # 17 Oct 2026 — the daily brief (09:00 KSA) and weekly report (Sunday
+        # 09:15 KSA) replace the log-only weekly digest, which read up to
+        # 100k whole snapshots. Built from sealed facts; emailed if enabled.
+        scheduler.add_job(_scheduled_report, CronTrigger(hour=6, minute=0, timezone="UTC"), args=["daily"],
+                          id="daily_brief", replace_existing=True)
+        scheduler.add_job(_scheduled_report, CronTrigger(day_of_week="sun", hour=6, minute=15, timezone="UTC"), args=["weekly"],
+                          id="weekly_report", replace_existing=True)
         logger.info(f"Scheduler started with {len(stores)} crawl jobs + weekly digest + 6h own-store sync + ledger day-seal + nightly archive")
     except Exception:
         logger.exception("[Boot] scheduler start/job registration failed — the API stays up")

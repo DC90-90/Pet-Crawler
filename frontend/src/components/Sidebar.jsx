@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, Store, LogOut, Languages, Bell, Tag, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X, LayoutDashboard, Lightbulb } from "lucide-react";
+import { Package, Store, LogOut, Languages, Bell, Tag, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X, LayoutDashboard, Lightbulb, FileText } from "lucide-react";
 import { useState, useEffect } from "react";
 
 // 15 Oct 2026 — one menu, each figure in one place. A page shows when the user
@@ -13,6 +13,7 @@ const navItems = [
   { to: "/market-share", pageKey: "market_share", icon: PieChart, labelKey: "nav_market", label: "Market" },
   { to: "/opportunities", pageKeys: ["insights", "price_intel", "market_share"], icon: Lightbulb, labelKey: "nav_opportunities", label: "Opportunities" },
   { to: "/stores", pageKey: "stores", icon: Store, labelKey: "nav_competitors", label: "Competitors" },
+  { to: "/reports", pageKey: "my_products", icon: FileText, labelKey: "nav_reports", label: "Reports" },
   { to: "/data-quality", pageKey: "stores", icon: ShieldCheck, labelKey: "nav_data_quality", label: "Data quality" },
   { to: "/alerts", pageKey: "alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },
   { to: "/import", pageKey: "import", icon: Upload, labelKey: "nav_import", label: "Import" },
