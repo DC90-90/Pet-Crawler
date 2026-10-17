@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Award, ShoppingCart, Swords, Percent, AlertCircle, Lightbulb } from "lucide-react";
+import { AlertTriangle, Award, ShoppingCart, Swords, Percent, AlertCircle, Lightbulb, CalendarDays } from "lucide-react";
 import api from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useAuth, canAccessPage } from "@/App";
@@ -28,6 +28,7 @@ import { PriceIntelDetailSheet } from "@/components/priceIntel/PriceIntelDetailS
 import ScannerPage from "@/pages/ScannerPage";
 import DiscountsPage from "@/pages/DiscountsPage";
 import PriceRecommendations from "@/components/PriceRecommendations";
+import PromotionsCalendar from "@/components/PromotionsCalendar";
 
 const INTEL_KEYS = ["insights", "price_intel"];
 const WAR_MAX_PCT = 100;
@@ -161,6 +162,7 @@ export default function PricingPage() {
     { id: "full", label: isRTL ? "المقارنة الكاملة" : "Full comparison", icon: ShoppingCart, show: intel },
     { id: "price-wars", label: isRTL ? "حروب الأسعار" : "Price wars", icon: Swords, show: intel },
     { id: "discounts", label: isRTL ? "تخفيضات المنافسين" : "Competitor discounts", icon: Percent, show: canAccessPage(user, "discounts") },
+    { id: "promotions", label: isRTL ? "تقويم العروض" : "Promotions calendar", icon: CalendarDays, show: canAccessPage(user, "discounts") },
   ].filter((x) => x.show), [user, intel, isRTL]);
   const tab = tabs.some((x) => x.id === params.get("tab")) ? params.get("tab") : tabs[0]?.id;
 
@@ -185,6 +187,7 @@ export default function PricingPage() {
       {(tab === "cheapest" || tab === "full") && <ComparisonPanel view={tab === "full" ? "full" : "advantage"} />}
       {tab === "price-wars" && <PriceWars />}
       {tab === "discounts" && <DiscountsPage embedded />}
+      {tab === "promotions" && <PromotionsCalendar />}
     </div>
   );
 }

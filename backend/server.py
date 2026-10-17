@@ -4252,6 +4252,14 @@ async def stock_planner_view(days: int = Query(30, ge=7, le=60), lead_days: int 
     return await stock_planner.planner(db, _effective_own_price, days, lead_days, cover_days)
 
 
+@router.get("/promotions/calendar")
+@api_cache.stored(6 * 3600, lambda: db)
+async def promotions_calendar(days: int = Query(90, ge=14, le=180), user=Depends(get_user)):
+    """When each store runs sales, how deep and how long (sealed daily ledger)."""
+    import promotions
+    return await promotions.calendar(db, days)
+
+
 @router.get("/data-quality/coverage")
 @api_cache.stored(300, lambda: db)
 async def data_quality_coverage(user=Depends(get_user)):
