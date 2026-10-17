@@ -10,7 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os, logging, random, uuid, bcrypt, jwt as pyjwt, secrets, statistics, csv, io, re, time, shutil, asyncio, math, json
 from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from bson import ObjectId
 from pymongo.errors import BulkWriteError
@@ -4179,6 +4179,74 @@ async def my_products(
     return {"kpis": dataset["kpis"], "products": paged, "total": dataset["total"],
             "limit": limit, "offset": offset, "categories": dataset["categories"],
             "cache": cache_meta}
+
+
+# ── Price recommendations and approved changes (17 Oct 2026) ─────────────────
+class PricingSettingsIn(BaseModel):
+    min_margin_pct: float = Field(15.0, ge=0, le=80)
+    raise_gap_pct: float = Field(3.0, ge=0.5, le=50)
+    undercut_sar: float = Field(0.0, ge=0, le=20)
+
+
+class PriceApplyIn(BaseModel):
+    sku: str
+    price: float = Field(..., gt=0)
+
+
+async def _pricing_settings():
+    import pricing_advisor
+    doc = await db.app_settings.find_one({"_id": "pricing"}, {"_id": 0}) or {}
+    return {**pricing_advisor.DEFAULTS, **{k: v for k, v in doc.items() if k in pricing_advisor.DEFAULTS}}
+
+
+@router.get("/pricing/settings")
+async def pricing_settings_get(user=Depends(get_user)):
+    return await _pricing_settings()
+
+
+@router.put("/pricing/settings")
+async def pricing_settings_put(data: PricingSettingsIn, user=Depends(get_user)):
+    if user.get("role") not in ("super_admin", "admin"):
+        raise HTTPException(403, "Only an admin can change pricing rules")
+    await db.app_settings.update_one({"_id": "pricing"}, {"$set": data.model_dump()}, upsert=True)
+    return await _pricing_settings()
+
+
+@router.get("/pricing/recommendations")
+async def pricing_recommendations(action: Optional[str] = Query(None), user=Depends(get_user)):
+    """One recommended price per own product from the 30-day My Products
+    dataset (same cohort, same sales) and the owner's margin rules."""
+    import pricing_advisor
+    dataset, cache_meta = await my_products_cache.serve(
+        db, _dashboard_cache_key(30),
+        lambda: _my_products_dataset(db, 30, None, None, None, None, None, None, True),
+        max_age=DASHBOARD_CACHE_MAX_AGE_SECS, cacheable=True, on_stale=_stale_callback())
+    settings = await _pricing_settings()
+    recs = [pricing_advisor.recommend(r, settings) for r in dataset["rows"]]
+    summary = pricing_advisor.summarize(recs)
+    order = {"lower": 0, "raise": 1, "check_cost": 2, "check_identity": 3, "hold": 4, "restock": 5, "no_market": 6}
+    recs.sort(key=lambda r: (order.get(r["action"], 9), -abs(r.get("profit_change_30d") or 0), -(r.get("units_30d") or 0)))
+    if action not in (None, "", "all"):
+        recs = [r for r in recs if r["action"] == action]
+    return {"settings": settings, "summary": summary, "rows": recs[:1000], "cache": cache_meta}
+
+
+@router.post("/pricing/apply")
+async def pricing_apply(data: PriceApplyIn, user=Depends(get_user)):
+    """Send one approved shelf price to the own Zid store."""
+    if user.get("role") not in ("super_admin", "admin"):
+        raise HTTPException(403, "Only an admin can change prices on the store")
+    import zid_prices
+    result = await zid_prices.apply(db, data.sku, round(data.price, 2), user.get("email"))
+    if not result.get("ok"):
+        raise HTTPException(409 if result.get("status") != "not_found" else 404, result)
+    return result
+
+
+@router.get("/pricing/changes")
+async def pricing_changes(user=Depends(get_user)):
+    import zid_prices
+    return await zid_prices.history(db)
 
 
 @router.get("/products")

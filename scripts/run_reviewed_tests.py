@@ -52,7 +52,7 @@ groups = {
                           "test_process_watch_and_resume", "test_identity_check", "test_measured_days",
                           "test_crawl_attempts", "test_store_categories", "test_category_map",
                           "test_pagination_rate_limit", "test_zid_variant_supplement", "test_full_export",
-                          "test_ledger_sales", "test_stale_serve_age", "test_store_active_persists", "test_position_bands", "test_product_market_view", "test_crawl_resume",
+                          "test_ledger_sales", "test_stale_serve_age", "test_store_active_persists", "test_position_bands", "test_product_market_view", "test_crawl_resume", "test_pricing_advisor",
                           "test_fast_reads"],
 }
 report_dir = ROOT / "test_reports/pytest"

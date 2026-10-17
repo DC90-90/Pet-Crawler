@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Award, ShoppingCart, Swords, Percent, AlertCircle } from "lucide-react";
+import { AlertTriangle, Award, ShoppingCart, Swords, Percent, AlertCircle, Lightbulb } from "lucide-react";
 import api from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useAuth, canAccessPage } from "@/App";
@@ -27,6 +27,7 @@ import { PriceIntelTabContent } from "@/components/priceIntel/PriceIntelTabs";
 import { PriceIntelDetailSheet } from "@/components/priceIntel/PriceIntelDetailSheet";
 import ScannerPage from "@/pages/ScannerPage";
 import DiscountsPage from "@/pages/DiscountsPage";
+import PriceRecommendations from "@/components/PriceRecommendations";
 
 const INTEL_KEYS = ["insights", "price_intel"];
 const WAR_MAX_PCT = 100;
@@ -154,6 +155,7 @@ export default function PricingPage() {
   const [params, setParams] = useSearchParams();
   const intel = INTEL_KEYS.some((k) => canAccessPage(user, k));
   const tabs = useMemo(() => [
+    { id: "recommendations", label: isRTL ? "توصيات الأسعار" : "Recommendations", icon: Lightbulb, show: intel },
     { id: "overpriced", label: isRTL ? "أسعاري الأعلى" : "Overpriced", icon: AlertTriangle, show: intel || canAccessPage(user, "scanner") },
     { id: "cheapest", label: isRTL ? "مزاياي" : "My advantages", icon: Award, show: intel },
     { id: "full", label: isRTL ? "المقارنة الكاملة" : "Full comparison", icon: ShoppingCart, show: intel },
@@ -178,6 +180,7 @@ export default function PricingPage() {
           </button>
         ))}
       </div>
+      {tab === "recommendations" && <PriceRecommendations />}
       {tab === "overpriced" && <ScannerPage embedded />}
       {(tab === "cheapest" || tab === "full") && <ComparisonPanel view={tab === "full" ? "full" : "advantage"} />}
       {tab === "price-wars" && <PriceWars />}
