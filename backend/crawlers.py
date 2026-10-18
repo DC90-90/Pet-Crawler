@@ -9,6 +9,7 @@ import re
 import uuid
 import time
 import asyncio
+import random
 import logging
 import itertools
 import httpx
@@ -2655,6 +2656,74 @@ async def _salla_categories_from_api(store_identifier, domain=None):
         _flatten_salla_categories(data if isinstance(data, list) else [])))
 
 
+# 19 Oct 2026 — the category walk misses products filed under no category it
+# reads: Hamtaro 2,791 of 5,616 (the full listing walk ended cleanly with 5,616
+# on 12 Oct), CutePets 2,831 of 3,075+. After the categories, the full
+# "latest" listing is walked slowly and only products not yet seen are added.
+# A walk the host throttles keeps its cursor and the next crawl resumes there.
+SALLA_WALK_PAUSE = (4.0, 6.0)
+SALLA_WALK_THROTTLE_WAITS = (60, 180, 300)
+SALLA_WALK_MAX_PAGES = 700
+SALLA_WALK_BUDGET_SECS = 50 * 60
+SALLA_WALK_CURSOR_MAX_AGE = timedelta(hours=36)
+
+
+async def _salla_latest_walk(db, store, client, seen_ids, captured, crawl_log):
+    start_url = "https://api.salla.dev/store/v1/products?source=latest&limit=50"
+    now = datetime.now(timezone.utc)
+    saved = await db.salla_walk_cursors.find_one({"_id": store["id"]}) or {}
+    saved_at = saved.get("saved_at")
+    if saved_at is not None and saved_at.tzinfo is None:
+        saved_at = saved_at.replace(tzinfo=timezone.utc)
+    url = saved.get("next") if saved.get("next") and saved_at and now - saved_at < SALLA_WALK_CURSOR_MAX_AGE else start_url
+    resumed = url != start_url
+    pages = added = 0
+    stop = "page_cap"
+    began = time.monotonic()
+    try:
+        while pages < SALLA_WALK_MAX_PAGES:
+            if time.monotonic() - began > SALLA_WALK_BUDGET_SECS:
+                stop = "time_budget"
+                break
+            r = await client.get(url)
+            for wait in SALLA_WALK_THROTTLE_WAITS:
+                if r.status_code not in (429, 503):
+                    break
+                await asyncio.sleep(wait)
+                r = await client.get(url)
+            if r.status_code != 200:
+                if resumed and pages == 0:          # a stale saved cursor: start over
+                    url, resumed = start_url, False
+                    continue
+                stop = f"http_{r.status_code}"
+                break
+            body = r.json()
+            pages += 1
+            for it in body.get("data") or []:
+                pid = it.get("id") if isinstance(it, dict) else None
+                if pid is not None and pid not in seen_ids:
+                    seen_ids.add(pid)
+                    captured.append(it)
+                    added += 1
+            nxt = (body.get("cursor") or {}).get("next")
+            if not nxt:
+                stop = "explicit_end"
+                break
+            url = nxt
+            await asyncio.sleep(random.uniform(*SALLA_WALK_PAUSE))
+    except Exception as exc:  # noqa: BLE001 — the category capture stands
+        stop = f"error:{type(exc).__name__}"
+    if stop == "explicit_end":
+        await db.salla_walk_cursors.delete_one({"_id": store["id"]})
+    else:
+        await db.salla_walk_cursors.update_one({"_id": store["id"]}, {"$set": {"next": url, "saved_at": datetime.now(timezone.utc),
+                                                                               "stop": stop}}, upsert=True)
+    crawl_log["endpoints_tried"].append({"endpoint": "latest_walk", "status": 200 if pages else 0, "products": added,
+                                         "error": f"pages={pages} stop={stop} resumed={resumed}"})
+    logger.info("[SallaWalk] %s: +%d products over %d pages, stop=%s resumed=%s", store.get("name"), added, pages, stop, resumed)
+    return added
+
+
 async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=200, max_pages_per_cat=200):
     """
     Direct-API crawler for Salla stores that disabled their public /api/v1/products endpoint.
@@ -2814,6 +2883,9 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
                     break
             if cat_count > 0:
                 crawl_log["endpoints_tried"].append({"endpoint": f"category {cid}", "status": 200, "products": cat_count, "error": None})
+
+        if store_identifier:
+            await _salla_latest_walk(db, store, client, seen_ids, captured, crawl_log)
 
         # iter63/64 — bounded barcode supplement from the product-detail
         # endpoint, reusing this walk's client / headers / pacing and the

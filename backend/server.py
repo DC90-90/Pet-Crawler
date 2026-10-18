@@ -2046,7 +2046,10 @@ async def _store_crawl_today(store_id):
     rows = await db.crawl_attempts.find(
         {"store_id": store_id, "started_at": {"$gte": since}, "trigger": {"$in": ["schedule", "resume"]}},
         {"_id": 0, "status": 1, "products_found": 1}).to_list(50)
-    done = any(r.get("status") in _CRAWL_DONE_STATUSES and (r.get("products_found") or 0) > 0 for r in rows)
+    # A partial crawl with products counts too: crawling the store again the
+    # same day only re-reads what the walk already saw (Alkarawan ran twice
+    # on 18 Oct, once per backend process).
+    done = any(r.get("status") in _CRAWL_DONE_STATUSES + ("partial",) and (r.get("products_found") or 0) > 0 for r in rows)
     return done, len(rows)
 
 

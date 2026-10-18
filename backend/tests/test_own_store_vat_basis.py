@@ -301,7 +301,7 @@ def test_backfill_flags_stale_rows_and_never_prices_them():
             {"sku": "GHOST-1", "barcode": "B-G1", "price": 11.0, "sync_source": "crawler_ingest",
              "last_synced_at": "2025-01-01T00:00:00+00:00"},
             {"sku": "GHOST-2", "barcode": "B-G2", "price": 12.0, "sync_source": "zid_api",
-             "last_synced_at": "2026-07-20T00:00:00+00:00"},
+             "last_synced_at": (__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - __import__("datetime").timedelta(days=30)).isoformat()},
             {"sku": "GHOST-3", "barcode": "B-G3", "price": 13.0},      # never synced
         ])
         server.db = db
