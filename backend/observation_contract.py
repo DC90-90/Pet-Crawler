@@ -60,6 +60,23 @@ def is_variant_parent(raw):
             or bool(raw.get("variants") or raw.get("skus")) or raw.get("type") == "variable")
 
 
+OPTIONS_UNPRICED_CONFIDENCE = 80     # below the 85 the price cohort requires
+
+
+def options_same_price(raw):
+    """A Salla listing flagged `has_options` with no option rows (`skus`) and no
+    "starting from" price: the options do not change the listed price as far
+    as the store's API shows (Zarafa: 48 of 375 listings, all with
+    starting_price null, 19 Oct 2026). It is catalogued as one offer — name,
+    stock, sold counter — but kept out of price comparisons (confidence below
+    the cohort's 85), because an option could still be another pack size."""
+    if str(raw.get("_variant_id") or raw.get("variant_id") or "root") != "root" or raw.get("_unresolved_parent"):
+        return False
+    if raw.get("skus") or raw.get("variants") or "starting_price" not in raw:
+        return False
+    return raw.get("has_options") in (True, 1, "true", "1") and not money(raw.get("starting_price"))
+
+
 def unresolved_identity(raw):
     if raw.get("_unresolved_parent"):
         return True
@@ -147,7 +164,8 @@ def normalize_offer(raw, store_name):
         reasons.append("currency_unverified_or_unsupported")
     if ambiguous:
         reasons.append("conditional_or_from_price")
-    if raw.get("skus") or raw.get("variants") or unresolved_identity(raw):
+    same_price_options = options_same_price(raw)
+    if raw.get("skus") or raw.get("variants") or (unresolved_identity(raw) and not same_price_options):
         reasons.append("unresolved_parent_variants")
         price = None
     basis = raw.get("_price_basis") or raw.get("price_basis") or "unknown"
@@ -190,7 +208,8 @@ def normalize_offer(raw, store_name):
                 img_url=image, product_url=url or raw.get("html_url") or raw.get("product_url") or raw.get("url") or "",
                 variant_skus=[sku], variant_barcodes=[barcode] if barcode else [],
                 observation_version=VERSION, is_synthetic=False, data_origin="store_observation",
-                comparable=not reasons, quarantine_reasons=reasons, present_on_store=not hidden)
+                comparable=not reasons, quarantine_reasons=reasons, present_on_store=not hidden,
+                options_unpriced=same_price_options)
 
 
 # Observation contract v2 went live on 2026-10-07 (commit 558861e); nothing

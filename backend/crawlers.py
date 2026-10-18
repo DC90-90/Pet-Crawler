@@ -18,6 +18,7 @@ from datetime import datetime, timezone, timedelta
 # iter61 — one definition of barcode canonicalisation, shared with matcher.py.
 # Re-exported here so `crawlers.barcode_keys` keeps working.
 from core.utils import _BARCODE_LEAD_RE, barcode_keys, canonical_barcode  # noqa: F401
+from observation_contract import OPTIONS_UNPRICED_CONFIDENCE
 
 # iter67 — the append-only daily ledger (Phase 1: written alongside the
 # rollups from every persistence path; nothing reads it yet).
@@ -1098,7 +1099,10 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 "variant_id": {"$nin": [None, "root"]}}, {"_id": 0, "offer_id": 1})
             known_parent = await db.observation_quarantine.find_one({"store_id": store["id"], "listing_id": listing_id,
                 "quarantine_reasons": "unresolved_parent_variants"}, {"_id": 0, "listing_id": 1})
-            if known_child or known_parent or is_parent(raw, parents, store["id"]):
+            # A same-price options listing was quarantined as a parent before
+            # 19 Oct 2026; without a known child offer it is catalogued again.
+            from observation_contract import options_same_price
+            if known_child or (not options_same_price(raw) and (known_parent or is_parent(raw, parents, store["id"]))):
                 raw = {**raw, "_unresolved_parent": True}
         norm = _normalize_raw_product(raw, store["name"])
         offer_id = stable_id(store["id"], norm["listing_id"], norm["variant_id"])
@@ -1230,7 +1234,8 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
             "variant_barcodes": norm.get("variant_barcodes",
                                          [norm.get("barcode")] if norm.get("barcode") else []),
             "source_tier": tier,
-            "confidence_score": confidence,
+            "confidence_score": min(confidence, OPTIONS_UNPRICED_CONFIDENCE) if norm.get("options_unpriced") else confidence,
+            "options_unpriced": bool(norm.get("options_unpriced")),
             "crawled_at": now,
         }
         # Keyed on _id (always indexed), not on the event_id field: production's

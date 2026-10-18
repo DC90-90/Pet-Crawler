@@ -115,9 +115,15 @@ async def ranking(db, orders_fn):
         orders = await orders_fn(db, start, end) if store.get("is_own_store") else None
         revenue = orders["revenue"] if orders is not None else round(sum(r["revenue"] for r in signals), 2) if signals else None
         n = len(obs)
+        # Everything read from the store in the last 7 days — in or out of
+        # stock — so "products" is not mistaken for what Daleel collected
+        # (the client read Zarafa's 1,318 in-stock offers as 1,318 of ~4,000
+        # products ingested, 19 Oct 2026). Parent listings are not offers.
+        catalog_n = sum(1 for s in all_offers if s["store_id"] == sid and not s.get("superseded_parent"))
         basis = "orders_exact" if orders is not None else "inventory_proxy" if signals else "unavailable"
         rows.append({"store_id": sid, "name": store["name"], "domain": store.get("domain"), "platform": store.get("platform"),
-                     "is_own_store": bool(store.get("is_own_store")), "products": n, "in_stock_pct": stock_pct,
+                     "is_own_store": bool(store.get("is_own_store")), "products": n, "catalog_products": catalog_n,
+                     "in_stock_pct": stock_pct,
                      "revenue_30d": revenue, "revenue_status": "ledger" if orders is not None else "computed" if signals else "not_measurable",
                      "revenue_days_measured": None if orders is not None else len(measured_days(sales, sid)), "revenue_days_expected": 30,
                      "revenue_basis": basis, "revenue_tier": "exact" if orders is not None else "estimated" if signals else "unavailable",

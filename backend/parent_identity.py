@@ -2,7 +2,7 @@
 
 Current-view annotations never edit historical offers or observation timestamps.
 """
-from observation_contract import stable_id, unresolved_identity
+from observation_contract import stable_id, unresolved_identity, options_same_price
 
 
 def listing_id(row):
@@ -29,7 +29,7 @@ async def remember(db, store_id, row, observed_at, reason):
 async def register_rows(db, store_id, rows, observed_at):
     # First pass: even a root preceding its children in one batch is unavailable.
     for row in rows:
-        if is_child(row) or unresolved_identity(row):
+        if is_child(row) or (unresolved_identity(row) and not options_same_price(row)):
             await remember(db, store_id, row, observed_at,
                            "resolved_children" if is_child(row) else "unresolved_parent_variants")
 
@@ -54,7 +54,9 @@ async def index(db):
 
 
 def is_parent(row, parents, store_id=None):
-    if is_child(row):
+    # A same-price options offer (observation_contract.options_same_price) is
+    # the listing's one offer, even where an older quarantine named it a parent.
+    if is_child(row) or row.get("options_unpriced"):
         return False
     sid = row.get("store_id") or store_id
     return unresolved_identity(row) or (sid, listing_id(row)) in parents[0] or (sid, row.get("sku")) in parents[1]

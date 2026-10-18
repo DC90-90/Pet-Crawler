@@ -72,3 +72,30 @@ def test_walk_adds_unseen_products_saves_and_resumes_cursor(monkeypatch):
     assert first[2] == "p2" and first[3] == "http_429" and "resumed=False" in first[4]
     assert second[0] == 3 and second[1] == "p2" and second[2] is None   # resumed at p2, finished, cursor cleared
     assert third[0] == 5 and third[1] == ["gone", START]               # stale cursor: start over
+
+
+def test_same_price_options_listing_is_catalogued_but_not_compared():
+    import observation_contract as oc
+    import parent_identity as pi
+    row = {"id": 266757885, "name": "Frisbee", "price": 13.8, "currency": "SAR", "_price_basis": "storefront_inc_vat",
+           "has_options": True, "starting_price": None, "is_available": True}
+    assert oc.options_same_price(row)
+    n = oc.normalize_offer(row, "Zarafa")
+    assert n["comparable"] and n["price"] == 13.8 and n["options_unpriced"] and n["in_stock"] is True
+    assert not pi.is_parent({**row, "options_unpriced": True}, (set(), set()))
+    # Options that change the price, or listed option rows, stay unresolved.
+    assert not oc.options_same_price({**row, "starting_price": 9.5})
+    assert not oc.options_same_price({**row, "skus": [{"id": 1}]})
+    assert not oc.options_same_price({k: v for k, v in row.items() if k != "starting_price"})   # not a Salla list row
+    assert "unresolved_parent_variants" in oc.normalize_offer({**row, "starting_price": 9.5}, "Zarafa")["quarantine_reasons"]
+    import price_cohort
+    assert OPT_CONF_EXCLUDED(price_cohort)
+
+
+def OPT_CONF_EXCLUDED(price_cohort):
+    from datetime import datetime, timezone
+    import observation_contract as oc
+    row = {"observation_version": 2, "comparable": True, "currency": "SAR", "price_basis": "storefront_inc_vat",
+           "price": 13.8, "crawled_at": datetime.now(timezone.utc), "in_stock": True,
+           "confidence_score": oc.OPTIONS_UNPRICED_CONFIDENCE}
+    return price_cohort.exclusion(row) == "low_source_confidence"

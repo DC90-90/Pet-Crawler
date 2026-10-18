@@ -14,6 +14,8 @@ FIELDS["brand_source"] = 1
 FIELDS["data_origin"] = 1
 # The pre-discount price a seller shows next to its price (product detail view).
 FIELDS["original_price"] = 1
+# Same-price options offers: catalogued, kept out of comparisons (19 Oct 2026).
+FIELDS["options_unpriced"] = 1
 
 
 def max_offer_age_days():

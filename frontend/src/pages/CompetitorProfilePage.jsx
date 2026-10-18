@@ -56,8 +56,8 @@ export default function CompetitorProfilePage() {
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {[
-          { label: "Verified Catalog Entries", val: kpis.catalog_size },
-          { label: "Verified Active Offers", val: kpis.active_skus },
+          { label: "Products tracked", val: kpis.catalog_size },
+          { label: "In stock, priced", val: kpis.active_skus },
           {
             label: kpis.revenue_basis === "orders_exact" ? "Order Revenue · 30D" : "Observed Value Proxy · 30D",
             /* iter73f — honest labels: a Salla store the platform never

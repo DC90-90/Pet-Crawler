@@ -126,7 +126,7 @@ export default function OverviewPage() {
                   <th className="text-start py-2 pe-2">{isRTL ? "المتجر" : "Store"}</th>
                   <th className="text-end py-2 pe-2">{isRTL ? "الإيرادات التقديرية" : "Est. revenue"}</th>
                   <th className="text-end py-2 pe-2">{isRTL ? "أيام مقاسة" : "Days measured"}</th>
-                  <th className="text-end py-2 pe-2">{isRTL ? "منتجات موثقة" : "Verified products"}</th>
+                  <th className="text-end py-2 pe-2" title={isRTL ? "كل ما قرأه دليل من المتجر في آخر 7 أيام، متوفراً أو نافداً" : "Everything Daleel read from the store in the last 7 days, in or out of stock"}>{isRTL ? "منتجات متتبعة" : "Products tracked"}</th>
                   <th className="text-end py-2">{isRTL ? "متوفر" : "In stock"}</th>
                 </tr>
               </thead>
@@ -149,7 +149,10 @@ export default function OverviewPage() {
                         : <span className="text-[11px] text-[#A1E4DB]" title={isRTL ? "لا ينشر المتجر مستويات المخزون ولا عدد المبيعات" : "This store publishes neither stock levels nor sales counts"}>{isRTL ? "غير قابل للقياس" : "Not measurable"}</span>}
                     </td>
                     <td className="py-2 pe-2 text-end text-[#A1E4DB]">{s.revenue_30d != null ? `${s.revenue_days_measured}/30` : "—"}</td>
-                    <td className="py-2 pe-2 text-end text-white">{fmt(s.products)}</td>
+                    <td className="py-2 pe-2 text-end text-white" data-testid={`ov-products-${s.store_id}`}>
+                      {fmt(s.catalog_products ?? s.products)}
+                      <span className="block text-[10px] text-[#A1E4DB]">{isRTL ? `${fmt(s.products)} متوفر بسعر مؤكد` : `${fmt(s.products)} in stock, priced`}</span>
+                    </td>
                     <td className="py-2 text-end text-[#A1E4DB]">{s.in_stock_pct != null ? `${s.in_stock_pct}%` : "—"}</td>
                   </tr>
                 ))}
