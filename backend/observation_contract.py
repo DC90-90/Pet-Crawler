@@ -91,7 +91,9 @@ def expand_variants(raw):
         yield {**raw,
                "_listing_id": str(raw.get('_listing_id') or raw.get('listing_id') or raw.get("id") or raw.get("sku") or ""),
                "_variant_id": str(raw.get('_variant_id') or raw.get('variant_id') or 'root'),
-               "_unresolved_parent": unresolved_identity(raw)}
+               # A same-price options listing is its own single offer (19 Oct 2026:
+               # marking it here kept every one of them quarantined).
+               "_unresolved_parent": unresolved_identity(raw) and not options_same_price(raw)}
         return
     if any(not isinstance(v, dict) or not (v.get("id") or v.get("variant_id")
            or (v.get("sku") and v.get("sku") != raw.get("sku")) or gtin(v.get("barcode"))) for v in variants):

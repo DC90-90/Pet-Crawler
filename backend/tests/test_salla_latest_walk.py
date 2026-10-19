@@ -82,6 +82,10 @@ def test_same_price_options_listing_is_catalogued_but_not_compared():
     assert oc.options_same_price(row)
     n = oc.normalize_offer(row, "Zarafa")
     assert n["comparable"] and n["price"] == 13.8 and n["options_unpriced"] and n["in_stock"] is True
+    # Through expand_variants, as the crawl processes it.
+    expanded = list(oc.expand_variants({**row, "_currency": "SAR"}))
+    assert len(expanded) == 1 and expanded[0]["_unresolved_parent"] is False
+    assert oc.normalize_offer(expanded[0], "Zarafa")["comparable"]
     assert not pi.is_parent({**row, "options_unpriced": True}, (set(), set()))
     # Options that change the price, or listed option rows, stay unresolved.
     assert not oc.options_same_price({**row, "starting_price": 9.5})
