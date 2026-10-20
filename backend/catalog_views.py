@@ -89,6 +89,12 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
         sku = mp.get("sku")
         if not sku or sku not in cohorts:
             continue
+        # A listing whose sizes or flavours are its own rows (each priced and
+        # compared) is not an offer: 327 such containers showed in My Products
+        # with no price and no comparison (20 Oct 2026). A search still finds
+        # it, so its sizes can be looked up by the parent's code.
+        if mp.get("superseded_parent") and not search:
+            continue
         c, price = cohorts[sku], price_fn(mp)
         stock = own_stock(mp)
         if category not in (None, "", "all") and category not in (mp.get("category"), mp.get("subcategory")):

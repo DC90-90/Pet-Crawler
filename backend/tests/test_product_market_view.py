@@ -139,3 +139,17 @@ def test_competitor_rows_once_per_store_and_honest_unmeasured_reasons():
     assert catalog_views.unmeasured_reason({"in_stock": False, "is_own_store": True}, "zid") == "out_of_stock"
     assert catalog_views.unmeasured_reason({"in_stock": True, "qty_available": 5}, "zid") == "no_stock_movement"
     assert catalog_views.unmeasured_reason({"in_stock": True}, "salla") == "not_published"
+
+
+def test_same_pack_written_as_count_times_unit_weight_matches():
+    """GimCat 20 g vs Hamtaro/Petsy "4×5 g", Wanpy 70 g vs "5×14 غ" — same
+    barcode, same total, refused by the pack guard (client, 20 Oct 2026)."""
+    from matcher import _pack_compatible as ok
+    assert ok("جيم كات مكافآت أعواد للقطط بالدجاج 20 جم", "جيم كات مكافئات 4×5جرام بالدجاج")
+    assert ok("وانبي مكافاة كريمية للقطط بالدجاج 70جم", "مكافآت دجاج للقطط 5×14 غ وانبي")
+    assert ok("Wanpy Creamy Lickable Treats Chicken - 70G", "Wanpy Creamy Cat Treats - 5 Pieces*14g")
+    assert ok("Beso cat litter 20 kg", "Beso cat litter 2 x 10 kg")
+    # Different totals stay apart: a single against its multipack.
+    assert not ok("جيم كات أعواد 5 جم", "جيم كات مكافئات 4×5جرام")
+    assert not ok("Royal Canin pouch 85g", "Royal Canin pouch 12 x 85g")
+    assert not ok("Beso cat litter 10 kg", "Beso cat litter 2 x 10 kg")

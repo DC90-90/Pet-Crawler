@@ -351,10 +351,51 @@ def _weights_reject(w1_g: Optional[float], w2_g: Optional[float]) -> bool:
     return ratio > 1.10  # >10% difference = REJECT
 
 
+_GRAM_UNITS = r"(?:g|gm|gr|gram|grams|جم|جرام|غرام|غم|غ)"
+_KG_UNITS = r"(?:kg|kgs|كجم|كغ|كيلو|كيلوجرام|كيلوغرام)"
+_MULTI_RE = re.compile(r"(\d+)\s*(?:pieces?|pcs|حبات|حبة|قطع|قطعة)?\s*[×x\*]\s*(\d+(?:\.\d+)?)\s*(" + _KG_UNITS + "|" + _GRAM_UNITS + r")(?![a-z؀-ۿ])", re.I)
+_SINGLE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(" + _KG_UNITS + "|" + _GRAM_UNITS + r")(?![a-z؀-ۿ])", re.I)
+
+
+def _grams(value, unit):
+    return float(value) * (1000 if re.fullmatch(_KG_UNITS, unit, re.I) else 1)
+
+
+def _total_weight(text):
+    """(total grams, is_multi) from "N×W unit" (count × unit weight) or a
+    single stated weight; Arabic and English units."""
+    t = str(text)
+    m = _MULTI_RE.search(t)
+    if m:
+        return int(m.group(1)) * _grams(m.group(2), m.group(3)), True
+    m = _SINGLE_RE.search(t)
+    if m:
+        return _grams(m.group(1), m.group(2)), False
+    return None, False
+
+
+def _same_total_weight(a_text, a_qty, b_text, b_qty, tolerance=0.03):
+    """True when one side states N×W and the other the same total weight:
+    "4×5 g" vs "20 g", "5 Pieces*14g" vs "70G" (20 Oct 2026). Either side
+    multi with the other single; equal totals within `tolerance`."""
+    a_total, a_multi = _total_weight(a_text)
+    b_total, b_multi = _total_weight(b_text)
+    if not a_total or not b_total or a_multi == b_multi:
+        return False
+    return abs(a_total - b_total) <= tolerance * max(a_total, b_total)
+
+
 def _pack_compatible(my_text: str, comp_text: str) -> bool:
     """Fix 1: Check if pack configurations are compatible."""
     my_qty = _extract_pack_qty(my_text)
     comp_qty = _extract_pack_qty(comp_text)
+
+    # The same pack written two ways: "20 g" against "4×5 g", "70G" against
+    # "5 Pieces*14g". Same total weight, same product — these offers already
+    # share the barcode. The client found many products with no comparison
+    # because of it (GimCat sticks, Wanpy treats, 20 Oct 2026).
+    if _same_total_weight(my_text, my_qty, comp_text, comp_qty):
+        return True
 
     # My product is a multi-pack
     if my_qty > 1 or my_qty == -1:
