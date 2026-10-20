@@ -90,4 +90,42 @@ async def matches_to_review(db, price_fn):
                                  "ratio_to_mine": round(s["price"] / price, 2) if s.get("price") else None}
                                 for s in sellers]})
     rows.sort(key=lambda r: -max(abs((o["ratio_to_mine"] or 1) - 1) for o in r["offers"]))
+    rows.extend(await _same_barcode_other_size(db, own, products, cohorts, price_fn))
     return {"rows": rows, "total": len(rows)}
+
+
+async def _same_barcode_other_size(db, own, products, cohorts, price_fn, days=7):
+    """Own products no competitor is compared on, although competitors list
+    the same barcode this week: their stated size differs (GimCat Beef Cream
+    "20 g" here, "60 g" at four stores — 20 Oct 2026). One side's listing or
+    barcode is wrong; the owner decides. Read on the (sku, crawled_at) index:
+    competitor SKUs are the barcode for these stores."""
+    from datetime import datetime, timedelta, timezone
+    from price_cohort import identity_agrees
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    out = []
+    for mp in products:
+        sku, price = mp.get("sku"), price_fn(mp)
+        if not sku or not price or (cohorts.get(sku) or {}).get("sellers") or mp.get("superseded_parent"):
+            continue
+        codes = sorted({c for c in (sku, str(mp.get("barcode") or "")) if c.isdigit() and 8 <= len(c) <= 14})
+        if not codes:
+            continue
+        latest = {}
+        async for s in db.product_snapshots.find(
+                {"sku": {"$in": codes}, "crawled_at": {"$gte": since}, "observation_version": 2,
+                 "store_id": {"$ne": own.get("id")}},
+                {"_id": 0, "store_id": 1, "store_name": 1, "sku": 1, "barcode": 1, "name_ar": 1, "name_en": 1,
+                 "price": 1, "offer_id": 1, "product_url": 1, "crawled_at": 1, "in_stock": 1}).sort("crawled_at", -1):
+            latest.setdefault(s["store_id"], s)
+        refused = [s for s in latest.values() if not identity_agrees(mp, s)]
+        if not refused:
+            continue
+        out.append({"sku": sku, "name_ar": mp.get("name_ar"), "name_en": mp.get("name_en"), "barcode": mp.get("barcode"),
+                    "image_url": mp.get("image_url"), "my_price": price, "reason": "same_barcode_other_size",
+                    "offers": [{"store_id": s["store_id"], "store_name": s.get("store_name"), "price": s.get("price"),
+                                "name": s.get("name_ar") or s.get("name_en"), "sku": s.get("sku"),
+                                "offer_id": s.get("offer_id"), "url": s.get("product_url"),
+                                "ratio_to_mine": round(s["price"] / price, 2) if s.get("price") else None}
+                               for s in refused]})
+    return out

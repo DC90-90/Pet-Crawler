@@ -18,6 +18,7 @@ const STATUS_TONE = { complete: "#10B981", done: "#10B981", partial: "#F59E0B", 
 const REASONS = {
   own_price_far_below_market: ["Your price is far below every seller — maybe a single item vs a pack, or a wrong barcode", "سعرك أقل بكثير من كل البائعين — ربما قطعة مقابل عبوة أو باركود خاطئ"],
   own_price_far_above_market: ["Your price is far above every seller — maybe a pack vs a single item, or a wrong barcode", "سعرك أعلى بكثير من كل البائعين — ربما عبوة مقابل قطعة أو باركود خاطئ"],
+  same_barcode_other_size: ["Competitors list your barcode with a different size — one listing or the barcode is wrong, so it is not compared. Confirm \"Same product\" only if the sizes really match.", "المنافسون يعرضون نفس الباركود بحجم مختلف — إحدى القوائم أو الباركود خاطئ، لذلك لا تتم المقارنة. اختر \"صحيح\" فقط إذا تطابق الحجم فعلاً."],
 };
 
 function Coverage({ isRTL }) {

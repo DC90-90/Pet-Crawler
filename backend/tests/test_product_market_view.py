@@ -153,3 +153,9 @@ def test_same_pack_written_as_count_times_unit_weight_matches():
     assert not ok("جيم كات أعواد 5 جم", "جيم كات مكافئات 4×5جرام")
     assert not ok("Royal Canin pouch 85g", "Royal Canin pouch 12 x 85g")
     assert not ok("Beso cat litter 10 kg", "Beso cat litter 2 x 10 kg")
+
+
+def test_both_multipacks_with_equal_totals_match():
+    from matcher import _pack_compatible as ok
+    assert ok("ترولي مكافآت كريمية للقطط سالمون 5×14 غم", "مكافآت سالمون للقطط 5×14 غ ترولي")
+    assert not ok("Royal Canin pouch 12 x 85g", "Royal Canin pouch 6 x 85g")

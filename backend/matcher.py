@@ -375,12 +375,14 @@ def _total_weight(text):
 
 
 def _same_total_weight(a_text, a_qty, b_text, b_qty, tolerance=0.03):
-    """True when one side states N×W and the other the same total weight:
-    "4×5 g" vs "20 g", "5 Pieces*14g" vs "70G" (20 Oct 2026). Either side
-    multi with the other single; equal totals within `tolerance`."""
+    """True when a side states N×W and both totals agree: "4×5 g" vs "20 g",
+    "5 Pieces*14g" vs "70G", "5×14 غم" vs "5×14 غ" (20 Oct 2026); equal
+    totals within `tolerance`."""
     a_total, a_multi = _total_weight(a_text)
     b_total, b_multi = _total_weight(b_text)
-    if not a_total or not b_total or a_multi == b_multi:
+    # At least one side states N×W (two singles are the guard's own case);
+    # both multi is the same pack when the totals agree ("5×14 غم" / "5×14 غ").
+    if not a_total or not b_total or not (a_multi or b_multi):
         return False
     return abs(a_total - b_total) <= tolerance * max(a_total, b_total)
 
