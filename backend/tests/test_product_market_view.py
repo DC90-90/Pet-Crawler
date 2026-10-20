@@ -118,3 +118,24 @@ def test_category_facets_from_store_category_and_name():
     rows = [{"facet_animal": "cat", "facet_type": "litter"}, {"facet_animal": None, "facet_type": "toys"}]
     assert cm.facet_counts(rows) == {"animal": {"cat": 1, "other": 1}, "type": {"litter": 1, "toys": 1}}
     assert cm.facet_filter(rows, animal="other") == rows[1:]
+
+
+def test_competitor_rows_once_per_store_and_honest_unmeasured_reasons():
+    """Client report (20 Oct 2026): a product all 4 competitors had run out of
+    showed "7 stores not compared" (each store's old offer listed again) and
+    blamed the own store for "publishing neither stock nor sales counts"."""
+    cohort = {"sellers": [], "excluded": [
+        {"store_id": "z", "store_name": "Zarafa", "price": 19.12, "excluded_reason": "out_of_stock", "crawled_at": "2026-10-20T01:30"},
+        {"store_id": "z", "store_name": "Zarafa", "price": 19.12, "excluded_reason": "legacy_or_unverified_offer", "crawled_at": "2026-10-09T02:45"},
+        {"store_id": "h", "store_name": "Hamtaro", "price": 19.55, "excluded_reason": "out_of_stock", "crawled_at": "2026-10-20T03:46"},
+        {"store_id": "h", "store_name": "Hamtaro", "price": 19.55, "excluded_reason": "legacy_or_unverified_offer", "crawled_at": "2026-10-08T01:58"}]}
+    rows = catalog_views.current_excluded(cohort)
+    assert [r["store_name"] for r in rows] == ["Zarafa", "Hamtaro"] and all(r["excluded_reason"] == "out_of_stock" for r in rows)
+    oos = catalog_views.out_of_stock_competitors(cohort)
+    assert [(r["store_name"], r["last_price"]) for r in oos] == [("Zarafa", 19.12), ("Hamtaro", 19.55)]
+    assert catalog_views._oos_fields(cohort) == {"oos_competitors": 2, "oos_competitor_min_price": 19.12, "oos_competitor_max_price": 19.55}
+    # A store with a live offer lists no excluded row.
+    assert catalog_views.current_excluded({**cohort, "sellers": [{"store_id": "z", "price": 18.0}]})[0]["store_name"] == "Hamtaro"
+    assert catalog_views.unmeasured_reason({"in_stock": False, "is_own_store": True}, "zid") == "out_of_stock"
+    assert catalog_views.unmeasured_reason({"in_stock": True, "qty_available": 5}, "zid") == "no_stock_movement"
+    assert catalog_views.unmeasured_reason({"in_stock": True}, "salla") == "not_published"

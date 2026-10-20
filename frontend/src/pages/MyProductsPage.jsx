@@ -29,8 +29,9 @@ const COLUMNS = [
     tip: ["My price against the cheapest competitor (+ = I am more expensive)", "سعري مقابل أرخص منافس (+ = أنا أغلى)"] },
   { key: "vs_median_pct", text: ["vs Median", "مقابل الوسيط"], sortable: true,
     tip: ["My price against the median competitor price", "سعري مقابل وسيط أسعار المنافسين"] },
-  { key: "qty_sold_est", label: "col_sales", sortable: true },
-  { key: "revenue_est", label: "col_revenue", sortable: true },
+  // My own sales — the shared "Mkt. Sales" label read as the market's (client, 20 Oct 2026).
+  { key: "qty_sold_est", text: ["My units sold (est.)", "مبيعاتي (تقدير)"], sortable: true },
+  { key: "revenue_est", text: ["My revenue (est.)", "إيراداتي (تقدير)"], sortable: true },
   { key: "market_revenue_est", text: ["Market size", "حجم السوق"], sortable: true,
     tip: ["Estimated revenue of every seller of this product over the period", "الإيرادات التقديرية لكل بائعي هذا المنتج خلال الفترة"] },
   { key: "market_share_pct", text: ["My share", "حصتي"], sortable: true,
@@ -500,6 +501,13 @@ export default function MyProductsPage() {
                     <span className={`text-xs font-semibold ${p.vs_lowest_pct == null ? "text-[#A1E4DB] opacity-60" : p.vs_lowest_pct > 0 ? "text-[#EF4444]" : "text-[#10B981]"}`}
                       title={p.vs_lowest_pct == null ? (isRTL ? "لا توجد بيانات منافس" : "No competitor data") : p.vs_lowest_pct > 0 ? (isRTL ? "هناك منافس يقدم سعرًا أقل منك" : "A competitor is undercutting you") : (isRTL ? "أنت الأرخص أو مساوٍ للأرخص" : "You are the cheapest or tied")}
                       data-testid={`vs-lowest-${p.sku}`}>{pct(p.vs_lowest_pct)}</span>
+                    {p.vs_lowest_pct == null && p.oos_competitors > 0 && (
+                      <p className="text-[10px] text-[#F59E0B] whitespace-nowrap" data-testid={`all-oos-${p.sku}`}
+                        title={isRTL ? "آخر أسعار المنافسين قبل نفاد المخزون" : "Competitors' last prices before they ran out"}>
+                        {isRTL ? `${p.oos_competitors} منافسين نفد لديهم` : `${p.oos_competitors} competitors out of stock`}
+                        <span className="block text-[#A1E4DB]">{isRTL ? "آخر سعر" : "last"} {p.oos_competitor_min_price}{p.oos_competitor_max_price !== p.oos_competitor_min_price ? `–${p.oos_competitor_max_price}` : ""}</span>
+                      </p>
+                    )}
                     {p.price_rank != null && <p className="text-[10px] text-[#A1E4DB]">#{p.price_rank} / {p.price_rank_of}</p>}
                   </TableCell>
                   <TableCell>
@@ -507,7 +515,7 @@ export default function MyProductsPage() {
                       data-testid={`vs-median-${p.sku}`}>{pct(p.vs_median_pct)}</span>
                   </TableCell>
                   {!release.price_comparison_only && <><TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-units-${p.sku}`} title={p.sales_basis}>{p.qty_sold_est?.toLocaleString() ?? "—"}</span></TableCell>
-                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-value-${p.sku}`} title={p.sales_basis}>{p.revenue_est?.toLocaleString() ?? "—"} {t("sar")}</span></TableCell>
+                  <TableCell><span className="text-sm font-semibold text-white metric-number" data-testid={`product-value-${p.sku}`} title={p.sales_basis}>{p.revenue_est == null ? "—" : `${p.revenue_est.toLocaleString()} ${t("sar")}`}</span></TableCell>
                   <TableCell data-testid={`market-size-${p.sku}`}>
                     {p.market_revenue_est == null ? <span className="text-xs text-[#A1E4DB] opacity-60">—</span> : (
                       <span className={`text-xs metric-number ${p.market_size_complete ? "text-white" : "text-[#A1E4DB]"}`}

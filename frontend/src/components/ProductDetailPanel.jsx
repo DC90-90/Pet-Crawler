@@ -220,19 +220,41 @@ export default function ProductDetailPanel({ sku, onClose }) {
                 <Stat testId="product-detail-volume" label={isRTL ? "مبيعات السوق (وحدات)" : "Market units sold"}
                   value={fmt(view.market.units)} sub={isRTL ? `${days} يوماً` : `last ${days} days`} />
                 <Stat testId="product-detail-market-revenue" label={isRTL ? "إيرادات السوق" : "Market revenue"}
-                  value={`${fmt(view.market.revenue)} SAR`} sub={isRTL ? "تقديرية" : "estimated"} />
+                  value={view.market.revenue == null ? "—" : `${fmt(view.market.revenue)} SAR`} sub={isRTL ? "تقديرية" : "estimated"} />
                 <Stat testId="product-detail-my-share" label={isRTL ? "حصتي (وحدات)" : "My share (units)"}
                   value={view.market.my_unit_share_pct != null ? `${view.market.my_unit_share_pct}%` : "—"}
                   sub={view.market.my_revenue_share_pct != null ? `${view.market.my_revenue_share_pct}% ${isRTL ? "من الإيرادات" : "of revenue"}` : null} />
                 <Stat testId="product-detail-coverage" label={isRTL ? "بائعون مقاسون" : "Sellers measured"}
                   value={`${view.market.sellers_measured} / ${view.market.sellers_live}`}
                   tone={view.market.complete ? "text-white" : "text-[#F59E0B]"} />
-                {!view.market.complete && (
-                  <p className="col-span-full text-[10px] text-[#F59E0B]" data-testid="product-detail-unmeasured">
-                    {isRTL ? `لا يمكن قياس مبيعات: ${view.market.unmeasured_stores.join("، ")} — لا تنشر هذه المتاجر المخزون ولا عدد المبيعات، لذلك لا تظهر الحصة.`
-                      : `Sales not measurable at: ${view.market.unmeasured_stores.join(", ")} — these stores publish neither stock nor sales counts, so no share is shown.`}
-                  </p>
+                {!view.market.complete && (view.market.unmeasured || []).length > 0 && (
+                  <div className="col-span-full text-[10px] text-[#F59E0B] space-y-0.5" data-testid="product-detail-unmeasured">
+                    {view.market.unmeasured.map((u) => (
+                      <p key={u.store}>
+                        {u.reason === "out_of_stock"
+                          ? (isRTL ? `${u.store}: نفد المخزون طوال الفترة — لا مبيعات لقياسها.` : `${u.store}: out of stock for the period — no sales to measure.`)
+                          : u.reason === "no_stock_movement"
+                            ? (isRTL ? `${u.store}: لم يتغير المخزون بين القراءات في الفترة.` : `${u.store}: stock did not move between readings in the period.`)
+                            : (isRTL ? `${u.store}: لا ينشر المتجر المخزون ولا عدد المبيعات.` : `${u.store}: the store publishes neither stock levels nor a sold count.`)}
+                      </p>
+                    ))}
+                    <p className="text-[#A1E4DB]">{isRTL ? "لا تظهر الحصة إلا عندما تُقاس مبيعات كل البائعين." : "A share is shown only when every seller's sales are measured."}</p>
+                  </div>
                 )}
+              </div>
+            )}
+
+            {/* Every competitor out of stock: say so, with their last prices. */}
+            {view.live.filter((s) => !s.is_own_store).length === 0 && (product.out_of_stock_competitors || []).length > 0 && (
+              <div className="rounded-md border border-[#F59E0B]/30 bg-[#F59E0B]/10 p-3 text-xs" data-testid="product-detail-all-oos">
+                <p className="text-[#FBBF24] font-semibold">
+                  {isRTL ? `كل المنافسين (${product.out_of_stock_competitors.length}) نفد لديهم هذا المنتج — لا يوجد سعر حالي للمقارنة.`
+                    : `All ${product.out_of_stock_competitors.length} competitors are out of stock — there is no current price to compare with.`}
+                </p>
+                <p className="text-[#A1E4DB] mt-1">
+                  {isRTL ? "آخر أسعارهم: " : "Their last prices: "}
+                  {product.out_of_stock_competitors.map((r) => `${r.store_name} ${r.last_price}`).join(" · ")} SAR
+                </p>
               </div>
             )}
 
@@ -240,7 +262,7 @@ export default function ProductDetailPanel({ sku, onClose }) {
             <div>
               <div className="flex items-baseline justify-between mb-2">
                 <h4 className="text-xs font-semibold text-white">
-                  {t("stores_carrying")} <span className="font-normal text-[#A1E4DB]" data-testid="seller-count">({view.live.length})</span>
+                  {isRTL ? "متوفر حالياً لدى" : "In stock now at"} <span className="font-normal text-[#A1E4DB]" data-testid="seller-count">({view.live.filter((s) => s.in_stock !== false).length}{product.competitors_total != null ? (isRTL ? ` من ${product.competitors_total + 1} بائعين` : ` of ${product.competitors_total + 1} sellers`) : ""})</span>
                 </h4>
                 <span className="text-[10px] text-[#A1E4DB]/70">{isRTL ? "مرتبة من الأرخص" : "cheapest first"}</span>
               </div>

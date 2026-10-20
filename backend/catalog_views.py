@@ -41,6 +41,13 @@ def verified_barcode(product):
     return str(product.get("barcode")) if gtin(product.get("barcode")) else str(product.get("sku")) if gtin(product.get("sku")) else None
 
 
+def _oos_fields(cohort):
+    oos = out_of_stock_competitors(cohort)
+    return {"oos_competitors": len(oos),
+            "oos_competitor_min_price": min((r["last_price"] for r in oos), default=None),
+            "oos_competitor_max_price": max((r["last_price"] for r in oos), default=None)}
+
+
 def market_share(mine, competitors):
     """One product's market size and my share, from ledger sales facts.
 
@@ -104,8 +111,9 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
                "qty_sold_est": units, "revenue_est": value, "my_stock_signal": get_stock_signal(stock["quantity"], stock["in_stock"]),
                "my_stock_status": "not_listed" if mp.get("present_on_store") is False else "hidden_on_store" if hidden_on_storefront(mp) else "own_catalog",
                "identity_check": identity_check(price, c),
-               "num_competitors": len({s["store_id"] for s in c["sellers"]+c["excluded"]}), "num_priced_competitors": len(c["sellers"]),
+               "num_competitors": len({s["store_id"] for s in c["sellers"]} | {s["store_id"] for s in current_excluded(c)}), "num_priced_competitors": len(c["sellers"]),
                "num_sellers": len(c["sellers"]), "competitor_min_price": c["min"], "competitor_max_price": c["max"],
+               **_oos_fields(c),
                "vs_my_price_pct": round((c["min"]-price)/price*100, 1) if c["min"] and price else None,
                "vs_lowest_pct": pos.get("vs_lowest_pct"), "vs_median_pct": pos.get("vs_median_pct"),
                "market_median_price": pos.get("market_median"), "price_rank": pos.get("rank"), "price_rank_of": pos.get("of"),
@@ -163,6 +171,15 @@ def price_position(price, competitor_prices):
             "market_median": round(med, 2), "market_avg": round(avg, 2), "market_lowest": lowest}
 
 
+def unmeasured_reason(seller, platform):
+    """Why a live seller has no measured sales for the period."""
+    if seller.get("in_stock") is False or seller.get("qty_available") == 0:
+        return "out_of_stock"          # nothing to sell: no stock movement to read
+    if platform == "zid" or seller.get("is_own_store"):
+        return "no_stock_movement"     # stock is published but did not move between readings
+    return "not_published"             # the store shows neither stock levels nor a sold counter
+
+
 async def seller_sales(db, own, mp, sellers, days):
     """Per-seller sold units and revenue for one product over the last `days`
     sealed KSA days, from the same ledger facts as every revenue figure.
@@ -206,14 +223,43 @@ async def seller_sales(db, own, mp, sellers, days):
     velocity = [{**per_day.get(d, {"date": d, "units": 0}), "units": round(per_day.get(d, {}).get("units", 0), 2)}
                 for d in sorted(measured_days)]
     mine = next((s for s in live if s.get("is_own_store")), None)
+    platforms = {d["id"]: d.get("platform") async for d in db.stores.find(
+        {"id": {"$in": [s["store_id"] for s in live]}}, {"_id": 0, "id": 1, "platform": 1})}
+    if not measured:
+        units = revenue = None                 # nothing measured is not "0 sold"
     return {"units": units, "revenue": revenue, "sellers_live": len(live), "sellers_measured": len(measured),
             "complete": complete, "days": days, "window": {"from": start, "to": end},
             "unmeasured_stores": [s.get("store_name") for s in live if not s["sales_measured"]],
+            "unmeasured": [{"store": s.get("store_name"), "reason": unmeasured_reason(s, platforms.get(s["store_id"]))}
+                           for s in live if not s["sales_measured"]],
             "my_unit_share_pct": mine.get("unit_share_pct") if mine else None,
             "my_revenue_share_pct": mine.get("revenue_share_pct") if mine else None,
             "velocity": {"velocity": velocity, "total_units": units,
                          "avg_daily": round(units / len(measured_days), 2) if measured_days else None,
                          "stores": [s.get("store_name") or s["store_id"] for s in measured if s["units_sold"]]}}
+
+
+def current_excluded(cohort):
+    """One excluded row per store — its newest reading — and none for a store
+    that has a live offer. A store's earlier offers (identity changes, the
+    pre-8 Oct crawl) listed each competitor twice: "7 stores not compared"
+    for 4 stores (client report, 20 Oct 2026)."""
+    live = {r["store_id"] for r in cohort.get("sellers", [])}
+    best = {}
+    for r in cohort.get("excluded", []):
+        sid = r.get("store_id")
+        if sid in live:
+            continue
+        ts = str(r.get("crawled_at") or "")
+        if sid not in best or ts > str(best[sid].get("crawled_at") or ""):
+            best[sid] = r
+    return sorted(best.values(), key=lambda r: (r.get("price") or 0))
+
+
+def out_of_stock_competitors(cohort):
+    rows = [r for r in current_excluded(cohort) if r.get("excluded_reason") == "out_of_stock" and r.get("price")]
+    return [{"store_id": r["store_id"], "store_name": r.get("store_name"), "last_price": r.get("price"),
+             "seen_at": r.get("crawled_at")} for r in rows]
 
 
 async def detail(db, sku, days, price_fn, competitor_store_ids=None):
@@ -224,7 +270,7 @@ async def detail(db, sku, days, price_fn, competitor_store_ids=None):
     c, price = cohorts[sku], price_fn(mp)
     stock = own_stock(mp)
     sellers = []
-    for row in c["sellers"] + c["excluded"]:
+    for row in c["sellers"] + current_excluded(c):
         excluded = row.get("eligible") is False
         sellers.append({**row, "price": row.get("price") if not excluded else None,
                         "historical_price": row.get("price") if excluded else None,
@@ -259,7 +305,9 @@ async def detail(db, sku, days, price_fn, competitor_store_ids=None):
             "historical_price": (mp.get("historical_price") if mp.get("historical_price") is not None else mp.get("price")) if not price else None,
             "price_status": "live" if price else "unavailable",
             "is_my_product": True, "store_prices": sellers, "seller_count": len(c["sellers"]),
-            "seller_summary": {"live": len(c["sellers"]), "stale": len(c["excluded"]), "oos": sum(s.get("in_stock") is False for s in c["excluded"])},
+            "competitors_total": len({r["store_id"] for r in c["sellers"]} | {r["store_id"] for r in current_excluded(c)}),
+            "out_of_stock_competitors": out_of_stock_competitors(c),
+            "seller_summary": {"live": len(c["sellers"]), "stale": len(current_excluded(c)), "oos": sum(s.get("in_stock") is False for s in current_excluded(c))},
             "price_range": {"min": c["min"], "max": c["max"], "avg": c["avg"]} if c["min"] else {},
             "total_volume": market["units"] if market else None, "market_sales": market,
             "position": price_position(price, [s["price"] for s in c["sellers"]]),
