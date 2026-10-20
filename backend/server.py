@@ -2456,7 +2456,7 @@ async def data_freshness(user=Depends(get_user)):
         "alarm": None,  # Human-readable reason if banner should flip red
     }
     try:
-        last_run = await db.sync_runs.find_one({}, sort=[("started_at", -1)])
+        last_run = await db.sync_runs.find_one({"sync_status": {"$ne": "deferred"}}, sort=[("started_at", -1)])
     except Exception:
         last_run = None
     if last_run:
@@ -8286,7 +8286,10 @@ async def _run_sync_and_match(kind: str):
     if kind != "manual_match_only":
         try:
             res = await sync_own_store_prices(db)
-            run["sync_status"] = 'error' if res.get('error') or res.get('status') in ('error', 'failed', 'deferred') else 'degraded' if res.get('catalog_complete') is False else 'ok'
+            # "deferred": the other backend process holds the store's lease and
+            # is running this same sync — not a failure (it raised a false
+            # "Last sync failed" alarm every 6 h, 20 Oct 2026).
+            run["sync_status"] = 'deferred' if res.get('status') == 'deferred' else 'error' if res.get('error') or res.get('status') in ('error', 'failed') else 'degraded' if res.get('catalog_complete') is False else 'ok'
             run['sync_error'] = res.get('error')
             run["sync_updated"] = int(res.get("updated") or 0)
             run["sync_discovered"] = int(res.get("discovered") or 0)

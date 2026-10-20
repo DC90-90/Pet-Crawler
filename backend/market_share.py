@@ -197,11 +197,12 @@ async def _store_signals(db, start, end):
     return out
 
 
-def _latest_snapshot_pipeline(active, since):
+def _latest_snapshot_pipeline(active, since, until=None):
     # Keep the established post-group projection: moving this many fields
     # before grouping added work for every historical row in local benchmarks.
+    window = {"$gte": since_bound(since), **({"$lt": until} if until is not None else {})}
     return [
-        {"$match": {"store_id": {"$in": active}, "crawled_at": {"$gte": since_bound(since)}, "offer_id": {"$type": "string"}}},
+        {"$match": {"store_id": {"$in": active}, "crawled_at": window, "offer_id": {"$type": "string"}}},
         {"$sort": {"crawled_at": -1}}, {"$group": {"_id": "$offer_id", "row": {"$first": "$$ROOT"}}},
         {"$replaceRoot": {"newRoot": "$row"}}, {"$project": FIELDS},
     ]
@@ -212,7 +213,19 @@ async def _latest_snapshots(db, since, min_confidence):
     # predicate. The shared versioned policy applies its confidence floor AFTER
     # selecting latest evidence; filtering here resurrects older trusted prices.
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}})
-    return await complete_latest(db, _latest_snapshot_pipeline(active, since))
+    # One store at a time, newest week first (20 Oct 2026): the all-store read
+    # passed the 10 s operation limit once Hamtaro and CutePets were crawled in
+    # full and the 30-day dataset stopped rebuilding. Same newest-per-offer result.
+    split = max(since_bound(since), datetime.now(timezone.utc) - timedelta(days=7))
+    rows = []
+    for sid in active:
+        recent = await complete_latest(db, _latest_snapshot_pipeline([sid], split))
+        rows.extend(recent)
+        if split > since_bound(since):
+            seen = {r.get("offer_id") for r in recent}
+            older = await complete_latest(db, _latest_snapshot_pipeline([sid], since, until=split))
+            rows.extend(r for r in older if r.get("offer_id") not in seen)
+    return rows
 
 
 async def _retired_latest_snapshots(db, since, min_confidence):

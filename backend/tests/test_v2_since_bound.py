@@ -62,8 +62,17 @@ def test_store_views_latest_is_bounded(monkeypatch):
         seen.append(pipeline)
         return []
     monkeypatch.setattr(store_views, "complete_latest", fake_complete_latest)
-    asyncio.run(store_views.latest(object(), days=90))
-    assert _match(seen[0]) == datetime.fromisoformat(CUTOVER)
+
+    class _Stores:
+        async def distinct(self, field, *args):
+            return ["s1"]
+
+    class _DB:
+        stores = _Stores()
+    asyncio.run(store_views.latest(_DB(), days=90))
+    # Read per store, newest week first (20 Oct 2026): the window as a whole
+    # still starts at the v2 cut-over, never earlier.
+    assert min(_match(p) for p in seen) == datetime.fromisoformat(CUTOVER)
 
 
 def test_persistence_retries_transient_errors_only(monkeypatch):

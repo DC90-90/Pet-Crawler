@@ -19,10 +19,24 @@ async def latest(db, store_id=None, since=None, projection=None, days=30):
     # in `days` is not a current listing for any store view. Callers whose
     # output already excludes older evidence pass a tighter explicit `since`.
     cutoff = since if since is not None else datetime.now(timezone.utc) - timedelta(days=days)
-    query = {"observation_version": 2, "is_synthetic": False, "crawled_at": {"$gte": since_bound(cutoff)}}
-    if store_id:
-        query["store_id"] = store_id
-    return await complete_latest(db, latest_pipeline(query, projection))
+    # One store at a time, newest week first: the all-store 30-day read was a
+    # single aggregation over ~1.5M snapshots and passed the 10 s operation
+    # limit once Hamtaro and CutePets were crawled in full — the Overview
+    # price card, gaps, trending and 30-day market share stopped rebuilding
+    # (20 Oct 2026). Same result: newest observation per offer in the window.
+    store_ids = [store_id] if store_id else await db.stores.distinct("id")
+    split = max(since_bound(cutoff), datetime.now(timezone.utc) - timedelta(days=LATEST_RECENT_DAYS))
+    rows = []
+    for sid in store_ids:
+        base = {"observation_version": 2, "is_synthetic": False, "store_id": sid}
+        recent = await complete_latest(db, latest_pipeline({**base, "crawled_at": {"$gte": split}}, projection))
+        rows.extend(recent)
+        if split > since_bound(cutoff):
+            seen = {r.get("offer_id") for r in recent}
+            older = await complete_latest(db, latest_pipeline(
+                {**base, "crawled_at": {"$gte": since_bound(cutoff), "$lt": split}}, projection))
+            rows.extend(r for r in older if r.get("offer_id") not in seen)
+    return rows
 
 
 async def profile(db, store_id, orders_fn):
@@ -158,13 +172,23 @@ async def market_summary(db, days, price_fn):
     unmatched = {key for s in valid for key in identity_keys(s) if key not in own_keys}
     spreads = [c["max"]-c["min"] for c in cohorts.values() if len(c["sellers"]) >= 2]
     since = datetime.now(timezone.utc)-timedelta(days=days)
+    # Day-over-day closing-price drops from the daily ledger, one store at a
+    # time on its (store_id, ksa_date) index. The snapshot walk this replaces
+    # read every observation of the window in one sorted scan: once Hamtaro and
+    # CutePets were crawled in full it outran the 15-minute background budget
+    # at 30 and 90 days, and the Overview's price card stayed "being prepared"
+    # (20 Oct 2026).
+    lo = ledger.ksa_day_str(since)
     previous, drops = {}, 0
-    async for row in db.product_snapshots.find({"observation_version": 2, "is_synthetic": False, "comparable": True, "crawled_at": {"$gte": since_bound(since)}}, {"_id": 0, "offer_id": 1, "price": 1}).sort("crawled_at", 1):
-        oid, price = row["offer_id"], row.get("price")
-        if price is not None:
-            if oid in previous and 0 < price < previous[oid]:
-                drops += 1
-            previous[oid] = price
+    for sid in await db.stores.distinct("id"):
+        async for row in db.daily_ledger.find({"store_id": sid, "ksa_date": {"$gte": lo}},
+                                              {"_id": 0, "sku": 1, "close_price": 1}).sort("ksa_date", 1):
+            price = row.get("close_price")
+            if price:
+                key = (sid, row.get("sku"))
+                if key in previous and 0 < price < previous[key]:
+                    drops += 1
+                previous[key] = price
     return {"total_skus": len(products), "price_drops": drops if previous else None, "product_gaps": len(unmatched) if valid else None,
             "median_spread": round(statistics.median(spreads), 2) if spreads else None,
             "avg_confidence": round(sum(s["confidence_score"] for s in valid)/len(valid), 1) if valid else None,
@@ -172,6 +196,7 @@ async def market_summary(db, days, price_fn):
             "market_position_summary": summarize_positions(own, products, cohorts, price_fn)}
 
 
+LATEST_RECENT_DAYS = 7
 TOP_SELLERS_LIMIT = 300
 REVIEWED_CATEGORY_SOURCES = ("reviewed", "store_supplied", "import_file")
 
