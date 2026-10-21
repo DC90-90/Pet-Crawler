@@ -48,6 +48,18 @@ def test_guards_before_any_price_move():
     assert pa.recommend({**ROW, "cost": None})["action"] == "lower"           # no cost: no floor, still a match
 
 
+def test_suggestion_names_the_stores_it_rests_on():
+    offers = [{"store_id": "z", "store_name": "Zarafa", "price": 100.0, "used": True},
+              {"store_id": "l", "store_name": "Lana", "price": 100.0, "used": True},
+              {"store_id": "h", "store_name": "Hobba", "price": 112.0, "used": True},
+              {"store_id": "p", "store_name": "Petsy", "price": 90.0, "used": False, "reason": "out_of_stock"}]
+    r = pa.recommend({**ROW, "competitor_offers": offers})
+    assert [o["store_name"] for o in r["based_on"]] == ["Zarafa", "Lana"]    # out-of-stock Petsy never sets it
+    assert len(r["competitors"]) == 4 and "Zarafa / Lana at 100.0" in r["reason"]
+    assert pa.recommend({**ROW, "price": 80.0, "competitor_offers": offers})["based_on"][0]["store_name"] == "Zarafa"
+    assert pa.recommend({**ROW, "competitor_min_price": None, "competitor_offers": offers[3:]})["based_on"] == []
+
+
 def test_zid_plan_divides_vat_and_keeps_list_price_on_sale():
     mp = {"sku": "A", "listing_id": "L1", "variant_id": "V1", "price": 115.0, "price_basis": "storefront_inc_vat"}
     p = zid_prices.plan(mp, 103.5)

@@ -119,7 +119,7 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
                "identity_check": identity_check(price, c),
                "num_competitors": len({s["store_id"] for s in c["sellers"]} | {s["store_id"] for s in current_excluded(c)}), "num_priced_competitors": len(c["sellers"]),
                "num_sellers": len(c["sellers"]), "competitor_min_price": c["min"], "competitor_max_price": c["max"],
-               **_oos_fields(c),
+               **_oos_fields(c), "competitor_offers": competitor_offers(c),
                "vs_my_price_pct": round((c["min"]-price)/price*100, 1) if c["min"] and price else None,
                "vs_lowest_pct": pos.get("vs_lowest_pct"), "vs_median_pct": pos.get("vs_median_pct"),
                "market_median_price": pos.get("market_median"), "price_rank": pos.get("rank"), "price_rank_of": pos.get("of"),
@@ -260,6 +260,20 @@ def current_excluded(cohort):
         if sid not in best or ts > str(best[sid].get("crawled_at") or ""):
             best[sid] = r
     return sorted(best.values(), key=lambda r: (r.get("price") or 0))
+
+
+def competitor_offers(cohort):
+    """Every competitor behind a product's comparison: the live sellers (used:
+    their prices set the lowest, the median and any suggested price) and, one
+    per store, those left out with the reason. Pricing names the stores its
+    suggestion rests on (client request, 21 Oct 2026)."""
+    out = [{"store_id": r["store_id"], "store_name": r.get("store_name"), "price": r.get("price"),
+            "in_stock": r.get("in_stock"), "url": r.get("product_url"), "seen_at": r.get("crawled_at"),
+            "used": True, "reason": None} for r in cohort.get("sellers", [])]
+    out += [{"store_id": r["store_id"], "store_name": r.get("store_name"), "price": r.get("price"),
+             "in_stock": r.get("in_stock"), "url": r.get("product_url"), "seen_at": r.get("crawled_at"),
+             "used": False, "reason": r.get("excluded_reason")} for r in current_excluded(cohort)]
+    return out
 
 
 def out_of_stock_competitors(cohort):

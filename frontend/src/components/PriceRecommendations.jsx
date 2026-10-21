@@ -3,15 +3,16 @@
  * from the verified competitor cohort, the product's cost and the owner's
  * minimum margin; an admin approves a price and Daleel sends it to Zid.
  */
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowRight, Check, Settings2, ImageOff, History } from "lucide-react";
+import { ArrowRight, Check, Settings2, ImageOff, History, ChevronDown, ExternalLink, Star } from "lucide-react";
 import api from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { useAuth } from "@/App";
 import { RequestError } from "@/components/RequestError";
 import { SkuLine } from "@/components/SkuLine";
+import { StoreLogo } from "@/components/StoreLogo";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
@@ -25,6 +26,71 @@ const ACTIONS = [
   ["restock", "Out of stock", "نفد المخزون", "#A1E4DB"],
   ["no_market", "No competitor", "بلا منافس", "#A1E4DB"],
 ];
+
+// Why a competitor's offer is left out of the comparison (price_cohort.exclusion).
+const LEFT_OUT = {
+  out_of_stock: ["out of stock", "نفد المخزون"],
+  stock_unknown: ["stock not shown", "المخزون غير معروف"],
+  below_corroborated_cluster: ["price far below the other sellers", "سعر أقل بكثير من باقي البائعين"],
+  low_source_confidence: ["price not reliable", "السعر غير موثوق"],
+  stale_or_unknown_observation: ["not seen recently", "لم يُرَ مؤخراً"],
+  hidden_listing: ["hidden on the store", "مخفي في المتجر"],
+  price_unavailable: ["no price", "بلا سعر"],
+  legacy_or_unverified_offer: ["old listing", "عرض قديم"],
+  currency_or_tax_unverified: ["price basis unclear", "أساس السعر غير واضح"],
+  parent_listing_not_an_offer: ["several sizes in one listing", "عدة أحجام في عرض واحد"],
+};
+
+const storeList = (offers) => offers.map((o) => o.store_name || o.store_id).join(" / ");
+
+// The suggestion in words, naming the stores it rests on (client request, 21 Oct 2026).
+function why(r, isRTL) {
+  const at = r.based_on?.length ? `${storeList(r.based_on)} (${fmt(r.competitor_min_price)})` : fmt(r.competitor_min_price);
+  if (r.action === "lower") return r.recommended_price > r.competitor_min_price
+    ? (isRTL ? `أقرب ما يمكن لأرخص بائع ${at} دون النزول عن أدنى هامش` : `As close as your minimum margin allows to the cheapest: ${at}`)
+    : (isRTL ? `مطابقة أرخص بائع متوفر: ${at}` : `Match the cheapest in-stock seller: ${at}`);
+  if (r.action === "raise") return isRTL ? `أنت الأرخص بفارق كبير؛ البائع التالي ${at} — ارفع وابقَ الأرخص` : `You are well under the next seller, ${at} — raise and stay the cheapest`;
+  if (r.action === "hold" && r.based_on?.length) return /margin/.test(r.reason || "")
+    ? (isRTL ? `مطابقة ${at} تنزل عن أدنى هامش` : `Matching ${at} would go below your minimum margin`)
+    : (isRTL ? `أنت الأرخص أو مساوٍ لـ ${at}` : `Already the cheapest or tied with ${at}`);
+  return r.reason;
+}
+
+function CompetitorRow({ r, o, anchor, isRTL }) {
+  return (
+    <div className={`flex items-center gap-2 rounded px-2 py-1 ${anchor ? "bg-[#1E988E]/15 border border-[#1E988E]/40" : "bg-white/[0.03]"} ${o.used ? "" : "opacity-60"}`}
+      data-testid={`pricing-comp-${r.sku}-${o.store_id}`}>
+      <StoreLogo storeId={o.store_id} name={o.store_name} size={16} />
+      <span className="text-white">{o.store_name || o.store_id}</span>
+      {o.url && <a href={o.url} target="_blank" rel="noopener noreferrer" className="text-[#6AC1B5]" title={isRTL ? "فتح صفحة المنتج" : "Open the product page"}><ExternalLink className="w-3 h-3" /></a>}
+      <span className="ms-auto text-white font-semibold">{fmt(o.price)} <span className="text-[#A1E4DB] font-normal">SAR</span></span>
+      {anchor
+        ? <span className="text-[10px] text-[#1E988E] inline-flex items-center gap-0.5"><Star className="w-3 h-3" />{isRTL ? "حدّد السعر المقترح" : "sets the suggestion"}</span>
+        : o.used ? <span className="text-[10px] text-[#A1E4DB]">{isRTL ? "متوفر · مُقارَن" : "in stock · compared"}</span>
+          : <span className="text-[10px] text-[#F59E0B]">{isRTL ? "غير مستخدم: " : "not used: "}{LEFT_OUT[o.reason]?.[isRTL ? 1 : 0] || o.reason}</span>}
+      {o.seen_at && <span className="text-[10px] text-[#A1E4DB]/70">{new Date(o.seen_at).toLocaleDateString(isRTL ? "ar-SA" : "en-GB", { day: "numeric", month: "short" })}</span>}
+    </div>
+  );
+}
+
+function Competitors({ r, isRTL }) {
+  const anchor = new Set((r.based_on || []).map((o) => o.store_id));
+  const used = (r.competitors || []).filter((o) => o.used);
+  const out = (r.competitors || []).filter((o) => !o.used);
+  return (
+    <div className="grid gap-1 text-[11px] max-w-[720px]">
+      <p className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB]">
+        {isRTL ? `المنافسون الذين بُني عليهم الاقتراح (${used.length})` : `Competitors this suggestion is built on (${used.length})`}
+      </p>
+      {used.map((o) => <CompetitorRow key={o.store_id} r={r} o={o} anchor={anchor.has(o.store_id)} isRTL={isRTL} />)}
+      {out.length > 0 && <>
+        <p className="text-[10px] uppercase tracking-[0.12em] text-[#A1E4DB] mt-1">{isRTL ? `بائعون آخرون لم يُستخدموا (${out.length})` : `Other sellers, not used (${out.length})`}</p>
+        {out.map((o) => <CompetitorRow key={o.store_id} r={r} o={o} anchor={false} isRTL={isRTL} />)}
+      </>}
+      {used.length === 0 && out.length === 0 && <p className="text-[#A1E4DB]">{isRTL ? "لا يبيعه أي منافس." : "No competitor sells it."}</p>}
+    </div>
+  );
+}
 
 function Settings({ settings, canEdit, isRTL, onSaved }) {
   const [form, setForm] = useState(settings);
@@ -71,6 +137,7 @@ export default function PriceRecommendations() {
   const [confirm, setConfirm] = useState(null);
   const [sent, setSent] = useState({});
   const [showLog, setShowLog] = useState(false);
+  const [open, setOpen] = useState({});
   const q = useQuery({ queryKey: ["pricing", "recommendations"], queryFn: async () => (await api.get("/pricing/recommendations", { timeout: 60000 })).data });
   const log = useQuery({ queryKey: ["pricing", "changes"], queryFn: async () => (await api.get("/pricing/changes")).data, enabled: showLog });
   const rows = useMemo(() => (q.data?.rows || []).filter((r) => r.action === action), [q.data, action]);
@@ -124,7 +191,8 @@ export default function PriceRecommendations() {
           </thead>
           <tbody>
             {rows.slice(0, shown).map((r) => (
-              <tr key={r.sku} className="border-b border-white/5" data-testid={`pricing-rec-row-${r.sku}`}>
+              <Fragment key={r.sku}>
+              <tr className={open[r.sku] ? "" : "border-b border-white/5"} data-testid={`pricing-rec-row-${r.sku}`}>
                 <td className="p-2">
                   <div className="flex items-center gap-2">
                     <div className="w-9 h-9 shrink-0 rounded bg-white overflow-hidden flex items-center justify-center">
@@ -144,7 +212,17 @@ export default function PriceRecommendations() {
                     <span className="block text-[10px] text-[#A1E4DB]">{r.change_pct > 0 ? "+" : ""}{r.change_pct}%{r.rank_after === 1 ? (isRTL ? " · الأرخص" : " · cheapest") : ""}</span>
                   </>}
                 </td>
-                <td className="p-2 text-end text-[#A1E4DB]">{fmt(r.competitor_min_price)}<span className="block text-[10px]">{r.num_sellers ? `${r.num_sellers} ${isRTL ? "بائع" : "sellers"}` : ""}</span></td>
+                <td className="p-2 text-end text-[#A1E4DB]">
+                  <span className="text-white">{fmt(r.competitor_min_price)}</span>
+                  {r.based_on?.length > 0 && <span className="block text-[10px] text-white/90 truncate max-w-[140px] ms-auto">{storeList(r.based_on)}</span>}
+                  {r.competitors?.length > 0 && (
+                    <button onClick={() => setOpen((o) => ({ ...o, [r.sku]: !o[r.sku] }))} data-testid={`pricing-comp-toggle-${r.sku}`}
+                      className="text-[10px] text-[#6AC1B5] hover:text-white inline-flex items-center gap-0.5">
+                      {isRTL ? `${r.num_sellers || 0} بائع` : `${r.num_sellers || 0} sellers`}
+                      {r.competitors.length > (r.num_sellers || 0) && (isRTL ? ` +${r.competitors.length - (r.num_sellers || 0)} غير مستخدم` : ` +${r.competitors.length - (r.num_sellers || 0)} not used`)}
+                      <ChevronDown className={`w-3 h-3 transition-transform ${open[r.sku] ? "rotate-180" : ""}`} />
+                    </button>)}
+                </td>
                 <td className="p-2 text-end whitespace-nowrap">
                   {r.margin_now_pct == null ? <span className="text-[#A1E4DB]/60" title={isRTL ? "لا توجد تكلفة" : "No cost on file"}>—</span> : (
                     <span className="text-white">{r.margin_now_pct}%{r.margin_after_pct != null && <span className="text-[#A1E4DB]"> → {r.margin_after_pct}%</span>}</span>)}
@@ -154,7 +232,7 @@ export default function PriceRecommendations() {
                   {r.profit_change_30d != null ? <span className={r.profit_change_30d < 0 ? "text-[#EF4444]" : "text-[#10B981]"}>{r.profit_change_30d > 0 ? "+" : ""}{fmt(r.profit_change_30d, 0)}</span> : "—"}
                   {r.breakeven_extra_sales_pct != null && <span className="block text-[10px] text-[#A1E4DB]">{isRTL ? `يحتاج +${r.breakeven_extra_sales_pct}% مبيعات للتعادل` : `needs +${r.breakeven_extra_sales_pct}% sales to break even`}</span>}
                 </td>
-                <td className="p-2 text-[11px] text-[#A1E4DB] max-w-[240px]">{r.reason}</td>
+                <td className="p-2 text-[11px] text-[#A1E4DB] max-w-[260px]">{why(r, isRTL)}</td>
                 {canApply && (
                   <td className="p-2">
                     {sent[r.sku] ? <span className="text-[10px] text-[#10B981] inline-flex items-center gap-1"><Check className="w-3 h-3" />{sent[r.sku] === "confirmed" ? (isRTL ? "حُدّث" : "updated") : (isRTL ? "أُرسل" : "sent")}</span>
@@ -166,6 +244,11 @@ export default function PriceRecommendations() {
                   </td>
                 )}
               </tr>
+              {open[r.sku] && (
+                <tr className="border-b border-white/5 bg-white/[0.02]" data-testid={`pricing-comp-${r.sku}`}>
+                  <td colSpan={canApply ? 8 : 7} className="p-3"><Competitors r={r} isRTL={isRTL} /></td>
+                </tr>)}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -206,6 +289,12 @@ export default function PriceRecommendations() {
               {confirm && (isRTL
                 ? `${confirm.name_ar}: من ${confirm.price} إلى ${confirm.recommended_price} ريال (شامل الضريبة). سيُرسل إلى زد ويظهر للعملاء فوراً.`
                 : `${confirm.name_ar || confirm.name_en}: from ${confirm.price} to ${confirm.recommended_price} SAR (incl. VAT). This is sent to Zid and shoppers see it right away.`)}
+              {confirm?.based_on?.length > 0 && <span className="block mt-2 text-white">
+                {isRTL ? "مبني على: " : "Based on: "}{confirm.based_on.map((o) => `${o.store_name || o.store_id} ${fmt(o.price)}`).join(isRTL ? "، " : ", ")}
+                {confirm.competitors.filter((o) => o.used).length > confirm.based_on.length && (isRTL
+                  ? ` — من بين ${confirm.competitors.filter((o) => o.used).length} بائعين متوفرين`
+                  : ` — out of ${confirm.competitors.filter((o) => o.used).length} in-stock sellers`)}
+              </span>}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

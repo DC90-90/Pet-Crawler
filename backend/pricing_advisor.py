@@ -70,6 +70,13 @@ def recommend(row, settings=None):
            "in_stock": row.get("in_stock"), "quantity": row.get("my_quantity"),
            "margin_now_pct": margin_pct(price, cost, factor),
            "floor_price": floor_price(cost, factor, s["min_margin_pct"]) if cost else None}
+    # The stores a suggestion rests on: every compared seller, and the ones at
+    # the lowest price that set it (client request, 21 Oct 2026).
+    offers = row.get("competitor_offers") or []
+    out["competitors"] = offers
+    out["based_on"] = [o for o in offers if o.get("used") and lowest is not None and o.get("price") == lowest]
+    names = " / ".join(o.get("store_name") or o.get("store_id") for o in out["based_on"])
+    at = f"{names} at {lowest}" if names else f"{lowest}"
 
     def done(action, target=None, reason=""):
         out.update(action=action, recommended_price=target, reason=reason)
@@ -102,15 +109,15 @@ def recommend(row, settings=None):
         target = _round_down(lowest - s["undercut_sar"]) if s["undercut_sar"] else lowest
         if floor and target < floor:
             if floor >= price:
-                return done("hold", reason=f"matching {lowest} would go below the {s['min_margin_pct']:g}% margin floor")
+                return done("hold", reason=f"matching {at} would go below the {s['min_margin_pct']:g}% margin floor")
             return done("lower", _round_up(floor),
-                        reason=f"closer to the cheapest ({lowest}) without going below the {s['min_margin_pct']:g}% margin")
-        return done("lower", target, reason=f"match the cheapest in-stock seller ({lowest})")
+                        reason=f"closer to the cheapest ({at}) without going below the {s['min_margin_pct']:g}% margin")
+        return done("lower", target, reason=f"match the cheapest in-stock seller ({at})")
     gap_pct = (lowest - price) / price * 100
     if gap_pct >= s["raise_gap_pct"]:
         target = _round_down(lowest * 0.99)
         if target > price:
-            return done("raise", target, reason=f"you are {gap_pct:.1f}% under the next seller ({lowest}); stay cheapest at a higher price")
+            return done("raise", target, reason=f"you are {gap_pct:.1f}% under the next seller ({at}); stay cheapest at a higher price")
     return done("hold", reason="already the cheapest or tied")
 
 
