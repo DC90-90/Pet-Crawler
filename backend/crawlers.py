@@ -243,6 +243,12 @@ CANONICAL_BRAND_MAP = {
     "mera": "Mera", "ميرا": "Mera",
     "bewi dog": "Bewi Dog", "بيوي دوق": "Bewi Dog",
     "gimdog": "GimDog", "جيم دوق": "GimDog",
+    # Key brands (21 Oct 2026); key_brands.KEY_BRANDS recognises them in names.
+    "carnilove": "Carnilove", "كارني لوف": "Carnilove", "life cat": "Life Cat", "لايف كات": "Life Cat",
+    "beso": "Beso", "بيسو": "Beso", "canvit": "Canvit", "كانفيت": "Canvit",
+    "intersand": "Intersand", "انترساند": "Intersand", "kit cat": "Kit Cat", "kitcat": "Kit Cat", "كيت كات": "Kit Cat",
+    "gim cat": "GimCat", "جيم كات": "GimCat", "schesir": "Schesir", "شيزير": "Schesir",
+    "taste of the wild": "Taste of the Wild",
 }
 
 
@@ -287,6 +293,12 @@ def extract_brand_smart(name_ar, name_en, existing=None):
     Returns the canonical form via `canonical_brand()` or None if nothing
     lands. Never returns "Unknown".
     """
+    # The client's key brands, named in the product name, win over any tag
+    # (key_brands.py, 21 Oct 2026).
+    from key_brands import brand_in_name
+    key = brand_in_name(name_en, name_ar)
+    if key:
+        return key
     if existing and str(existing).strip().lower() in CANONICAL_BRAND_MAP:
         c = canonical_brand(existing)
         if c:
@@ -2729,6 +2741,79 @@ async def _salla_latest_walk(db, store, client, seen_ids, captured, crawl_log):
     return added
 
 
+SALLA_SWEEP_PAGES = 6            # 50 items a page; search results past this are off-brand
+SALLA_SWEEP_BRAND_PAGES = 40     # a brand page lists only that brand: read it to the end
+SALLA_SWEEP_BUDGET_SECS = 600
+SALLA_SWEEP_PAUSE = (1.5, 2.5)
+
+
+async def _salla_key_brand_sweep(store, client, seen_ids, captured, crawl_log):
+    """The client's key brands, read from the store itself: any item the
+    category walk and the latest walk missed is added (21 Oct 2026 — "all
+    items of these brands, no exceptions")."""
+    from key_brands import SEARCH_TERMS, brand_in_name
+    began, added, queries, stop = time.monotonic(), {}, 0, "done"
+    # 1. The store's own brand pages: every item it files under a key brand,
+    # whatever the item's name says. The brand list pages by ?page=N on the
+    # store API (its "next" link points at a host that answers 400).
+    store_brands, page = [], 1
+    while page <= 20:
+        try:
+            r = await client.get("https://api.salla.dev/store/v1/brands", params={"page": page})
+        except Exception:  # noqa: BLE001
+            break
+        if r.status_code != 200:
+            break
+        body = r.json()
+        rows = [b for b in (body.get("data") or []) if isinstance(b, dict)]
+        store_brands += rows
+        if not rows or not (body.get("cursor") or {}).get("next"):
+            break
+        page += 1
+        await asyncio.sleep(random.uniform(*SALLA_SWEEP_PAUSE))
+    jobs = [(brand_in_name(b.get("name"), b.get("label")), {"source": "brands", "source_value[]": b["id"], "limit": 50}, None)
+            for b in store_brands if b.get("id") is not None and brand_in_name(b.get("name"), b.get("label"))]
+    # 2. The store's search, for items not filed under a brand; fuzzy, so an
+    # item is kept only when its name names the brand.
+    jobs += [(brand, {"source": "search", "source_value": term, "limit": 50}, brand)
+             for brand, terms in SEARCH_TERMS.items() for term in terms]
+    brand_pages = sum(1 for j in jobs if j[2] is None)
+    for brand, first_params, must_name in jobs:
+        url, params, pages = "https://api.salla.dev/store/v1/products", first_params, 0
+        cap = SALLA_SWEEP_PAGES if must_name else SALLA_SWEEP_BRAND_PAGES
+        while url and pages < cap:
+            if time.monotonic() - began > SALLA_SWEEP_BUDGET_SECS:
+                stop = "time_budget"
+                break
+            try:
+                r = await client.get(url, params=params)
+            except Exception as exc:  # noqa: BLE001 — the catalogue walk stands
+                stop = f"error:{type(exc).__name__}"
+                break
+            pages += 1
+            if r.status_code != 200:
+                stop = f"http_{r.status_code}"
+                break
+            body = r.json()
+            for it in body.get("data") or []:
+                pid = it.get("id") if isinstance(it, dict) else None
+                if pid is None or pid in seen_ids or (must_name and brand_in_name(it.get("name")) != must_name):
+                    continue
+                seen_ids.add(pid)
+                captured.append(it)
+                added[brand] = added.get(brand, 0) + 1
+            url, params = (body.get("cursor") or {}).get("next"), None
+            await asyncio.sleep(random.uniform(*SALLA_SWEEP_PAUSE))
+        queries += 1
+        if stop != "done":
+            break
+    crawl_log["endpoints_tried"].append({"endpoint": "key_brand_sweep", "status": 200 if queries else 0,
+                                         "products": sum(added.values()),
+                                         "error": f"brand_pages={brand_pages} queries={queries} stop={stop} added={added}"})
+    logger.info("[KeyBrandSweep] %s: +%d items %s, stop=%s", store.get("name"), sum(added.values()), added, stop)
+    return added
+
+
 async def crawl_salla_storefront_categories(db, store, target_min_products=300, max_categories=200, max_pages_per_cat=200):
     """
     Direct-API crawler for Salla stores that disabled their public /api/v1/products endpoint.
@@ -2891,6 +2976,7 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
 
         if store_identifier:
             await _salla_latest_walk(db, store, client, seen_ids, captured, crawl_log)
+            await _salla_key_brand_sweep(store, client, seen_ids, captured, crawl_log)
 
         # iter63/64 — bounded barcode supplement from the product-detail
         # endpoint, reusing this walk's client / headers / pacing and the

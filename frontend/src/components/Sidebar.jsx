@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, Store, LogOut, Languages, Bell, Tag, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X, LayoutDashboard, Lightbulb, FileText } from "lucide-react";
+import { Package, Store, LogOut, Languages, Bell, Tag, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X, LayoutDashboard, Lightbulb, FileText, Star } from "lucide-react";
 import { useState, useEffect } from "react";
 
 // 15 Oct 2026 — one menu, each figure in one place. A page shows when the user
@@ -11,6 +11,7 @@ const navItems = [
   { to: "/products", pageKey: "my_products", icon: Package, labelKey: "nav_products", label: "My Products" },
   { to: "/pricing", pageKeys: ["insights", "price_intel", "scanner", "discounts"], icon: Tag, labelKey: "nav_pricing", label: "Pricing" },
   { to: "/market-share", pageKey: "market_share", icon: PieChart, labelKey: "nav_market", label: "Market" },
+  { to: "/key-brands", pageKey: "market_share", icon: Star, labelKey: "nav_key_brands", label: "Key brands" },
   { to: "/opportunities", pageKeys: ["insights", "price_intel", "market_share"], icon: Lightbulb, labelKey: "nav_opportunities", label: "Opportunities" },
   { to: "/stores", pageKey: "stores", icon: Store, labelKey: "nav_competitors", label: "Competitors" },
   { to: "/reports", pageKey: "my_products", icon: FileText, labelKey: "nav_reports", label: "Reports" },

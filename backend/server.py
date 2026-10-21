@@ -4251,6 +4251,15 @@ async def pricing_apply(data: PriceApplyIn, user=Depends(get_user)):
     return result
 
 
+@router.get("/brands/key")
+@api_cache.stored(1800, lambda: db)
+async def key_brands_view(user=Depends(get_user)):
+    """The client's key brands: every item in every store, grouped by barcode,
+    with each store's latest price and stock and the own store's (21 Oct 2026)."""
+    import key_brands
+    return await key_brands.catalogue(db, _effective_own_price)
+
+
 @router.get("/stock/planner")
 @api_cache.stored(1800, lambda: db)
 async def stock_planner_view(days: int = Query(30, ge=7, le=60), lead_days: int = Query(7, ge=1, le=60),
@@ -12711,6 +12720,8 @@ async def _boot():
         await _boot_sequence()
         asyncio.create_task(_resume_interrupted_backfills())
         asyncio.create_task(_resume_cut_off_crawls())
+        import key_brands
+        asyncio.create_task(key_brands.tag_products(db, delay_secs=240))
         BOOT_STATE["status"] = "done" if BOOT_STATE["phase"] != "waiting_for_mongo" else "mongo_unreachable"
     except Exception as exc:
         BOOT_STATE["status"] = "aborted"

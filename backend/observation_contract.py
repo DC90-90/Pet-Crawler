@@ -199,8 +199,13 @@ def normalize_offer(raw, store_name):
     brand = raw.get("brand")
     if isinstance(brand, dict):
         brand = brand.get("name")
+    # A key brand named in the product name wins over the store's tag
+    # (Kit Cat items tagged "Almo" — key_brands.py, 21 Oct 2026).
+    from key_brands import brand_in_name
+    key_brand = brand_in_name(name)
     return dict(sku=sku, barcode=barcode, name_ar=str(name), name_en=str(name),
-                brand=str(brand) if brand else None, brand_source="store_supplied" if brand else "unresolved",
+                brand=key_brand or (str(brand) if brand else None),
+                brand_source="key_brand_name" if key_brand else "store_supplied" if brand else "unresolved",
                 listing_id=listing, variant_id=variant, attributes=raw.get("attributes") or [],
                 price=price, original_price=original, sale_price=price if price and original and price < original else None,
                 price_decimal=str(Decimal(str(price))) if price is not None else None,

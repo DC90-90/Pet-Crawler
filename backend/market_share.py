@@ -42,6 +42,7 @@ from price_cohort import FIELDS, build_cohorts, identity_agrees
 from category_map import facets as category_facets
 from stock_evidence import own_stock
 from price_cohort import exclusion
+from key_brands import brand_in_name
 from snapshot_reads import complete_latest
 from observation_contract import since_bound
 from pack_guard import (
@@ -814,8 +815,9 @@ def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_s
             s["unit_share_pct"] = _pct(s["units"], market_units) if share_comparable else None
             s["revenue_share_pct"] = _pct(s["revenue"], market_revenue) if share_comparable else None
 
-        brand = mp.get("brand") if mp.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=mp.get("brand") or "") or ""
-        brand_source = mp.get("brand_source") if mp.get("brand_source") in ("reviewed", "store_supplied") else "derived_from_name" if brand else "unresolved"
+        key_brand = None if mp.get("brand_source") == "reviewed" else brand_in_name(name_en, name_ar)
+        brand = key_brand or (mp.get("brand") if mp.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=mp.get("brand") or "") or "")
+        brand_source = "derived_from_name" if key_brand else mp.get("brand_source") if mp.get("brand_source") in ("reviewed", "store_supplied") else "derived_from_name" if brand else "unresolved"
         category = mp.get("category") if mp.get("category_source") in ("reviewed", "store_supplied", "import_file") else ""
         category_source = mp.get("category_source") if category else "unclassified"
 
@@ -899,7 +901,8 @@ def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_s
         sample_sku = sorted(g["skus"])[0]
         cat_row = catalog.get(sellers[0].get("offer_id"), {})
         name_ar, name_en = sellers[0].get("name_ar") or "", sellers[0].get("name_en") or ""
-        brand = cat_row.get("brand") if cat_row.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=cat_row.get("brand") or "") or ""
+        key_brand = None if cat_row.get("brand_source") == "reviewed" else brand_in_name(name_en, name_ar)
+        brand = key_brand or (cat_row.get("brand") if cat_row.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=cat_row.get("brand") or "") or "")
         category = cat_row.get("category") if cat_row.get("category_source") in ("reviewed", "store_supplied", "import_file") else ""
         category_method = cat_row.get("category_source") if category else "unclassified"
         if category_map is not None and cat_row.get("category_source") != "reviewed":
