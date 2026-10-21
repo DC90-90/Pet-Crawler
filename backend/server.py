@@ -4260,6 +4260,35 @@ async def key_brands_view(user=Depends(get_user)):
     return await key_brands.catalogue(db, _effective_own_price)
 
 
+@router.post("/brands/key/audit")
+async def key_brands_audit_start(user=Depends(get_user)):
+    """Ask every store which key-brand items it lists and check each is in
+    Daleel this week. Runs in the background; one at a time."""
+    if user.get("role") not in ("super_admin", "admin"):
+        raise HTTPException(403, "Only an admin can run the coverage check")
+    import key_brands
+    import process_watch
+    owner = f"{process_watch.BOOT_ID}:{uuid.uuid4().hex[:6]}"
+    if not await job_control.acquire(db, "key-brand-audit", owner, hours=2):
+        return {"started": False, "reason": "already_running"}
+
+    async def _run():
+        try:
+            await key_brands.audit(db)
+        except Exception:
+            logger.exception("[KeyBrandAudit] failed")
+        finally:
+            await job_control.release(db, "key-brand-audit", owner)
+    asyncio.create_task(_run())
+    return {"started": True}
+
+
+@router.get("/brands/key/audit")
+async def key_brands_audit_latest(user=Depends(get_user)):
+    import key_brands
+    return await key_brands.latest_audit(db)
+
+
 @router.get("/stock/planner")
 @api_cache.stored(1800, lambda: db)
 async def stock_planner_view(days: int = Query(30, ge=7, le=60), lead_days: int = Query(7, ge=1, le=60),

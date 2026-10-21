@@ -202,7 +202,7 @@ def normalize_offer(raw, store_name):
     # A key brand named in the product name wins over the store's tag
     # (Kit Cat items tagged "Almo" — key_brands.py, 21 Oct 2026).
     from key_brands import brand_in_name
-    key_brand = brand_in_name(name)
+    key_brand = brand_in_name(name) or brand_in_name(brand)
     return dict(sku=sku, barcode=barcode, name_ar=str(name), name_en=str(name),
                 brand=key_brand or (str(brand) if brand else None),
                 brand_source="key_brand_name" if key_brand else "store_supplied" if brand else "unresolved",

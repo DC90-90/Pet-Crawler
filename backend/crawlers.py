@@ -1164,7 +1164,8 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 # its SKU field. Persisting it is what makes Level 1 real.
                 "barcode": norm.get("barcode") or "",
                 "name_ar": norm["name_ar"], "name_en": norm["name_ar"],
-                "brand": extract_brand(norm["name_ar"]),
+                "brand": norm["brand"] if norm.get("brand_source") == "key_brand_name" else extract_brand(norm["name_ar"]),
+                "brand_source": "key_brand_name" if norm.get("brand_source") == "key_brand_name" else None,
                 "category": category,
                 # additive: parent category stays; None = confidently generic
                 "subcategory": classify_food_subcategory_hybrid(category, norm["name_ar"], store_cats),
@@ -1186,6 +1187,9 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 patch["barcode"] = norm["barcode"]
             if norm["img_url"] and not existing.get("image_url"):
                 patch["image_url"] = norm["img_url"]
+            if (norm.get("brand_source") == "key_brand_name" and existing.get("brand") != norm["brand"]
+                    and existing.get("brand_source") != "reviewed"):
+                patch.update(brand=norm["brand"], brand_source="key_brand_name")
             if product_url and not existing.get("product_url"):
                 patch["product_url"] = product_url
             if store_category_rows and existing.get("category_source") != "reviewed":
@@ -2778,6 +2782,9 @@ async def _salla_key_brand_sweep(store, client, seen_ids, captured, crawl_log):
     jobs += [(brand, {"source": "search", "source_value": term, "limit": 50}, brand)
              for brand, terms in SEARCH_TERMS.items() for term in terms]
     brand_pages = sum(1 for j in jobs if j[2] is None)
+    # An item the walks already caught still takes the brand its store files
+    # it under: its name may not say it ("طعام قطط بالبط" on the Carnilove page).
+    by_id = {it.get("id"): it for it in captured if isinstance(it, dict)}
     for brand, first_params, must_name in jobs:
         url, params, pages = "https://api.salla.dev/store/v1/products", first_params, 0
         cap = SALLA_SWEEP_PAGES if must_name else SALLA_SWEEP_BRAND_PAGES
@@ -2797,10 +2804,16 @@ async def _salla_key_brand_sweep(store, client, seen_ids, captured, crawl_log):
             body = r.json()
             for it in body.get("data") or []:
                 pid = it.get("id") if isinstance(it, dict) else None
-                if pid is None or pid in seen_ids or (must_name and brand_in_name(it.get("name")) != must_name):
+                if pid is None or (must_name and brand_in_name(it.get("name")) != must_name):
+                    continue
+                if must_name is None and brand_in_name(it.get("name")) != brand:
+                    target = by_id.get(pid, it)
+                    target["brand"] = {"name": brand}
+                if pid in seen_ids:
                     continue
                 seen_ids.add(pid)
                 captured.append(it)
+                by_id[pid] = it
                 added[brand] = added.get(brand, 0) + 1
             url, params = (body.get("cursor") or {}).get("next"), None
             await asyncio.sleep(random.uniform(*SALLA_SWEEP_PAUSE))

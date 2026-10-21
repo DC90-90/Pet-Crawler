@@ -75,7 +75,9 @@ def test_catalogue_groups_every_store_by_barcode_and_marks_mine():
                 snap("z", "z2", "Royal Canin Kitten", 40.0, barcode="3182550702362"),
                 snap("z", "z3", "Kit Cat Hairball 30x5g", 30.0, barcode=""),
                 snap("off", "c1", "Carnilove Cat 2kg", 10.0),
-                snap("z", "z4", "Carnilove old", 9.0, barcode="", ago=30)])
+                snap("z", "z4", "Carnilove old", 9.0, barcode="", ago=30),
+                # filed under Carnilove by the store; the name does not say it
+                {**snap("l", "l2", "طعام قطط بالبط 400 جم", 20.0, barcode=""), "brand": "Carnilove"}])
             return await kb.catalogue(db, own_price_fn=lambda p: p.get("price"))
         finally:
             await client.drop_database(db.name)
@@ -89,5 +91,52 @@ def test_catalogue_groups_every_store_by_barcode_and_marks_mine():
     assert carni["cheapest_store"] == "Zarafa" and carni["own_vs_cheapest_pct"] == 9.1     # Lana is out of stock
     assert any(i["brand"] == "Kit Cat" and not i["own_sells"] for i in out["items"])         # an item I don't sell
     assert items["gtin:08595602581900"]["own_sells"] and items["gtin:08595602581900"]["competitors"] == 0
-    assert len(out["items"]) == 3                     # no Royal Canin, no closed store, nothing older than the window
-    assert {b["brand"]: b["items"] for b in out["brands"]}["Carnilove"] == 1
+    assert items["offer:l2"]["brand"] == "Carnilove"                                          # found by the store's brand
+    assert len(out["items"]) == 4                     # no Royal Canin, no closed store, nothing older than the window
+    assert {b["brand"]: b["items"] for b in out["brands"]}["Carnilove"] == 2
+
+
+def test_a_store_brand_tag_naming_a_key_brand_labels_the_offer():
+    from observation_contract import normalize_offer
+    row = normalize_offer({"id": 7, "name": "طعام قطط بالبط 2 كجم", "brand": {"name": "LifeCat"}, "price": 30,
+                           "currency": "SAR"}, "Zarafa")
+    assert row["brand"] == "Life Cat" and row["brand_source"] == "key_brand_name"
+    other = normalize_offer({"id": 8, "name": "Cat food", "brand": {"name": "Whiskas"}, "price": 9, "currency": "SAR"}, "Z")
+    assert other["brand"] == "Whiskas" and other["brand_source"] == "store_supplied"
+
+
+def test_the_sweep_stamps_the_brand_page_brand_on_items_already_caught():
+    import asyncio
+    import crawlers
+
+    class Resp:
+        def __init__(self, body, status=200):
+            self.status_code, self._body = status, body
+
+        def json(self):
+            return self._body
+
+    class Client:
+        async def get(self, url, params=None):
+            if url.endswith("/brands"):
+                return Resp({"data": [{"id": 11, "name": "Carnilove"}, {"id": 12, "name": "Royal Canin"}], "cursor": {}})
+            if params and params.get("source") == "brands":
+                return Resp({"data": [{"id": 1, "name": "طعام قطط بالبط"}, {"id": 2, "name": "Carnilove Salmon"}], "cursor": {}})
+            return Resp({"data": [{"id": 3, "name": "Royal Canin Kitten"}], "cursor": {}})   # search: off-brand only
+
+    crawlers.SALLA_SWEEP_PAUSE = (0, 0)
+    caught = [{"id": 1, "name": "طعام قطط بالبط"}]
+    seen, log = {1}, {"endpoints_tried": []}
+    added = asyncio.run(crawlers._salla_key_brand_sweep({"name": "S"}, Client(), seen, caught, log))
+    assert caught[0]["brand"] == {"name": "Carnilove"}            # already caught, now labelled
+    assert added == {"Carnilove": 1} and [c["id"] for c in caught] == [1, 2]
+    assert "brand_pages=1" in log["endpoints_tried"][-1]["error"]
+
+
+def test_coverage_row_counts_and_explains_every_missing_item():
+    listed = {"1": {"brand": "Kit Cat", "name": "a"}, "2": {"brand": "Kit Cat", "name": "b"},
+              "3": {"brand": "Beso", "name": "c"}}
+    row = kb.coverage_row(listed, seen={"1"}, known={"1", "2"})
+    assert row["store_lists"] == 3 and row["in_daleel"] == 1
+    assert row["brands"]["Kit Cat"]["missing"][0]["why"] == "seen before, not this week"
+    assert row["brands"]["Beso"]["missing"][0]["why"] == "never collected"

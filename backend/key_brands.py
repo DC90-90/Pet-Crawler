@@ -69,7 +69,7 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
     stores = {s["id"]: s for s in await db.stores.find(
         {"is_active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1, "is_own_store": 1, "domain": 1}).to_list(200)}
     own_id = next((sid for sid, s in stores.items() if s.get("is_own_store")), None)
-    proj = {k: 1 for k in ("sku", "barcode", "store_id", "store_name", "offer_id", "name_ar", "name_en", "price",
+    proj = {k: 1 for k in ("sku", "barcode", "store_id", "store_name", "offer_id", "name_ar", "name_en", "brand", "price",
                            "original_price", "in_stock", "qty_available", "product_url", "image_url", "crawled_at")}
     name_rx = {"$regex": MONGO_RX, "$options": "i"}
     rows = []
@@ -79,13 +79,14 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
             continue
         rows += await complete_latest(db, latest_pipeline(
             {"observation_version": 2, "is_synthetic": False, "store_id": sid, "crawled_at": {"$gte": since},
-             "$or": [{"name_ar": name_rx}, {"name_en": name_rx}]}, proj))
+             "$or": [{"name_ar": name_rx}, {"name_en": name_rx}, {"brand": name_rx}]}, proj))
     groups = {}
     for r in rows:
         sid = r["store_id"]
         if sid == own_id:
             continue                      # the own offer comes from the own catalogue below
-        brand = brand_in_name(r.get("name_en"), r.get("name_ar"))
+        # The name first; else the brand the store files it under.
+        brand = brand_in_name(r.get("name_en"), r.get("name_ar")) or brand_in_name(r.get("brand"))
         if not brand:
             continue
         key = _group_key(r)
@@ -179,3 +180,184 @@ async def tag_products(db, delay_secs=0):
         log.exception("[KeyBrands] tagging stopped after %d products", changed)
     log.info("[KeyBrands] tagged %d products with their key brand", changed)
     return changed
+
+
+# ── Coverage check (21 Oct 2026) ──────────────────────────────────────────
+# Asks every store itself which key-brand items it lists, then checks each
+# one is in Daleel with a reading from the last WINDOW_DAYS days. Salla: the
+# store's own brand pages plus its search (names checked). Zid: the store's
+# full public product list, kept when the name or the store's brand tag
+# names a key brand. Runs on the server, one request at a time.
+AUDIT_PAUSE = (1.0, 2.0)
+
+
+def _raw_name(raw):
+    n = raw.get("name") or raw.get("title") or ""
+    return " ".join(str(v) for v in n.values()) if isinstance(n, dict) else str(n)
+
+
+def _raw_brand(raw):
+    b = raw.get("brand")
+    if isinstance(b, dict):
+        b = b.get("name")
+        if isinstance(b, dict):
+            b = " ".join(str(v) for v in b.values())
+    return str(b or "")
+
+
+def _raw_url(raw):
+    u = raw.get("url") or raw.get("html_url") or raw.get("product_url")
+    if isinstance(raw.get("urls"), dict):
+        u = raw["urls"].get("customer") or u
+    return u if isinstance(u, str) else None
+
+
+def _raw_price(raw):
+    p = raw.get("price")
+    return p.get("amount") if isinstance(p, dict) else p
+
+
+async def _store_listing_salla(client, store):
+    import asyncio
+    import random
+    from fetch_policy import polite_get
+    sid = store.get("salla_store_identifier")
+    if not sid:
+        return None, "no store identifier yet"
+    base = f"https://{store['domain']}"
+    headers = {"Accept": "application/json, text/plain, */*", "Accept-Language": "ar", "x-requested-with": "XMLHttpRequest",
+               "Referer": base + "/", "Origin": base, "store-identifier": str(sid)}
+    api = "https://api.salla.dev/store/v1"
+    found, note = {}, []
+    brands, page = [], 1
+    while page <= 20:
+        r = await polite_get(client, f"{api}/brands", params={"page": page}, headers=headers)
+        if r is None or r.status_code != 200:
+            break
+        body = r.json()
+        rows = [b for b in (body.get("data") or []) if isinstance(b, dict)]
+        brands += rows
+        if not rows or not (body.get("cursor") or {}).get("next"):
+            break
+        page += 1
+        await asyncio.sleep(random.uniform(*AUDIT_PAUSE))
+    jobs = [(brand_in_name(b.get("name"), b.get("label")), {"source": "brands", "source_value[]": b["id"], "limit": 50}, False)
+            for b in brands if b.get("id") is not None and brand_in_name(b.get("name"), b.get("label"))]
+    note.append(f"{len(jobs)} brand pages")
+    jobs += [(brand, {"source": "search", "source_value": t, "limit": 50}, True)
+             for brand, terms in SEARCH_TERMS.items() for t in terms]
+    for brand, params, check_name in jobs:
+        url, pages = f"{api}/products", 0
+        while url and pages < (6 if check_name else 40):
+            r = await polite_get(client, url, params=params, headers=headers)
+            if r is None or r.status_code != 200:
+                note.append(f"{brand}: http {getattr(r, 'status_code', 'none')}")
+                break
+            body = r.json()
+            pages += 1
+            for it in body.get("data") or []:
+                if not isinstance(it, dict) or it.get("id") is None:
+                    continue
+                if check_name and brand_in_name(_raw_name(it)) != brand:
+                    continue
+                found.setdefault(str(it["id"]), {"brand": brand, "name": _raw_name(it), "url": _raw_url(it),
+                                                 "price": _raw_price(it)})
+            url, params = (body.get("cursor") or {}).get("next"), None
+            await asyncio.sleep(random.uniform(*AUDIT_PAUSE))
+    return found, "; ".join(note)
+
+
+async def _store_listing_zid(client, store):
+    import asyncio
+    import random
+    from fetch_policy import polite_get
+    base = f"https://{store['domain']}/api/v1/products"
+    found, page, total = {}, 1, 0
+    while page <= 400:
+        r = await polite_get(client, base, params={"page": page}, headers={"Accept": "application/json"})
+        if r is None or r.status_code != 200:
+            return found, f"stopped at page {page}: http {getattr(r, 'status_code', 'none')} after {total} listings"
+        body = r.json()
+        rows = (body.get("results") or body.get("data") or body.get("products") or []) if isinstance(body, dict) else []
+        if not rows:
+            break
+        total += len(rows)
+        for it in rows:
+            if not isinstance(it, dict) or it.get("id") is None:
+                continue
+            brand = brand_in_name(_raw_name(it)) or brand_in_name(_raw_brand(it))
+            if brand:
+                found[str(it["id"])] = {"brand": brand, "name": _raw_name(it), "url": _raw_url(it),
+                                        "price": _raw_price(it)}
+        if "next" in body and not body.get("next"):
+            break
+        page += 1
+        await asyncio.sleep(random.uniform(*AUDIT_PAUSE))
+    return found, f"{total} listings read"
+
+
+async def _in_daleel(db, store_id, ids, since):
+    """The store's listing ids Daleel read this week, and those it ever held."""
+    seen, known = set(), set()
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        seen |= {str(x) for x in await db.product_snapshots.distinct(
+            "listing_id", {"store_id": store_id, "crawled_at": {"$gte": since}, "listing_id": {"$in": chunk}})}
+        known |= {str(x) for x in await db.products.distinct(
+            "listing_id", {"store_id": store_id, "listing_id": {"$in": chunk}})}
+    return seen, known
+
+
+def coverage_row(listed, seen, known):
+    per = {}
+    for lid, it in listed.items():
+        b = per.setdefault(it["brand"], {"store_lists": 0, "in_daleel": 0, "missing": []})
+        b["store_lists"] += 1
+        if lid in seen:
+            b["in_daleel"] += 1
+        else:
+            b["missing"].append({**it, "listing_id": lid,
+                                 "why": "seen before, not this week" if lid in known else "never collected"})
+    return {"store_lists": len(listed), "in_daleel": sum(b["in_daleel"] for b in per.values()),
+            "brands": dict(sorted(per.items()))}
+
+
+async def audit(db, days=WINDOW_DAYS):
+    """Per store and brand: what the store lists, what Daleel holds this week,
+    and every missing item by name and link. Stored in key_brand_audits."""
+    import httpx
+    started = datetime.now(timezone.utc)
+    since = started - timedelta(days=days)
+    stores = await db.stores.find({"is_active": {"$ne": False}, "is_own_store": {"$ne": True}}, {"_id": 0}).to_list(100)
+    report = {"started_at": started, "status": "running", "stores": []}
+    run_id = (await db.key_brand_audits.insert_one(dict(report))).inserted_id
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        for store in sorted(stores, key=lambda s: s.get("name") or ""):
+            row = {"store_id": store["id"], "store": store.get("name"), "platform": store.get("platform")}
+            try:
+                if store.get("platform") == "salla":
+                    listed, note = await _store_listing_salla(client, store)
+                elif store.get("platform") == "zid":
+                    listed, note = await _store_listing_zid(client, store)
+                else:
+                    listed, note = None, "platform not checked"
+                if listed is not None:
+                    seen, known = await _in_daleel(db, store["id"], list(listed), since)
+                    row.update(checked=True, **coverage_row(listed, seen, known))
+                else:
+                    row["checked"] = False
+            except Exception as exc:  # noqa: BLE001 — one store's failure is reported, not fatal
+                note, row["checked"] = f"error: {type(exc).__name__}: {str(exc)[:120]}", False
+            row["note"] = note
+            report["stores"].append(row)
+            await db.key_brand_audits.update_one({"_id": run_id}, {"$set": {"stores": report["stores"]}})
+    checked = [s for s in report["stores"] if s.get("checked")]
+    report.update(status="done", finished_at=datetime.now(timezone.utc),
+                  store_lists=sum(s["store_lists"] for s in checked), in_daleel=sum(s["in_daleel"] for s in checked))
+    await db.key_brand_audits.update_one({"_id": run_id}, {"$set": report})
+    return report
+
+
+async def latest_audit(db):
+    doc = await db.key_brand_audits.find_one({}, {"_id": 0}, sort=[("started_at", -1)])
+    return doc or {"status": "never_run"}

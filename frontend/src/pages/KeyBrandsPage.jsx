@@ -3,9 +3,11 @@
  * tracked store, with each store's latest price and stock — including the
  * items the own store does not sell yet.
  */
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { Star, ExternalLink, ImageOff, Download, Search } from "lucide-react";
+import { Star, ExternalLink, ImageOff, Download, Search, ShieldCheck, ChevronDown } from "lucide-react";
+import { useAuth } from "@/App";
 import api from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { RequestError } from "@/components/RequestError";
@@ -37,6 +39,80 @@ function csv(items) {
   URL.revokeObjectURL(a.href);
 }
 
+// Every store asked which key-brand items it lists; each checked against Daleel.
+function CoverageCheck({ isRTL }) {
+  const { user } = useAuth();
+  const canRun = ["super_admin", "admin"].includes(user?.role);
+  const [open, setOpen] = useState({});
+  const q = useQuery({ queryKey: ["brands", "key", "audit"], queryFn: async () => (await api.get("/brands/key/audit")).data,
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 15000 : false) });
+  const run = async () => {
+    try {
+      const { data } = await api.post("/brands/key/audit");
+      if (data.started) toast.success(isRTL ? "بدأ الفحص — يستغرق نحو 30–60 دقيقة" : "Check started — takes about 30–60 minutes");
+      else toast.info(isRTL ? "الفحص يعمل بالفعل" : "A check is already running");
+      q.refetch();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Failed"); }
+  };
+  const d = q.data;
+  const rows = d?.stores || [];
+  const pct = d?.store_lists ? Math.round((d.in_daleel / d.store_lists) * 1000) / 10 : 100;
+  return (
+    <div className="glass-card rounded-md p-4" data-testid="key-brands-coverage">
+      <div className="flex flex-wrap items-center gap-3">
+        <ShieldCheck className="w-4 h-4 text-[#1E988E]" />
+        <h3 className="text-sm font-semibold text-white">{isRTL ? "فحص التغطية: هل كل منتج في المتاجر موجود في دليل؟" : "Coverage check: is every store item in Daleel?"}</h3>
+        {d?.started_at && <span className="text-[10px] text-[#A1E4DB]">{d.status === "running" ? (isRTL ? "يعمل الآن… " : "running… ") : ""}{new Date(d.finished_at || d.started_at).toLocaleString(isRTL ? "ar-SA" : "en-GB", { dateStyle: "short", timeStyle: "short" })}</span>}
+        {d?.status === "done" && <span className="text-xs text-white">{isRTL ? `المتاجر تعرض ${d.store_lists} · في دليل ${d.in_daleel}` : `stores list ${d.store_lists} · in Daleel ${d.in_daleel}`}
+          <span className={d.store_lists - d.in_daleel ? " text-[#F59E0B]" : " text-[#10B981]"}> ({pct}%)</span></span>}
+        {canRun && <button onClick={run} disabled={d?.status === "running"} className="ms-auto h-7 px-3 rounded bg-[#1E988E] text-[#090E1C] text-xs font-semibold disabled:opacity-50" data-testid="key-brands-audit-run">{isRTL ? "تشغيل الفحص" : "Run check"}</button>}
+      </div>
+      <p className="text-[11px] text-[#A1E4DB] mt-1">{isRTL ? "يسأل كل متجر عن منتجات هذه العلامات (صفحات العلامات والبحث في سلة، والقائمة الكاملة في زد) ويتحقق أن دليل قرأ كل منتج خلال آخر 7 أيام." : "Asks each store for its items of these brands (Salla brand pages and search; the full product list on Zid) and checks Daleel read each one in the last 7 days."}</p>
+      {rows.length > 0 && (
+        <div className="overflow-x-auto mt-3">
+          <table className="w-full text-xs">
+            <thead><tr className="text-[9px] uppercase tracking-[0.12em] text-[#A1E4DB] border-b border-white/10">
+              <th className="text-start p-2">{isRTL ? "المتجر" : "Store"}</th>
+              <th className="text-end p-2">{isRTL ? "يعرض المتجر" : "Store lists"}</th>
+              <th className="text-end p-2">{isRTL ? "في دليل" : "In Daleel"}</th>
+              <th className="text-end p-2">{isRTL ? "ناقص" : "Missing"}</th>
+              <th className="text-start p-2">{isRTL ? "ملاحظة" : "Note"}</th>
+            </tr></thead>
+            <tbody>
+              {rows.map((s) => {
+                const missing = Object.values(s.brands || {}).flatMap((b) => b.missing);
+                return (
+                  <Fragment key={s.store_id}>
+                    <tr className="border-b border-white/5" data-testid={`audit-store-${s.store_id}`}>
+                      <td className="p-2 text-white"><span className="inline-flex items-center gap-1.5"><StoreLogo storeId={s.store_id} name={s.store} size={14} />{s.store}</span></td>
+                      <td className="p-2 text-end text-white">{s.checked ? s.store_lists : "—"}</td>
+                      <td className="p-2 text-end text-white">{s.checked ? s.in_daleel : "—"}</td>
+                      <td className="p-2 text-end">{!s.checked ? <span className="text-[#F59E0B]">{isRTL ? "لم يُفحص" : "not checked"}</span> : missing.length === 0 ? <span className="text-[#10B981]">0 ✓</span> :
+                        <button className="text-[#F59E0B] inline-flex items-center gap-0.5" onClick={() => setOpen((o) => ({ ...o, [s.store_id]: !o[s.store_id] }))}>{missing.length}<ChevronDown className="w-3 h-3" /></button>}</td>
+                      <td className="p-2 text-[10px] text-[#A1E4DB]">{s.note}</td>
+                    </tr>
+                    {open[s.store_id] && missing.length > 0 && (
+                      <tr className="border-b border-white/5 bg-white/[0.02]"><td colSpan={5} className="p-2">
+                        <div className="grid gap-1 text-[11px]">
+                          {missing.map((m) => (
+                            <div key={m.listing_id} className="flex flex-wrap items-center gap-2">
+                              <span className="text-[#6AC1B5] w-24 shrink-0">{m.brand}</span>
+                              <span className="text-white truncate max-w-[420px]">{m.name}</span>
+                              {m.price != null && <span className="text-[#A1E4DB]">{m.price}</span>}
+                              {m.url && <a href={m.url} target="_blank" rel="noopener noreferrer" className="text-[#6AC1B5]"><ExternalLink className="w-3 h-3" /></a>}
+                              <span className="text-[10px] text-[#F59E0B]">{m.why === "never collected" ? (isRTL ? "لم يُجمع بعد" : "never collected") : (isRTL ? "قُرئ سابقاً، ليس هذا الأسبوع" : "seen before, not this week")}</span>
+                            </div>))}
+                        </div>
+                      </td></tr>)}
+                  </Fragment>);
+              })}
+            </tbody>
+          </table>
+        </div>)}
+    </div>
+  );
+}
+
 export default function KeyBrandsPage() {
   const { isRTL } = useI18n();
   const [brand, setBrand] = useState(null);
@@ -65,6 +141,8 @@ export default function KeyBrandsPage() {
         {res.data && <button onClick={() => csv(items)} className="h-8 px-3 rounded bg-white/5 text-[#A1E4DB] hover:text-white text-xs inline-flex items-center gap-1.5" data-testid="key-brands-export">
           <Download className="w-3.5 h-3.5" />{isRTL ? `تصدير (${items.length})` : `Export (${items.length})`}</button>}
       </div>
+
+      <CoverageCheck isRTL={isRTL} />
 
       {!res.data ? <p className="text-sm text-[#A1E4DB]">{isRTL ? "جارٍ جمع منتجات العلامات من كل المتاجر… قد يستغرق دقيقة في أول مرة." : "Gathering every item of these brands from all stores… the first load can take a minute."}</p> : <>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2" data-testid="key-brands-cards">
