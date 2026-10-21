@@ -59,7 +59,10 @@ def test_catalogue_groups_every_store_by_barcode_and_marks_mine():
             await db.stores.insert_many([{"id": "own", "name": "Pets houses", "is_own_store": True},
                                          {"id": "z", "name": "Zarafa"}, {"id": "l", "name": "Lana Pets"},
                                          {"id": "off", "name": "Closed", "is_active": False}])
-            await db.products.insert_one({"store_id": "own", "sku": "8595602581757", "price": 60.0})
+            await db.my_products.insert_many([
+                {"sku": "8595602581757", "name_ar": "كارني لوف 2 كجم", "price": 60.0},
+                {"sku": "8595602581900", "name_en": "Schesir Tuna 85g", "price": 7.0},      # nobody else sells it
+                {"sku": "3182550702362", "name_en": "Royal Canin Kitten", "price": 41.0}])  # not a key brand
 
             def snap(store, offer, name, price, stock=True, barcode="8595602581757", ago=1):
                 return {"observation_version": 2, "is_synthetic": False, "store_id": store, "offer_id": offer,
@@ -85,5 +88,6 @@ def test_catalogue_groups_every_store_by_barcode_and_marks_mine():
     assert {o["store_name"]: o["price"] for o in carni["offers"]} == {"Zarafa": 55.0, "Lana Pets": 52.0, "Pets houses": 60.0}
     assert carni["cheapest_store"] == "Zarafa" and carni["own_vs_cheapest_pct"] == 9.1     # Lana is out of stock
     assert any(i["brand"] == "Kit Cat" and not i["own_sells"] for i in out["items"])         # an item I don't sell
-    assert len(out["items"]) == 2                     # no Royal Canin, no closed store, nothing older than the window
+    assert items["gtin:08595602581900"]["own_sells"] and items["gtin:08595602581900"]["competitors"] == 0
+    assert len(out["items"]) == 3                     # no Royal Canin, no closed store, nothing older than the window
     assert {b["brand"]: b["items"] for b in out["brands"]}["Carnilove"] == 1

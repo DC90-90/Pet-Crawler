@@ -75,21 +75,16 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
     rows = []
     # One store at a time: each read stays inside the 10 s operation limit.
     for sid in stores:
+        if sid == own_id:
+            continue
         rows += await complete_latest(db, latest_pipeline(
             {"observation_version": 2, "is_synthetic": False, "store_id": sid, "crawled_at": {"$gte": since},
              "$or": [{"name_ar": name_rx}, {"name_en": name_rx}]}, proj))
-    # The own catalogue: its live price and barcodes, so an item is marked
-    # "you sell it" even when its own listing names the brand differently.
-    own_codes = {}
-    if own_id:
-        # Whole records: the shelf-price rule reads sync time, basis and identity.
-        async for p in db.products.find({"store_id": own_id}, {"_id": 0}):
-            for v in (p.get("sku"), p.get("barcode")):
-                g = gtin(v)
-                if g:
-                    own_codes[g] = p
     groups = {}
     for r in rows:
+        sid = r["store_id"]
+        if sid == own_id:
+            continue                      # the own offer comes from the own catalogue below
         brand = brand_in_name(r.get("name_en"), r.get("name_ar"))
         if not brand:
             continue
@@ -99,26 +94,41 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
         g["name_ar"] = g["name_ar"] or r.get("name_ar")
         g["name_en"] = g["name_en"] or r.get("name_en")
         g["image_url"] = g["image_url"] or r.get("image_url")
-        sid = r["store_id"]
-        price = r.get("price")
-        if sid == own_id and own_price_fn and g["barcode"] in own_codes:
-            price = own_price_fn(own_codes[g["barcode"]]) or None   # the shelf price, VAT included
         prev = g["offers"].get(sid)
         if prev and str(prev["seen_at"]) >= str(r.get("crawled_at")):
             continue
         g["offers"][sid] = {"store_id": sid, "store_name": stores.get(sid, {}).get("name") or r.get("store_name"),
-                            "own": sid == own_id, "price": price, "original_price": r.get("original_price"),
+                            "own": False, "price": r.get("price"), "original_price": r.get("original_price"),
                             "in_stock": r.get("in_stock"), "qty": r.get("qty_available"),
                             "url": r.get("product_url"), "name": r.get("name_ar") or r.get("name_en"),
                             "seen_at": r.get("crawled_at")}
+    # The own catalogue (the My Products records): the same shelf price and
+    # stock as every other page. An own product joins its competitors by
+    # barcode even when its own name spells the brand differently, and an own
+    # key-brand product nobody else sells is listed too.
+    if own_id:
+        from stock_evidence import own_stock
+        async for p in db.my_products.find({}, {"_id": 0}):
+            if p.get("superseded_parent"):
+                continue
+            code = next((c for c in (gtin(p.get("barcode")), gtin(p.get("sku"))) if c), None)
+            key = "gtin:" + code if code else None
+            brand = brand_in_name(p.get("name_en"), p.get("name_ar"))
+            if key not in groups:
+                if not brand:
+                    continue
+                key = key or "own:" + str(p.get("sku"))
+                groups[key] = {"key": key, "brand": brand, "barcode": code, "name_ar": p.get("name_ar"),
+                               "name_en": p.get("name_en"), "image_url": p.get("image_url"), "offers": {}}
+            g = groups[key]
+            g["image_url"] = g["image_url"] or p.get("image_url")
+            g["offers"][own_id] = {"store_id": own_id, "store_name": stores[own_id]["name"], "own": True,
+                                   "price": (own_price_fn(p) or None) if own_price_fn else p.get("price"),
+                                   "in_stock": own_stock(p)["in_stock"], "qty": own_stock(p)["quantity"],
+                                   "url": p.get("product_url"), "name": p.get("name_ar") or p.get("name_en"),
+                                   "sku": p.get("sku"), "seen_at": p.get("last_synced_at")}
     items = []
     for g in groups.values():
-        own_p = own_codes.get(g["barcode"]) if g["barcode"] else None
-        if own_p and own_id not in g["offers"]:
-            price = (own_price_fn(own_p) or None) if own_price_fn else own_p.get("price")
-            g["offers"][own_id] = {"store_id": own_id, "store_name": stores[own_id]["name"], "own": True, "price": price,
-                                   "in_stock": own_p.get("in_stock"), "url": own_p.get("product_url"),
-                                   "name": own_p.get("name_ar") or own_p.get("name_en"), "seen_at": None}
         offers = sorted(g.pop("offers").values(), key=lambda o: (o["price"] is None, o["price"] or 0))
         comp = [o for o in offers if not o["own"]]
         live = [o for o in comp if o["in_stock"] and o["price"]]
