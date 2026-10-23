@@ -166,10 +166,9 @@ SUPER_ADMIN_PASSWORD = os.environ.get("SUPER_ADMIN_PASSWORD", "")
 LEGACY_ADMIN_EMAIL = "admin@daleelpets.com"  # to be deleted on startup
 
 VALID_ROLES = ["super_admin", "admin", "user"]
-ALL_PAGES = [
-    "my_products", "price_intel", "insights", "scanner", "market_share",
-    "discounts", "alerts", "stores", "import", "settings",
-]
+# One permission per menu page (access_policy.PAGES); retired keys stored on
+# older accounts are translated on read and migrated at boot.
+from access_policy import PAGES as ALL_PAGES, effective_pages
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -248,7 +247,7 @@ async def get_user(request: Request):
         enforce_access(u, request.url.path, request.method)
         await release_runtime.authorize_request(db, request, str(u["_id"]))
         # super_admin always has access to every page (implicit)
-        allowed = ALL_PAGES if role == "super_admin" else list(u.get("allowed_pages", []) or [])
+        allowed = ALL_PAGES if role == "super_admin" else effective_pages(u.get("allowed_pages"))
         return {
             "id": str(u["_id"]),
             "email": u["email"],
@@ -793,7 +792,7 @@ async def login(request: Request, data: AuthIn, response: Response):
         raise HTTPException(401, "Invalid credentials")
     uid = str(user["_id"])
     role = user.get("role", "user")
-    allowed = ALL_PAGES if role == "super_admin" else list(user.get("allowed_pages", []) or [])
+    allowed = ALL_PAGES if role == "super_admin" else effective_pages(user.get("allowed_pages"))
     token = make_token(uid, email)
     response.set_cookie("daleel_token", token, httponly=True, samesite="none", secure=True, max_age=86400, path="/")
     return {
@@ -832,14 +831,29 @@ def _serialize_user(u: dict) -> dict:
         "email": u.get("email", ""),
         "name": u.get("name", ""),
         "role": role,
-        "allowed_pages": ALL_PAGES if role == "super_admin" else list(u.get("allowed_pages", []) or []),
+        "allowed_pages": ALL_PAGES if role == "super_admin" else effective_pages(u.get("allowed_pages")),
         "created_at": (u.get("created_at").isoformat() if isinstance(u.get("created_at"), datetime) else u.get("created_at")),
         "is_super_admin": is_super_admin_email(u.get("email", "")),
     }
 
 
 def _validate_pages(pages: List[str]) -> List[str]:
-    return [p for p in (pages or []) if p in ALL_PAGES]
+    return effective_pages(pages)
+
+
+async def _migrate_page_keys():
+    """Store today's page keys on accounts saved with the retired ones, so
+    the Users page shows exactly what each user can open (23 Oct 2026)."""
+    from access_policy import LEGACY
+    moved = 0
+    async for u in db.users.find({"allowed_pages": {"$in": list(LEGACY)}}, {"_id": 1, "allowed_pages": 1}):
+        pages = effective_pages(u.get("allowed_pages"))
+        if pages != u.get("allowed_pages"):
+            await db.users.update_one({"_id": u["_id"]}, {"$set": {"allowed_pages": pages,
+                                                                  "allowed_pages_before_oct23": u.get("allowed_pages")}})
+            moved += 1
+    if moved:
+        logger.info("[Users] moved %d accounts to the menu page keys", moved)
 
 
 @router.get("/admin/users")
@@ -12751,6 +12765,7 @@ async def _boot():
         asyncio.create_task(_resume_cut_off_crawls())
         import key_brands
         asyncio.create_task(key_brands.tag_products(db, delay_secs=240))
+        asyncio.create_task(_migrate_page_keys())
         BOOT_STATE["status"] = "done" if BOOT_STATE["phase"] != "waiting_for_mongo" else "mongo_unreachable"
     except Exception as exc:
         BOOT_STATE["status"] = "aborted"

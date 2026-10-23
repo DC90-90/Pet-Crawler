@@ -8,15 +8,18 @@ import { useAuth } from "@/App";
 import { ADMIN_READ_ONLY_REASON } from "@/lib/releaseActions";
 import { RequestError } from "@/components/RequestError";
 
+// One permission per menu page, named as in the menu (23 Oct 2026).
 const PAGE_LABELS = {
+  overview: "Overview",
   my_products: "My Products",
-  price_intel: "Price Intel",
-  insights: "Insights",
-  scanner: "Price Scanner",
+  pricing: "Pricing",
   market_share: "Market Share",
-  discounts: "Discounts",
+  key_brands: "Key brands",
+  opportunities: "Opportunities",
+  competitors: "Competitors",
+  reports: "Reports",
+  data_quality: "Data quality",
   alerts: "Alerts",
-  stores: "Stores",
   import: "Import",
   settings: "Settings",
 };

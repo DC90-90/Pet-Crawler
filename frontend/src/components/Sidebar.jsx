@@ -7,15 +7,15 @@ import { useState, useEffect } from "react";
 // 15 Oct 2026 — one menu, each figure in one place. A page shows when the user
 // may see any of its sections (pageKeys); the sections themselves check again.
 const navItems = [
-  { to: "/", pageKey: "my_products", icon: LayoutDashboard, labelKey: "nav_overview", label: "Overview" },
+  { to: "/", pageKey: "overview", icon: LayoutDashboard, labelKey: "nav_overview", label: "Overview" },
   { to: "/products", pageKey: "my_products", icon: Package, labelKey: "nav_products", label: "My Products" },
-  { to: "/pricing", pageKeys: ["insights", "price_intel", "scanner", "discounts"], icon: Tag, labelKey: "nav_pricing", label: "Pricing" },
+  { to: "/pricing", pageKey: "pricing", icon: Tag, labelKey: "nav_pricing", label: "Pricing" },
   { to: "/market-share", pageKey: "market_share", icon: PieChart, labelKey: "nav_market", label: "Market" },
-  { to: "/key-brands", pageKey: "market_share", icon: Star, labelKey: "nav_key_brands", label: "Key brands" },
-  { to: "/opportunities", pageKeys: ["insights", "price_intel", "market_share"], icon: Lightbulb, labelKey: "nav_opportunities", label: "Opportunities" },
-  { to: "/stores", pageKey: "stores", icon: Store, labelKey: "nav_competitors", label: "Competitors" },
-  { to: "/reports", pageKey: "my_products", icon: FileText, labelKey: "nav_reports", label: "Reports" },
-  { to: "/data-quality", pageKey: "stores", icon: ShieldCheck, labelKey: "nav_data_quality", label: "Data quality" },
+  { to: "/key-brands", pageKey: "key_brands", icon: Star, labelKey: "nav_key_brands", label: "Key brands" },
+  { to: "/opportunities", pageKey: "opportunities", icon: Lightbulb, labelKey: "nav_opportunities", label: "Opportunities" },
+  { to: "/stores", pageKey: "competitors", icon: Store, labelKey: "nav_competitors", label: "Competitors" },
+  { to: "/reports", pageKey: "reports", icon: FileText, labelKey: "nav_reports", label: "Reports" },
+  { to: "/data-quality", pageKey: "data_quality", icon: ShieldCheck, labelKey: "nav_data_quality", label: "Data quality" },
   { to: "/alerts", pageKey: "alerts", icon: Bell, labelKey: "nav_alerts", label: "Alerts" },
   { to: "/import", pageKey: "import", icon: Upload, labelKey: "nav_import", label: "Import" },
 ];

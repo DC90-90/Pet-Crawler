@@ -107,9 +107,9 @@ export default function OpportunitiesPage() {
   const [params, setParams] = useSearchParams();
   const [days, setDays] = useState(30);
   const [picked, setPicked] = useState(null);
-  const intel = ["insights", "price_intel"].some((k) => canAccessPage(user, k));
+  const intel = canAccessPage(user, "opportunities");
   const tabs = useMemo(() => [
-    { id: "missing", label: isRTL ? "منتجات لا أبيعها" : "Products I don't sell", icon: PackageSearch, show: canAccessPage(user, "market_share") },
+    { id: "missing", label: isRTL ? "منتجات لا أبيعها" : "Products I don't sell", icon: PackageSearch, show: intel },
     { id: "best-sellers", label: isRTL ? "الأكثر مبيعاً في السوق" : "Market best sellers", icon: TrendingUp, show: intel },
     { id: "restock", label: isRTL ? "فرص إعادة التخزين" : "Restock opportunities", icon: PackageCheck, show: intel },
     { id: "stock-planner", label: isRTL ? "مخطط مخزوني" : "My stock planner", icon: Boxes, show: intel },

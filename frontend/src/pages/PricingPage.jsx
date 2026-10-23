@@ -30,7 +30,6 @@ import DiscountsPage from "@/pages/DiscountsPage";
 import PriceRecommendations from "@/components/PriceRecommendations";
 import PromotionsCalendar from "@/components/PromotionsCalendar";
 
-const INTEL_KEYS = ["insights", "price_intel"];
 const WAR_MAX_PCT = 100;
 
 function usePriceDashboard(scope) {
@@ -154,15 +153,15 @@ export default function PricingPage() {
   const { t, isRTL } = useI18n();
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
-  const intel = INTEL_KEYS.some((k) => canAccessPage(user, k));
+  const intel = canAccessPage(user, "pricing");
   const tabs = useMemo(() => [
     { id: "recommendations", label: isRTL ? "توصيات الأسعار" : "Recommendations", icon: Lightbulb, show: intel },
-    { id: "overpriced", label: isRTL ? "أسعاري الأعلى" : "Overpriced", icon: AlertTriangle, show: intel || canAccessPage(user, "scanner") },
+    { id: "overpriced", label: isRTL ? "أسعاري الأعلى" : "Overpriced", icon: AlertTriangle, show: intel },
     { id: "cheapest", label: isRTL ? "مزاياي" : "My advantages", icon: Award, show: intel },
     { id: "full", label: isRTL ? "المقارنة الكاملة" : "Full comparison", icon: ShoppingCart, show: intel },
     { id: "price-wars", label: isRTL ? "حروب الأسعار" : "Price wars", icon: Swords, show: intel },
-    { id: "discounts", label: isRTL ? "تخفيضات المنافسين" : "Competitor discounts", icon: Percent, show: canAccessPage(user, "discounts") },
-    { id: "promotions", label: isRTL ? "تقويم العروض" : "Promotions calendar", icon: CalendarDays, show: canAccessPage(user, "discounts") },
+    { id: "discounts", label: isRTL ? "تخفيضات المنافسين" : "Competitor discounts", icon: Percent, show: intel },
+    { id: "promotions", label: isRTL ? "تقويم العروض" : "Promotions calendar", icon: CalendarDays, show: intel },
   ].filter((x) => x.show), [user, intel, isRTL]);
   const tab = tabs.some((x) => x.id === params.get("tab")) ? params.get("tab") : tabs[0]?.id;
 

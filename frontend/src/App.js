@@ -179,21 +179,21 @@ function AppLayout() {
         </div>
         <div className="flex-1 min-w-0">
         <ReleaseBoundary><Routes>
-          <Route path="/" element={<ProtectedRoute pageKey="my_products"><OverviewPage /></ProtectedRoute>} />
+          <Route path="/" element={<ProtectedRoute pageKey="overview"><OverviewPage /></ProtectedRoute>} />
           <Route path="/products" element={<ProtectedRoute pageKey="my_products"><MyProductsPage /></ProtectedRoute>} />
-          <Route path="/pricing" element={<ProtectedRoute pageKeys={["insights", "price_intel", "scanner", "discounts"]}><PricingPage /></ProtectedRoute>} />
-          <Route path="/opportunities" element={<ProtectedRoute pageKeys={["insights", "price_intel", "market_share"]}><OpportunitiesPage /></ProtectedRoute>} />
+          <Route path="/pricing" element={<ProtectedRoute pageKey="pricing"><PricingPage /></ProtectedRoute>} />
+          <Route path="/opportunities" element={<ProtectedRoute pageKey="opportunities"><OpportunitiesPage /></ProtectedRoute>} />
           <Route path="/insights" element={<Navigate to="/pricing" replace />} />
           <Route path="/price-intel" element={<Navigate to="/pricing" replace />} />
           <Route path="/scanner" element={<Navigate to="/pricing?tab=overpriced" replace />} />
           <Route path="/discounts" element={<Navigate to="/pricing?tab=discounts" replace />} />
           <Route path="/alerts" element={<ProtectedRoute pageKey="alerts"><AlertsPage /></ProtectedRoute>} />
           <Route path="/market-share" element={<ProtectedRoute pageKey="market_share"><MarketSharePage /></ProtectedRoute>} />
-          <Route path="/stores" element={<ProtectedRoute pageKey="stores"><StoreRegistryPage /></ProtectedRoute>} />
-          <Route path="/data-quality" element={<ProtectedRoute pageKey="stores"><DataQualityPage /></ProtectedRoute>} />
-          <Route path="/key-brands" element={<ProtectedRoute pageKey="market_share"><KeyBrandsPage /></ProtectedRoute>} />
-          <Route path="/reports" element={<ProtectedRoute pageKey="my_products"><ReportsPage /></ProtectedRoute>} />
-          <Route path="/stores/:storeId" element={<ProtectedRoute pageKey="stores"><CompetitorProfilePage /></ProtectedRoute>} />
+          <Route path="/stores" element={<ProtectedRoute pageKey="competitors"><StoreRegistryPage /></ProtectedRoute>} />
+          <Route path="/data-quality" element={<ProtectedRoute pageKey="data_quality"><DataQualityPage /></ProtectedRoute>} />
+          <Route path="/key-brands" element={<ProtectedRoute pageKey="key_brands"><KeyBrandsPage /></ProtectedRoute>} />
+          <Route path="/reports" element={<ProtectedRoute pageKey="reports"><ReportsPage /></ProtectedRoute>} />
+          <Route path="/stores/:storeId" element={<ProtectedRoute pageKey="competitors"><CompetitorProfilePage /></ProtectedRoute>} />
           <Route path="/settings" element={<ProtectedRoute pageKey="settings"><ReleaseSettings /></ProtectedRoute>} />
           <Route path="/settings/coverage" element={<ProtectedRoute pageKey="settings"><CoverageReportPage /></ProtectedRoute>} />
           <Route path="/import" element={<ProtectedRoute pageKey="import"><ImportPage /></ProtectedRoute>} />
