@@ -154,3 +154,65 @@ def test_a_resume_refused_by_a_lock_is_tried_once_more(monkeypatch):
 
     asyncio.run(scenario())
     assert calls == ["zarafa", "zarafa"]
+
+
+def test_a_store_whose_crawl_never_started_is_caught_up(monkeypatch):
+    """23 Oct 2026: four stores queued behind Zarafa and Petsy when a Republish
+    killed the process; they left no attempt and nothing crawled them."""
+    import server
+    import ledger
+    import process_watch
+    from motor.motor_asyncio import AsyncIOMotorClient
+    from test_p0_my_products_baseline import _loopback_mongo_url
+
+    now = datetime.now(timezone.utc)
+    since = ledger.ksa_midnight_utc(ledger.ksa_day_str(now))
+    past = max(since + timedelta(minutes=1), now - timedelta(minutes=40))
+    if now - past < timedelta(minutes=16):
+        return                                  # just after KSA midnight: no slot has passed yet today
+    future = now + timedelta(hours=1)
+    client = AsyncIOMotorClient(_loopback_mongo_url())
+    db = client["cu_" + uuid.uuid4().hex]
+    crawled = []
+
+    async def fake_crawl(db_, store, trigger="x"):
+        crawled.append((store["id"], trigger))
+        return {"products_found": 10}
+
+    async def noop(*a, **k):
+        return None
+
+    async def alive(db_, within=None):
+        return {"live-boot"}
+
+    async def scenario():
+        try:
+            monkeypatch.setattr(server, "db", db)
+            monkeypatch.setattr(server, "crawl_store_waterfall", fake_crawl)
+            monkeypatch.setattr(server, "_recompute_store_metrics", noop)
+            monkeypatch.setattr(server, "maybe_recompute_dashboard_cache", noop)
+            monkeypatch.setattr(server, "maybe_recompute_page_caches", noop)
+            monkeypatch.setattr(server, "cache_clear", lambda *a, **k: None)
+            monkeypatch.setattr(process_watch, "alive_boot_ids", alive)
+            monkeypatch.setattr(server, "DAILY_CRAWL_BY_DOMAIN", {
+                "missed.sa": (past.hour, past.minute), "crawled.sa": (past.hour, past.minute),
+                "running.sa": (past.hour, past.minute), "later.sa": (future.hour, future.minute)})
+            for sid in ("missed", "crawled", "running", "later"):
+                await db.stores.insert_one({"id": sid, "name": sid, "domain": sid + ".sa", "is_active": True})
+            await db.stores.insert_one({"id": "off", "name": "off", "domain": "missed.sa", "is_active": False})
+            await db.crawl_attempts.insert_many([
+                {"_id": uuid.uuid4().hex, "store_id": "crawled", "trigger": "schedule", "boot_id": "live-boot",
+                 "started_at": now - timedelta(minutes=10), "status": "complete", "products_found": 9},
+                {"_id": uuid.uuid4().hex, "store_id": "running", "trigger": "schedule", "boot_id": "live-boot",
+                 "started_at": now - timedelta(minutes=10), "status": "running"}])
+            await server._resume_cut_off_crawls(delay_secs=0)
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+
+    asyncio.run(scenario())
+    ids = [c[0] for c in crawled]
+    assert ("missed", "resume") in crawled
+    assert not {"crawled", "running", "off"} & set(ids)        # done today, crawling now, inactive
+    if future.date() == now.date():
+        assert "later" not in ids                               # its slot has not come yet

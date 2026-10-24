@@ -1396,7 +1396,8 @@ async def _execute_backfill(run_id, stores, rematch):
 
 async def _resume_cut_off_crawls(delay_secs=150):
     """After a restart, crawl again today's scheduled crawls the restart cut
-    off (an attempt still "running" whose process stopped heartbeating). One
+    off (an attempt still "running" whose process stopped heartbeating), and
+    any store whose slot passed without a crawl today. One
     process does it (lease); stores run one after another through
     scheduled_crawl_job, which skips a store already crawled today and caps
     attempts at CRAWL_RESUME_MAX_PER_DAY (16 Oct 2026)."""
@@ -1420,6 +1421,23 @@ async def _resume_cut_off_crawls(delay_secs=150):
                 await db.crawl_attempts.update_one({"_id": a["_id"]}, {"$set": {"status": "cut_off_by_restart"}})
                 if a["store_id"] not in cut:
                     cut.append(a["store_id"])
+        # Crawls a restart stopped before they began: queued behind another
+        # store's crawl (one per process), they left no attempt to resume —
+        # Lana, Panda, Aleef and CutePets went uncrawled on 23 Oct 2026. Any
+        # active store whose slot today has passed and that has no crawl
+        # today is crawled now.
+        now = datetime.now(timezone.utc)
+        live = {a["store_id"] async for a in db.crawl_attempts.find(
+            {"started_at": {"$gte": since}, "status": "running", "boot_id": {"$in": list(alive)}}, {"store_id": 1})}
+        async for st in db.stores.find({"is_active": {"$ne": False}}, {"_id": 0, "id": 1, "domain": 1}):
+            hour, minute = DAILY_CRAWL_BY_DOMAIN.get(st.get("domain", ""), (2, 0))
+            slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if slot < since:
+                slot += timedelta(days=1)          # the slot in today's KSA day
+            if st["id"] in cut or st["id"] in live or now < slot + timedelta(minutes=15):
+                continue
+            if not (await _store_crawl_today(st["id"]))[0]:
+                cut.append(st["id"])
         deferred = []
         for store_id in cut:
             logger.info("[CrawlResume] crawling %s again after a restart cut it off", store_id)
