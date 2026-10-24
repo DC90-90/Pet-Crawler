@@ -1408,6 +1408,9 @@ async def _resume_cut_off_crawls(delay_secs=150):
         return
     try:
         alive = await process_watch.alive_boot_ids(db)
+        freed = await job_control.free_dead(db, alive)
+        if freed:
+            logger.info("[CrawlResume] freed %d store locks left by stopped processes", freed)
         since = ledger.ksa_midnight_utc(ledger.ksa_day_str(datetime.now(timezone.utc)))
         cut = []
         async for a in db.crawl_attempts.find({"started_at": {"$gte": since}, "status": "running",
@@ -1417,12 +1420,25 @@ async def _resume_cut_off_crawls(delay_secs=150):
                 await db.crawl_attempts.update_one({"_id": a["_id"]}, {"$set": {"status": "cut_off_by_restart"}})
                 if a["store_id"] not in cut:
                     cut.append(a["store_id"])
+        deferred = []
         for store_id in cut:
             logger.info("[CrawlResume] crawling %s again after a restart cut it off", store_id)
             try:
-                await scheduled_crawl_job(store_id, trigger="resume")
+                result = await scheduled_crawl_job(store_id, trigger="resume")
+                if (result or {}).get("status") == "deferred":
+                    deferred.append(store_id)
             except Exception:
                 logger.exception("[CrawlResume] %s failed", store_id)
+        if deferred:
+            # Still locked (a live process holds it, or an owner of the old
+            # form): once more after any lease has had time to expire.
+            await asyncio.sleep(job_control.LEASE_TTL.total_seconds() + 30)
+            for store_id in deferred:
+                logger.info("[CrawlResume] %s was locked; trying again", store_id)
+                try:
+                    await scheduled_crawl_job(store_id, trigger="resume")
+                except Exception:
+                    logger.exception("[CrawlResume] %s failed", store_id)
     finally:
         await job_control.release(db, "crawl-resume", owner)
 

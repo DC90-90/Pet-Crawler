@@ -65,6 +65,28 @@ async def release(db, key, owner):
     await db.job_leases.delete_one({"_id": key, "owner": owner})
 
 
+def process_owner():
+    """A lease owner naming this process, so a lease left by a dead process
+    can be recognised after a restart (free_dead)."""
+    import process_watch
+    return f"{process_watch.BOOT_ID}:{uuid.uuid4().hex[:8]}"
+
+
+async def free_dead(db, alive_boot_ids, prefix="store:"):
+    """Delete `prefix` leases whose owner process stopped heartbeating. A
+    Republish kills the holder without release; its lease would otherwise
+    block the store for up to LEASE_TTL, and the post-restart crawl resume
+    runs sooner than that (Zarafa deferred, 23 Oct 2026)."""
+    import re
+    freed = 0
+    async for lease in db.job_leases.find({"_id": {"$regex": "^" + re.escape(prefix)}}, {"_id": 1, "owner": 1}):
+        m = re.match(r"^([0-9a-f]{12}):", str(lease.get("owner") or ""))
+        if m and m.group(1) not in alive_boot_ids:
+            res = await db.job_leases.delete_one({"_id": lease["_id"], "owner": lease["owner"]})
+            freed += res.deleted_count
+    return freed
+
+
 async def release_all(db):
     """Release every lease this process holds (graceful shutdown)."""
     for key, owner in list(_renewals):

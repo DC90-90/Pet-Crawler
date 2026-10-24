@@ -3650,7 +3650,7 @@ async def sync_own_store_prices(db, store=None, *, targeted_rows=None, observed_
     store = store or await db.stores.find_one({"is_own_store": True}, {"_id": 0})
     if not store:
         return {"status": "error", "error": "no_own_store_flagged"}
-    owner = str(uuid.uuid4())
+    owner = job_control.process_owner()
     if not await job_control.acquire(db, f"store:{store['id']}", owner):
         return {"status": "deferred", "error": "store_job_already_running"}
     try:
@@ -4348,7 +4348,7 @@ async def _crawl_store_waterfall_attempt(db, store):
     if store.get("is_own_store"):
         return await sync_own_store_prices(db, store)
     import job_control
-    owner = str(uuid.uuid4())
+    owner = job_control.process_owner()
     if not await job_control.acquire(db, f"store:{store['id']}", owner):
         return {"status": "deferred", "error": "store_job_already_running"}
     try:
