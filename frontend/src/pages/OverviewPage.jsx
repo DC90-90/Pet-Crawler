@@ -8,8 +8,8 @@
  * Before, the same revenue appeared on four cards with four different values.
  */
 import { useNavigate, Link } from "react-router-dom";
-import { useQueries } from "@tanstack/react-query";
-import { ArrowRight, Store as StoreIcon } from "lucide-react";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { ArrowRight, Store as StoreIcon, TrendingDown, TrendingUp, PackageX, Star, ShieldCheck } from "lucide-react";
 import api from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import { RequestError } from "@/components/RequestError";
@@ -26,6 +26,48 @@ function Kpi({ label, value, sub, to, testId }) {
     </div>
   );
   return to ? <Link to={to} className="block hover:opacity-90">{body}</Link> : body;
+}
+
+// One card per decision, each opening the list behind it (25 Oct 2026).
+function Decisions({ isRTL }) {
+  const q = useQuery({ queryKey: ["decisions"], queryFn: async () => (await api.get("/decisions", { timeout: 30000 })).data,
+    refetchInterval: (query) => (Object.values(query.state.data || {}).some((v) => v === null) ? 20000 : false) });
+  const d = q.data || {};
+  const cards = [];
+  const pending = isRTL ? "قيد التحضير…" : "being prepared…";
+  if ("pricing" in d) cards.push({ key: "lower", to: "/pricing?tab=recommendations&action=lower", icon: TrendingDown, tone: "#EF4444",
+    value: d.pricing?.lower, title: isRTL ? "أسعار أعلى من الأرخص" : "Prices above the cheapest",
+    sub: d.pricing ? (isRTL ? "اقتراح خفض السعر لمطابقة أرخص منافس متوفر" : "suggested cuts to match the cheapest in-stock seller") : pending });
+  if ("pricing" in d) cards.push({ key: "raise", to: "/pricing?tab=recommendations&action=raise", icon: TrendingUp, tone: "#10B981",
+    value: d.pricing?.raise, title: isRTL ? "أسعار يمكن رفعها" : "Prices you can raise",
+    sub: d.pricing ? (d.pricing.raise_profit_30d ? (isRTL ? `نحو +${fmt(d.pricing.raise_profit_30d)} ريال ربح في 30 يوماً مع بقائك الأرخص` : `about +${fmt(d.pricing.raise_profit_30d)} SAR profit in 30 days, still the cheapest`) : (isRTL ? "مع بقائك الأرخص" : "while staying the cheapest")) : pending });
+  if ("stock" in d) cards.push({ key: "stock", to: "/opportunities?tab=stock-planner", icon: PackageX, tone: "#F59E0B",
+    value: d.stock ? (d.stock.out || 0) + (d.stock.critical || 0) : null, title: isRTL ? "منتجات نفدت أو على وشك" : "Out of stock or about to run out",
+    sub: d.stock ? (isRTL ? `${fmt(d.stock.out)} نفد · ${fmt(d.stock.critical)} حرج · ${fmt(d.stock.reorder_products)} تحتاج إعادة طلب` : `${fmt(d.stock.out)} out · ${fmt(d.stock.critical)} critical · ${fmt(d.stock.reorder_products)} to reorder`) : pending });
+  if ("key_brands" in d) cards.push({ key: "brands", to: "/key-brands", icon: Star, tone: "#6AC1B5",
+    value: d.key_brands?.dearer, title: isRTL ? "منتجات العلامات الرئيسية سعري فيها أعلى" : "Key-brand items where I'm dearer",
+    sub: d.key_brands ? (isRTL ? `${fmt(d.key_brands.not_sold)} منتجاً من هذه العلامات لا أبيعه` : `${fmt(d.key_brands.not_sold)} items of these brands I don't sell`) : pending });
+  if ("matches" in d) cards.push({ key: "matches", to: "/data-quality", icon: ShieldCheck, tone: "#A1E4DB",
+    value: d.matches?.to_review, title: isRTL ? "مطابقات تحتاج قراراً" : "Product matches to check",
+    sub: d.matches ? (isRTL ? "نفس الباركود بحجم أو سعر مختلف" : "same barcode, different size or price") : pending });
+  if (!cards.length) return null;
+  return (
+    <section data-testid="overview-decisions">
+      <h2 className="text-white mb-3">{isRTL ? "قرارات اليوم" : "Decisions for today"}</h2>
+      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))" }}>
+        {cards.map((c) => (
+          <Link key={c.key} to={c.to} className="kpi-card block group" data-testid={`ov-decision-${c.key}`}>
+            <div className="flex items-center gap-2 text-sm font-medium text-white">
+              <c.icon className="w-4 h-4 shrink-0" style={{ color: c.tone }} />{c.title}
+            </div>
+            <p className="text-[28px] font-bold text-white mt-2 leading-none">{c.value == null ? "…" : fmt(c.value)}</p>
+            <p className="text-xs text-[#A1E4DB] mt-2">{c.sub}</p>
+            <p className="text-xs text-[#6AC1B5] mt-3 inline-flex items-center gap-1 group-hover:text-white">{isRTL ? "افتح القائمة" : "Open the list"}<ArrowRight className="w-3 h-3 rtl:rotate-180" /></p>
+          </Link>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 export default function OverviewPage() {
@@ -64,6 +106,9 @@ export default function OverviewPage() {
       </div>
       <DataFreshnessBanner />
       {failed && <RequestError id="overview-request" error={failed.error} onRetry={() => results.filter((r) => r.isError).forEach((r) => r.refetch())} />}
+
+      <Decisions isRTL={isRTL} />
+      <h2 className="text-white pt-2">{isRTL ? "متجري في السوق (آخر 30 يوماً)" : "My store in the market (last 30 days)"}</h2>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3" data-testid="overview-kpis">
         <Kpi testId="ov-kpi-revenue" label={isRTL ? "إيراداتي (30 يوماً)" : "My revenue (30 days)"}

@@ -62,6 +62,8 @@ def test_pages_stay_separate_and_unknown_calls_fail_closed():
 def test_shared_lookups_need_at_least_one_page():
     assert allowed(["key_brands"], "/api/stores/brands") and allowed(["alerts"], "/api/data-freshness/")
     assert not allowed([], "/api/stores/brands")
+    # The Overview's decision cards filter themselves by page (server.decisions).
+    assert allowed(["overview"], "/api/decisions") and not allowed([], "/api/decisions")
 
 
 def test_an_account_with_retired_keys_reaches_the_new_pages():

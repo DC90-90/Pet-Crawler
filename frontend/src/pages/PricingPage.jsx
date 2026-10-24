@@ -149,6 +149,18 @@ function PriceWars() {
   );
 }
 
+// What each tab answers, in one line (25 Oct 2026).
+const TAB_HELP = {
+  recommendations: ["A suggested price for each product, the competitors it is based on, and the effect on profit. Approve a price to send it to your store.",
+    "سعر مقترح لكل منتج، والمنافسون الذين بُني عليهم، وأثره على الربح. اعتمد السعر ليُرسل إلى متجرك."],
+  overpriced: ["Products where an in-stock competitor sells the same item cheaper than you.", "منتجات يبيعها منافس متوفر بسعر أقل منك."],
+  cheapest: ["Products where you are the cheapest seller, and by how much.", "منتجات أنت فيها الأرخص، وبكم."],
+  full: ["Every compared product: your price next to every competitor's price.", "كل منتج مقارن: سعرك بجانب سعر كل منافس."],
+  "price-wars": ["Products where sellers' prices differ the most right now.", "منتجات تختلف فيها أسعار البائعين أكثر من غيرها الآن."],
+  discounts: ["Competitors' current discounts: the price before and after, and since when.", "تخفيضات المنافسين الحالية: السعر قبل وبعد، ومنذ متى."],
+  promotions: ["When each store runs sales, how deep and for how long.", "متى يطلق كل متجر عروضه، وبأي عمق، ولكم يوماً."],
+};
+
 export default function PricingPage() {
   const { t, isRTL } = useI18n();
   const { user } = useAuth();
@@ -181,6 +193,7 @@ export default function PricingPage() {
           </button>
         ))}
       </div>
+      {TAB_HELP[tab] && <p className="text-sm text-[#A1E4DB] -mt-1" data-testid="pricing-tab-help">{TAB_HELP[tab][isRTL ? 1 : 0]}</p>}
       {tab === "recommendations" && <PriceRecommendations />}
       {tab === "overpriced" && <ScannerPage embedded />}
       {(tab === "cheapest" || tab === "full") && <ComparisonPanel view={tab === "full" ? "full" : "advantage"} />}

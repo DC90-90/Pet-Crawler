@@ -34,7 +34,8 @@ def effective_pages(pages):
 
 # Lookups every page uses (store logos and names, freshness, one product's
 # detail): open to any user who may see at least one page.
-SHARED = ("/api/stores/brands", "/api/comparison-stores", "/api/data-freshness", "/api/products/", "/api/jobs/")
+SHARED = ("/api/stores/brands", "/api/comparison-stores", "/api/data-freshness", "/api/products/", "/api/jobs/",
+          "/api/decisions")     # filters itself by page
 
 # First matching prefix decides; specific prefixes come before general ones.
 READ_RULES = (

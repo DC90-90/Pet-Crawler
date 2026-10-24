@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { SectionTabs } from "@/components/SectionTabs";
 import { useNavigate } from "react-router-dom";
 import api, { API_BASE } from "@/lib/api";
 import { toast } from "sonner";
-import { CATEGORY_LABELS } from "@/lib/i18n";
+import { CATEGORY_LABELS, useI18n } from "@/lib/i18n";
 import { PieChart, Download, RefreshCw, Filter, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ShareOverview from "@/components/marketShare/ShareOverview";
@@ -27,6 +28,7 @@ const TABS = [
 const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c);
 
 export default function MarketSharePage() {
+  const { isRTL } = useI18n();
   const scope = useComparisonScope();
   const navigate = useNavigate();
   const [optionsError, setOptionsError] = useState(false);
@@ -98,13 +100,15 @@ export default function MarketSharePage() {
 
   return (
     <div className="p-6 space-y-5" data-testid="market-share-page">
+      <SectionTabs section="market" />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-            <PieChart className="w-5 h-5 text-[#1E988E]" /> Market Share
+            <PieChart className="w-5 h-5 text-[#1E988E]" /> {isRTL ? "الحصة السوقية" : "Market share"}
           </h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">
-            Tracked-store coverage · order totals where complete · inventory proxies labelled separately
+            {isRTL ? "حصتك من المبيعات على المنتجات التي تبيعها أنت والمنافسون. مبيعات المتاجر مقدّرة من تغيّر المخزون، والأيام غير القابلة للقياس مذكورة."
+                   : "Your share of sales on the products you and your competitors sell. Store sales are estimated from stock changes; days that can't be measured are shown as such."}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full" data-testid="ms-header-controls">

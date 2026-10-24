@@ -4337,6 +4337,43 @@ async def key_brands_audit_latest(user=Depends(get_user)):
     return await key_brands.latest_audit(db)
 
 
+@router.get("/decisions")
+async def decisions(user=Depends(get_user)):
+    """The Overview's "decisions for today": one count per action, each from
+    the page that lists it (same cached answer), and only for pages the user
+    may open. A count still being computed comes back as null rather than
+    holding the Overview (25 Oct 2026)."""
+    pages = set(ALL_PAGES if user.get("role") == "super_admin" else effective_pages(user.get("allowed_pages")))
+
+    async def soon(make, secs=8):
+        try:
+            return await asyncio.wait_for(asyncio.shield(asyncio.ensure_future(make())), secs)
+        except Exception:   # noqa: BLE001 — slow or failed: the card says "being prepared"
+            return None
+    out = {}
+    if "pricing" in pages:
+        got = await soon(_pricing_recs)
+        if got:
+            summary = got[1]
+            out["pricing"] = {"lower": summary["by_action"].get("lower", 0), "raise": summary["by_action"].get("raise", 0),
+                              "raise_profit_30d": summary.get("raise_profit_30d"), "check": summary["by_action"].get("check_identity", 0)
+                              + summary["by_action"].get("check_cost", 0)}
+        else:
+            out["pricing"] = None
+    if "opportunities" in pages:
+        got = await soon(lambda: stock_planner_view(days=30, lead_days=7, cover_days=30, user=user))
+        out["stock"] = got and {k: got["summary"].get(k) for k in ("out", "critical", "low", "reorder_products", "lost_revenue_est")}
+    if "key_brands" in pages:
+        got = await soon(lambda: key_brands_view(user=user))
+        out["key_brands"] = got and {"dearer": sum(b["me_dearer"] for b in got["brands"]),
+                                     "not_sold": sum(b["not_sold_by_me"] for b in got["brands"]),
+                                     "items": sum(b["items"] for b in got["brands"])}
+    if "data_quality" in pages:
+        got = await soon(lambda: data_quality_matches(user=user))
+        out["matches"] = got and {"to_review": got.get("total", len(got.get("rows") or []))}
+    return out
+
+
 @router.get("/stock/planner")
 @api_cache.stored(1800, lambda: db)
 async def stock_planner_view(days: int = Query(30, ge=7, le=60), lead_days: int = Query(7, ge=1, le=60),

@@ -46,7 +46,7 @@ function TierBadge({ tier }) {
 export default function StoreRegistryPage() {
   const { canEdit, canRefresh, canSchedule } = useReleaseActions();
   const [error, setError] = useState(null);
-  const { t } = useI18n();
+  const { t, isRTL } = useI18n();
   const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -157,7 +157,7 @@ export default function StoreRegistryPage() {
       <div className="flex flex-wrap gap-3 items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_competitors")}</h1>
-          <p className="text-sm text-[#A1E4DB] mt-0.5">Manage tracked competitor stores</p>
+          <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "المتاجر التي يتابعها دليل: ما تبيعه، وآخر قراءة لكل متجر" : "The stores Daleel tracks: what they sell and when each was last read"}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant={crawlPaused ? "destructive" : "outline"} size="sm"

@@ -7,6 +7,7 @@
  *   Restock opportunities    → /insights/restock-opportunities
  */
 import { useEffect, useMemo, useState } from "react";
+import { SectionTabs } from "@/components/SectionTabs";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { PackageSearch, TrendingUp, PackageCheck, Boxes } from "lucide-react";
@@ -119,6 +120,7 @@ export default function OpportunitiesPage() {
 
   return (
     <div className="p-6 space-y-5" data-testid="opportunities-page">
+      <SectionTabs section="market" />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">{t("nav_opportunities")}</h1>

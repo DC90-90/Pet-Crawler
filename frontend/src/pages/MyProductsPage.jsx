@@ -245,7 +245,7 @@ export default function MyProductsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-white">{t("nav_products")}</h1>
-          <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "السوق السعودي، مفكّك" : "Saudi Market, Decoded"}</p>
+          <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "كل منتج في متجرك: سعره، مخزونه، مبيعاته، وموقعه مقابل المنافسين" : "Every product in your store: its price, stock, sales and where it stands against competitors"}</p>
         </div>
         <div className="flex items-center gap-2">
           <button

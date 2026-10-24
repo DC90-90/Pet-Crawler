@@ -4,6 +4,7 @@
  * items the own store does not sell yet.
  */
 import { Fragment, useMemo, useState } from "react";
+import { SectionTabs } from "@/components/SectionTabs";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { Star, ExternalLink, ImageOff, Download, Search, ShieldCheck, ChevronDown } from "lucide-react";
@@ -133,6 +134,7 @@ export default function KeyBrandsPage() {
 
   return (
     <div className="p-6 space-y-5" data-testid="key-brands-page">
+      <SectionTabs section="market" />
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white inline-flex items-center gap-2"><Star className="w-6 h-6 text-[#1E988E]" />{isRTL ? "العلامات الرئيسية" : "Key brands"}</h1>

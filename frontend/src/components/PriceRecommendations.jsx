@@ -5,6 +5,7 @@
  */
 import { Fragment, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowRight, Check, Settings2, ImageOff, History, ChevronDown, ExternalLink, Star } from "lucide-react";
 import api from "@/lib/api";
@@ -132,7 +133,8 @@ export default function PriceRecommendations() {
   const { user } = useAuth();
   const qc = useQueryClient();
   const canApply = ["super_admin", "admin"].includes(user?.role);
-  const [action, setAction] = useState("lower");
+  const [params] = useSearchParams();
+  const [action, setAction] = useState(() => params.get("action") || "lower");
   const [shown, setShown] = useState(50);
   const [confirm, setConfirm] = useState(null);
   const [sent, setSent] = useState({});
