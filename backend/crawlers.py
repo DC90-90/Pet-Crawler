@@ -2853,7 +2853,9 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
     # Phase 0 — iter75 cheap path: store id from the storefront HTML plus the
     # FULL category tree from the storefront API. No browser needed, and far
     # more complete than scraping a rendered menu.
-    store_identifier = await _salla_store_identifier_from_html(store["domain"])
+    # The id saved by an earlier crawl stands in when the homepage does not
+    # show it (it does not change for a store).
+    store_identifier = await _salla_store_identifier_from_html(store["domain"]) or store.get("salla_store_identifier")
     if store_identifier:
         cat_ids = await _salla_categories_from_api(store_identifier, store["domain"])
         logger.info("[StorefrontCategories] %s: HTML+API → store_identifier=%s categories=%d",
@@ -2864,7 +2866,11 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
 
     # Phase 1 — Playwright: capture store-identifier + discover all categories (incl. nested)
     try:
-        if store_identifier and len(cat_ids) >= 3:
+        # With the store id, the latest walk below reads the whole catalogue
+        # whatever the category count: a browser adds nothing. Catshoop (2
+        # categories) failed on 26 Oct 2026 because the production browser
+        # would not start, although its id was known.
+        if store_identifier:
             raise _CheapPathIsEnough
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
@@ -4293,6 +4299,9 @@ async def _sync_own_store_prices_locked(db, store=None, *, targeted_rows=None, o
 RUNNING_CRAWLS = {}   # attempt id -> store name, this process (for stall diagnostics)
 
 
+CRAWL_TIMEOUT_SECS = 3.5 * 3600
+
+
 async def crawl_store_waterfall(db, store, trigger="unspecified"):
     """Every attempt is recorded in crawl_attempts the moment it starts and
     updated when it ends, whatever the outcome. Crawl logs are written only
@@ -4326,7 +4335,7 @@ async def crawl_store_waterfall(db, store, trigger="unspecified"):
         await asyncio.shield(finish("cancelled"))
         raise
     except asyncio.TimeoutError:
-        await finish("timed_out", error="exceeded 2.5 h")
+        await finish("timed_out", error=f"exceeded {CRAWL_TIMEOUT_SECS / 3600:g} h")
         raise
     except Exception as exc:
         await finish("failed", error=f"{type(exc).__name__}: {str(exc)[:300]}")
@@ -4349,10 +4358,12 @@ async def _crawl_store_waterfall_attempt(db, store):
         return await sync_own_store_prices(db, store)
     import job_control
     owner = job_control.process_owner()
-    if not await job_control.acquire(db, f"store:{store['id']}", owner):
+    if not await job_control.acquire(db, f"store:{store['id']}", owner, hours=4):
         return {"status": "deferred", "error": "store_job_already_running"}
     try:
-        return await asyncio.wait_for(_crawl_store_waterfall_locked(db, store), timeout=2.5*3600)
+        # CutePets' full crawl takes ~2 h and ran past the old 2.5 h limit on
+        # 25 Oct 2026 (nothing saved that day) once the key-brand sweep ran.
+        return await asyncio.wait_for(_crawl_store_waterfall_locked(db, store), timeout=CRAWL_TIMEOUT_SECS)
     finally:
         await job_control.release(db, f"store:{store['id']}", owner)
 
