@@ -13,6 +13,7 @@ import random
 import logging
 import itertools
 import httpx
+import browser_launch
 from datetime import datetime, timezone, timedelta
 
 # iter61 — one definition of barcode canonicalisation, shared with matcher.py.
@@ -1687,7 +1688,7 @@ async def crawl_tier2_xhr(db, store):
                 user, pwd, host, port = creds
                 launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
                 logger.info(f"[Proxy] store={store.get('domain')} tier=2 using proxy_user={user}")
-            browser = await pw.chromium.launch(**launch_kwargs)
+            browser = await browser_launch.launch(pw, **launch_kwargs)
             ctx = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="ar-SA",
@@ -1907,7 +1908,7 @@ async def crawl_tier3_html(db, store):
                 user, pwd, host, port = creds
                 launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
                 logger.info(f"[Proxy] store={store.get('domain')} tier=3 using proxy_user={user}")
-            browser = await pw.chromium.launch(**launch_kwargs)
+            browser = await browser_launch.launch(pw, **launch_kwargs)
             ctx = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36", locale="ar-SA")
             page = await ctx.new_page()
             for path in STORE_PAGES:
@@ -2475,7 +2476,7 @@ async def _salla_dom_barcode_supplement(store, items, cap=SALLA_DOM_BARCODE_CAP,
             if creds:
                 user, pwd, host, port = creds
                 launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
-            browser = await pw.chromium.launch(**launch_kwargs)
+            browser = await browser_launch.launch(pw, **launch_kwargs)
             try:
                 ctx = await browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -2906,7 +2907,7 @@ async def crawl_salla_storefront_categories(db, store, target_min_products=300, 
                 launch_kwargs["proxy"] = playwright_proxy_config(user, pwd, host, port)
                 proxy_user_for_httpx = (user, pwd, host, port)
                 logger.info(f"[Proxy] store={store.get('domain')} tier=storefront_categories using proxy_user={user}")
-            browser = await pw.chromium.launch(**launch_kwargs)
+            browser = await browser_launch.launch(pw, **launch_kwargs)
             ctx = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="ar-SA",
@@ -4494,7 +4495,7 @@ async def crawl_tier4_authenticated(db, store, cookies):
     logger.info(f"[T4 Crawl] Starting authenticated crawl for {store_name}")
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+        browser = await browser_launch.launch(pw, headless=True, args=["--no-sandbox", "--disable-gpu"])
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             locale="ar-SA",

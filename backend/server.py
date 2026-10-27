@@ -2836,7 +2836,7 @@ async def _run_tier4_login(store_id: str):
     try:
         from playwright.async_api import async_playwright
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-gpu"])
+            browser = await __import__("browser_launch").launch(pw, headless=True, args=["--no-sandbox", "--disable-gpu"])
             context = await browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 locale="ar-SA",
@@ -4329,6 +4329,13 @@ async def key_brands_audit_start(user=Depends(get_user)):
             await job_control.release(db, "key-brand-audit", owner)
     asyncio.create_task(_run())
     return {"started": True}
+
+
+@router.get("/admin/browser-check")
+async def admin_browser_check(user=Depends(require_super_admin)):
+    """Try every headless browser on this server and report each outcome."""
+    import browser_launch
+    return await browser_launch.check()
 
 
 @router.get("/brands/key/audit")
