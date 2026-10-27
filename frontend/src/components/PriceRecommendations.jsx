@@ -4,6 +4,7 @@
  * minimum margin; an admin approves a price and Daleel sends it to Zid.
  */
 import { Fragment, useMemo, useState } from "react";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -172,6 +173,9 @@ export default function PriceRecommendations() {
           </button>
         ))}
       </div>
+      {/* "Sold 30d" and "Profit 30d" below cover this period (27 Oct 2026). */}
+      <SalesPeriod days={30} label={isRTL ? "مبيع 30 يوماً وأثر الربح يغطيان:" : "Sold 30d and Profit 30d cover:"}
+        basis={isRTL ? "مبيعاتك من دفتر متجرك اليومي" : "your sales from your store's daily ledger"} />
       <p className="text-[11px] text-[#A1E4DB]">
         {action === "raise" && (isRTL ? `رفع هذه الأسعار يضيف نحو ${fmt(summary.raise_profit_30d, 0)} ريال ربحاً خلال 30 يوماً بنفس حجم المبيعات، مع بقائك الأرخص. ` : `Raising these adds about ${fmt(summary.raise_profit_30d, 0)} SAR profit over 30 days at the same sales, while you stay the cheapest. `)}
         {summary.without_cost > 0 && (isRTL ? `${summary.without_cost} منتجاً بلا تكلفة: الهامش لا يُحسب لها — ارفع ملف التكاليف من صفحة الاستيراد.` : `${summary.without_cost} products have no cost, so their margin can't be checked — upload costs on the Import page.`)}

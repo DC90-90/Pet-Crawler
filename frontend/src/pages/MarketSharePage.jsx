@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import { SectionTabs } from "@/components/SectionTabs";
 import { useNavigate } from "react-router-dom";
 import api, { API_BASE } from "@/lib/api";
@@ -225,6 +226,9 @@ export default function MarketSharePage() {
           </div>
         </div>
       )}
+
+      <SalesPeriod days={days} basis={includeToday ? (isRTL ? "تشمل ساعات اليوم الجارية" : "today's hours included, still changing")
+        : (isRTL ? "مبيعات كل متجر مقدّرة من تغيّر المخزون بين القراءات" : "each store's sales estimated from stock changes between crawls")} />
 
       {tab === "overview" && (
         <ShareOverview days={days} includeToday={includeToday} filters={filters}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import api from "@/lib/api";
 import { RequestError } from "@/components/RequestError";
 import { HistoricalQuantity } from "@/components/HistoricalQuantity";
@@ -22,6 +23,7 @@ const packReason = (x) => {
 
 export default function ProductBreakdown({ productKey, days, includeToday, open, onClose, scopeParams }) {
   const [row, setRow] = useState(null);
+  const [win, setWin] = useState(null);
   const [err, setErr] = useState(null);
   const [retry, setRetry] = useState(0);
 
@@ -30,7 +32,7 @@ export default function ProductBreakdown({ productKey, days, includeToday, open,
     setRow(null); setErr(null);
     let live = true;
     api.get(`/market-share/product/${encodeURIComponent(productKey)}`, { params: { days, include_today: includeToday, ...scopeParams } })
-      .then((r) => live && setRow(r.data.product))
+      .then((r) => { if (live) { setRow(r.data.product); setWin(r.data.window); } })
       .catch((e) => live && setErr(e));
     return () => { live = false; };
   }, [productKey, days, open, includeToday, scopeParams, retry]);
@@ -121,9 +123,13 @@ export default function ProductBreakdown({ productKey, days, includeToday, open,
             )}
 
             <div>
-              <h4 className="text-xs font-semibold text-white mb-2">
+              <h4 className="text-xs font-semibold text-white mb-1">
                 Every seller of this product ({sellers.length})
               </h4>
+              {/* Units, movement and value below cover this period (27 Oct 2026). */}
+              <SalesPeriod className="mb-2" from={win?.date_from} to={win?.date_to} days={win?.days || days}
+                label="Units and value cover:"
+                basis={includeToday ? "today's hours included, still changing" : "estimated from stock changes between crawls"} />
               <div className="overflow-x-auto rounded-md border border-white/10">
                 <Table>
                   <TableHeader>

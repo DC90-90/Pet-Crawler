@@ -4,6 +4,7 @@
  * including what measured competitors sold of it while it was out at mine.
  */
 import { useMemo, useState } from "react";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import { useQuery } from "@tanstack/react-query";
 import { ImageOff } from "lucide-react";
 import api from "@/lib/api";
@@ -41,6 +42,8 @@ export default function StockPlanner() {
         {isRTL ? "كم يكفي مخزونك، ماذا تعيد طلبه، وكم كلّفك نفاد المخزون — من دفتر متجرك اليومي لآخر 30 يوماً مكتملة."
           : "How long your stock lasts, what to reorder, and what running out cost — from your store's daily ledger, last 30 complete days."}
       </p>
+      <SalesPeriod from={q.data?.window?.from} to={q.data?.window?.to} days={q.data?.window?.days || 30}
+        basis={isRTL ? "سرعة بيعك من دفتر متجرك اليومي" : "your sales rate from your store's daily ledger"} />
       <div className="flex flex-wrap items-center gap-4 text-xs">
         <label className="text-[#A1E4DB] inline-flex items-center gap-2">{isRTL ? "مدة التوريد (أيام)" : "Supplier lead time (days)"}
           <input type="number" min={1} max={60} value={lead} onChange={(e) => setLead(Math.max(1, Number(e.target.value) || 7))} className="w-16 h-7 px-2 rounded bg-[#0A2728] border border-[#13625F] text-white" />

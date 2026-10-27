@@ -8,6 +8,7 @@
  * Before, the same revenue appeared on four cards with four different values.
  */
 import { useNavigate, Link } from "react-router-dom";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { ArrowRight, Store as StoreIcon, TrendingDown, TrendingUp, PackageX, Star, ShieldCheck } from "lucide-react";
 import api from "@/lib/api";
@@ -109,6 +110,8 @@ export default function OverviewPage() {
 
       <Decisions isRTL={isRTL} />
       <h2 className="text-white pt-2">{isRTL ? "متجري في السوق (آخر 30 يوماً)" : "My store in the market (last 30 days)"}</h2>
+      <SalesPeriod days={30} className="-mt-3" basis={isRTL ? "الإيرادات مقدّرة من تغيّر المخزون أو عدّاد المبيعات العام؛ عدد الأيام المقاسة لكل متجر في الجدول"
+        : "revenue estimated from stock changes or public sold counters; days measured per store are in the table"} />
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3" data-testid="overview-kpis">
         <Kpi testId="ov-kpi-revenue" label={isRTL ? "إيراداتي (30 يوماً)" : "My revenue (30 days)"}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import { useParams, useNavigate } from "react-router-dom";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
@@ -52,6 +53,8 @@ export default function CompetitorProfilePage() {
           </div>
         </div>
       </div>
+
+      <SalesPeriod days={30} basis={kpis.revenue_basis === "orders_exact" ? "revenue from actual orders" : "revenue estimated from stock changes or the public sold counter"} />
 
       {/* KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">

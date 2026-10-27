@@ -7,6 +7,7 @@
  *   Restock opportunities    → /insights/restock-opportunities
  */
 import { useEffect, useMemo, useState } from "react";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import { SectionTabs } from "@/components/SectionTabs";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -45,6 +46,7 @@ function BestSellers({ days }) {
         {isRTL ? `المنتجات الأكثر مبيعاً في المتاجر المتتبعة خلال آخر ${days} يوماً (لكل متجر على حدة). المبيعات تقديرية من حركة المخزون أو عدّاد المبيعات.`
           : `Products with the most observed sales in tracked stores over the last ${days} days, per store. Sales are estimated from stock movement or the public sold counter.`}
       </p>
+      <SalesPeriod days={days} />
       {all.length > 0 && <StoreTabs stores={storesOf(all)} value={store} onChange={setStore} prefix="opps-best-store" />}
       {all.length > 0 && <FacetTabs counts={facetCounts(inStore)} animal={animal} ptype={ptype} onAnimal={setAnimal} onType={setPtype} prefix="opps-best" />}
       {q.isLoading ? <p className="text-xs text-[#A1E4DB]">{t("loading")}</p> : rows.length === 0 ? <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p> : (

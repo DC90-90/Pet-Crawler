@@ -9,6 +9,7 @@
  * is marked "not measurable" and no share is shown while one is missing.
  */
 import { useEffect, useMemo, useState } from "react";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import { toast } from "sonner";
 import { useI18n } from "@/lib/i18n";
 import api from "@/lib/api";
@@ -195,6 +196,12 @@ export default function ProductDetailPanel({ sku, onClose }) {
                 </button>
               ))}
             </div>
+
+            {view.market && (
+              <SalesPeriod from={view.market.window?.from} to={view.market.window?.to} days={view.market.days || days}
+                basis={view.market.sellers_live ? (isRTL ? `مبيعات ${view.market.sellers_measured} من ${view.market.sellers_live} بائعين قابلة للقياس، مقدّرة من تغيّر المخزون`
+                  : `${view.market.sellers_measured} of ${view.market.sellers_live} sellers' sales measurable, estimated from stock changes`) : null} />
+            )}
 
             {/* Position */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2" data-testid="product-detail-position">

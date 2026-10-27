@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { SalesPeriod } from "@/components/SalesPeriod";
 import { HistoricalQuantity } from "@/components/HistoricalQuantity";
 import { ObservedAt } from "@/components/ObservedAt";
 import { useRelease } from "@/contexts/ReleaseContext";
@@ -361,6 +362,12 @@ export default function MyProductsPage() {
           </SelectContent>
         </Select>
       </div>
+
+      {/* The period every sales figure below covers (client request, 27 Oct 2026). */}
+      <SalesPeriod from={kpis.sales_window?.from} to={kpis.sales_window?.to} days={onDate ? 1 : days}
+        measured={kpis.sales_days_measured} expected={kpis.sales_days_expected}
+        basis={kpis.my_revenue_source === "zid_orders" ? (isRTL ? "مبيعاتي من طلبات زد الفعلية" : "my sales from actual Zid orders")
+          : (isRTL ? "المبيعات مقدّرة من تغيّر المخزون اليومي" : "sales estimated from day-to-day stock changes")} />
 
       {/* Table */}
       <div className="glass-card overflow-hidden">
