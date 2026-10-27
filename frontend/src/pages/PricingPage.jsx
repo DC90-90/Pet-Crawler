@@ -174,7 +174,7 @@ export default function PricingPage() {
     { id: "price-wars", label: isRTL ? "حروب الأسعار" : "Price wars", icon: Swords, show: intel },
     { id: "discounts", label: isRTL ? "تخفيضات المنافسين" : "Competitor discounts", icon: Percent, show: intel },
     { id: "promotions", label: isRTL ? "تقويم العروض" : "Promotions calendar", icon: CalendarDays, show: intel },
-  ].filter((x) => x.show), [user, intel, isRTL]);
+  ].filter((x) => x.show), [intel, isRTL]);
   const tab = tabs.some((x) => x.id === params.get("tab")) ? params.get("tab") : tabs[0]?.id;
 
   return (

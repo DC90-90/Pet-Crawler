@@ -12269,6 +12269,8 @@ async def market_share_my_products(days: int = Query(30),
                                    quality: Optional[str] = Query(None, description="high|medium|low"),
                                    contested: bool = Query(False, description="Only products another tracked seller's sales can be compared against"),
                                    sort: str = Query("market_revenue_desc"),
+                                   colf: Optional[str] = Query(None, description="Per-column filters, JSON (table_query)"),
+                                   sort_by: Optional[str] = Query(None), sort_dir: str = Query("desc"),
                                    include_today: bool = Query(False),
                                    limit: int = Query(100, ge=1, le=500),
                                    offset: int = Query(0, ge=0),
@@ -12278,7 +12280,9 @@ async def market_share_my_products(days: int = Query(30),
     rows = _ms_filter(ds.get("my_products") or [], search=search, category=category,
                       brand=brand, store_id=store_id, catalog=catalog,
                       min_confidence=min_confidence, quality=quality, contested=contested)
+    import table_query
     rows = sorted(rows, key=_MS_SORTS.get(sort, _MS_SORTS["market_revenue_desc"]))
+    rows = table_query.apply(rows, colf, sort_by, sort_dir)
     return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "total": len(rows),
             "rows": rows[offset:offset + limit],
             "totals": {
@@ -12317,6 +12321,8 @@ async def market_share_missing(days: int = Query(30),
                                animal: Optional[str] = Query(None, description="Tab: cat|dog|bird|fish|small_pet|other"),
                                ptype: Optional[str] = Query(None, description="Tab: dry_food|wet_food|litter|treats|...|other"),
                                sort: str = Query("opportunity_desc"),
+                               colf: Optional[str] = Query(None, description="Per-column filters, JSON (table_query)"),
+                               sort_by: Optional[str] = Query(None), sort_dir: str = Query("desc"),
                                include_today: bool = Query(False),
                                limit: int = Query(100, ge=1, le=500),
                                offset: int = Query(0, ge=0),
@@ -12331,7 +12337,9 @@ async def market_share_missing(days: int = Query(30),
     facets = {"animal": category_map.facet_counts(category_map.facet_filter(rows, ptype=ptype))["animal"],
               "type": category_map.facet_counts(category_map.facet_filter(rows, animal=animal))["type"]}
     rows = category_map.facet_filter(rows, animal, ptype)
+    import table_query
     rows = sorted(rows, key=_MS_SORTS.get(sort, _MS_SORTS["opportunity_desc"]))
+    rows = table_query.apply(rows, colf, sort_by, sort_dir)
     return {"window": ds.get("window"), "comparison_scope": ds.get("comparison_scope"), "total": len(rows),
             "facets": facets,
             "total_untruncated": ds.get("missing_products_total"),

@@ -6,7 +6,7 @@
  *   Market best sellers      → /insights/top-sellers
  *   Restock opportunities    → /insights/restock-opportunities
  */
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { SalesPeriod } from "@/components/SalesPeriod";
 import { SectionTabs } from "@/components/SectionTabs";
 import { useSearchParams } from "react-router-dom";
@@ -25,20 +25,52 @@ import ProductBreakdown from "@/components/marketShare/ProductBreakdown";
 import { FacetTabs, StoreTabs, facetCounts, facetMatch, storesOf } from "@/components/MarketTabs";
 import { StoreLogo } from "@/components/StoreLogo";
 import StockPlanner from "@/components/StockPlanner";
+import DataTable from "@/components/DataTable";
 
 const RANGES = [7, 14, 30, 90];
+
+// Every field a best-seller row carries (27 Oct 2026 — filter on every column).
+function bestColumns(isRTL) {
+  return [
+    { id: "rank", label: "#", type: "number", width: 60, align: "end" },
+    { id: "name", label: isRTL ? "المنتج" : "Product", type: "text", width: 300, always: true, get: (s) => [s.name_ar, s.name_en],
+      render: (s) => (
+        <div className="flex items-start gap-2">
+          <div className="w-10 h-10 shrink-0 rounded bg-white overflow-hidden flex items-center justify-center">
+            {s.image_url ? <img src={s.image_url} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : null}
+          </div>
+          <div className="min-w-0"><p className="text-white inline-flex items-center gap-1.5"><MineBadge sku={s.sku} />{s.name_ar || s.name_en}</p>
+            {s.name_en && s.name_ar && s.name_en !== s.name_ar && <p className="text-xs text-[#A1E4DB]">{s.name_en}</p>}</div>
+        </div>) },
+    { id: "store_name", label: isRTL ? "المتجر" : "Store", type: "text", width: 140,
+      render: (s) => <span className="inline-flex items-center gap-1.5"><StoreLogo storeId={s.store_id} name={s.store_name} size={14} />{s.store_name}</span> },
+    { id: "category", label: isRTL ? "الفئة" : "Category", type: "text", width: 120 },
+    { id: "sku", label: "SKU", type: "text", width: 130, render: (s) => <SkuLine sku={s.sku} barcode={s.barcode} /> },
+    { id: "units", label: isRTL ? "الوحدات المباعة (تقدير)" : "Units sold (est.)", type: "number", width: 110, align: "end",
+      render: (s) => (s.units ?? 0).toLocaleString() },
+    { id: "revenue_est", label: isRTL ? "الإيراد (تقدير، ريال)" : "Revenue (est., SAR)", type: "number", width: 120, align: "end",
+      render: (s) => (s.revenue_est ?? 0).toLocaleString() },
+    { id: "avg_price", label: isRTL ? "متوسط السعر (ريال)" : "Average price (SAR)", type: "number", width: 110, align: "end" },
+    { id: "price", label: isRTL ? "السعر الحالي (ريال)" : "Current price (SAR)", type: "number", width: 110, align: "end", hidden: true },
+    { id: "velocity", label: isRTL ? "وحدات في اليوم" : "Units per day", type: "number", width: 100, align: "end", hidden: true },
+    { id: "num_sellers", label: isRTL ? "عدد البائعين" : "Sellers", type: "number", width: 90, align: "end" },
+    { id: "basis", label: isRTL ? "المصدر" : "Basis", type: "text", width: 140, hidden: true },
+    { id: "barcode", label: isRTL ? "الباركود" : "Barcode", type: "text", width: 140, hidden: true },
+  ];
+}
 
 function BestSellers({ days }) {
   const { t, isRTL } = useI18n();
   const [store, setStore] = useState("all");
   const [animal, setAnimal] = useState("all");
   const [ptype, setPtype] = useState("all");
-  const [shown, setShown] = useState(50);
   const q = useQuery({ queryKey: ["opps", "top-sellers", days], queryFn: async () => (await api.get("/insights/top-sellers", { params: { days } })).data });
   const all = useMemo(() => q.data || [], [q.data]);
   const inStore = useMemo(() => all.filter((r) => store === "all" || r.store_id === store), [all, store]);
   const rows = useMemo(() => inStore.filter((r) => facetMatch(r, animal, ptype)), [inStore, animal, ptype]);
-  useEffect(() => { setShown(50); }, [store, animal, ptype, days]);
+  // Rank by units in the current selection, so the rank column stays meaningful when re-sorted.
+  const ranked = useMemo(() => [...rows].sort((a, b) => (b.units_sold ?? b.qty_sold_est ?? 0) - (a.units_sold ?? a.qty_sold_est ?? 0))
+    .map((r, i) => ({ ...r, rank: i + 1, units: r.units_sold ?? r.qty_sold_est })), [rows]);
   if (q.isError) return <RequestError id="best-sellers-request" error={q.error} onRetry={() => q.refetch()} />;
   return (
     <div className="glass-card rounded-md p-5 space-y-3" data-testid="opps-best-sellers">
@@ -49,31 +81,9 @@ function BestSellers({ days }) {
       <SalesPeriod days={days} />
       {all.length > 0 && <StoreTabs stores={storesOf(all)} value={store} onChange={setStore} prefix="opps-best-store" />}
       {all.length > 0 && <FacetTabs counts={facetCounts(inStore)} animal={animal} ptype={ptype} onAnimal={setAnimal} onType={setPtype} prefix="opps-best" />}
-      {q.isLoading ? <p className="text-xs text-[#A1E4DB]">{t("loading")}</p> : rows.length === 0 ? <p className="text-xs text-[#A1E4DB]">{t("no_data")}</p> : (
-        <div className="divide-y divide-white/5">
-          {rows.slice(0, shown).map((s, i) => (
-            <div key={`${s.offer_id || s.sku}-${s.store_id || i}`} className="flex items-center gap-3 py-2" data-testid={`opps-best-${i}`}>
-              <span className={`w-6 h-6 shrink-0 rounded text-[10px] font-bold flex items-center justify-center ${i < 3 ? "bg-[#1E988E] text-[#090E1C]" : "bg-white/5 text-[#A1E4DB]"}`}>{i + 1}</span>
-              <div className="w-10 h-10 shrink-0 rounded bg-white overflow-hidden flex items-center justify-center">
-                {s.image_url ? <img src={s.image_url} alt="" loading="lazy" className="max-w-full max-h-full object-contain" /> : null}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-xs font-medium text-white truncate inline-flex items-center gap-1.5"><MineBadge sku={s.sku} />{s.name_ar || s.name_en}</p>
-                <SkuLine sku={s.sku} barcode={s.barcode} />
-                {s.store_name && <p className="text-[10px] text-[#A1E4DB] inline-flex items-center gap-1"><StoreLogo storeId={s.store_id} name={s.store_name} size={12} />{s.store_name}{s.avg_price != null && ` · ${s.avg_price} SAR`}</p>}
-              </div>
-              <div className="text-end shrink-0">
-                <p className="text-xs font-bold text-white">{(s.units_sold ?? s.qty_sold_est ?? 0).toLocaleString()} {isRTL ? "وحدة" : "units"}</p>
-                <p className="text-[10px] text-[#A1E4DB]">{(s.revenue_est ?? 0).toLocaleString()} SAR</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {rows.length > shown && (
-        <button onClick={() => setShown((n) => n + 50)} className="text-xs text-[#6AC1B5] hover:text-white" data-testid="opps-best-more">
-          {isRTL ? `عرض المزيد (${rows.length - shown})` : `Show more (${rows.length - shown})`}
-        </button>
+      {q.isLoading ? <p className="text-xs text-[#A1E4DB]">{t("loading")}</p> : (
+        <DataTable columns={bestColumns(isRTL)} rows={ranked} storageKey="opps-best-sellers" exportName="daleel-market-best-sellers"
+          rowKey={(s) => `${s.offer_id || s.sku}-${s.store_id}`} initialSort={{ id: "rank", dir: "asc" }} />
       )}
     </div>
   );
@@ -116,7 +126,7 @@ export default function OpportunitiesPage() {
     { id: "best-sellers", label: isRTL ? "الأكثر مبيعاً في السوق" : "Market best sellers", icon: TrendingUp, show: intel },
     { id: "restock", label: isRTL ? "فرص إعادة التخزين" : "Restock opportunities", icon: PackageCheck, show: intel },
     { id: "stock-planner", label: isRTL ? "مخطط مخزوني" : "My stock planner", icon: Boxes, show: intel },
-  ].filter((x) => x.show), [user, intel, isRTL]);
+  ].filter((x) => x.show), [intel, isRTL]);
   const tab = tabs.some((x) => x.id === params.get("tab")) ? params.get("tab") : tabs[0]?.id;
   const filters = useMemo(() => ({ ...scope.params }), [scope.params]);
 
