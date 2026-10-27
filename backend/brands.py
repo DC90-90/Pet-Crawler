@@ -71,16 +71,23 @@ async def refresh(db):
 
 def install(by_code, names):
     from key_brands import KEY_BRANDS
+    aliases = {}                          # spelling -> canonical brand
     try:
-        from crawlers import CANONICAL_BRAND_MAP
-        known = set(CANONICAL_BRAND_MAP.values())
+        from crawlers import CANONICAL_BRAND_MAP, KNOWN_BRANDS
+        for k, v in CANONICAL_BRAND_MAP.items():
+            aliases[_norm(k)] = v         # Arabic and other spellings of known brands
+            aliases[_norm(v)] = v
+        for k in KNOWN_BRANDS:
+            aliases.setdefault(_norm(k), _canonical(k))
     except Exception:  # noqa: BLE001
-        known = set()
-    pool = {_norm(n) for n in list(names) + list(known) + list(KEY_BRANDS) if _usable(n)}
-    ordered = sorted(pool, key=len, reverse=True)       # "Royal Canin" before "Royal"
+        pass
+    for n in list(names) + list(KEY_BRANDS):
+        aliases.setdefault(_norm(n), _norm(n))
+    aliases = {k: v for k, v in aliases.items() if _usable(k) and _usable(v)}
+    ordered = sorted(aliases, key=len, reverse=True)       # "Royal Canin" before "Royal"
     parts = [r"(?<![\w؀-ۿ])" + re.escape(n).replace(r"\ ", r"\s*") + r"(?![\w؀-ۿ])" for n in ordered]
     _state.update(at=time.time(), by_code=dict(by_code), names=ordered,
-                  canon={n.casefold().replace(" ", ""): n for n in ordered},
+                  canon={k.casefold().replace(" ", ""): v for k, v in aliases.items()},
                   pattern=re.compile("|".join(parts), re.I) if parts else None)
 
 
@@ -95,15 +102,14 @@ async def ensure(db):
 
 
 def brand_for(name_ar=None, name_en=None, codes=(), existing=None):
+    """One order everywhere (27 Oct 2026): a key brand in the name; a known
+    brand written in the name; the store's own tag; the brand stores give
+    the same barcode. Store tags can be wrong (Kit Cat tagged "Almo", Acana
+    tagged "ميو"), so a brand the name states wins over them."""
     from key_brands import brand_in_name
     key = brand_in_name(name_en, name_ar)
     if key:
         return key, "key_brand_name"
-    from observation_contract import gtin, sku_gtin
-    for c in codes or ():
-        g = gtin(c) or sku_gtin(c)
-        if g and g in _state["by_code"]:
-            return _state["by_code"][g], "same_barcode"
     text = " ".join(str(x or "") for x in (name_en, name_ar))
     if _state["pattern"] is not None and text.strip():
         m = _state["pattern"].search(text)
@@ -112,4 +118,9 @@ def brand_for(name_ar=None, name_en=None, codes=(), existing=None):
             return _state["canon"].get(found.casefold().replace(" ", ""), _norm(found)), "name"
     if existing and _usable(existing):
         return _canonical(existing), "store_tag"
+    from observation_contract import gtin, sku_gtin
+    for c in codes or ():
+        g = gtin(c) or sku_gtin(c)
+        if g and g in _state["by_code"]:
+            return _state["by_code"][g], "same_barcode"
     return None, None

@@ -23,6 +23,12 @@ def test_order_key_brand_then_barcode_then_name_then_tag():
     assert brands.brand_for(None, "Some Unknown Toy", []) == (None, None)
 
 
+def test_a_brand_the_name_states_beats_a_wrong_store_tag():
+    # Panda tagged an Acana product "ميو" (27 Oct 2026).
+    assert brands.brand_for("أكانا بريميوم باتيه للقطط", None, [], existing="ميو")[0] == "Acana"
+    assert brands.brand_for("علبة للقطط", None, ["6287050381356"], existing="Meow") == ("Meow", "store_tag")
+
+
 def test_names_match_whole_words_only():
     assert brands.brand_for(None, "Homeowner dog bed", [])[0] is None      # "Meow" inside a word is not a brand
     assert brands.brand_for(None, "Meow cat treats", [])[0] == "Meow"

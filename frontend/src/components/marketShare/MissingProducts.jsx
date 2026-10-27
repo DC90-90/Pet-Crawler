@@ -9,6 +9,8 @@ import { ConfidenceBadge, Unavailable, TrendCell, SourceChip, SOURCE_META, fmtMo
 
 const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c || "—");
 const LIMIT = 100;
+// A row without a barcode carries its internal grouping key there ("offer:…").
+const cleanBarcode = (b) => { const m = /^gtin:(\d+)/.exec(b || ""); return m ? m[1] : /^\d{8,14}$/.test(b || "") ? b : null; };
 
 // Every field a row carries, as a column; the less used start hidden and are
 // one click away in Columns (27 Oct 2026 — "display all the data").
@@ -17,7 +19,8 @@ const COLUMNS = [
     render: (r) => (<><p className="text-white">{r.name}</p>{r.name_ar && r.name_ar !== r.name && <p className="text-xs text-[#A1E4DB]">{r.name_ar}</p>}</>) },
   { id: "brand", label: "Brand", type: "text", width: 130 },
   { id: "category", label: "Category", type: "text", width: 120, render: (r) => catLabel(r.category) },
-  { id: "barcode", label: "Barcode", type: "text", width: 140, render: (r) => <span dir="ltr">{r.barcode || "—"}</span> },
+  { id: "barcode", label: "Barcode", type: "text", width: 140, get: (r) => cleanBarcode(r.barcode),
+    render: (r) => <span dir="ltr">{cleanBarcode(r.barcode) || "—"}</span> },
   { id: "sku", label: "SKU", type: "text", width: 140, hidden: true, render: (r) => <span dir="ltr">{r.sku}</span> },
   { id: "competitor_count", label: "Stores selling it", type: "number", width: 110, align: "end" },
   { id: "in_stock_sellers", label: "Stores with stock", type: "number", width: 110, align: "end" },

@@ -639,24 +639,18 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
 
 
 def _resolve_brand(rows, name_ar, name_en, codes, brand_fn):
-    """(brand, source) for one product: a reviewed label; a key brand named in
-    the name; the brand a store gives (its tag or brand page); the brand any
-    store gives the same barcode; a known brand name in the name; the old name
-    guess. Every product gets a brand when any evidence names one (27 Oct 2026)."""
+    """(brand, source) for one product: a reviewed label, else brands.brand_for
+    (key brand in the name, known brand in the name, the store's tag, the
+    same barcode at another store), else the old name guess."""
     import brands
     reviewed = next((r.get("brand") for r in rows if r.get("brand_source") == "reviewed" and r.get("brand")), None)
     if reviewed:
         return reviewed, "reviewed"
-    key = brand_in_name(name_en, name_ar)
-    if key:
-        return key, "derived_from_name"
     tagged = next((r.get("brand") for r in rows if r.get("brand_source") in ("store_supplied", "key_brand_name")
                    and brands._usable(r.get("brand"))), None)
-    if tagged:
-        return brands._canonical(tagged), "store_supplied"
-    found, how = brands.brand_for(name_ar, name_en, [c for c in codes if c])
+    found, how = brands.brand_for(name_ar, name_en, [c for c in codes if c], tagged)
     if found:
-        return found, ("store_supplied" if how == "same_barcode" else "derived_from_name")
+        return found, ("store_supplied" if how in ("store_tag", "same_barcode") else "derived_from_name")
     guess = brand_fn(name_ar, name_en, existing=(rows[0].get("brand") if rows else "") or "") or ""
     return guess, ("derived_from_name" if guess else "unresolved")
 
