@@ -61,7 +61,7 @@ def recommend(row, settings=None):
     cost = row.get("cost") if (row.get("cost") or 0) > 0 else None
     factor = vat_factor(row)
     lowest = row.get("competitor_min_price")
-    out = {"sku": row.get("sku"), "name_ar": row.get("name_ar"), "name_en": row.get("name_en"),
+    out = {"sku": row.get("sku"), "name_ar": row.get("name_ar"), "name_en": row.get("name_en"), "brand": row.get("brand"),
            "image_url": row.get("image_url"), "barcode": row.get("barcode"), "product_url": row.get("product_url"),
            "price": price, "cost": cost, "vat_included": factor > 1,
            "competitor_min_price": lowest, "market_median_price": row.get("market_median_price"),

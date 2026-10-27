@@ -626,6 +626,8 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     # Everything below is CPU work on ~60k offers: run it in a thread so the
     # event loop keeps answering (14 Oct 2026: this block stalled the loop for
     # 55-59 s per window, failing health checks and restarting production).
+    import brands
+    await brands.ensure(db)         # the brand directory every row reads
     return await asyncio.to_thread(
         _assemble_dataset, days=days, own_store_id=own_store_id, own_price_fn=own_price_fn,
         brand_fn=brand_fn, orders_by_sku=orders_by_sku, window_start=window_start,
@@ -634,6 +636,29 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
         prev_sales=prev_sales, signals=signals, snaps=snaps, my_by_sku=my_by_sku,
         cohorts=cohorts, cohort_links=cohort_links, cohort_exclusions=cohort_exclusions,
         own_key_index=own_key_index, alias=alias, variant_links=variant_links, catalog=catalog)
+
+
+def _resolve_brand(rows, name_ar, name_en, codes, brand_fn):
+    """(brand, source) for one product: a reviewed label; a key brand named in
+    the name; the brand a store gives (its tag or brand page); the brand any
+    store gives the same barcode; a known brand name in the name; the old name
+    guess. Every product gets a brand when any evidence names one (27 Oct 2026)."""
+    import brands
+    reviewed = next((r.get("brand") for r in rows if r.get("brand_source") == "reviewed" and r.get("brand")), None)
+    if reviewed:
+        return reviewed, "reviewed"
+    key = brand_in_name(name_en, name_ar)
+    if key:
+        return key, "derived_from_name"
+    tagged = next((r.get("brand") for r in rows if r.get("brand_source") in ("store_supplied", "key_brand_name")
+                   and brands._usable(r.get("brand"))), None)
+    if tagged:
+        return brands._canonical(tagged), "store_supplied"
+    found, how = brands.brand_for(name_ar, name_en, [c for c in codes if c])
+    if found:
+        return found, ("store_supplied" if how == "same_barcode" else "derived_from_name")
+    guess = brand_fn(name_ar, name_en, existing=(rows[0].get("brand") if rows else "") or "") or ""
+    return guess, ("derived_from_name" if guess else "unresolved")
 
 
 def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_sku,
@@ -815,9 +840,7 @@ def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_s
             s["unit_share_pct"] = _pct(s["units"], market_units) if share_comparable else None
             s["revenue_share_pct"] = _pct(s["revenue"], market_revenue) if share_comparable else None
 
-        key_brand = None if mp.get("brand_source") == "reviewed" else brand_in_name(name_en, name_ar)
-        brand = key_brand or (mp.get("brand") if mp.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=mp.get("brand") or "") or "")
-        brand_source = "derived_from_name" if key_brand else mp.get("brand_source") if mp.get("brand_source") in ("reviewed", "store_supplied") else "derived_from_name" if brand else "unresolved"
+        brand, brand_source = _resolve_brand([mp], name_ar, name_en, [mp.get("barcode"), mp.get("sku")], brand_fn)
         category = mp.get("category") if mp.get("category_source") in ("reviewed", "store_supplied", "import_file") else ""
         category_source = mp.get("category_source") if category else "unclassified"
 
@@ -901,8 +924,11 @@ def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_s
         sample_sku = sorted(g["skus"])[0]
         cat_row = catalog.get(sellers[0].get("offer_id"), {})
         name_ar, name_en = sellers[0].get("name_ar") or "", sellers[0].get("name_en") or ""
-        key_brand = None if cat_row.get("brand_source") == "reviewed" else brand_in_name(name_en, name_ar)
-        brand = key_brand or (cat_row.get("brand") if cat_row.get("brand_source") in ("reviewed", "store_supplied") else brand_fn(name_ar, name_en, existing=cat_row.get("brand") or "") or "")
+        seller_rows = [catalog.get(x.get("offer_id"), {}) for x in sellers]
+        brand, _ = _resolve_brand([cat_row] + seller_rows, name_ar, name_en,
+                                  [ckey.split(":")[1] if ckey.startswith("gtin:") else None, cat_row.get("barcode")]
+                                  + [x.get("sku") for x in sellers] + [r.get("barcode") for r in seller_rows],
+                                  brand_fn)
         category = cat_row.get("category") if cat_row.get("category_source") in ("reviewed", "store_supplied", "import_file") else ""
         category_method = cat_row.get("category_source") if category else "unclassified"
         if category_map is not None and cat_row.get("category_source") != "reviewed":

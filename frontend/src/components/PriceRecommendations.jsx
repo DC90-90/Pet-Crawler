@@ -206,6 +206,7 @@ export default function PriceRecommendations() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-white truncate max-w-[260px]">{r.name_ar || r.name_en}</p>
+                      {r.brand && <p className="text-xs text-[#6AC1B5]">{r.brand}</p>}
                       <SkuLine sku={r.sku} barcode={r.barcode} />
                     </div>
                   </div>

@@ -74,6 +74,8 @@ def market_share(mine, competitors):
 
 async def dataset(db, days, on_date, date_from, date_to, category, animal_type, search, own_only, price_fn, orders_fn):
     own, catalog, cohorts = await context(db, price_fn)
+    import brands
+    await brands.ensure(db)
     if on_date:
         start, end = ledger.ksa_midnight_utc(on_date), ledger.ksa_midnight_utc(on_date)+timedelta(days=1)
     elif date_from or date_to:
@@ -102,7 +104,8 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
         if animal_type not in (None, "", "all") and animal_type != mp.get("animal_type"):
             continue
         parent_sku = parent_skus.get(str(mp.get("listing_id") or mp.get("zid_id")))
-        searchable = " ".join([*(str(mp.get(k) or "") for k in ("sku", "barcode", "name_ar", "name_en")), parent_sku or ""]).casefold()
+        brand, brand_basis = brands.brand_for(mp.get("name_ar"), mp.get("name_en"), [mp.get("barcode"), sku], mp.get("brand"))
+        searchable = " ".join([*(str(mp.get(k) or "") for k in ("sku", "barcode", "name_ar", "name_en")), parent_sku or "", brand or ""]).casefold()
         if search and search.casefold() not in searchable:
             continue
         evidence = orders["by_sku"].get(sku, {"units": 0, "revenue": 0}) if orders is not None else sales.get((own.get("id"), mp.get("offer_id") or sku))
@@ -111,6 +114,7 @@ async def dataset(db, days, on_date, date_from, date_to, category, animal_type, 
                              [sales.get((s["store_id"], s.get("offer_id") or s.get("sku"))) for s in c["sellers"]])
         pos = price_position(price, [s["price"] for s in c["sellers"]]) or {}
         row = {**mp, "sku": sku, "parent_sku": parent_sku, "price": price or None, "market_price": c["avg"], "is_my_product": True,
+               "brand": brand, "brand_basis": brand_basis,
                "barcode": verified_barcode(mp),
                "category_candidate": mp.get("category"), "category": mp.get("category") if mp.get("category_source") in ("reviewed", "store_supplied", "import_file") else None,
                **stock, "my_quantity": stock["quantity"], "my_units_sold": units, "my_revenue_est": value,

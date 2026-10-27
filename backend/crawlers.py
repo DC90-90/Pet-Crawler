@@ -1087,6 +1087,18 @@ def _collect_variant_field_list(raw, keys, *, fallback="", numeric_only=False):
     return seen
 
 
+# Brand evidence, strongest first; a product's brand moves only up this list.
+_TRUSTED_BRAND_SOURCES = ("key_brand_name", "store_supplied")
+_BRAND_RANK = {"reviewed": 3, "key_brand_name": 2, "store_supplied": 1}
+
+
+def _brand_upgrade(existing, norm):
+    new, old = norm.get("brand_source"), existing.get("brand_source")
+    if new not in _TRUSTED_BRAND_SOURCES or not norm.get("brand") or existing.get("brand") == norm["brand"]:
+        return False
+    return _BRAND_RANK.get(new, 0) >= _BRAND_RANK.get(old, 0) and old != "reviewed"
+
+
 async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=95):
     """Process raw product data from any crawler tier into products + snapshots."""
     new_count = 0
@@ -1164,8 +1176,9 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 # its SKU field. Persisting it is what makes Level 1 real.
                 "barcode": norm.get("barcode") or "",
                 "name_ar": norm["name_ar"], "name_en": norm["name_ar"],
-                "brand": norm["brand"] if norm.get("brand_source") == "key_brand_name" else extract_brand(norm["name_ar"]),
-                "brand_source": "key_brand_name" if norm.get("brand_source") == "key_brand_name" else None,
+                # The store's own brand (tag or brand page) when it gives one.
+                "brand": norm["brand"] if norm.get("brand_source") in _TRUSTED_BRAND_SOURCES else extract_brand(norm["name_ar"]),
+                "brand_source": norm.get("brand_source") if norm.get("brand_source") in _TRUSTED_BRAND_SOURCES else None,
                 "category": category,
                 # additive: parent category stays; None = confidently generic
                 "subcategory": classify_food_subcategory_hybrid(category, norm["name_ar"], store_cats),
@@ -1187,9 +1200,8 @@ async def process_crawled_products(db, store, all_raw, now, tier=1, confidence=9
                 patch["barcode"] = norm["barcode"]
             if norm["img_url"] and not existing.get("image_url"):
                 patch["image_url"] = norm["img_url"]
-            if (norm.get("brand_source") == "key_brand_name" and existing.get("brand") != norm["brand"]
-                    and existing.get("brand_source") != "reviewed"):
-                patch.update(brand=norm["brand"], brand_source="key_brand_name")
+            if _brand_upgrade(existing, norm):
+                patch.update(brand=norm["brand"], brand_source=norm["brand_source"])
             if product_url and not existing.get("product_url"):
                 patch["product_url"] = product_url
             if store_category_rows and existing.get("category_source") != "reviewed":
@@ -2747,7 +2759,7 @@ async def _salla_latest_walk(db, store, client, seen_ids, captured, crawl_log):
 
 SALLA_SWEEP_PAGES = 6            # 50 items a page; search results past this are off-brand
 SALLA_SWEEP_BRAND_PAGES = 40     # a brand page lists only that brand: read it to the end
-SALLA_SWEEP_BUDGET_SECS = 600
+SALLA_SWEEP_BUDGET_SECS = 1800    # every brand page of the store, then key-brand search
 SALLA_SWEEP_PAUSE = (1.5, 2.5)
 
 
@@ -2775,12 +2787,20 @@ async def _salla_key_brand_sweep(store, client, seen_ids, captured, crawl_log):
             break
         page += 1
         await asyncio.sleep(random.uniform(*SALLA_SWEEP_PAUSE))
-    jobs = [(brand_in_name(b.get("name"), b.get("label")), {"source": "brands", "source_value[]": b["id"], "limit": 50}, None)
-            for b in store_brands if b.get("id") is not None and brand_in_name(b.get("name"), b.get("label"))]
+    def page_job(b):
+        return {"source": "brands", "source_value[]": b["id"], "limit": 50}
+    named = [b for b in store_brands if b.get("id") is not None and str(b.get("name") or "").strip()]
+    key_pages = [b for b in named if brand_in_name(b.get("name"), b.get("label"))]
+    jobs = [(brand_in_name(b.get("name"), b.get("label")), page_job(b), None) for b in key_pages]
     # 2. The store's search, for items not filed under a brand; fuzzy, so an
     # item is kept only when its name names the brand.
     jobs += [(brand, {"source": "search", "source_value": term, "limit": 50}, brand)
              for brand, terms in SEARCH_TERMS.items() for term in terms]
+    # 3. Every other brand page: each product takes the brand its store files
+    # it under, so Daleel can name the brand of every item (27 Oct 2026 — the
+    # client: "display the brand name for each item"). Key brands go first so
+    # the time budget never cuts them.
+    jobs += [(str(b["name"]).strip(), page_job(b), None) for b in named if b not in key_pages]
     brand_pages = sum(1 for j in jobs if j[2] is None)
     # An item the walks already caught still takes the brand its store files
     # it under: its name may not say it ("طعام قطط بالبط" on the Carnilove page).
@@ -2806,9 +2826,14 @@ async def _salla_key_brand_sweep(store, client, seen_ids, captured, crawl_log):
                 pid = it.get("id") if isinstance(it, dict) else None
                 if pid is None or (must_name and brand_in_name(it.get("name")) != must_name):
                     continue
-                if must_name is None and brand_in_name(it.get("name")) != brand:
+                if must_name is None:
                     target = by_id.get(pid, it)
-                    target["brand"] = {"name": brand}
+                    # The first brand page an item is found on names it (key
+                    # brands are read first).
+                    if not target.get("_brand_page"):
+                        target["_brand_page"] = brand
+                        if brand_in_name(it.get("name")) != brand:
+                            target["brand"] = {"name": brand}
                 if pid in seen_ids:
                     continue
                 seen_ids.add(pid)

@@ -130,7 +130,9 @@ def test_the_sweep_stamps_the_brand_page_brand_on_items_already_caught():
     added = asyncio.run(crawlers._salla_key_brand_sweep({"name": "S"}, Client(), seen, caught, log))
     assert caught[0]["brand"] == {"name": "Carnilove"}            # already caught, now labelled
     assert added == {"Carnilove": 1} and [c["id"] for c in caught] == [1, 2]
-    assert "brand_pages=1" in log["endpoints_tried"][-1]["error"]
+    # Every brand page is read (Royal Canin too); the key brand, read first, names the item.
+    assert "brand_pages=2" in log["endpoints_tried"][-1]["error"]
+    assert caught[0]["_brand_page"] == "Carnilove"
 
 
 def test_coverage_row_counts_and_explains_every_missing_item():

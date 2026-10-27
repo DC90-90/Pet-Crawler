@@ -424,6 +424,7 @@ export default function MyProductsPage() {
                               <ExternalLink className="w-3 h-3 opacity-60 flex-shrink-0" />
                             </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
+                            {p.brand && <p className="text-xs text-[#6AC1B5] mt-0.5" data-testid={`product-brand-${p.sku}`}>{p.brand}</p>}
                             <SkuLine sku={p.sku} barcode={p.barcode} className="mt-0.5" />
                             {p.present_on_store === false && (
                               <span className="inline-block mt-1 text-[9px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30" data-testid={`archived-badge-${p.sku}`}>
@@ -449,6 +450,7 @@ export default function MyProductsPage() {
                               {p.name_ar}
                             </p>
                             <p className="text-[11px] text-[#A1E4DB]">{p.name_en}</p>
+                            {p.brand && <p className="text-xs text-[#6AC1B5] mt-0.5" data-testid={`product-brand-${p.sku}`}>{p.brand}</p>}
                             <SkuLine sku={p.sku} barcode={p.barcode} className="mt-0.5" />
                             {p.present_on_store === false && (
                               <span className="inline-block mt-1 text-[9px] uppercase tracking-[0.12em] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30" data-testid={`archived-badge-${p.sku}`}>
