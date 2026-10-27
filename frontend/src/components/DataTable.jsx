@@ -211,7 +211,7 @@ export default function DataTable({
       </div>
 
       <div className="glass-card overflow-x-auto">
-        <table className="w-full text-sm" style={{ tableLayout: "fixed", minWidth: cols.reduce((n, c) => n + (widths[c.id] || c.width || 140), 0) }}>
+        <table className="dt-table w-full text-sm" style={{ tableLayout: "fixed", minWidth: cols.reduce((n, c) => n + (widths[c.id] || c.width || 140), 0) }}>
           <colgroup>{cols.map((c) => <col key={c.id} style={{ width: widths[c.id] || c.width || 140 }} />)}</colgroup>
           <thead>
             <tr>
