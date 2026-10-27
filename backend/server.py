@@ -4338,6 +4338,15 @@ async def admin_browser_check(user=Depends(require_super_admin)):
     return await browser_launch.check()
 
 
+@router.post("/admin/browser-repair")
+async def admin_browser_repair(user=Depends(require_super_admin)):
+    """Install Chromium's system libraries on this server (playwright
+    install-deps), then report every launch attempt again."""
+    import browser_launch
+    repaired = await asyncio.to_thread(browser_launch.repair)
+    return {"repair": repaired, "check": await browser_launch.check()}
+
+
 @router.get("/brands/key/audit")
 async def key_brands_audit_latest(user=Depends(get_user)):
     import key_brands
@@ -13127,8 +13136,17 @@ async def _boot_sequence():
             logger.error(f"[Playwright] Install raised exception: {e.__class__.__name__}: {e}")
             return
 
-        # 4. Prove it works now; dump what is on disk when it still does not.
+        # 4. Prove it works now; when it does not, install the system libraries
+        # the browser needs (27 Oct 2026: production's Chromium builds crashed
+        # at launch on every crawl), then try once more.
         if not _smoke("post-install"):
+            try:
+                import browser_launch
+                fixed = browser_launch.repair()
+                logger.info("[Playwright] install-deps rc=%s", fixed.get("returncode"))
+            except Exception as dep_err:
+                logger.error(f"[Playwright] install-deps raised: {dep_err}")
+        if not _smoke("post-deps"):
             try:
                 root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache" / "ms-playwright")))
                 if root.exists():

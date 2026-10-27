@@ -60,10 +60,50 @@ async def launch(pw, **kwargs):
     raise first
 
 
+def missing_libs(path):
+    """System libraries a browser binary needs and the server lacks (ldd)."""
+    import subprocess
+    try:
+        out = subprocess.run(["ldd", path], capture_output=True, text=True, timeout=30).stdout
+    except Exception as exc:  # noqa: BLE001
+        return [f"ldd unavailable: {type(exc).__name__}"]
+    return sorted({line.split("=>")[0].strip() for line in out.splitlines() if "not found" in line})
+
+
+def _tail(text, n=1200):
+    """The end of a launch error: the reason follows a very long command line."""
+    text = str(text)
+    head = text.splitlines()[0] if text else ""
+    return head if len(text) <= n else head + " … " + text[-n:]
+
+
+def repair():
+    """Install the system libraries Chromium needs (playwright install-deps,
+    root + apt). Blocking; run it in a thread."""
+    import subprocess
+    import sys
+    cmd = [sys.executable, "-m", "playwright", "install-deps", "chromium"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        result = {"cmd": " ".join(cmd), "returncode": r.returncode, "stdout": r.stdout[-2000:], "stderr": r.stderr[-2000:]}
+    except Exception as exc:  # noqa: BLE001
+        result = {"cmd": " ".join(cmd), "returncode": None, "error": f"{type(exc).__name__}: {exc}"}
+    _working["path"] = None          # try the default again
+    return result
+
+
 async def check():
     """Every launch attempt with its outcome, for the admin."""
+    import asyncio
     from playwright.async_api import async_playwright
-    out = {"env_PLAYWRIGHT_BROWSERS_PATH": os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "attempts": []}
+    shm = None
+    try:
+        st = os.statvfs("/dev/shm")
+        shm = round(st.f_bavail * st.f_frsize / 1048576)
+    except Exception:  # noqa: BLE001
+        pass
+    out = {"env_PLAYWRIGHT_BROWSERS_PATH": os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), "attempts": [],
+           "uid": getattr(os, "getuid", lambda: None)(), "dev_shm_free_mb": shm}
     async with async_playwright() as pw:
         out["default_executable"] = pw.chromium.executable_path
         for path in [None] + candidates():
@@ -75,6 +115,7 @@ async def check():
                 await browser.close()
                 out["attempts"].append({"path": path or "default", "ok": True})
             except Exception as exc:  # noqa: BLE001
-                out["attempts"].append({"path": path or "default", "ok": False, "error": str(exc)[:1500]})
+                out["attempts"].append({"path": path or "default", "ok": False, "error": _tail(exc),
+                                        "missing_libs": await asyncio.to_thread(missing_libs, path or pw.chromium.executable_path)})
     out["working_in_this_process"] = _working["path"]
     return out
