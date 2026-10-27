@@ -140,3 +140,54 @@ def test_coverage_row_counts_and_explains_every_missing_item():
     assert row["store_lists"] == 3 and row["in_daleel"] == 1
     assert row["brands"]["Kit Cat"]["missing"][0]["why"] == "seen before, not this week"
     assert row["brands"]["Beso"]["missing"][0]["why"] == "never collected"
+
+
+def test_zarafa_skus_carry_the_barcode_before_the_store_number():
+    """27 Oct 2026: Zarafa lists Taste of the Wild as "74198612383-341666817"
+    (UPC 074198612383); the client saw these as "not sold by me"."""
+    from observation_contract import sku_gtin, normalize_offer
+    from price_cohort import identity_keys
+    assert sku_gtin("74198612383-341666817") == "00074198612383"
+    for risky in ("9003579308936-6", "9003579308936-12", "12345678-BLK", "074198614301SandF",
+                  "74198612383-1234", "1234567890123-1234567", "", None):
+        assert sku_gtin(risky) is None, risky                 # pack tails, merchant codes, bad check digit
+    assert identity_keys({"sku": "74198612383-341666817", "barcode": ""}) == {"00074198612383"}
+    assert identity_keys({"sku": "074198612383"}) == identity_keys({"sku": "74198612383-341666817"})
+    row = normalize_offer({"id": 1, "name": "Taste Of The Wild Cat Dry Food", "sku": "74198612383-341666817",
+                           "price": 87, "currency": "SAR"}, "Zarafa")
+    from observation_contract import gtin
+    assert gtin(row["barcode"]) == "00074198612383"
+
+
+def test_a_competitor_offer_joins_my_product_through_the_matcher(monkeypatch):
+    import asyncio
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    async def fake_matches(db, own_price_fn, own_id):
+        return {"zarafa-offer": "MY-TOTW"}                     # matched by name/confirmed, no barcode
+    monkeypatch.setattr(kb, "_own_matches", fake_matches)
+
+    async def run():
+        client = AsyncIOMotorClient(os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017"))
+        db = client[f"test_kb_match_{uuid.uuid4().hex[:8]}"]
+        try:
+            now = datetime.now(timezone.utc)
+            await db.stores.insert_many([{"id": "own", "name": "Pets houses", "is_own_store": True},
+                                         {"id": "z", "name": "Zarafa"}])
+            await db.my_products.insert_one({"sku": "MY-TOTW", "name_ar": "تيست اوف ذا وايلد قطط", "price": 95.0})
+            await db.product_snapshots.insert_one({
+                "observation_version": 2, "is_synthetic": False, "store_id": "z", "offer_id": "zarafa-offer",
+                "sku": "ZR-1", "barcode": "", "name_en": "Taste Of The Wild Cat Dry Food", "price": 87.0,
+                "in_stock": True, "crawled_at": now - timedelta(hours=3)})
+            return await kb.catalogue(db, own_price_fn=lambda p: p.get("price"))
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+
+    out = asyncio.run(run())
+    assert len(out["items"]) == 1
+    item = out["items"][0]
+    assert item["own_sells"] and item["own_price"] == 95.0 and item["cheapest_store"] == "Zarafa"
+    assert item["name_ar"] == "تيست اوف ذا وايلد قطط"          # my own name leads the row

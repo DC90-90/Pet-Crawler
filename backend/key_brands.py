@@ -54,12 +54,32 @@ def brand_in_name(*names):
 
 
 def _group_key(row):
-    from observation_contract import gtin
+    from observation_contract import gtin, sku_gtin
     for v in (row.get("barcode"), row.get("sku")):
-        g = gtin(v)
+        g = gtin(v) or sku_gtin(v)
         if g:
             return "gtin:" + g
     return "offer:" + str(row.get("offer_id"))
+
+
+async def _own_matches(db, own_price_fn, own_id):
+    """{competitor offer_id: own sku} from the comparison cohorts My Products
+    and Pricing use; empty (barcode joins only) if they cannot be built."""
+    if not own_id or own_price_fn is None:
+        return {}
+    import logging
+    try:
+        from comparison_views import context
+        _, _, cohorts = await context(db, own_price_fn)
+    except Exception:  # noqa: BLE001 — the page still shows, joined by barcode
+        logging.getLogger(__name__).exception("[KeyBrands] own matches unavailable")
+        return {}
+    out = {}
+    for sku, c in cohorts.items():
+        for r in (c.get("sellers") or []) + (c.get("excluded") or []):
+            if r.get("offer_id") and r.get("store_id") != own_id:
+                out.setdefault(r["offer_id"], sku)
+    return out
 
 
 async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
@@ -80,6 +100,21 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
         rows += await complete_latest(db, latest_pipeline(
             {"observation_version": 2, "is_synthetic": False, "store_id": sid, "crawled_at": {"$gte": since},
              "$or": [{"name_ar": name_rx}, {"name_en": name_rx}, {"brand": name_rx}]}, proj))
+    # The own catalogue (the My Products records), read first: its products
+    # are the rows competitors' offers join.
+    own_products, own_key = [], {}
+    if own_id:
+        async for p in db.my_products.find({}, {"_id": 0}):
+            if p.get("superseded_parent") or not p.get("sku"):
+                continue
+            code = next((c for c in (gtin(p.get("barcode")), gtin(p.get("sku"))) if c), None)
+            own_products.append((p, code))
+            own_key[p["sku"]] = "gtin:" + code if code else "own:" + str(p["sku"])
+    # Which own product each competitor offer is: the same matching My
+    # Products uses (barcode, then name, size and pack). Zarafa and others
+    # often publish no barcode, so a barcode-only join showed products the
+    # client sells as "not sold by me" (27 Oct 2026).
+    matched = await _own_matches(db, own_price_fn, own_id)
     groups = {}
     for r in rows:
         sid = r["store_id"]
@@ -89,7 +124,8 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
         brand = brand_in_name(r.get("name_en"), r.get("name_ar")) or brand_in_name(r.get("brand"))
         if not brand:
             continue
-        key = _group_key(r)
+        own_sku = matched.get(r.get("offer_id"))
+        key = own_key.get(own_sku) or _group_key(r)
         g = groups.setdefault(key, {"key": key, "brand": brand, "barcode": key[5:] if key.startswith("gtin:") else None,
                                     "name_ar": None, "name_en": None, "image_url": None, "offers": {}})
         g["name_ar"] = g["name_ar"] or r.get("name_ar")
@@ -103,26 +139,23 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
                             "in_stock": r.get("in_stock"), "qty": r.get("qty_available"),
                             "url": r.get("product_url"), "name": r.get("name_ar") or r.get("name_en"),
                             "seen_at": r.get("crawled_at")}
-    # The own catalogue (the My Products records): the same shelf price and
-    # stock as every other page. An own product joins its competitors by
-    # barcode even when its own name spells the brand differently, and an own
+    # Own offers: the same shelf price and stock as every other page. An own
     # key-brand product nobody else sells is listed too.
     if own_id:
         from stock_evidence import own_stock
-        async for p in db.my_products.find({}, {"_id": 0}):
-            if p.get("superseded_parent"):
-                continue
-            code = next((c for c in (gtin(p.get("barcode")), gtin(p.get("sku"))) if c), None)
-            key = "gtin:" + code if code else None
+        for p, code in own_products:
+            key = own_key[p["sku"]]
             brand = brand_in_name(p.get("name_en"), p.get("name_ar"))
             if key not in groups:
                 if not brand:
                     continue
-                key = key or "own:" + str(p.get("sku"))
                 groups[key] = {"key": key, "brand": brand, "barcode": code, "name_ar": p.get("name_ar"),
                                "name_en": p.get("name_en"), "image_url": p.get("image_url"), "offers": {}}
             g = groups[key]
-            g["image_url"] = g["image_url"] or p.get("image_url")
+            g["name_ar"] = p.get("name_ar") or g["name_ar"]          # my own name leads the row
+            g["name_en"] = p.get("name_en") or g["name_en"]
+            g["image_url"] = p.get("image_url") or g["image_url"]
+            g["barcode"] = g["barcode"] or code
             g["offers"][own_id] = {"store_id": own_id, "store_name": stores[own_id]["name"], "own": True,
                                    "price": (own_price_fn(p) or None) if own_price_fn else p.get("price"),
                                    "in_stock": own_stock(p)["in_stock"], "qty": own_stock(p)["quantity"],

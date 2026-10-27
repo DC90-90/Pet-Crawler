@@ -51,6 +51,19 @@ def gtin(value):
     return text if (10 - check % 10) % 10 == int(text[-1]) and int(text) != 0 else None
 
 
+# Some Salla stores (Zarafa) keep the barcode in the SKU with the store's own
+# long product number appended: "74198612383-341666817" is UPC 074198612383.
+# Only a check-digit-valid 11-14 digit code followed by a 6+ digit number is
+# read: a short tail ("-6", "-12") can mean a pack, and a merchant code like
+# "12345678-BLK" is not a barcode (27 Oct 2026).
+_SKU_WITH_STORE_NUMBER = re.compile(r"([0-9]{11,14})-[0-9]{6,}")
+
+
+def sku_gtin(value):
+    m = _SKU_WITH_STORE_NUMBER.fullmatch(str(value or "").strip())
+    return gtin(m.group(1)) if m else None
+
+
 def stable_id(*parts):
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
@@ -189,7 +202,7 @@ def normalize_offer(raw, store_name):
     sold_raw = next((raw[k] for k in ("sold_quantity", "sold_count", "sales_count", "sold_products_count", "total_sold", "orders_count") if raw.get(k) is not None), None)
     sold = observed_int(sold_raw)
     capped = bool(raw.get("sold_count_capped")) or bool(re.search(r"\+|أكثر|اكثر|more than", str(sold_raw), re.I))
-    barcode = next((str(raw[k]).strip() for k in ("barcode", "gtin", "ean", "upc", "sku") if gtin(raw.get(k))), "")
+    barcode = next((str(raw[k]).strip() for k in ("barcode", "gtin", "ean", "upc", "sku") if gtin(raw.get(k))), "") or (sku_gtin(raw.get("sku")) or "")
     image = image_url(raw)
     urls = raw.get("urls") or {}
     url = (urls.get("customer") or urls.get("store")) if isinstance(urls, dict) else None

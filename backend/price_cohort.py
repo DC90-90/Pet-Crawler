@@ -1,6 +1,6 @@
 """Versioned, shared current-price cohort. Historical rows are labelled, never actionable."""
 from datetime import datetime, timezone, timedelta
-from observation_contract import gtin, money, stable_id, TRUSTED_PRICE_BASES
+from observation_contract import gtin, money, sku_gtin, stable_id, TRUSTED_PRICE_BASES
 from pack_guard import slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers, discount_escapes
 from price_read_limits import query_max_ms, bounded_read
 from cohort_reads import read_cohort_snapshots
@@ -37,7 +37,7 @@ def aware(value):
 
 def identity_keys(row):
     # An explicit GTIN is stronger evidence than a merchant's numeric local SKU.
-    code = gtin(row.get('barcode')) or gtin(row.get('sku'))
+    code = gtin(row.get('barcode')) or gtin(row.get('sku')) or sku_gtin(row.get('sku'))
     return {code} if code else set()
 
 
