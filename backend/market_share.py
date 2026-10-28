@@ -651,8 +651,9 @@ def _resolve_brand(rows, name_ar, name_en, codes, brand_fn):
     found, how = brands.brand_for(name_ar, name_en, [c for c in codes if c], tagged)
     if found:
         return found, ("store_supplied" if how in ("store_tag", "same_barcode") else "derived_from_name")
-    guess = brand_fn(name_ar, name_en, existing=(rows[0].get("brand") if rows else "") or "") or ""
-    return guess, ("derived_from_name" if guess else "unresolved")
+    # No fallback to the old substring guess: it read «اتو» (AATU) inside
+    # «جاتو» (Signor Gatto) (28 Oct 2026). Unknown stays unknown.
+    return "", "unresolved"
 
 
 def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_sku,

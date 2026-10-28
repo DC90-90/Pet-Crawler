@@ -31,6 +31,9 @@ def test_a_brand_the_name_states_beats_a_wrong_store_tag():
 
 def test_names_match_whole_words_only():
     assert brands.brand_for(None, "Homeowner dog bed", [])[0] is None      # "Meow" inside a word is not a brand
+    brands.install({}, [])
+    assert brands.brand_for("سينيور رمل جاتو للقطط", "Signor Gatto Pure Bloom", [])[0] != "AATU"   # «اتو» inside «جاتو»
+    setup_function(None)
     assert brands.brand_for(None, "Meow cat treats", [])[0] == "Meow"
 
 
