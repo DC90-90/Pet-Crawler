@@ -75,8 +75,8 @@ _CONCEPTS = {
     "turkey": r"turkey|ديك\s*رومي|رومي", "lamb": r"lamb|mutton|ضان|خروف|غنم", "beef": r"beef|بقر|بقري",
     "meat": r"meat|لحم(?!\s*(?:ال)?(?:ضان|بقر|بقري|غنم|خروف))", "duck": r"duck|بط|بطه", "rabbit": r"rabbit|ارنب",
     "shrimp": r"shrimps?|prawns?|ربيان|جمبري|روبيان", "liver": r"liver|كبده|كبد", "cheese": r"cheese|جبن|جبنه",
-    "kitten": r"kittens?|junior|صغيره|صغار", "adult": r"adults?|بالغه", "sterilised": r"sterili[sz]ed|neutered|معقمه",
-    "senior": r"senior|mature|مسن|كبار\s*السن", "mother": r"mother|baby|الام", "gravy": r"gravy|sauce|broth|مرق|صلصه",
+    "kitten": r"kittens?|junior|baby|صغيره|صغار|صغارها|كيتن|بيبي", "adult": r"adults?|بالغه", "sterilised": r"sterili[sz]ed|neutered|معقمه",
+    "senior": r"senior|mature|مسن|كبار\s*السن", "mother": r"mother|الام", "gravy": r"gravy|sauce|broth|مرق|صلصه",
     "jelly": r"jelly|jellies|جلي|جيلي|هلام", "pate": r"pate|pâté|باتيه", "mousse": r"mousse|موس",
     "hairball": r"hair\s*ball|كرات\s*الشعر", "urinary": r"urinary|بولي|البوليه|المسالك",
     "sensitive": r"sensitive|حساس|حساسه", "indoor": r"indoor|داخلي", "light": r"light|لايت",
@@ -93,8 +93,13 @@ _CONCEPTS = {
     "clumping": r"clumping|متكتل|تكتل", "scented": r"scented|معطر", "unscented": r"unscented|بدون\s*رائحه|غير\s*معطر",
     "lavender": r"lavender|لافندر|خزامى", "vanilla": r"vanilla|فانيلا", "paste": r"paste|معجون",
     "treat": r"treats?|snacks?|مكافا[هت]|سناك", "sticks": r"sticks?|اصابع", "vitamin": r"vitamins?|فيتامين",
+    "dog": r"dogs?|pupp(?:y|ies)|كلب|كلاب|جرو|جراء", "surimi": r"surimi|سوريمي",
+    "seabass": r"sea\s*bass|قاروص|levrek", "seafood": r"sea\s*food|sea\s*mix|ماكولات\s*بحريه",
+    "taurine": r"taurine|تورين", "biotin": r"biotin|بيوتين", "skincoat": r"skin|coat|جلد|فرو",
     "soup": r"soup|شوربه|حساء",   # not "fillet": stores add «شرائح» to names whose English has none
 }
+# "box + litter", a gift, "free": not the product alone. "Senior 7+", "grain free" are.
+_BUNDLE_RX = re.compile(r"[a-z؀-ۿ]\s*\+\s*[a-z؀-ۿ]|هديه|هدايا|مجانا|مجاني|gift|(?<!grain\s)(?<!grain-)free", re.I)
 _CONCEPT_RX = {k: re.compile(r"(?<![a-z؀-ۿ])(?:و|ب|بال|وال|ال|لل|مع)?(?:" + v + r")(?![a-z؀-ۿ])", re.I)
                for k, v in _CONCEPTS.items()}
 
@@ -109,6 +114,8 @@ def name_signature(*names):
     """(unit size, pack count, concepts) a product name states, or None
     when it states no size."""
     t = _norm_text(*names)
+    if _BUNDLE_RX.search(t):
+        return None                     # a bundle or a gift offer is not the product alone
     m = _SIZE_RX.search(t.replace(",", "."))
     if not m:
         return None

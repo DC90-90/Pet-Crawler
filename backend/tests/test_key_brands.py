@@ -260,3 +260,23 @@ def test_the_catalogue_marks_a_name_link_and_never_links_two_barcodes(monkeypatc
     assert tuna["own_sells"] and {o["store_name"]: o.get("match") for o in tuna["offers"]} == {"Hobba": "name", "Pets houses": None}
     other = next(i for i in out["items"] if i["key"] == "gtin:08681299500024")
     assert not other["own_sells"]                    # my product has a different barcode: a different product
+
+
+def test_the_wrong_name_links_found_on_31_oct_stay_unlinked():
+    sig = kb.name_signature
+    cases = [
+        ("صحن رمل مغلق ستيفان بلاست اخضر فلتر 3 طبقات + رمل كيت كات تفاح 10 لتر", "Kit cat Classic Antibacterial Sand 10L - Apple", "كيت كات رمل تفاح 10 لتر"),
+        ("فارمينا ماتيس طعام رطب للقطط بالدجاج -300جرام", "Farmina Dog Ecopet Natural Puppy - 300g", "فارمينا طعام كلاب بالدجاج 300 جرام"),
+        ("شيزر معلبات طعام القطط تونة مع السوريمي -85جرام - الحبة", "Schesir Wet Food Cat Tuna Cooking Water 85g", "شيزر تونة 85 جرام"),
+        ("ظرف شيزر دجاج مع سمك القاروص 70 جرام", "Schesir Silver Chicken - 70g", "شيزر سيلفر دجاج 70 جرام"),
+        ("جيم كات عصار فيتامين مع البيوتين لتحسين جودة الشعر والجلد50جرام", "Gimcat Food Supplement for Cat Contains Taurine 50gm", "جيم كات عصار فيتامين تورين 50 جرام"),
+        ("جيم كات مكافآت للقطط, ثلاث نكهات مختلفة -150 جرام", "GimCat Nutri Pockets Sea Mix 150gm", "جيم كات مكافآت سي ميكس 150 جرام"),
+        ("للكيتن - موس السالمون والدجاج 70 غ طعام رطب شيزر بيبي اظرف - 70 غ", "Schesir Skin & Coat Salmon With Chicken in Mousse - 70g", "شيزر موس السالمون والدجاج للجلد والفرو 70 جرام"),
+    ]
+    for theirs, mine_en, mine_ar in cases:
+        assert kb.name_match(sig(theirs), [("mine", sig(mine_en, mine_ar))]) is None, theirs
+    # and the right ones still link
+    assert kb.name_match(sig("بيسو طعام جاف للقطط الأم وصغارها بنكهة الدجاج - 2 كغ"),
+                         [("m", sig("Beso Dry Food Rich in Chicken - Mother & Baby - 2kg", ""))]) == "m"
+    assert kb.name_match(sig("موس السالمون والدجاج لدعم الجلد والفرو 70 غ طعام رطب للقطط شيزر سبيشيل اظرف"),
+                         [("m", sig("Schesir Skin & Coat Salmon With Chicken in Mousse - 70g", ""))]) == "m"
