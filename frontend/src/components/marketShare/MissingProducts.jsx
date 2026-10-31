@@ -116,12 +116,12 @@ export default function MissingProducts({ days, includeToday, filters, onPickPro
   return (
     <div className="space-y-3" data-testid="ms-missing-products">
       {facets && <FacetTabs counts={facets} animal={animal} ptype={ptype} onAnimal={setAnimal} onType={setPtype} prefix="ms-missing" />}
-      <p className="text-sm text-[#A1E4DB]" data-testid="ms-missing-count">
+      {!data ? <p className="text-sm text-[#A1E4DB]" data-testid="ms-missing-count">Loading…</p> : <p className="text-sm text-[#A1E4DB]" data-testid="ms-missing-count">
         {fmtNum(data?.total_untruncated ?? total)} products competitors sell that I don't
         {data?.total_untruncated > total && ` · ${fmtNum(total)} match the filters`}
         {" · shelf-value proxy "}<span dir="ltr">{fmtMoney(data?.opportunity_value)}</span>
         {" · my share of every row is 0% (not in my catalogue)"}
-      </p>
+      </p>}
       <DataTable columns={COLUMNS} rows={data?.rows || []} total={total} allTotal={data?.total_untruncated ?? total} loading={loading && !data}
         storageKey="ms-missing" exportName="daleel-products-i-dont-sell" rowKey={(r) => r.canonical_key}
         onRowClick={onPickProduct} onQuery={setQuery} fetchAll={fetchAll}
