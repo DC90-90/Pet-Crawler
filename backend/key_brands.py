@@ -53,6 +53,99 @@ def brand_in_name(*names):
     return min(hits)[1] if hits else None
 
 
+# ── Linking a listing without a barcode to my product by its name ──────────
+# (31 Oct 2026, owner approved.) 1,038 of the 1,756 "not sold by me" rows
+# were listings with no barcode (Hobba, Petsy, CutePets, Lana), which no
+# barcode join can reach. Used on this page only, never for prices, and only
+# when everything the two names state agrees: the key brand, the unit size,
+# the pack count and every flavour, age and recipe word below, with exactly
+# one of my products fitting. Anything less leaves the row "not sold by me".
+_UNIT = (r"(kg|kgs|كجم|كغ|كيلو|كيلوجرام|كيلوغرام|ك|g|gm|gr|gram|grams|جم|جرام|غرام|غم|غ|"
+         r"ml|مل|l|lt|ltr|liter|litre|liters|litres|لتر|ليتر)")
+_SIZE_RX = re.compile(r"(\d+(?:\.\d+)?)\s*" + _UNIT + r"(?![a-z؀-ۿ])", re.I)
+_PACK_RX = (
+    re.compile(r"(?:كرتون|carton|box|pack\s*of|bundle)\s*\(?\s*(?:of\s*|for\s*)?(\d+)", re.I),
+    re.compile(r"(\d+)\s*(?:حبه|حبات|قطعه|قطع|pieces?|pcs|pack|cans|pouches|sachets?|علب|ظروف)(?![a-z؀-ۿ])", re.I),
+    re.compile(r"(\d+)\s*[x×*]\s*\d", re.I),
+    re.compile(_UNIT + r"\s*[x×*]\s*(\d+)", re.I),
+)
+# Concept -> spellings (Arabic in normalised form: ا for أإآ, ه for ة, ي for ى).
+_CONCEPTS = {
+    "chicken": r"chicken|دجاج|فراخ", "tuna": r"tuna|تونه|تونا", "salmon": r"salmon|سلمون|سالمون",
+    "turkey": r"turkey|ديك\s*رومي|رومي", "lamb": r"lamb|mutton|ضان|خروف|غنم", "beef": r"beef|بقر|بقري",
+    "meat": r"meat|لحم(?!\s*(?:ال)?(?:ضان|بقر|بقري|غنم|خروف))", "duck": r"duck|بط|بطه", "rabbit": r"rabbit|ارنب",
+    "shrimp": r"shrimps?|prawns?|ربيان|جمبري|روبيان", "liver": r"liver|كبده|كبد", "cheese": r"cheese|جبن|جبنه",
+    "kitten": r"kittens?|junior|صغيره|صغار", "adult": r"adults?|بالغه", "sterilised": r"sterili[sz]ed|neutered|معقمه",
+    "senior": r"senior|mature|مسن|كبار\s*السن", "mother": r"mother|baby|الام", "gravy": r"gravy|sauce|broth|مرق|صلصه",
+    "jelly": r"jelly|jellies|جلي|جيلي|هلام", "pate": r"pate|pâté|باتيه", "mousse": r"mousse|موس",
+    "hairball": r"hair\s*ball|كرات\s*الشعر", "urinary": r"urinary|بولي|البوليه|المسالك",
+    "sensitive": r"sensitive|حساس|حساسه", "indoor": r"indoor|داخلي", "light": r"light|لايت",
+    "papaya": r"papaya|بابايا", "pumpkin": r"pumpkin|يقطين|قرع", "seabream": r"sea\s*bream|دنيس|دينيس",
+    "whitebait": r"whitebait", "mackerel": r"mackerel|ماكريل|اسقمري", "sardine": r"sardines?|سردين",
+    "anchovy": r"anchov(?:y|ies)|انشوفه|انشوجه", "trout": r"trout|تراوت", "herring": r"herring|رنجه", "cod": r"cod|قد",
+    "carp": r"carp|كارب|شبوط", "quail": r"quail|سمان|سماني", "venison": r"venison|deer|غزال", "boar": r"boar|خنزير",
+    "oceanfish": r"ocean\s*fish|سمك\s*المحيط", "whitefish": r"white\s*fish|سمك\s*ابيض",
+    "vegetable": r"vegetables?|veggies?|خضار|خضروات", "carrot": r"carrots?|جزر", "rice": r"rice|ارز|رز",
+    "aloe": r"aloe|صبار", "mango": r"mango|مانجو", "pineapple": r"pineapple|اناناس", "apple": r"apple|تفاح",
+    "pomegranate": r"pomegranate|رمان", "blueberry": r"blueberr(?:y|ies)|توت", "quinoa": r"quinoa|كينوا",
+    "prime": r"prime|برايم", "crab": r"crab|سلطعون|كابوريا", "squid": r"squid|حبار|كاليماري", "egg": r"eggs?|بيض",
+    "milk": r"milk|حليب", "catnip": r"catnip", "grainfree": r"grain\s*free|خالي\s*من\s*الحبوب|بدون\s*حبوب",
+    "clumping": r"clumping|متكتل|تكتل", "scented": r"scented|معطر", "unscented": r"unscented|بدون\s*رائحه|غير\s*معطر",
+    "lavender": r"lavender|لافندر|خزامى", "vanilla": r"vanilla|فانيلا", "paste": r"paste|معجون",
+    "treat": r"treats?|snacks?|مكافا[هت]|سناك", "sticks": r"sticks?|اصابع", "vitamin": r"vitamins?|فيتامين",
+    "soup": r"soup|شوربه|حساء",   # not "fillet": stores add «شرائح» to names whose English has none
+}
+_CONCEPT_RX = {k: re.compile(r"(?<![a-z؀-ۿ])(?:و|ب|بال|وال|ال|لل|مع)?(?:" + v + r")(?![a-z؀-ۿ])", re.I)
+               for k, v in _CONCEPTS.items()}
+
+
+def _norm_text(*names):
+    t = " | ".join(str(n or "") for n in names).lower()
+    t = re.sub("[أإآ]", "ا", t).replace("ة", "ه").replace("ى", "ي")
+    return re.sub(r"[ً-ْـ]", "", t)
+
+
+def name_signature(*names):
+    """(unit size, pack count, concepts) a product name states, or None
+    when it states no size."""
+    t = _norm_text(*names)
+    m = _SIZE_RX.search(t.replace(",", "."))
+    if not m:
+        return None
+    value, unit = float(m.group(1)), m.group(2).lower()
+    if unit in ("kg", "kgs", "كجم", "كغ", "كيلو", "كيلوجرام", "كيلوغرام", "ك"):
+        size = ("mass", value * 1000)
+    elif unit in ("ml", "مل"):
+        size = ("volume", value)
+    elif unit in ("l", "lt", "ltr", "liter", "litre", "liters", "litres", "لتر", "ليتر"):
+        size = ("volume", value * 1000)
+    else:
+        size = ("mass", value)
+    pack = 1
+    for rx in _PACK_RX:
+        p = rx.search(t)
+        if p:
+            n = int(p.group(p.lastindex))
+            pack = n if n > 1 else 1
+            break
+    return size, pack, frozenset(k for k, rx in _CONCEPT_RX.items() if rx.search(t))
+
+
+def _same_product(a, b):
+    (ka, va), pa, ca = a
+    (kb, vb), pb, cb = b
+    return ka == kb and abs(va - vb) <= 0.03 * max(va, vb) and pa == pb and ca and ca == cb
+
+
+def name_match(signature, candidates):
+    """The one candidate (key, signature) whose name states the same
+    product; None when none or more than one does."""
+    if signature is None:
+        return None
+    hits = [key for key, sig in candidates if sig is not None and _same_product(signature, sig)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def _group_key(row):
     from observation_contract import gtin, sku_gtin
     for v in (row.get("barcode"), row.get("sku")):
@@ -127,6 +220,12 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
     # often publish no barcode, so a barcode-only join showed products the
     # client sells as "not sold by me" (27 Oct 2026).
     matched = await _own_matches(db, own_price_fn, own_id)
+    # My key-brand products by brand, for listings no barcode joins.
+    own_sigs, own_keys = {}, set(own_key.values())
+    for p, code in own_products:
+        b = brand_in_name(p.get("name_en"), p.get("name_ar"))
+        if b:
+            own_sigs.setdefault(b, []).append((p["sku"], name_signature(p.get("name_en"), p.get("name_ar")), bool(code)))
     groups = {}
     for r in rows:
         sid = r["store_id"]
@@ -137,6 +236,14 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
         if not brand:
             continue
         own_sku = matched.get(r.get("offer_id"))
+        by_name = False
+        if not own_sku and _group_key(r) not in own_keys:
+            # Two different barcodes are two products: a listing with one
+            # is linked by name only to my products that have none.
+            has_code = _group_key(r).startswith("gtin:")
+            own_sku = name_match(name_signature(r.get("name_en"), r.get("name_ar")),
+                                 [(sku, sig) for sku, sig, coded in own_sigs.get(brand, ()) if not (has_code and coded)])
+            by_name = bool(own_sku)
         key = own_key.get(own_sku) or _group_key(r)
         g = groups.setdefault(key, {"key": key, "brand": brand, "barcode": key[5:] if key.startswith("gtin:") else None,
                                     "name_ar": None, "name_en": None, "image_url": None, "offers": {}})
@@ -150,7 +257,7 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
                             "own": False, "price": r.get("price"), "original_price": r.get("original_price"),
                             "in_stock": r.get("in_stock"), "qty": r.get("qty_available"),
                             "url": r.get("product_url"), "name": r.get("name_ar") or r.get("name_en"),
-                            "seen_at": r.get("crawled_at")}
+                            "seen_at": r.get("crawled_at"), "match": "name" if by_name else None}
     # Own offers: the same shelf price and stock as every other page. An own
     # key-brand product nobody else sells is listed too.
     if own_id:

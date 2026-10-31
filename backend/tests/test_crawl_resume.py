@@ -216,3 +216,14 @@ def test_a_store_whose_crawl_never_started_is_caught_up(monkeypatch):
     assert not {"crawled", "running", "off"} & set(ids)        # done today, crawling now, inactive
     if future.date() == now.date():
         assert "later" not in ids                               # its slot has not come yet
+
+
+def test_a_slot_before_utc_midnight_belongs_to_the_ksa_day_it_starts():
+    """31 Oct 2026: the crawl moved to 01:00 KSA = 22:00 UTC the evening
+    before; the catch-up must still find that slot inside today's KSA day."""
+    import server
+    since = datetime(2026, 10, 30, 21, 0, tzinfo=timezone.utc)          # 31 Oct 00:00 KSA
+    assert server._slot_in_ksa_day(since, 22, 0) == datetime(2026, 10, 30, 22, 0, tzinfo=timezone.utc)
+    assert server._slot_in_ksa_day(since, 1, 35) == datetime(2026, 10, 31, 1, 35, tzinfo=timezone.utc)
+    assert server._slot_in_ksa_day(since, 21, 0) == since
+    assert all(h == 22 for _, h, _ in server.DAILY_CRAWL_SCHEDULE)       # 01:00–01:55 KSA

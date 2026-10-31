@@ -203,3 +203,60 @@ def test_a_competitor_offer_joins_my_product_through_the_matcher(monkeypatch):
     item = out["items"][0]
     assert item["own_sells"] and item["own_price"] == 95.0 and item["cheapest_store"] == "Zarafa"
     assert item["name_ar"] == "تيست اوف ذا وايلد قطط"          # my own name leads the row
+
+
+def test_a_listing_without_a_barcode_links_to_my_product_only_when_its_name_states_the_same_product():
+    sig = kb.name_signature
+    mine = [("beso-tuna-gravy-24", sig("Beso Tuna in Gravy - 85g - Carton for 24 pcs", "")),
+            ("beso-tuna-gravy", sig("Beso Tuna in Gravy - 85g", "")),
+            ("beso-tuna-jelly-24", sig("Beso Wet Food Tuna in Jelly - 85g - Carton for 24 pcs", "")),
+            ("carni-kitten-6", sig("Carnilove Dry Food for Kittens Salmon & Turkey 6kg", "")),
+            ("beso-chicken-7", sig("Beso Adult Cat Food Rich in Chicken - 7kg", "بيسو طعام جاف للقطط البالغة بالدجاج - 7 كغ"))]
+    # Arabic against English, the pack and every flavour agreeing (31 Oct 2026 samples).
+    assert kb.name_match(sig("شرائح التونة بالمرق طعام رطب للقطط ــ بيسو 85غ - كرتون 24 حبه"), mine) == "beso-tuna-gravy-24"
+    assert kb.name_match(sig("شرائح التونة بالمرق طعام رطب للقطط ــ بيسو 85غ - حبه"), mine) == "beso-tuna-gravy"
+    assert kb.name_match(sig("كارنيلوف طعام جاف للقطط الصغيرة من السلمون والديك الرومي - 6 كيلوجرام"), mine) == "carni-kitten-6"
+    # Anything that differs leaves it unlinked.
+    assert kb.name_match(sig("شرائح التونة والربيان بالمرق ــ بيسو 85غ - كرتون 24 حبه"), mine) is None   # + shrimp
+    assert kb.name_match(sig("شرائح التونة بالمرق ــ بيسو 85غ - كرتون 12 حبه"), mine) is None             # 12, not 24
+    assert kb.name_match(sig("شرائح التونة بالمرق ــ بيسو 400غ"), mine) is None                           # size
+    assert kb.name_match(sig("بيسو طعام جاف للقطط البالغة مكس الدجاج مع اللحم - 7 كغ"), mine) is None       # + meat
+    assert kb.name_match(sig("بيسو طعام للقطط"), mine) is None                                             # no size
+    # Two of my products fit: no guess.
+    twins = [("a", sig("Beso Pate Beef Adult 400g", "")), ("b", sig("Beso Pate Beef Adult - 400 g", ""))]
+    assert kb.name_match(sig("باتيه اللحم البقري للقطط البالغة (400 جرام) ـــ بيسو"), twins) is None
+
+
+def test_the_catalogue_marks_a_name_link_and_never_links_two_barcodes(monkeypatch):
+    import asyncio
+    import uuid
+    from datetime import datetime, timedelta, timezone
+    from motor.motor_asyncio import AsyncIOMotorClient
+
+    async def run():
+        client = AsyncIOMotorClient(os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017"))
+        db = client[f"test_key_brands_{uuid.uuid4().hex[:8]}"]
+        try:
+            now = datetime.now(timezone.utc) - timedelta(hours=2)
+            await db.stores.insert_many([{"id": "own", "name": "Pets houses", "is_own_store": True},
+                                         {"id": "h", "name": "Hobba"}])
+            await db.my_products.insert_many([
+                {"sku": "BESO-TG-85", "name_en": "Beso Tuna in Gravy - 85g", "price": 6.0},
+                {"sku": "8681299500017", "barcode": "8681299500017", "name_en": "Beso Chicken in Gravy - 85g", "price": 6.0}])
+
+            def snap(offer, name, barcode=""):
+                return {"observation_version": 2, "is_synthetic": False, "store_id": "h", "offer_id": offer, "sku": offer,
+                        "barcode": barcode, "name_ar": name, "price": 5.5, "in_stock": True, "crawled_at": now}
+            await db.product_snapshots.insert_many([
+                snap("h1", "شرائح التونة بالمرق طعام رطب للقطط ــ بيسو 85غ"),
+                snap("h2", "شرائح الدجاج بالمرق طعام رطب للقطط ــ بيسو 85غ", barcode="8681299500024")])  # another barcode
+            return await kb.catalogue(db, own_price_fn=lambda p: p.get("price"))
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+
+    out = asyncio.run(run())
+    tuna = next(i for i in out["items"] if (i["name_en"] or "").startswith("Beso Tuna"))
+    assert tuna["own_sells"] and {o["store_name"]: o.get("match") for o in tuna["offers"]} == {"Hobba": "name", "Pets houses": None}
+    other = next(i for i in out["items"] if i["key"] == "gtin:08681299500024")
+    assert not other["own_sells"]                    # my product has a different barcode: a different product

@@ -1394,6 +1394,13 @@ async def _execute_backfill(run_id, stores, rematch):
         logger.info("[Backfill] run %s finished", run_id)
 
 
+def _slot_in_ksa_day(ksa_midnight_utc, hour, minute):
+    """When a UTC hh:mm slot falls inside the KSA day that starts at
+    `ksa_midnight_utc` (21:00 UTC): 22:00 UTC is 1 h in, 01:00 UTC is 4 h in."""
+    offset = (hour * 60 + minute - (ksa_midnight_utc.hour * 60 + ksa_midnight_utc.minute)) % (24 * 60)
+    return ksa_midnight_utc + timedelta(minutes=offset)
+
+
 async def _resume_cut_off_crawls(delay_secs=150):
     """After a restart, crawl again today's scheduled crawls the restart cut
     off (an attempt still "running" whose process stopped heartbeating), and
@@ -1430,10 +1437,8 @@ async def _resume_cut_off_crawls(delay_secs=150):
         live = {a["store_id"] async for a in db.crawl_attempts.find(
             {"started_at": {"$gte": since}, "status": "running", "boot_id": {"$in": list(alive)}}, {"store_id": 1})}
         async for st in db.stores.find({"is_active": {"$ne": False}}, {"_id": 0, "id": 1, "domain": 1}):
-            hour, minute = DAILY_CRAWL_BY_DOMAIN.get(st.get("domain", ""), (2, 0))
-            slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if slot < since:
-                slot += timedelta(days=1)          # the slot in today's KSA day
+            hour, minute = DAILY_CRAWL_BY_DOMAIN.get(st.get("domain", ""), DEFAULT_CRAWL_SLOT)
+            slot = _slot_in_ksa_day(since, hour, minute)
             if st["id"] in cut or st["id"] in live or now < slot + timedelta(minutes=15):
                 continue
             if not (await _store_crawl_today(st["id"]))[0]:
@@ -2138,34 +2143,38 @@ async def scheduled_crawl_job(store_id: str, trigger: str = "schedule"):
     await maybe_recompute_page_caches(db)
     return result
 
-# ── Daily cron schedule (Feb 2026) ──────────────────────────
-# All active stores crawl ONCE per day at 04:00–04:55 KSA time (UTC+3 → 01:00–01:55 UTC),
+# ── Daily cron schedule (Feb 2026; 01:00 KSA since 31 Oct 2026) ─
+# All active stores crawl ONCE per day at 01:00–01:55 KSA time (UTC+3 → 22:00–22:55 UTC
+# the evening before). At 04:00 KSA the queue (two crawls at a time, ~1 h a store)
+# ran into the host's 12-hourly restart (~07:15–07:40 KSA in late Oct 2026), which
+# cut CutePets and Hamtaro every morning; they finished hours later on a re-run.
 # staggered in 5-minute slots so the backend, proxy pool, and target servers never see
 # concurrent load. Priority field still exists in DB for future use but no longer drives
 # scheduling.
 DAILY_CRAWL_SCHEDULE = [
     # (domain,            UTC hour, UTC minute) — KSA = UTC + 3
-    ("zarafaksa.com",     1,  0),   # 04:00 KSA
-    ("petsysa.com",       1,  5),   # 04:05 KSA
-    ("lanapets.com",      1, 10),   # 04:10 KSA
-    ("matjarpanda.com",   1, 15),   # 04:15 KSA
-    ("caty-store.com",    1, 20),   # 04:20 KSA
-    ("aleef.com",         1, 25),   # 04:25 KSA
-    ("cutecat.com.sa",    1, 30),   # 04:30 KSA
-    ("cutepets.com.sa",   1, 35),   # 04:35 KSA
-    ("hamtaro.sa",        1, 40),   # 04:40 KSA
-    ("hobbapet.com",      1, 45),   # 04:45 KSA
-    ("mowkly.com",        1, 50),   # 04:50 KSA
-    ("pets-houses.com",   1, 55),   # 04:55 KSA
+    ("zarafaksa.com",    22,  0),   # 01:00 KSA
+    ("petsysa.com",      22,  5),   # 01:05 KSA
+    ("lanapets.com",     22, 10),   # 01:10 KSA
+    ("matjarpanda.com",  22, 15),   # 01:15 KSA
+    ("caty-store.com",   22, 20),   # 01:20 KSA
+    ("aleef.com",        22, 25),   # 01:25 KSA
+    ("cutecat.com.sa",   22, 30),   # 01:30 KSA
+    ("cutepets.com.sa",  22, 35),   # 01:35 KSA
+    ("hamtaro.sa",       22, 40),   # 01:40 KSA
+    ("hobbapet.com",     22, 45),   # 01:45 KSA
+    ("mowkly.com",       22, 50),   # 01:50 KSA
+    ("pets-houses.com",  22, 55),   # 01:55 KSA
 ]
 DAILY_CRAWL_BY_DOMAIN = {d: (h, m) for d, h, m in DAILY_CRAWL_SCHEDULE}
+DEFAULT_CRAWL_SLOT = (23, 0)        # 02:00 KSA, after the window
 
 
 def register_crawl_job(store_id, store_name, store_domain):
-    """Register a daily cron job at the store's assigned 04:00–04:55 KSA slot.
+    """Register a daily cron job at the store's assigned 01:00–01:55 KSA slot.
 
     Stores not in the hardcoded schedule (e.g. newly added via /api/stores)
-    fall back to 02:00 UTC (05:00 KSA) so they still crawl daily without
+    fall back to 23:00 UTC (02:00 KSA) so they still crawl daily without
     colliding with the scheduled window.
     """
     job_id = f"crawl_{store_id}"
@@ -2173,7 +2182,7 @@ def register_crawl_job(store_id, store_name, store_domain):
         scheduler.remove_job(job_id)
     except Exception:
         pass
-    hour, minute = DAILY_CRAWL_BY_DOMAIN.get(store_domain, (2, 0))
+    hour, minute = DAILY_CRAWL_BY_DOMAIN.get(store_domain, DEFAULT_CRAWL_SLOT)
     scheduler.add_job(
         scheduled_crawl_job,
         CronTrigger(hour=hour, minute=minute, timezone="UTC"),
@@ -2226,19 +2235,13 @@ async def list_stores(user=Depends(get_user)):
             s["product_count"] = int((last_log or {}).get("products_found") or 0)
         s["next_crawl_at"] = get_next_run(s["id"])
         # Daily cron schedule (Feb 2026) — every store crawls once per day at
-        # its assigned 04:00–04:55 KSA slot. Surface the assigned slot so the
-        # frontend can render "Daily at 04:15 KSA" etc.
-        slot = DAILY_CRAWL_BY_DOMAIN.get(s.get("domain", ""))
-        if slot:
-            utc_h, utc_m = slot
-            ksa_h = (utc_h + 3) % 24
-            s["crawl_frequency_label"] = f"Daily at {ksa_h:02d}:{utc_m:02d} KSA"
-            s["crawl_schedule_ksa"] = f"{ksa_h:02d}:{utc_m:02d}"
-            s["crawl_schedule_utc"] = f"{utc_h:02d}:{utc_m:02d}"
-        else:
-            s["crawl_frequency_label"] = "Daily at 05:00 KSA"
-            s["crawl_schedule_ksa"] = "05:00"
-            s["crawl_schedule_utc"] = "02:00"
+        # its assigned 01:00–01:55 KSA slot. Surface the assigned slot so the
+        # frontend can render "Daily at 01:15 KSA" etc.
+        utc_h, utc_m = DAILY_CRAWL_BY_DOMAIN.get(s.get("domain", ""), DEFAULT_CRAWL_SLOT)
+        ksa_h = (utc_h + 3) % 24
+        s["crawl_frequency_label"] = f"Daily at {ksa_h:02d}:{utc_m:02d} KSA"
+        s["crawl_schedule_ksa"] = f"{ksa_h:02d}:{utc_m:02d}"
+        s["crawl_schedule_utc"] = f"{utc_h:02d}:{utc_m:02d}"
         # Strip encrypted credential fields — never send to frontend
         for k in ["tier4_email", "tier4_password", "tier4_phone", "tier4_session_cookies"]:
             s.pop(k, None)
@@ -2478,7 +2481,7 @@ async def data_freshness(user=Depends(get_user)):
                 next_run_dt = nr
     config = await db.runtime_settings.find_one({"_id": "crawls"}) or {}
     if not config.get("paused"):
-        next_run_dt = now.replace(hour=1, minute=0, second=0, microsecond=0)
+        next_run_dt = now.replace(hour=DAILY_CRAWL_SCHEDULE[0][1], minute=DAILY_CRAWL_SCHEDULE[0][2], second=0, microsecond=0)
         if next_run_dt <= now:
             next_run_dt += timedelta(days=1)
 
@@ -12945,7 +12948,7 @@ async def _boot_sequence():
         stores = await db.stores.find({"is_active": True}, {"_id": 0}).to_list(100)
         for s in stores:
             register_crawl_job(s["id"], s["name"], s.get("domain", ""))
-        logger.info(f"[Scheduler] Daily crawl schedule loaded — {len(stores)} stores, 04:00–04:55 KSA window.")
+        logger.info(f"[Scheduler] Daily crawl schedule loaded — {len(stores)} stores, 01:00–01:55 KSA window.")
     except Exception:
         logger.exception("[Boot] crawl-job registration failed — the scheduler still "
                          "starts; re-register by restarting once Mongo is healthy")
@@ -12960,7 +12963,7 @@ async def _boot_sequence():
         scheduler.add_job(_scheduled_own_sync, "interval", hours=6, id="own_store_sync", replace_existing=True)
 
         # iter67 — seal the KSA day that just ended. 21:30 UTC = 00:30 Asia/Riyadh,
-        # after midnight KSA and before the 01:00-01:55 UTC crawl window opens.
+        # after midnight KSA and before the 22:00-22:55 UTC (01:00 KSA) crawl window opens.
         async def _scheduled_ledger_seal():
             try:
                 await ledger.seal_ksa_day(db)
@@ -12976,7 +12979,8 @@ async def _boot_sequence():
         asyncio.create_task(_ledger_sales_refresh(delay_secs=120))
 
         # iter78 — archive the closed KSA day to object storage. 03:00 UTC = 06:00
-        # Riyadh: after the crawl window AND after the 21:30 UTC seal.
+        # Riyadh: after the 21:30 UTC seal (the crawl window now ends ~03:00 UTC;
+        # the archive reads the closed day, not tonight's crawl).
         scheduler.add_job(scheduled_archive, CronTrigger(hour=3, minute=0, timezone="UTC"),
                           id="nightly_price_archive", replace_existing=True)
         # 17 Oct 2026 — the daily brief (09:00 KSA) and weekly report (Sunday

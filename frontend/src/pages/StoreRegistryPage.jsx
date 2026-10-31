@@ -130,7 +130,7 @@ export default function StoreRegistryPage() {
   };
 
   // Format the daily crawl slot in KSA timezone with "Today/Tomorrow" relative wording.
-  // The backend now schedules every store at a fixed 04:00–04:55 KSA daily slot.
+  // The backend schedules every store at a fixed 01:00–01:55 KSA daily slot.
   const formatNextCrawl = (iso) => {
     if (!iso) return "-";
     const next = new Date(iso);

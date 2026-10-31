@@ -138,7 +138,7 @@ export default function KeyBrandsPage() {
       { id: "competitors_in_stock", label: isRTL ? "منافسون متوفرون" : "Competitors in stock", type: "number", width: 110, align: "end" },
       { id: "offers", field: "offers.store_name", label: isRTL ? "كل المتاجر: السعر والمخزون" : "Every store: price and stock", type: "text", width: 360,
         get: (i) => i.offers.map((o) => o.store_name),
-        exportValue: (i) => i.offers.map((o) => `${o.store_name} ${o.price ?? "—"} ${o.in_stock === false ? "OOS" : ""}`.trim()),
+        exportValue: (i) => i.offers.map((o) => `${o.store_name} ${o.price ?? "—"} ${o.in_stock === false ? "OOS" : ""} ${o.match === "name" ? "(by name)" : ""}`.trim()),
         render: (i) => (
           <div className="flex flex-wrap gap-1">
             {i.offers.map((o) => (
@@ -148,6 +148,7 @@ export default function KeyBrandsPage() {
                 <span className="text-white">{o.store_name}</span>
                 <span className="text-white font-semibold">{fmt(o.price)}</span>
                 {o.in_stock === false && <span className="text-[#F59E0B]">{isRTL ? "نفد" : "OOS"}</span>}
+                {o.match === "name" && <span className="text-[#A1E4DB]" title={isRTL ? "رُبط بالاسم: نفس العلامة والحجم والعبوة والنكهة، والمتجر لا ينشر باركود" : "Linked by name: same brand, size, pack and flavour; this store publishes no barcode"}>{isRTL ? "بالاسم" : "by name"}</span>}
                 {o.url && <ExternalLink className="w-2.5 h-2.5 text-[#6AC1B5]" />}
               </a>
             ))}
@@ -156,7 +157,7 @@ export default function KeyBrandsPage() {
       ...stores.map(([sid, name]) => ({
         id: `store:${sid}`, label: isRTL ? `${name} (ريال)` : `${name} (SAR)`, type: "number", width: 110, align: "end", hidden: true,
         get: (i) => offerOf(i, sid)?.price,
-        render: (i) => { const o = offerOf(i, sid); return !o ? "—" : <span className={o.in_stock === false ? "opacity-60" : ""}>{fmt(o.price)}{o.in_stock === false && <span className="block text-xs text-[#F59E0B]">{isRTL ? "نفد" : "OOS"}</span>}</span>; },
+        render: (i) => { const o = offerOf(i, sid); return !o ? "—" : <span className={o.in_stock === false ? "opacity-60" : ""}>{fmt(o.price)}{o.in_stock === false && <span className="block text-xs text-[#F59E0B]">{isRTL ? "نفد" : "OOS"}</span>}{o.match === "name" && <span className="block text-xs text-[#A1E4DB]" title={isRTL ? "رُبط بالاسم: نفس العلامة والحجم والعبوة والنكهة، والمتجر لا ينشر باركود" : "Linked by name: same brand, size, pack and flavour; this store publishes no barcode"}>{isRTL ? "بالاسم" : "by name"}</span>}</span>; },
       })),
     ];
   }, [res.data, isRTL]);
@@ -169,6 +170,9 @@ export default function KeyBrandsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white inline-flex items-center gap-2"><Star className="w-6 h-6 text-[#1E988E]" />{isRTL ? "العلامات الرئيسية" : "Key brands"}</h1>
           <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL ? "كل منتج من هذه العلامات في كل المتاجر — بسعره ومخزونه في كل متجر" : "Every item of these brands in every store — with each store's price and stock"}</p>
+          <p className="text-xs text-[#A1E4DB] mt-1">{isRTL
+            ? "يُربط منتج المتجر بمنتجي بالباركود. إن لم ينشر المتجر باركود يُربط بالاسم فقط عندما تتطابق العلامة والحجم والعبوة وكل نكهة وعمر، ويظهر عليه «بالاسم». «لا أبيعه» تعني أن أياً من منتجاتي لا يطابقه بهذه القواعد (مثلاً كرتون وأنا أبيع الحبة)."
+            : "A store's item is linked to mine by barcode. When the store publishes no barcode it is linked by name only when brand, size, pack and every flavour and age word agree, and is marked “by name”. “Not sold by me” means none of my products matches it by these rules (e.g. a carton when I sell the single)."}</p>
         </div>
 
       </div>
