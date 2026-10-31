@@ -92,14 +92,26 @@ async def catalogue(db, own_price_fn=None, days=WINDOW_DAYS):
     proj = {k: 1 for k in ("sku", "barcode", "store_id", "store_name", "offer_id", "name_ar", "name_en", "brand", "price",
                            "original_price", "in_stock", "qty_available", "product_url", "image_url", "crawled_at")}
     name_rx = {"$regex": MONGO_RX, "$options": "i"}
-    rows = []
-    # One store at a time: each read stays inside the 10 s operation limit.
+    latest = {}
+    # One store and one day at a time: each read stays inside the 10 s
+    # operation limit. A whole week of one store's snapshots passed it once
+    # the key-brand sweep grew the stores' listings, and the page kept
+    # serving its 29 Oct copy (31 Oct 2026).
     for sid in stores:
         if sid == own_id:
             continue
-        rows += await complete_latest(db, latest_pipeline(
-            {"observation_version": 2, "is_synthetic": False, "store_id": sid, "crawled_at": {"$gte": since},
-             "$or": [{"name_ar": name_rx}, {"name_en": name_rx}, {"brand": name_rx}]}, proj))
+        end = datetime.now(timezone.utc)
+        while end > since:
+            start = max(since, end - timedelta(days=1))
+            for r in await complete_latest(db, latest_pipeline(
+                    {"observation_version": 2, "is_synthetic": False, "store_id": sid,
+                     "crawled_at": {"$gte": start, "$lt": end},
+                     "$or": [{"name_ar": name_rx}, {"name_en": name_rx}, {"brand": name_rx}]}, proj)):
+                prev = latest.get((sid, r.get("offer_id")))
+                if prev is None or str(prev.get("crawled_at")) < str(r.get("crawled_at")):
+                    latest[(sid, r.get("offer_id"))] = r
+            end = start
+    rows = list(latest.values())
     # The own catalogue (the My Products records), read first: its products
     # are the rows competitors' offers join.
     own_products, own_key = [], {}

@@ -45,11 +45,20 @@ def test_the_search_terms_find_the_brand_they_search_for():
                 assert kb.brand_in_name(t) == brand, t
 
 
-def test_catalogue_groups_every_store_by_barcode_and_marks_mine():
+def test_catalogue_groups_every_store_by_barcode_and_marks_mine(monkeypatch):
     import asyncio
+    import snapshot_reads
     import uuid
     from datetime import datetime, timedelta, timezone
     from motor.motor_asyncio import AsyncIOMotorClient
+
+    windows, real = [], snapshot_reads.complete_latest
+
+    async def spy(db, pipeline):
+        span = pipeline[0]["$match"]["crawled_at"]
+        windows.append(span["$lt"] - span["$gte"])
+        return await real(db, pipeline)
+    monkeypatch.setattr(snapshot_reads, "complete_latest", spy)
 
     async def run():
         client = AsyncIOMotorClient(os.environ.get("MONGO_URL", "mongodb://127.0.0.1:27017"))
@@ -94,6 +103,7 @@ def test_catalogue_groups_every_store_by_barcode_and_marks_mine():
     assert items["offer:l2"]["brand"] == "Carnilove"                                          # found by the store's brand
     assert len(out["items"]) == 4                     # no Royal Canin, no closed store, nothing older than the window
     assert {b["brand"]: b["items"] for b in out["brands"]}["Carnilove"] == 2
+    assert windows and max(windows) <= timedelta(days=1)   # each read is one store, one day (10 s limit)
 
 
 def test_a_store_brand_tag_naming_a_key_brand_labels_the_offer():
