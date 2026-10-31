@@ -30,12 +30,14 @@ def _dataset(rev, now, rows=2):
 KEY = "my_products:my-products-read-v1:pv:abcdef123456:{day}:days=30"
 
 
-def test_previous_key_pattern_matches_any_day_same_window():
+def test_previous_key_pattern_matches_any_day_and_build_same_window():
     import re
     pat = re.compile(mpc.previous_key_pattern(KEY.format(day="2026-10-12")))
     assert pat.match(KEY.format(day="2026-10-11"))
+    assert pat.match(KEY.format(day="2026-10-11").replace("abcdef123456", "000000000000"))   # the last Republish
     assert not pat.match(KEY.format(day="2026-10-11").replace("days=30", "days=7"))
-    assert not pat.match(KEY.format(day="2026-10-11").replace("abcdef123456", "000000000000"))
+    assert not pat.match(KEY.format(day="2026-10-11").replace(":pv:", ":pv2:"))                # another price policy
+    assert not pat.match(KEY.format(day="2026-10-11").replace("read-v1", "read-v2"))           # another schema
 
 
 def test_compute_dataset_tolerates_a_race_only_when_asked():

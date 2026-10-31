@@ -35,7 +35,7 @@ function Decisions({ isRTL }) {
     refetchInterval: (query) => (Object.values(query.state.data || {}).some((v) => v === null) ? 20000 : false) });
   const d = q.data || {};
   const cards = [];
-  const pending = isRTL ? "قيد التحضير…" : "being prepared…";
+  const pending = isRTL ? "جارٍ التحميل…" : "loading…";
   if ("pricing" in d) cards.push({ key: "lower", to: "/pricing?tab=recommendations&action=lower", icon: TrendingDown, tone: "#EF4444",
     value: d.pricing?.lower, title: isRTL ? "أسعار أعلى من الأرخص" : "Prices above the cheapest",
     sub: d.pricing ? (isRTL ? "اقتراح خفض السعر لمطابقة أرخص منافس متوفر" : "suggested cuts to match the cheapest in-stock seller") : pending });

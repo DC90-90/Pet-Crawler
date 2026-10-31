@@ -3450,13 +3450,14 @@ def _stale_callback():
 
 
 async def _previous_page_cache(db, base, days):
-    """The newest complete entry for this page and window computed by this
-    build and price policy, on any day and revision, within the age limit."""
+    """The newest complete entry for this page and window computed under this
+    price policy, by any build, on any day and revision, within the age limit.
+    Any build (31 Oct 2026): a Republish is a new build, and every page
+    answered "being prepared" until this build had rebuilt it (~15 minutes)."""
     import re as _re
-    from investigation_status import build_identity
-    prefix = f"{base}:{price_cohort.POLICY_VERSION}:{build_identity()['code_digest'][:12]}:"
+    prefix = f"{base}:{price_cohort.POLICY_VERSION}:"
     doc = await db.dashboard_cache.find_one(
-        {"base": base, "window_days": days, "key": {"$regex": "^" + _re.escape(prefix)}},
+        {"base": base, "window_days": days, "key": {"$regex": "^" + _re.escape(prefix) + "[0-9a-f]+:"}},
         cache_blobs.HEAD_PROJECTION, sort=[("computed_at", -1)])
     if doc is None or doc.get("computed_at") is None:
         return None, None

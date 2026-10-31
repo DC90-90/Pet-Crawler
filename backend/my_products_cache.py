@@ -105,10 +105,15 @@ def usable_previous(doc, max_age, now):
 
 
 def previous_key_pattern(key):
-    """Same build, policy and window on any KSA day: keys end ':YYYY-MM-DD:days=N'."""
+    """Same schema, price policy and window, from any build and KSA day: keys
+    end ':<build>:YYYY-MM-DD:days=N'. Any build (31 Oct 2026): every Republish
+    is a new build, and pages answered "being prepared" for ~15 minutes after
+    each one; the last build's result is served, labelled, while this one builds."""
     import re
     prefix, _day, window = key.rsplit(":", 2)
-    return "^" + re.escape(prefix + ":") + r"\d{4}-\d{2}-\d{2}" + re.escape(":" + window) + "$"
+    head, _build = prefix.rsplit(":", 1)
+    return ("^" + re.escape(head + ":") + r"[0-9a-f]+:" + r"\d{4}-\d{2}-\d{2}"
+            + re.escape(":" + window) + "$")
 
 
 def _size_of(doc):
