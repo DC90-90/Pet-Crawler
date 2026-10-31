@@ -271,6 +271,7 @@ def test_the_wrong_name_links_found_on_31_oct_stay_unlinked():
         ("ظرف شيزر دجاج مع سمك القاروص 70 جرام", "Schesir Silver Chicken - 70g", "شيزر سيلفر دجاج 70 جرام"),
         ("جيم كات عصار فيتامين مع البيوتين لتحسين جودة الشعر والجلد50جرام", "Gimcat Food Supplement for Cat Contains Taurine 50gm", "جيم كات عصار فيتامين تورين 50 جرام"),
         ("جيم كات مكافآت للقطط, ثلاث نكهات مختلفة -150 جرام", "GimCat Nutri Pockets Sea Mix 150gm", "جيم كات مكافآت سي ميكس 150 جرام"),
+        ("Farmina Vet Life Obesity Veterinary Cat Wet Food with Chicken- 12 Pieces*85 g", "Farmina Wet Food Cat Vet Life Convalescence Chicken - 85g - Carton for 12 pcs", ""),
         ("للكيتن - موس السالمون والدجاج 70 غ طعام رطب شيزر بيبي اظرف - 70 غ", "Schesir Skin & Coat Salmon With Chicken in Mousse - 70g", "شيزر موس السالمون والدجاج للجلد والفرو 70 جرام"),
     ]
     for theirs, mine_en, mine_ar in cases:

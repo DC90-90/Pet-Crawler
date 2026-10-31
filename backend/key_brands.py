@@ -96,6 +96,8 @@ _CONCEPTS = {
     "dog": r"dogs?|pupp(?:y|ies)|كلب|كلاب|جرو|جراء", "surimi": r"surimi|سوريمي",
     "seabass": r"sea\s*bass|قاروص|levrek", "seafood": r"sea\s*food|sea\s*mix|ماكولات\s*بحريه",
     "taurine": r"taurine|تورين", "biotin": r"biotin|بيوتين", "skincoat": r"skin|coat|جلد|فرو",
+    "obesity": r"obesity|weight|سمنه|الوزن", "convalescence": r"convalescence|recovery|نقاهه",
+    "renal": r"renal|kidney|كلى|الكلي", "diabetic": r"diabet\w*|سكري", "gastro": r"gastro\w*|intestinal|هضم\w*",
     "soup": r"soup|شوربه|حساء",   # not "fillet": stores add «شرائح» to names whose English has none
 }
 # "box + litter", a gift, "free": not the product alone. "Senior 7+", "grain free" are.
