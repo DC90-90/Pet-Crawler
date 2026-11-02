@@ -36,6 +36,7 @@ def test_every_menu_page_opens_the_calls_it_makes():
                     "/api/discounts/top-pct", "/api/promotions/calendar", "/api/scanner/opportunities"],
         "market_share": ["/api/market-share/overview", "/api/market-share/brands"],
         "key_brands": ["/api/brands/key", "/api/brands/key/audit"],
+        "sales_prices": ["/api/sales-prices"],
         "opportunities": ["/api/insights/top-sellers", "/api/insights/restock-opportunities", "/api/stock/planner",
                           "/api/market-share/missing-products"],
         "competitors": ["/api/stores/", "/api/stores/abc"],
@@ -55,6 +56,11 @@ def test_pages_stay_separate_and_unknown_calls_fail_closed():
     assert not allowed(["key_brands"], "/api/pricing/recommendations")
     assert not allowed(["alerts"], "/api/data-quality/coverage")
     assert not allowed(["pricing"], "/api/something-new")
+    # The client's tables open nothing else, and nothing else opens them (2 Nov 2026).
+    assert not allowed(["sales_prices"], "/api/market-share/my-products")
+    assert not allowed(["sales_prices"], "/api/pricing/recommendations")
+    assert not allowed(["market_share", "pricing", "overview"], "/api/sales-prices")
+    assert allowed(["sales_prices"], "/api/stores/brands")         # store names and logos
     assert not allowed(["pricing"], "/api/admin/users")
     assert not allowed(["pricing"], "/api/pricing/apply", "POST")       # writes stay with the super admin
 

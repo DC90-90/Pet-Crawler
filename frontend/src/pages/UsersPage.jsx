@@ -11,6 +11,7 @@ import { RequestError } from "@/components/RequestError";
 // One permission per menu page, named as in the menu (23 Oct 2026).
 const PAGE_LABELS = {
   overview: "Overview",
+  sales_prices: "Sales & prices (simple tables)",
   my_products: "My Products",
   pricing: "Pricing",
   market_share: "Market Share",

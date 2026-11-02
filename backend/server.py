@@ -12381,6 +12381,19 @@ async def market_share_missing(days: int = Query(30),
             "opportunity_value": round(sum(r.get("market_revenue") or 0 for r in rows), 2)}
 
 
+@router.get("/sales-prices")
+async def sales_prices(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+    """The client's two plain tables, units sold and prices per store, one row
+    per own product (client_tables.py, 2 Nov 2026). Only the windows the page
+    caches are built for, so this never computes on a visit."""
+    if days not in _INSIGHTS_STD:
+        raise HTTPException(422, f"days must be one of {list(_INSIGHTS_STD)}")
+    ds, meta = await _market_share_dataset(db, days)
+    _apply_cache_headers(response, meta)
+    import client_tables
+    return client_tables.build(ds)
+
+
 @router.get("/market-share/brands")
 async def market_share_brands(days: int = Query(30), category: Optional[str] = Query(None),
                               comparison_mode: str = "all", competitor_ids: Optional[str] = None,

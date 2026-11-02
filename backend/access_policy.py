@@ -9,7 +9,8 @@ ticked was refused them. Old keys are still read and translated.
 from fastapi import HTTPException
 
 # The menu, in order; the Users page shows these.
-PAGES = ["overview", "my_products", "pricing", "market_share", "key_brands", "opportunities",
+# sales_prices (2 Nov 2026): the client's two plain tables, units and prices.
+PAGES = ["overview", "sales_prices", "my_products", "pricing", "market_share", "key_brands", "opportunities",
          "competitors", "reports", "data_quality", "alerts", "import", "settings"]
 
 # What each retired key opened, in today's pages.
@@ -48,6 +49,7 @@ READ_RULES = (
     ("/api/promotions", {"pricing"}),
     ("/api/stock", {"opportunities", "pricing"}),
     ("/api/brands/key", {"key_brands"}),
+    ("/api/sales-prices", {"sales_prices"}),
     ("/api/data-quality", {"data_quality"}),
     ("/api/reports", {"reports"}),
     ("/api/digests", {"reports", "overview"}),

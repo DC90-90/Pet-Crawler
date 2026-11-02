@@ -29,6 +29,7 @@ const OpportunitiesPage = lazy(() => import("@/pages/OpportunitiesPage"));
 const StoreRegistryPage = lazy(() => import("@/pages/StoreRegistryPage"));
 const DataQualityPage = lazy(() => import("@/pages/DataQualityPage"));
 const KeyBrandsPage = lazy(() => import("@/pages/KeyBrandsPage"));
+const SalesPricesPage = lazy(() => import("@/pages/SalesPricesPage"));
 const ReportsPage = lazy(() => import("@/pages/ReportsPage"));
 const AlertsPage = lazy(() => import("@/pages/AlertsPage"));
 const CompetitorProfilePage = lazy(() => import("@/pages/CompetitorProfilePage"));
@@ -127,6 +128,23 @@ function ProtectedRoute({ children, pageKey, pageKeys }) {
   return <Suspense fallback={<PageLoader />}>{children}</Suspense>;
 }
 
+// Where each page lives, in menu order. A user without the Overview lands on
+// the first page they may open instead of "no access" (the client's
+// tables-only account, 2 Nov 2026).
+const PAGE_HOME = [["overview", "/"], ["sales_prices", "/sales-prices"], ["my_products", "/products"],
+  ["pricing", "/pricing"], ["market_share", "/market-share"], ["key_brands", "/key-brands"],
+  ["opportunities", "/opportunities"], ["competitors", "/stores"], ["reports", "/reports"],
+  ["data_quality", "/data-quality"], ["alerts", "/alerts"], ["import", "/import"], ["settings", "/settings"]];
+
+function HomeRoute() {
+  const { user } = useAuth();
+  if (user && !canAccessPage(user, "overview")) {
+    const home = PAGE_HOME.find(([k]) => canAccessPage(user, k));
+    return <Navigate to={home ? home[1] : "/no-access"} replace />;
+  }
+  return <ProtectedRoute pageKey="overview"><OverviewPage /></ProtectedRoute>;
+}
+
 function SuperAdminRoute({ children }) {
   const { user, checking } = useAuth();
   if (checking) return <div className="flex items-center justify-center min-h-screen bg-[#090E1C]"><div className="w-8 h-8 rounded-full border-2 border-[#1E988E] border-t-transparent animate-spin" /></div>;
@@ -180,7 +198,8 @@ function AppLayout() {
         </div>
         <div className="flex-1 min-w-0">
         <ReleaseBoundary><Routes>
-          <Route path="/" element={<ProtectedRoute pageKey="overview"><OverviewPage /></ProtectedRoute>} />
+          <Route path="/" element={<HomeRoute />} />
+          <Route path="/sales-prices" element={<ProtectedRoute pageKey="sales_prices"><SalesPricesPage /></ProtectedRoute>} />
           <Route path="/products" element={<ProtectedRoute pageKey="my_products"><MyProductsPage /></ProtectedRoute>} />
           <Route path="/pricing" element={<ProtectedRoute pageKey="pricing"><PricingPage /></ProtectedRoute>} />
           <Route path="/opportunities" element={<ProtectedRoute pageKey="opportunities"><OpportunitiesPage /></ProtectedRoute>} />

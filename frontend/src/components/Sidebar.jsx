@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth, canAccessPage } from "@/App";
 import { useI18n } from "@/lib/i18n";
-import { Package, Store, LogOut, Languages, Bell, Tag, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X, LayoutDashboard, FileText, Users } from "lucide-react";
+import { Package, Store, LogOut, Languages, Bell, Tag, Settings, ChevronLeft, ChevronRight, Upload, Sun, Moon, ShieldCheck, PieChart, X, LayoutDashboard, FileText, Users, Table2 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { SECTIONS } from "@/components/SectionTabs";
 
@@ -10,6 +10,7 @@ import { SECTIONS } from "@/components/SectionTabs";
 // market share, key brands and opportunities as tabs (SectionTabs).
 const MAIN = [
   { to: "/", pageKeys: ["overview"], icon: LayoutDashboard, en: "Overview", ar: "نظرة عامة", end: true },
+  { to: "/sales-prices", pageKeys: ["sales_prices"], icon: Table2, en: "Sales & prices", ar: "المبيعات والأسعار" },
   { to: "/products", pageKeys: ["my_products"], icon: Package, en: "My products", ar: "منتجاتي" },
   { to: "/pricing", pageKeys: ["pricing"], icon: Tag, en: "Pricing", ar: "التسعير" },
   { section: "market", pageKeys: ["market_share", "key_brands", "opportunities"], icon: PieChart, en: "Market", ar: "السوق" },
