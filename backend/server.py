@@ -3573,6 +3573,16 @@ def _refresh_stored_views():
         except Exception as e:   # noqa: BLE001 — the page still refreshes on its next visit
             started[name] = f"ERROR: {str(e)[:80]}"
             logger.exception("[ApiCache] refresh of %s not started", name)
+
+    async def sales_prices_one_by_one():
+        # One window at a time: each reads a large market dataset.
+        for days in _INSIGHTS_STD:
+            try:
+                await _sales_prices_tables.refresh(days=days)
+            except Exception:   # noqa: BLE001 — logged by api_cache; the next window still runs
+                pass
+    asyncio.create_task(sales_prices_one_by_one())
+    started["sales_prices"] = "started"
     return started
 
 
@@ -12382,14 +12392,20 @@ async def market_share_missing(days: int = Query(30),
 
 
 @router.get("/sales-prices")
-async def sales_prices(days: int = Query(30), response: Response = None, user=Depends(get_user)):
+async def sales_prices(days: int = Query(30), user=Depends(get_user)):
     """The client's two plain tables, units sold and prices per store, one row
     per own product (client_tables.py, 2 Nov 2026). Only the windows the page
-    caches are built for, so this never computes on a visit."""
+    caches are built for. Built from the market dataset this took 6-18 s a
+    visit, so the finished tables are stored and refreshed with the page
+    caches (_refresh_stored_views)."""
     if days not in _INSIGHTS_STD:
         raise HTTPException(422, f"days must be one of {list(_INSIGHTS_STD)}")
-    ds, meta = await _market_share_dataset(db, days)
-    _apply_cache_headers(response, meta)
+    return await _sales_prices_tables(days=days)
+
+
+@api_cache.stored(1800, lambda: db)
+async def _sales_prices_tables(days: int):
+    ds, _meta = await _market_share_dataset(db, days)
     import client_tables
     return client_tables.build(ds)
 

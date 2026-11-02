@@ -129,7 +129,7 @@ def test_rebuild_and_sales_map_through_the_evidence_ledger(monkeypatch):
                                                _row("z", "b", "2026-10-12", 3), _row("z", "b", "2026-10-13", 3)])
             await db.daily_ledger_store.insert_many([{"store_id": "z", "ksa_date": d, "sealed_at": now}
                                                      for d in ("2026-10-11", "2026-10-12", "2026-10-13")])
-            await db.observation_events.insert_one({"store_id": "z", "sku": "a", "offer_id": "offer-a", "observed_at": now})
+            await db.products.insert_one({"store_id": "z", "sku": "a", "offer_id": "offer-a"})
             first = await ledger_sales.rebuild_if_stale(db, now=now)
             again = await ledger_sales.rebuild_if_stale(db, now=now)      # same sealed day: no-op
             start, end = ledger.sealed_ksa_window(30, now)
@@ -143,3 +143,51 @@ def test_rebuild_and_sales_map_through_the_evidence_ledger(monkeypatch):
     assert row["units"] == 5 and row["revenue"] == 100.0 and row["days"] == ["2026-10-12", "2026-10-13"]
     zero = sales[("z", "b")]                                             # measured: sold nothing
     assert zero["units"] == 0 and zero["revenue"] == 0 and zero["days"] == ["2026-10-13"]
+
+
+def _scratch_db():
+    from motor.motor_asyncio import AsyncIOMotorClient
+    from test_p0_my_products_baseline import _loopback_mongo_url
+    client = AsyncIOMotorClient(_loopback_mongo_url())
+    return client, client["ls_" + uuid.uuid4().hex]
+
+
+def test_offers_come_from_the_newest_ledger_row_then_the_product_record():
+    # The nightly rebuild stopped after 21 Oct 2026; offers no longer come
+    # from a sort over every observation event ever recorded.
+    async def scenario():
+        client, db = _scratch_db()
+        try:
+            await db.products.insert_many([{"store_id": "z", "sku": "a", "offer_id": "from-product"},
+                                           {"store_id": "z", "sku": "b", "offer_id": "b-product"},
+                                           {"store_id": "y", "sku": "a", "offer_id": "other-store"}])
+            rows = [{**_row("z", "a", "2026-10-11", 5), "offer_id": "old"},
+                    {**_row("z", "a", "2026-10-12", 4), "offer_id": "new"},
+                    _row("z", "b", "2026-10-12", 4)]                           # a row filled from snapshots
+            return await ledger_sales.offer_index(db, rows, ["z"])
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+    assert asyncio.run(scenario()) == {("z", "a"): "new", ("z", "b"): "b-product"}
+
+
+def test_a_failed_rebuild_is_kept_where_the_status_page_shows_it(monkeypatch):
+    async def broken(db, rows, store_ids):
+        raise TimeoutError("operation exceeded time limit")
+    monkeypatch.setattr(ledger_sales, "offer_index", broken)
+    now = datetime(2026, 10, 14, 12, tzinfo=timezone.utc)
+
+    async def scenario():
+        client, db = _scratch_db()
+        try:
+            await db.stores.insert_one({"id": "z", "name": "Zid A", "platform": "zid"})
+            try:
+                await ledger_sales.rebuild(db, now=now)
+            except TimeoutError:
+                pass
+            return await ledger_sales.meta(db)
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+    failure = asyncio.run(scenario())["last_failure"]
+    assert failure["step"] == "offers" and "time limit" in failure["error"]

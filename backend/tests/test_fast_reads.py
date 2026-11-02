@@ -137,11 +137,22 @@ def test_the_page_cache_rebuild_refreshes_the_overview_views(monkeypatch):
     for name in ("key_brands_view", "stock_planner_view", "data_quality_matches"):
         monkeypatch.setattr(getattr(server, name), "refresh", lambda name=name, **kw: called.append((name, kw)))
 
+    async def table_refresh(**kw):
+        called.append(("sales_prices", kw))
+    monkeypatch.setattr(server._sales_prices_tables, "refresh", table_refresh)
+
     async def recompute(db):
         return {"pages": 1.0}
     monkeypatch.setattr(server, "recompute_page_caches", recompute)
-    stats = asyncio.run(server.maybe_recompute_page_caches(None, force=True))
-    assert stats["stored_views"] == {"key_brands": "started", "stock_planner": "started", "matches": "started"}
+
+    async def run():
+        stats = await server.maybe_recompute_page_caches(None, force=True)
+        await asyncio.sleep(0.05)                     # the tables refresh one window after another
+        return stats
+    stats = asyncio.run(run())
+    assert stats["stored_views"] == {"key_brands": "started", "stock_planner": "started", "matches": "started",
+                                     "sales_prices": "started"}
+    assert [kw["days"] for name, kw in called if name == "sales_prices"] == [7, 14, 30, 90]
     assert ("stock_planner_view", {"user": None, "days": 30, "lead_days": 7, "cover_days": 30}) in called
     assert ("key_brands_view", {"user": None}) in called
 

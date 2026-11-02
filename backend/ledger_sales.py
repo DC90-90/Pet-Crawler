@@ -46,7 +46,7 @@ DEDUPE_MIN_QTY = 10           # small drops (2 -> 1) coincide by chance; never d
 BUILD_DAYS = 70
 LEASE_KEY = "ledger-sales-rebuild"
 _ROW_FIELDS = {"_id": 0, "store_id": 1, "sku": 1, "ksa_date": 1, "qty_available": 1,
-               "sold_count_cumulative": 1, "close_price": 1, "in_stock": 1}
+               "sold_count_cumulative": 1, "close_price": 1, "in_stock": 1, "offer_id": 1}
 
 
 def _num(v):
@@ -231,13 +231,27 @@ async def fill_ledger_holes(db, rows, store_ids, read_from, end_date):
     return filled, pairs
 
 
-async def offer_index(db):
-    """(store_id, sku) -> latest offer_id, from the immutable observation events."""
+async def offer_index(db, rows, store_ids):
+    """(store_id, sku) -> offer_id: the newest ledger row that names one, else
+    the store's product record (read store by store, on its index).
+
+    This was one aggregation that sorted every observation event ever
+    recorded. The nightly rebuild stopped after 21 Oct 2026 (found 2 Nov:
+    no sales after that day on any page), and that ever-growing sort was the
+    one read here able to pass the 10 s limit on each production operation."""
     out = {}
-    pipeline = [{"$match": {"offer_id": {"$type": "string"}}}, {"$sort": {"observed_at": 1}},
-                {"$group": {"_id": {"s": "$store_id", "k": "$sku"}, "o": {"$last": "$offer_id"}}}]
-    async for r in db.observation_events.aggregate(pipeline, allowDiskUse=True):
-        out[(r["_id"]["s"], r["_id"]["k"])] = r["o"]
+    for sid in store_ids:
+        async for p in db.products.find({"store_id": sid, "offer_id": {"$type": "string"}},
+                                        {"_id": 0, "sku": 1, "offer_id": 1}).batch_size(5000):
+            if p.get("sku"):
+                out.setdefault((sid, p["sku"]), p["offer_id"])
+    newest = {}
+    for r in rows:
+        if r.get("offer_id") and r.get("sku"):
+            key = (r["store_id"], r["sku"])
+            if r["ksa_date"] >= newest.get(key, ""):
+                newest[key] = r["ksa_date"]
+                out[key] = r["offer_id"]
     return out
 
 
@@ -254,28 +268,54 @@ async def ensure_indexes(db):
 
 
 async def rebuild(db, days=BUILD_DAYS, now=None):
-    """Materialize the window ending with the last sealed KSA day."""
+    """Materialize the window ending with the last sealed KSA day. A failure
+    is kept in the meta (`last_failure`, shown by /admin/ledger-sales/status):
+    it only reached the log before, and the rebuild failed unseen for 12 days."""
+    step = ["start"]
+    try:
+        return await _rebuild(db, days, now, step)
+    except BaseException as exc:
+        try:
+            await db.ledger_sales_meta.update_one({"_id": "current"}, {"$set": {"last_failure": {
+                "at": datetime.now(timezone.utc), "step": step[0],
+                "error": f"{type(exc).__name__}: {str(exc)[:400]}"}}}, upsert=True)
+        except Exception:  # noqa: BLE001 — the original failure is what matters
+            logger.warning("[LedgerSales] could not record the failure", exc_info=True)
+        raise
+
+
+async def _rebuild(db, days, now, step):
     import ledger
     now = now or datetime.now(timezone.utc)
     end_date = ledger.ksa_day_str(now - timedelta(days=1))
     start_date = ledger.ksa_day_str(now - timedelta(days=days))
     read_from = ledger.ksa_day_str(now - timedelta(days=days + MAX_GAP_DAYS))
+    step[0] = "stores"
     stores = {s["id"]: s async for s in db.stores.find({}, {"_id": 0, "id": 1, "name": 1, "platform": 1})}
     sealed = {(r["store_id"], r["ksa_date"]) async for r in db.daily_ledger_store.find(
         {"ksa_date": {"$gte": read_from, "$lte": end_date}, "sealed_at": {"$ne": None}},
         {"_id": 0, "store_id": 1, "ksa_date": 1})}
-    rows = await db.daily_ledger.find({"ksa_date": {"$gte": read_from, "$lte": end_date}},
-                                      _ROW_FIELDS).batch_size(5000).to_list(None)
+    # Store by store on the (store_id, ksa_date) index: every production
+    # operation has 10 s.
+    step[0] = "ledger rows"
+    rows = []
+    for sid in stores:
+        rows += await db.daily_ledger.find({"store_id": sid, "ksa_date": {"$gte": read_from, "$lte": end_date}},
+                                           _ROW_FIELDS).batch_size(5000).to_list(None)
+    step[0] = "ledger holes"
     filled, filled_pairs = await fill_ledger_holes(db, rows, list(stores), read_from, end_date)
     rows += filled
     sealed |= set(filled_pairs)        # completed days only: end_date is yesterday
-    index = await offer_index(db)
+    step[0] = "offers"
+    index = await offer_index(db, rows, list(stores))
+    step[0] = "compute"
     facts, groups, observed = await asyncio.to_thread(compute, rows, sealed, start_date, end_date, stores, index)
     build = f"{now.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
     docs = [{"_id": stable_id(VERSION, build, f["store_id"], f["offer_id"] or f["sku"], f["date"]), "build": build,
              **f, "units": round(f["units"], 2), "revenue": round(f["revenue"], 2)} for f in facts]
     obs_docs = [{"_id": stable_id(VERSION, build, o["store_id"], o["offer_id"] or o["sku"]), "build": build,
                  **o, "first": o["dates"][0], "last": o["dates"][-1]} for o in observed]
+    step[0] = "write"
     await ensure_indexes(db)
     for coll, rows_out in ((db.ledger_sales_daily, docs), (db.ledger_sales_observed, obs_docs)):
         for i in range(0, len(rows_out), 5000):
@@ -284,7 +324,8 @@ async def rebuild(db, days=BUILD_DAYS, now=None):
         "build": build, "built_at": now, "start_date": start_date, "end_date": end_date,
         "facts": len(docs), "observed": len(obs_docs), "groups": groups, "version": VERSION,
         "filled_store_days": [{"store": (stores.get(s) or {}).get("name", s), "date": d} for s, d in sorted(filled_pairs)],
-        "filled_rows": len(filled)}}, upsert=True)
+        "filled_rows": len(filled)}, "$unset": {"last_failure": ""}}, upsert=True)
+    step[0] = "clean up"
     await db.ledger_sales_daily.delete_many({"build": {"$ne": build}})
     await db.ledger_sales_observed.delete_many({"build": {"$ne": build}})
     # Cached pages are keyed on the observation revision: new evidence, new pages.
