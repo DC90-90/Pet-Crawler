@@ -5,7 +5,6 @@ import { ShieldCheck, UserPlus, Trash2, KeyRound, ChevronDown, ChevronRight, Loc
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/App";
-import { ADMIN_READ_ONLY_REASON } from "@/lib/releaseActions";
 import { RequestError } from "@/components/RequestError";
 
 // One permission per menu page, named as in the menu (23 Oct 2026).
@@ -241,11 +240,10 @@ function UserRow({ u, allPages, onChange }) {
           </span>
           {!locked && (
             <button
-              disabled
               onClick={deleteUser}
               className="p-2 rounded hover:bg-[#EF4444]/10 transition"
               style={{ color: "#EF4444" }}
-              title={ADMIN_READ_ONLY_REASON}
+              title={`Delete ${u.email}`}
               data-testid={`delete-user-${u.id}`}
             >
               <Trash2 className="w-4 h-4" />
@@ -266,7 +264,7 @@ function UserRow({ u, allPages, onChange }) {
       )}
 
       {expanded && !locked && (
-        <fieldset disabled title={ADMIN_READ_ONLY_REASON} data-testid={`user-readonly-fields-${u.id}`} className="px-4 pb-4 space-y-4 min-w-0" style={{ borderTop: "1px solid #13625F" }}>
+        <div data-testid={`user-fields-${u.id}`} className="px-4 pb-4 space-y-4 min-w-0" style={{ borderTop: "1px solid #13625F" }}>
           <div className="pt-4">
             <label className="text-[10px] uppercase tracking-wider mb-2 block" style={{ color: "#A1E4DB", fontFamily: "'JetBrains Mono', monospace" }}>Role</label>
             <select
@@ -339,7 +337,7 @@ function UserRow({ u, allPages, onChange }) {
               {pwForm.saving ? "Saving..." : "Update"}
             </Button>
           </form>
-        </fieldset>
+        </div>
       )}
     </div>
   );
@@ -403,10 +401,10 @@ export default function UsersPage() {
         />
       </div>
 
-      <p className="text-xs text-amber-300" data-testid="users-readonly-reason">{ADMIN_READ_ONLY_REASON}</p>
-      <fieldset disabled title={ADMIN_READ_ONLY_REASON} className="min-w-0" data-testid="create-user-readonly">
-        <CreateUserForm allPages={data.all_pages} onCreated={fetchUsers} />
-      </fieldset>
+      {/* Unlocked 2 Nov 2026: a 10 Oct release-safety pass left every control
+          disabled, so the owner could not add, edit or remove an account. The
+          server already limits these calls to the super admin. */}
+      <CreateUserForm allPages={data.all_pages} onCreated={fetchUsers} />
 
       <div data-testid="users-list">
         {loading && <p className="text-xs" style={{ color: "#A1E4DB" }}>Loading...</p>}
