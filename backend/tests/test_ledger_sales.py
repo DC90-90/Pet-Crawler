@@ -191,3 +191,19 @@ def test_a_failed_rebuild_is_kept_where_the_status_page_shows_it(monkeypatch):
             client.close()
     failure = asyncio.run(scenario())["last_failure"]
     assert failure["step"] == "offers" and "time limit" in failure["error"]
+
+
+def test_old_builds_are_dropped_in_batches():
+    async def scenario():
+        client, db = _scratch_db()
+        try:
+            await db.ledger_sales_daily.insert_many([{"build": "old", "n": i} for i in range(25)]
+                                                    + [{"build": "new", "n": i} for i in range(3)])
+            await db.ledger_sales_observed.insert_many([{"build": "old"}, {"build": "new"}])
+            await ledger_sales.drop_old_builds(db, "new", batch=10)
+            return (sorted(await db.ledger_sales_daily.distinct("build")), await db.ledger_sales_daily.count_documents({}),
+                    await db.ledger_sales_observed.distinct("build"))
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+    assert asyncio.run(scenario()) == (["new"], 3, ["new"])

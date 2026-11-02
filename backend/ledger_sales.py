@@ -325,11 +325,11 @@ async def _rebuild(db, days, now, step):
         "facts": len(docs), "observed": len(obs_docs), "groups": groups, "version": VERSION,
         "filled_store_days": [{"store": (stores.get(s) or {}).get("name", s), "date": d} for s, d in sorted(filled_pairs)],
         "filled_rows": len(filled)}, "$unset": {"last_failure": ""}}, upsert=True)
-    step[0] = "clean up"
-    await db.ledger_sales_daily.delete_many({"build": {"$ne": build}})
-    await db.ledger_sales_observed.delete_many({"build": {"$ne": build}})
     # Cached pages are keyed on the observation revision: new evidence, new pages.
+    step[0] = "revision"
     await db.data_versions.update_one({"_id": "observations"}, {"$inc": {"revision": 1}}, upsert=True)
+    step[0] = "clean up"
+    await drop_old_builds(db, build)
     logger.info("[LedgerSales] build %s: %d facts %s..%s, shared groups %s", build, len(docs),
                 start_date, end_date, [g["names"] for g in groups])
     return {"build": build, "facts": len(docs), "start_date": start_date, "end_date": end_date, "groups": groups}
@@ -351,6 +351,19 @@ async def rebuild_if_stale(db, now=None):
         return await rebuild(db, now=now)
     finally:
         await job_control.release(db, LEASE_KEY, owner)
+
+
+async def drop_old_builds(db, build, batch=2000):
+    """Delete earlier builds a batch at a time. One delete of a whole build
+    (~90,000 rows) passed the 45 s socket limit on 2 Nov 2026 after the new
+    build was already live; reads only ever see the current build, so rows
+    left behind by a failure are removed by the next rebuild."""
+    for coll in (db.ledger_sales_daily, db.ledger_sales_observed):
+        while True:
+            ids = [d["_id"] async for d in coll.find({"build": {"$ne": build}}, {"_id": 1}).limit(batch)]
+            if not ids:
+                break
+            await coll.delete_many({"_id": {"$in": ids}})
 
 
 async def meta(db):
