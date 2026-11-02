@@ -46,7 +46,7 @@ export default function SalesPricesPage() {
   const rows = useMemo(() => (data?.rows || []).map((r) => {
     // The cheapest in-stock price in the row, mine included, is shown in green.
     const live = Object.values(r.prices).filter((p) => !p[1]).map((p) => p[0]);
-    if (r.my_price) live.push(r.my_price);
+    if (r.my_price && !r.my_out_of_stock) live.push(r.my_price);
     return { ...r, low: live.length > 1 ? Math.min(...live) : null, n_prices: Object.keys(r.prices).length };
   }), [data]);
   const categories = useMemo(() => [...new Set(rows.map((r) => r.category).filter(Boolean))].sort(), [rows]);
@@ -54,7 +54,9 @@ export default function SalesPricesPage() {
   const salesColumns = useMemo(() => [
     ...productColumns(isRTL, categories),
     { id: "my_units", label: isRTL ? `مبيعات ${own} (حبة)` : `${own} sales (units)`, type: "number", width: 140, align: "end",
-      render: (r) => (r.my_units == null ? dash : <span className="text-white font-semibold">{fmt(r.my_units, 0)}</span>) },
+      exportValue: (r) => (r.my_units != null ? r.my_units : r.my_out_of_stock ? (isRTL ? "نفد" : "out of stock") : ""),
+      render: (r) => (r.my_units != null ? <span className="text-white font-semibold">{fmt(r.my_units, 0)}</span>
+        : r.my_out_of_stock ? <span className="text-[#F59E0B]">{isRTL ? "نفد" : "out of stock"}</span> : dash) },
     { id: "market_units", label: isRTL ? `مبيعات كل المتاجر شاملة ${own} (حبة)` : `All stores incl. ${own} (units)`, type: "number", width: 170, align: "end",
       render: (r) => (r.market_units == null ? dash : fmt(r.market_units, 0)) },
     { id: "share", label: isRTL ? `حصة ${own} (%)` : `${own} share (%)`, type: "number", width: 110, align: "end", hidden: true,
@@ -71,7 +73,8 @@ export default function SalesPricesPage() {
     return [
       ...productColumns(isRTL, categories),
       { id: "my_price", label: isRTL ? `سعر ${own}` : `${own} price`, type: "number", width: 120, align: "end",
-        render: (r) => (r.my_price == null ? dash : <span className="font-semibold">{cell(r.my_price, false, r.low)}</span>) },
+        exportValue: (r) => (r.my_price == null ? "" : `${r.my_price}${r.my_out_of_stock ? (isRTL ? " نفد" : " OOS") : ""}`),
+        render: (r) => (r.my_price == null ? dash : <span className="font-semibold">{cell(r.my_price, r.my_out_of_stock, r.low)}</span>) },
       ...(data?.competitors || []).map((s, i) => ({
         id: `store:${s.store_id}`, label: s.store_name, type: "number", width: 105, align: "end",
         get: (r) => r.prices[i]?.[0], exportValue: (r) => (r.prices[i] ? `${r.prices[i][0]}${r.prices[i][1] ? (isRTL ? " نفد" : " OOS") : ""}` : ""),
@@ -99,8 +102,8 @@ export default function SalesPricesPage() {
         <h1 className="text-2xl font-bold tracking-tight text-white inline-flex items-center gap-2">
           <Table2 className="w-6 h-6 text-[#1E988E]" />{isRTL ? "المبيعات والأسعار" : "Sales & prices"}</h1>
         <p className="text-sm text-[#A1E4DB] mt-0.5">{isRTL
-          ? `كل منتج من منتجات ${own}: كم بعنا وكم باع السوق، وسعرنا مقابل سعر كل منافس`
-          : `Every ${own} product: what we sold, what the market sold, and our price against every competitor's`}</p>
+          ? "كل منتج من منتجات متجري: كم بعت وكم باع السوق، وسعري مقابل سعر كل منافس"
+          : "Every product of my store: what I sold, what the market sold, and my price against every competitor's"}</p>
       </div>
 
       <nav className="flex flex-wrap gap-1 border-b border-white/10">
@@ -141,8 +144,8 @@ export default function SalesPricesPage() {
             <DataTable key={`sales-${isRTL}`} columns={salesColumns} rows={rows} storageKey="sp-sales" exportName={isRTL ? "مبيعات-بالحبة" : "sales-in-units"}
               rowKey={(r) => r.key} initialSort={{ id: "market_units", dir: "desc" }} />
             <p className="text-xs text-[#A1E4DB]/80">{isRTL
-              ? `المبيعات بالحبة لكل متجر محسوبة من حركة المخزون وعدادات البيع في موقعه خلال الفترة (أيام كاملة بتوقيت السعودية)، ومبيعات ${own} محسوبة بنفس الطريقة وقد تختلف قليلاً عن تقارير زد. «—» تعني لا توجد قراءة لهذا المنتج في هذه الفترة، وليست صفراً.`
-              : `Units per store are measured from stock movement and sold counters on its site over the period (whole KSA days); ${own}'s units are measured the same way and may differ slightly from Zid reports. “—” means no reading for this product in this period, not zero.`}</p>
+              ? `المبيعات بالحبة لكل متجر محسوبة من حركة المخزون وعدادات البيع في موقعه خلال الفترة (أيام كاملة بتوقيت السعودية)، ومبيعات ${own} محسوبة بنفس الطريقة وقد تختلف قليلاً عن تقارير زد. «نفد» = المنتج نافد لدى ${own} فلا توجد حركة تُقاس. «—» = لا توجد قراءة لهذا المنتج في هذه الفترة، وليست صفراً.`
+              : `Units per store are measured from stock movement and sold counters on its site over the period (whole KSA days); ${own}'s units are measured the same way and may differ slightly from Zid reports. “Out of stock” = ${own} has none, so there is no movement to measure. “—” = no reading for this product in this period, not zero.`}</p>
           </>
         ) : (
           <>

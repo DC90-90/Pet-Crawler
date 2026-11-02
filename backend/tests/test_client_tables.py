@@ -54,3 +54,12 @@ def test_an_in_stock_offer_beats_an_out_of_stock_one_at_the_same_store():
                {"store_id": "a", "price": 9.0}]
     r = client_tables.build({"stores": STORES, "my_products": [_row(sellers=sellers)]})["rows"][0]
     assert r["prices"] == {"0": [9.0, False]}
+
+
+def test_my_out_of_stock_products_say_so():
+    rows = [_row(my_units=None, sellers=[{"store_id": "own", "is_own": True, "in_stock": False, "qty_available": 0}]),
+            _row(my_units=None, sellers=[{"store_id": "own", "is_own": True, "in_stock": None, "qty_available": 0}]),
+            _row(my_units=3, sellers=[{"store_id": "own", "is_own": True, "in_stock": True, "qty_available": 9}]),
+            _row(my_units=None, sellers=[])]
+    out = client_tables.build({"stores": STORES, "my_products": rows})["rows"]
+    assert [r["my_out_of_stock"] for r in out] == [True, True, False, False]

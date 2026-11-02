@@ -43,7 +43,7 @@ SHARED_KEY_MIN_UNITS = 3
 SHARED_MIN_KEYS = 30          # pairs sharing this many movements share stock...
 SHARED_MIN_FRACTION = 0.15    # ...when that is this share of the smaller store's movements
 DEDUPE_MIN_QTY = 10           # small drops (2 -> 1) coincide by chance; never deduped
-BUILD_DAYS = 70
+BUILD_DAYS = 92                # the longest page window is 90 days (70 left "90 days" ~20 days short)
 LEASE_KEY = "ledger-sales-rebuild"
 _ROW_FIELDS = {"_id": 0, "store_id": 1, "sku": 1, "ksa_date": 1, "qty_available": 1,
                "sold_count_cumulative": 1, "close_price": 1, "in_stock": 1, "offer_id": 1}

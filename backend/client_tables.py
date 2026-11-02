@@ -38,8 +38,11 @@ def build(ds):
     rows = []
     for r in ds.get("my_products") or []:
         by_store = {}
+        own_offer = None
         for s in r.get("sellers") or []:
-            if not s.get("is_own"):
+            if s.get("is_own"):
+                own_offer = s
+            else:
                 by_store.setdefault(s["store_id"], []).append(s)
         # Keyed by the store's position in `competitors`: 2,700 rows x 11
         # stores of full store ids tripled the answer.
@@ -54,6 +57,11 @@ def build(ds):
             "brand": r.get("brand") or "",
             "category": r.get("category") or "",
             "my_units": r.get("my_units"),
+            # 1,434 of the 1,473 products without own units on 2 Nov 2026 had
+            # no stock: nothing moved to measure. Shown as out of stock, not
+            # as a missing number.
+            "my_out_of_stock": bool(own_offer) and (own_offer.get("in_stock") is False
+                                                    or own_offer.get("qty_available") == 0),
             "market_units": r.get("market_units"),
             "stores_with_units": r.get("sellers_with_sales") or 0,
             "stores_selling": r.get("sellers_total") or 0,
