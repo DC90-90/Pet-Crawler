@@ -3549,10 +3549,31 @@ async def maybe_recompute_page_caches(db, min_interval_secs=600, force=False):
             and (now - _LAST_PAGE_CACHE_RECOMPUTE).total_seconds() < min_interval_secs):
         return None
     try:
-        return await recompute_page_caches(db)
+        stats = await recompute_page_caches(db)
     except Exception:
         logger.exception("[PageCache] recompute failed — caches left stale, endpoints fall back to live")
         return None
+    stats["stored_views"] = _refresh_stored_views()
+    return stats
+
+
+def _refresh_stored_views():
+    """Key brands, the stock planner and the matches to review (the Overview's
+    decision counts) refreshed only when someone opened them, so the first
+    visitor after the nightly crawl saw the previous afternoon's copy (2 Nov
+    2026). They now refresh with the page caches, in the background, so a
+    crawl's next store does not wait on them."""
+    started = {}
+    for name, view, kwargs in (("key_brands", key_brands_view, {}),
+                               ("stock_planner", stock_planner_view, {"days": 30, "lead_days": 7, "cover_days": 30}),
+                               ("matches", data_quality_matches, {})):
+        try:
+            view.refresh(user=None, **kwargs)
+            started[name] = "started"
+        except Exception as e:   # noqa: BLE001 — the page still refreshes on its next visit
+            started[name] = f"ERROR: {str(e)[:80]}"
+            logger.exception("[ApiCache] refresh of %s not started", name)
+    return started
 
 
 

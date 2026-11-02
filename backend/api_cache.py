@@ -106,12 +106,24 @@ def stored(fresh_secs, db_getter, key_prefix=""):
     def decorator(func):
         sig = inspect.signature(func)
 
-        @functools.wraps(func)
-        async def wrapper(*args, **kwargs):
+        def key_of(args, kwargs):
             bound = sig.bind_partial(*args, **kwargs)
             parts = [key_prefix or func.__name__] + [f"{k}={v!r}" for k, v in sorted(bound.arguments.items())
                                                      if k not in SKIP_PARAMS]
-            return await get(db_getter(), "|".join(parts), lambda: func(*args, **kwargs), fresh_secs)
+            return "|".join(parts)
+
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            return await get(db_getter(), key_of(args, kwargs), lambda: func(*args, **kwargs), fresh_secs)
+
+        def refresh(*args, **kwargs):
+            """Recompute and store now, whatever the copy's age, in the
+            background; returns the task. Called with the same arguments as
+            a request, so it fills the key that request reads."""
+            task = _single_flight(db_getter(), key_of(args, kwargs), lambda: func(*args, **kwargs))
+            task.add_done_callback(_log_failure)
+            return task
+        wrapper.refresh = refresh
         return wrapper
     return decorator
 

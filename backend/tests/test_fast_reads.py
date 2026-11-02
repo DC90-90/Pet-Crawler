@@ -97,6 +97,55 @@ def test_concurrent_misses_compute_once():
     assert out == [[1]] * 5 and len(calls) == 1
 
 
+def test_a_refresh_fills_the_key_a_request_reads_even_when_fresh():
+    # Key brands showed the previous afternoon's copy to the first visitor
+    # after the nightly crawl (2 Nov 2026).
+    import api_cache
+    api_cache.clear_memo()
+    state = {"db": None, "n": 0}
+
+    @api_cache.stored(1800, lambda: state["db"])
+    async def view(days: int = 30, user=None):
+        state["n"] += 1
+        return {"n": state["n"], "days": days}
+
+    async def scenario():
+        client, db = _db()
+        state["db"] = db
+        try:
+            first = await view(days=30, user={"email": "a"})
+            await view.refresh(days=30, user=None)                  # fresh copy, recomputed anyway
+            after = await view(days=30, user={"email": "b"})        # another user, same key
+            return first, after, await db.api_cache.distinct("_id")
+        finally:
+            await client.drop_database(db.name)
+            client.close()
+    first, after, keys = asyncio.run(scenario())
+    assert first == {"n": 1, "days": 30} and after == {"n": 2, "days": 30}
+    assert keys == ["view|days=30"]
+
+
+def test_the_page_cache_rebuild_refreshes_the_overview_views(monkeypatch):
+    os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27017")
+    os.environ.setdefault("DB_NAME", "test_fast_reads")
+    os.environ.setdefault("JWT_SECRET", "x" * 32)
+    os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
+    from cryptography.fernet import Fernet
+    os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    import server
+    called = []
+    for name in ("key_brands_view", "stock_planner_view", "data_quality_matches"):
+        monkeypatch.setattr(getattr(server, name), "refresh", lambda name=name, **kw: called.append((name, kw)))
+
+    async def recompute(db):
+        return {"pages": 1.0}
+    monkeypatch.setattr(server, "recompute_page_caches", recompute)
+    stats = asyncio.run(server.maybe_recompute_page_caches(None, force=True))
+    assert stats["stored_views"] == {"key_brands": "started", "stock_planner": "started", "matches": "started"}
+    assert ("stock_planner_view", {"user": None, "days": 30, "lead_days": 7, "cover_days": 30}) in called
+    assert ("key_brands_view", {"user": None}) in called
+
+
 def test_list_rows_drop_fields_no_list_renders():
     os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27017")
     os.environ.setdefault("DB_NAME", "test_fast_reads")
