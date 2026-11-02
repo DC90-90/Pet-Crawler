@@ -216,3 +216,36 @@ def test_large_json_is_encoded_off_the_loop_with_cache_headers():
     out = asyncio.run(server._json_off_loop(lambda: {"full_table": [{"sku": "1", "price": 2.5}], "name": "منتج"}, resp))
     assert json.loads(out.body) == {"full_table": [{"sku": "1", "price": 2.5}], "name": "منتج"}
     assert out.headers["x-cache-source"] == "cache" and out.media_type == "application/json"
+
+
+def test_the_client_tables_never_build_market_data_live_and_build_one_at_a_time(monkeypatch):
+    os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27017")
+    os.environ.setdefault("DB_NAME", "test_fast_reads")
+    os.environ.setdefault("JWT_SECRET", "x" * 32)
+    os.environ.setdefault("CORS_ORIGINS", "http://localhost:3000")
+    from cryptography.fernet import Fernet
+    os.environ.setdefault("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    import server
+    from price_read_limits import in_background, _background
+    seen, running = [], []
+
+    async def dataset(db, days):
+        seen.append(in_background())
+        running.append(1)
+        concurrent = len(running)
+        await asyncio.sleep(0.02)
+        running.pop()
+        return {"stores": [], "my_products": [], "window": {"days": days}, "concurrent": concurrent}, {}
+    monkeypatch.setattr(server, "_market_share_dataset", dataset)
+    peaks = []
+    real_build = __import__("client_tables").build
+    monkeypatch.setattr(__import__("client_tables"), "build", lambda ds: peaks.append(ds["concurrent"]) or real_build(ds))
+
+    async def run():
+        token = _background.set(True)                   # as api_cache runs a refresh
+        try:
+            await asyncio.gather(*[server._sales_prices_tables.__wrapped__(days=d) for d in (7, 14, 30, 90)])
+        finally:
+            _background.reset(token)
+    asyncio.run(run())
+    assert seen == [False] * 4 and peaks == [1] * 4

@@ -12403,9 +12403,23 @@ async def sales_prices(days: int = Query(30), user=Depends(get_user)):
     return await _sales_prices_tables(days=days)
 
 
+_SALES_TABLES_LOCK = asyncio.Lock()
+
+
 @api_cache.stored(1800, lambda: db)
 async def _sales_prices_tables(days: int):
-    ds, _meta = await _market_share_dataset(db, days)
+    # api_cache refreshes in the background, and a background read of a
+    # missing page entry builds it live: the 90-day market dataset that way
+    # timed out, and four at once likely took a process down (2 Nov 2026).
+    # Read as a visit does (this build's entry or the previous build's, never
+    # a live build), one window at a time.
+    from price_read_limits import _background
+    async with _SALES_TABLES_LOCK:
+        token = _background.set(False)
+        try:
+            ds, _meta = await _market_share_dataset(db, days)
+        finally:
+            _background.reset(token)
     import client_tables
     return client_tables.build(ds)
 
