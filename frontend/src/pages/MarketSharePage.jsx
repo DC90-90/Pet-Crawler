@@ -230,6 +230,16 @@ export default function MarketSharePage() {
       <SalesPeriod days={days} basis={includeToday ? (isRTL ? "تشمل ساعات اليوم الجارية" : "today's hours included, still changing")
         : (isRTL ? "مبيعات كل متجر مقدّرة من تغيّر المخزون بين القراءات" : "each store's sales estimated from stock changes between crawls")} />
 
+      {/* A search on the Overview narrowed only the headline cards, which say
+          "Unavailable" when one product's share cannot be measured: the client
+          searched a SKU and saw no product (4 Nov 2026). Show the products. */}
+      {tab === "overview" && filters.search && (
+        <div className="space-y-2" data-testid="ms-overview-search-results">
+          <p className="text-sm font-semibold text-white">{isRTL ? `المنتجات المطابقة لـ «${filters.search}»` : `Products matching “${filters.search}”`}</p>
+          <MyProductsShare days={days} includeToday={includeToday} filters={filters}
+            onPickProduct={pickProduct} key={`ovs-${nonce}-${includeToday}`} />
+        </div>
+      )}
       {tab === "overview" && (
         <ShareOverview days={days} includeToday={includeToday} filters={filters}
           onPickProduct={pickProduct} onGoto={(id) => (id === "missing" ? navigate("/opportunities?tab=missing") : setTab(id))}

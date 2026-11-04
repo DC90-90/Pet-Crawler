@@ -22,10 +22,13 @@ const dash = <span className="text-[#A1E4DB]/60">—</span>;
 function productColumns(isRTL, categories) {
   return [
     { id: "name", label: isRTL ? "اسم المنتج" : "Product", type: "text", width: 320, always: true,
-      get: (r) => [r.name_ar, r.name_en], exportValue: (r) => (isRTL ? r.name_ar || r.name_en : r.name_en || r.name_ar),
+      // SKU and barcode too: the client looks products up by SKU (4 Nov 2026).
+      get: (r) => [r.name_ar, r.name_en, r.sku, r.barcode], exportValue: (r) => (isRTL ? r.name_ar || r.name_en : r.name_en || r.name_ar),
       render: (r) => {
         const [main, other] = isRTL ? [r.name_ar || r.name_en, r.name_en] : [r.name_en || r.name_ar, r.name_ar];
-        return <><p className="text-white">{main}</p>{other && other !== main && <p className="text-xs text-[#A1E4DB]">{other}</p>}</>;
+        const code = r.barcode || r.sku;
+        return <><p className="text-white">{main}</p>{other && other !== main && <p className="text-xs text-[#A1E4DB]">{other}</p>}
+          {code && <p className="text-[11px] text-[#A1E4DB]/70" dir="ltr">{code}</p>}</>;
       } },
     { id: "brand", label: isRTL ? "البراند" : "Brand", type: "text", width: 130 },
     { id: "category", label: isRTL ? "الصنف" : "Category", type: "enum", width: 140, options: categories },
@@ -38,6 +41,7 @@ export default function SalesPricesPage() {
   const { isRTL } = useI18n();
   const [tab, setTab] = useState("sales");
   const [days, setDays] = useState(30);
+  const [q, setQ] = useState("");
   const res = useQuery({ queryKey: ["sales-prices", days],
     queryFn: async () => (await api.get("/sales-prices", { params: { days }, timeout: 60000 })).data });
   const data = res.data;
@@ -50,6 +54,15 @@ export default function SalesPricesPage() {
     return { ...r, low: live.length > 1 ? Math.min(...live) : null, n_prices: Object.keys(r.prices).length };
   }), [data]);
   const categories = useMemo(() => [...new Set(rows.map((r) => r.category).filter(Boolean))].sort(), [rows]);
+  // One search over name, SKU, barcode and brand, for both tables. Arabic
+  // digits count as digits; a barcode matches with or without leading zeros.
+  const shown = useMemo(() => {
+    const term = q.trim().toLowerCase().replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
+    if (!term) return rows;
+    const digits = /^\d+$/.test(term) ? term.replace(/^0+/, "") : null;
+    return rows.filter((r) => [r.name_ar, r.name_en, r.brand].some((v) => (v || "").toLowerCase().includes(term))
+      || [r.sku, r.barcode].some((v) => (v || "").toLowerCase().includes(term) || (digits && (v || "").replace(/^0+/, "").includes(digits))));
+  }, [rows, q]);
 
   const salesColumns = useMemo(() => [
     ...productColumns(isRTL, categories),
@@ -85,10 +98,10 @@ export default function SalesPricesPage() {
   }, [isRTL, categories, own, data]);
 
   const totals = useMemo(() => {
-    const mine = rows.filter((r) => r.my_units != null);
-    const market = rows.filter((r) => r.market_units != null);
+    const mine = shown.filter((r) => r.my_units != null);
+    const market = shown.filter((r) => r.market_units != null);
     return { mine: mine.reduce((n, r) => n + r.my_units, 0), market: market.reduce((n, r) => n + r.market_units, 0) };
-  }, [rows]);
+  }, [shown]);
 
   const w = data?.window;
   const tabBtn = (id, ar, en) => (
@@ -105,6 +118,10 @@ export default function SalesPricesPage() {
           ? "كل منتج من منتجات متجري: كم بعت وكم باع السوق، وسعري مقابل سعر كل منافس"
           : "Every product of my store: what I sold, what the market sold, and my price against every competitor's"}</p>
       </div>
+
+      <input value={q} onChange={(e) => setQ(e.target.value)} data-testid="sp-search"
+        placeholder={isRTL ? "ابحث بالاسم أو الـ SKU أو الباركود أو البراند" : "Search by name, SKU, barcode or brand"}
+        className="w-full max-w-md h-10 px-3 rounded-lg bg-[#090E1C] border border-white/15 text-white text-sm placeholder:text-[#A1E4DB]/60 focus:outline-none focus:border-[#1E988E]" />
 
       <nav className="flex flex-wrap gap-1 border-b border-white/10">
         {tabBtn("sales", "المبيعات بالحبة", "Sales in units")}
@@ -138,10 +155,10 @@ export default function SalesPricesPage() {
               </div>
               <div className="glass-card rounded-md p-3">
                 <p className="text-xs text-[#A1E4DB]">{isRTL ? "المنتجات" : "Products"}</p>
-                <p className="text-xl font-bold text-white">{fmt(rows.length, 0)}</p>
+                <p className="text-xl font-bold text-white">{fmt(shown.length, 0)}</p>
               </div>
             </div>
-            <DataTable key={`sales-${isRTL}`} columns={salesColumns} rows={rows} storageKey="sp-sales" exportName={isRTL ? "مبيعات-بالحبة" : "sales-in-units"}
+            <DataTable key={`sales-${isRTL}`} columns={salesColumns} rows={shown} storageKey="sp-sales" exportName={isRTL ? "مبيعات-بالحبة" : "sales-in-units"}
               rowKey={(r) => r.key} initialSort={{ id: "market_units", dir: "desc" }} />
             <p className="text-xs text-[#A1E4DB]/80">{isRTL
               ? `المبيعات بالحبة لكل متجر محسوبة من حركة المخزون وعدادات البيع في موقعه خلال الفترة (أيام كاملة بتوقيت السعودية)، ومبيعات ${own} محسوبة بنفس الطريقة وقد تختلف قليلاً عن تقارير زد. «نفد» = المنتج نافد لدى ${own} فلا توجد حركة تُقاس. «—» = لا توجد قراءة لهذا المنتج في هذه الفترة، وليست صفراً.`
@@ -149,7 +166,7 @@ export default function SalesPricesPage() {
           </>
         ) : (
           <>
-            <DataTable key={`prices-${isRTL}`} columns={priceColumns} rows={rows} storageKey="sp-prices" exportName={isRTL ? "الأسعار" : "prices"}
+            <DataTable key={`prices-${isRTL}`} columns={priceColumns} rows={shown} storageKey="sp-prices" exportName={isRTL ? "الأسعار" : "prices"}
               rowKey={(r) => r.key} initialSort={{ id: "n_prices", dir: "desc" }} />
             <p className="text-xs text-[#A1E4DB]/80">{isRTL
               ? "آخر سعر رُصد في كل متجر، بالريال شامل الضريبة. الأخضر = أرخص سعر متوفر في الصف. «نفد» = آخر سعر قبل نفاد الكمية. «—» = المتجر لا يبيع هذا المنتج."
