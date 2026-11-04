@@ -1,4 +1,5 @@
 """Versioned, shared current-price cohort. Historical rows are labelled, never actionable."""
+import asyncio
 from datetime import datetime, timezone, timedelta
 from observation_contract import gtin, money, sku_gtin, stable_id, TRUSTED_PRICE_BASES
 from pack_guard import slug_descriptor, stated_weight_grams, slug_pack_reject, cluster_outliers, discount_escapes
@@ -262,17 +263,27 @@ async def _build_cohorts(db, own_rows, own_store_id, own_price_fn, now, competit
             # Rejections recorded before offer ids existed are keyed by the
             # competitor SKU; honour them the same way verified_matching does.
             blocked_by_sku.add((m.get("my_sku"), m.get("competitor_store_id"), m.get("competitor_sku")))
-    grouped, history = {}, {}
     reviewed = await reviewed_brand_map(db)
-    from parent_identity import index, annotate
+    from parent_identity import index
     parents = parents if parents is not None else await index(db)
     # Latest offer first, BEFORE eligibility: an OOS reading must not resurrect an older in-stock price.
-    seen = set()
     active = await db.stores.distinct("id", {"is_active": {"$ne": False}, "id": {"$ne": own_store_id}})
     if competitor_store_ids is not None:
         active = [sid for sid in active if sid in competitor_store_ids]
     rows = await read_cohort_snapshots(db, active, now, snapshot_pipeline,
                                       max_time_ms=query_max_ms())
+    # The matching below is CPU work over every competitor offer (~60k):
+    # on the event loop it froze a backend process for 3 x 12 s on 4 Nov 2026
+    # and the platform restarted it mid-rebuild. Same remedy as the Market
+    # Share assembly (14 Oct 2026): a thread.
+    return await asyncio.to_thread(_match_cohorts, rows, own_rows, own_by_sku, by_key, manual, blocked,
+                                   blocked_by_sku, reviewed, parents, own_price_fn, now)
+
+
+def _match_cohorts(rows, own_rows, own_by_sku, by_key, manual, blocked, blocked_by_sku, reviewed, parents,
+                   own_price_fn, now):
+    from parent_identity import annotate
+    grouped, history, seen = {}, {}, set()
     valid_until = min([freshness_transition(stamp, now) for r in own_rows
                        for stamp in (r.get("last_synced_at"), r.get("quantity_observed_at") or r.get("last_synced_at"))],
                       default=now+timedelta(days=max_offer_age_days()))

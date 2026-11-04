@@ -587,7 +587,8 @@ async def build_dataset(db, days, own_store_id, *, own_price_fn, brand_fn,
     snaps = [s for s in await _latest_snapshots(db, snap_since, min_confidence) if s.get("store_id") in stores]
     from parent_identity import index, annotate
     parents = await index(db)
-    snaps = [annotate(s, parents) for s in snaps]
+    # Tens of thousands of offers: off the event loop (4 Nov 2026, see below).
+    snaps = await asyncio.to_thread(lambda: [annotate(s, parents) for s in snaps])
 
     my_rows = await db.my_products.find(
         {}, {"_id": 0, "sku": 1, "name_ar": 1, "name_en": 1, "price": 1,
