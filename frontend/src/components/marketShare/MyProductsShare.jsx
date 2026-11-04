@@ -11,6 +11,21 @@ const catLabel = (c) => (CATEGORY_LABELS[c]?.en || c || "—");
 const LIMIT = 100;
 const dash = <span className="text-[#A1E4DB]/60">—</span>;
 
+// A share is over the sellers with sales readings (4 Nov 2026); "*" marks one
+// that leaves out a seller without readings. No share says why, in words.
+const SHARE_WHY = {
+  no_competitor_sales_readings: "no competitor readings",
+  sole_seller: "only I sell it",
+  own_sales_unmeasured: "my sales not measured",
+};
+function Share({ r, value, cls }) {
+  if (value == null) return <span className="text-[11px] text-[#A1E4DB]/70">{SHARE_WHY[r.share_unavailable_reason] || "—"}</span>;
+  return (
+    <span className={`font-semibold ${cls}`} title={r.share_partial ? `Among the ${r.share_sellers_measured} of ${r.sellers_total} sellers with sales readings` : "Every seller measured"}>
+      {fmtPct(value)}{r.share_partial && <span className="text-[#F59E0B]">*</span>}
+    </span>);
+}
+
 // Every field a row carries, as a column (27 Oct 2026 — filter on every
 // column, all the data visible).
 const COLUMNS = [
@@ -32,10 +47,10 @@ const COLUMNS = [
     render: (r) => (r.market_units == null ? <Unavailable reason={r.unavailable_reason} /> : fmtNum(r.market_units)) },
   { id: "market_revenue", label: "Shelf-value proxy (SAR)", type: "number", width: 130, align: "end",
     render: (r) => (r.market_revenue == null ? <Unavailable reason={r.unavailable_reason} /> : fmtMoney(r.market_revenue)) },
-  { id: "unit_share_pct", label: "My unit share (%)", type: "number", width: 110, align: "end",
-    render: (r) => (r.unit_share_pct == null ? dash : <span className="font-semibold text-[#5FD3C7]">{fmtPct(r.unit_share_pct)}</span>) },
-  { id: "revenue_share_pct", label: "My value share (%)", type: "number", width: 110, align: "end",
-    render: (r) => (r.revenue_share_pct == null ? dash : <span className="font-semibold text-[#10B981]">{fmtPct(r.revenue_share_pct)}</span>) },
+  { id: "unit_share_pct", label: "My unit share (%)", type: "number", width: 120, align: "end",
+    render: (r) => <Share r={r} value={r.unit_share_pct} cls="text-[#5FD3C7]" /> },
+  { id: "revenue_share_pct", label: "My value share (%)", type: "number", width: 120, align: "end",
+    render: (r) => <Share r={r} value={r.revenue_share_pct} cls="text-[#10B981]" /> },
   { id: "sellers_total", label: "Stores carrying (me included)", type: "number", width: 120, align: "end",
     render: (r) => <>{r.sellers_total}<span className="block text-xs text-[#A1E4DB]">{r.competitor_count} competitor{r.competitor_count === 1 ? "" : "s"} + me</span></> },
   { id: "competitor_count", label: "Competitors", type: "number", width: 100, align: "end", hidden: true },

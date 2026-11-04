@@ -74,12 +74,16 @@ def test_shared_stock_is_counted_once_for_the_lead():
 def test_unchanged_in_stock_reading_is_a_measured_zero_only_for_a_live_store():
     rows = [_row("z", "sold", _day(0), 9), _row("z", "sold", _day(1), 8),      # z is live (a sale)
             _row("z", "flat", _day(0), 5), _row("z", "flat", _day(1), 5),      # read twice, no sale -> zero
-            _row("z", "oos", _day(0), 0), _row("z", "oos", _day(1), 0),        # 0 -> 0 proves nothing
+            # No stock on both days: sold nothing (4 Nov 2026; was "proves nothing",
+            # which left 1,434 out-of-stock own products "Unavailable")...
+            _row("z", "oos", _day(0), 0), _row("z", "oos", _day(1), 0),
+            # ...unless the store still offers it at 0 (untracked / back-order).
+            {**_row("z", "backorder", _day(0), 0), "in_stock": True}, {**_row("z", "backorder", _day(1), 0), "in_stock": True},
             _row("z", "restock", _day(0), 2), _row("z", "restock", _day(1), 6),  # a restock can hide sales
             _row("o", "static", _day(0), 4), _row("o", "static", _day(1), 4)]  # store never moves: no zeros
     sealed = {(r["store_id"], r["ksa_date"]) for r in rows}
     _facts, _groups, observed = ledger_sales.compute(rows, sealed, _day(0), _day(30), STORES, {})
-    assert [(o["store_id"], o["sku"], o["dates"]) for o in observed] == [("z", "flat", [_day(1)])]
+    assert sorted((o["store_id"], o["sku"], o["dates"]) for o in observed) == [("z", "flat", [_day(1)]), ("z", "oos", [_day(1)])]
 
 
 def test_a_store_day_missing_from_the_ledger_is_completed_from_snapshots():

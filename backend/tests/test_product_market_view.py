@@ -15,17 +15,21 @@ import ledger_sales  # noqa: E402
 import price_cohort  # noqa: E402
 
 
-def test_market_share_needs_every_seller_measured():
+def test_market_share_over_the_measured_sellers():
     full = catalog_views.market_share({"units": 2, "revenue": 200}, [{"units": 6, "revenue": 540}, {"units": 0, "revenue": 0}])
     assert full["market_revenue_est"] == 740 and full["market_units_est"] == 8
     assert full["market_share_pct"] == 27.0 and full["market_unit_share_pct"] == 25.0
     assert full["has_market_share"] and full["market_share_unavailable_reason"] is None
 
-    # A competitor we cannot see: market size covers the measured sellers, no share.
+    # A competitor we cannot see: market size and share cover the measured
+    # sellers, flagged incomplete (4 Nov 2026: 93% of products had no share).
     partial = catalog_views.market_share({"units": 2, "revenue": 200}, [{"units": 6, "revenue": 540}, None])
     assert partial["market_revenue_est"] == 740 and partial["market_size_complete"] is False
-    assert partial["market_share_pct"] is None
-    assert partial["market_share_unavailable_reason"] == "competitor_sales_unmeasured"
+    assert partial["market_share_pct"] == 27.0 and partial["market_sellers_measured"] == 2
+    assert partial["market_sellers_total"] == 3 and partial["market_share_unavailable_reason"] is None
+    # No competitor measured at all: nothing to compare against.
+    blind = catalog_views.market_share({"units": 2, "revenue": 200}, [None, None])
+    assert blind["market_share_pct"] is None and blind["market_share_unavailable_reason"] == "competitor_sales_unmeasured"
 
     assert catalog_views.market_share(None, [{"units": 1, "revenue": 9}])["market_share_unavailable_reason"] == "own_sales_unmeasured"
     nobody = catalog_views.market_share({"units": 0, "revenue": 0}, [{"units": 0, "revenue": 0}])
@@ -159,3 +163,15 @@ def test_both_multipacks_with_equal_totals_match():
     from matcher import _pack_compatible as ok
     assert ok("ترولي مكافآت كريمية للقطط سالمون 5×14 غم", "مكافآت سالمون للقطط 5×14 غ ترولي")
     assert not ok("Royal Canin pouch 12 x 85g", "Royal Canin pouch 6 x 85g")
+
+
+def test_market_pages_share_over_the_sellers_with_readings():
+    import market_share
+    own, a, b = {"is_own": True}, {"is_own": False}, {"is_own": False}
+    # Ours and one competitor measured, one competitor without readings: a share, partial.
+    assert market_share.share_status(4, [own, a], [own, a, b]) == (True, True, None)
+    assert market_share.share_status(4, [own, a, b], [own, a, b]) == (True, False, None)
+    # Nothing to compare against, each with its own reason.
+    assert market_share.share_status(4, [own], [own, a, b]) == (False, False, "no_competitor_sales_readings")
+    assert market_share.share_status(4, [own], [own]) == (False, False, "sole_seller")
+    assert market_share.share_status(None, [a], [own, a]) == (False, False, "own_sales_unmeasured")

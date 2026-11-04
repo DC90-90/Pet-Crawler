@@ -52,17 +52,20 @@ def market_share(mine, competitors):
     """One product's market size and my share, from ledger sales facts.
 
     mine/competitors: sales evidence ({units, revenue}) or None where a seller
-    cannot be measured. The market size is the sum over measured sellers; the
-    share is given only when every live seller is measured, so it never leaves
-    out a seller whose sales we cannot see (as a share of the measured sellers
-    would). A product nobody sold in the window has no share."""
+    cannot be measured. The market size is the sum over measured sellers, and
+    so is the share: requiring every seller measured left 93% of products
+    without one (4 Nov 2026), as several stores publish no sales readings.
+    `market_size_complete` says whether any seller was left out. A share needs
+    my sales and at least one measured competitor (or no competitor at all);
+    a product nobody sold in the window has no share."""
     sellers = [mine, *competitors]
     measured = [e for e in sellers if e is not None]
     units = round(sum(e.get("units") or 0 for e in measured), 2) if measured else None
     revenue = round(sum(e.get("revenue") or 0 for e in measured), 2) if measured else None
     complete = mine is not None and len(measured) == len(sellers)
-    reason = (None if complete and revenue else "own_sales_unmeasured" if mine is None
-              else "competitor_sales_unmeasured" if not complete else "no_sales_in_window")
+    comparable = mine is not None and (len(measured) >= 2 or not competitors)
+    reason = (None if comparable and revenue else "own_sales_unmeasured" if mine is None
+              else "competitor_sales_unmeasured" if not comparable else "no_sales_in_window")
     return {"market_units_est": units, "market_revenue_est": revenue,
             "market_my_revenue_est": round(mine.get("revenue") or 0, 2) if mine is not None else None,
             "market_sellers_measured": len(measured), "market_sellers_total": len(sellers),

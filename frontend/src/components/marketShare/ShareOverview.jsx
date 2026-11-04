@@ -62,17 +62,17 @@ export default function ShareOverview({ days, includeToday, filters, onPickProdu
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
           ["My revenue share", k.my_revenue_share_pct === null || k.my_revenue_share_pct === undefined
-            ? "Unavailable" : fmtPct(k.my_revenue_share_pct), k.my_units_source, "ms-kpi-revenue-share"],
+            ? "No readings" : fmtPct(k.my_revenue_share_pct), k.my_units_source, "ms-kpi-revenue-share"],
           ["My unit share", k.my_unit_share_pct === null || k.my_unit_share_pct === undefined
-            ? "Unavailable" : fmtPct(k.my_unit_share_pct), k.my_units_source, "ms-kpi-unit-share"],
+            ? "No readings" : fmtPct(k.my_unit_share_pct), k.my_units_source, "ms-kpi-unit-share"],
           ["Tracked shelf-value proxy", k.market_revenue === null || k.market_revenue === undefined
-            ? "Unavailable" : fmtMoney(k.market_revenue), null, "ms-kpi-market-revenue"],
+            ? "No readings" : fmtMoney(k.market_revenue), null, "ms-kpi-market-revenue"],
           [k.my_units_source === "orders_exact" ? "My invoiced revenue" : "My shelf-value proxy", k.my_revenue === null || k.my_revenue === undefined
-            ? "Unavailable" : fmtMoney(k.my_revenue), k.my_units_source, "ms-kpi-my-revenue"],
+            ? "No readings" : fmtMoney(k.my_revenue), k.my_units_source, "ms-kpi-my-revenue"],
         ].map(([label, value, source, tid]) => (
           <div key={label} className="kpi-card" data-testid={tid}>
             <p className="text-[9px] uppercase tracking-[0.15em] text-[#A1E4DB]">{label}</p>
-            <p className={`text-xl font-bold mt-1 ${value === "Unavailable" ? "text-[#F59E0B]" : "text-white"}`} dir="ltr">
+            <p className={`text-xl font-bold mt-1 ${value === "No readings" ? "text-[#F59E0B]" : "text-white"}`} dir="ltr">
               {value}
             </p>
             {source && <div className="mt-1.5"><SourceChip source={source} compact /></div>}

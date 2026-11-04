@@ -32,7 +32,7 @@ from sales_evidence import PLACEHOLDERS
 
 logger = logging.getLogger(__name__)
 
-VERSION = 3                   # 2: measured zeros; 3: ledger holes completed from snapshots
+VERSION = 4                   # 2: measured zeros; 3: ledger holes completed from snapshots; 4: zero stock both days
 HOLE_FRACTION = 0.9           # a store-day below 90% of the store's median ledger rows is a hole
 HOLE_MIN_ROWS = 50
 MAX_GAP_DAYS = 2              # same 48 h limit as interval facts
@@ -95,7 +95,12 @@ def _intervals(by_date, exact_stock):
             if qb >= qa:
                 # Exact stock read on both days with no drop is a measured zero
                 # (a restock hides sales, so only an unchanged level counts).
-                if exact_stock and qb == qa and qa > 0:
+                # Zero stock on both days is one too, unless the store still
+                # offers it (an untracked or back-orderable item): 1,434 own
+                # products out of stock all month read "Unavailable" instead of
+                # 0 sold (4 Nov 2026).
+                if exact_stock and qb == qa and (qa > 0 or (ra.get("in_stock") is not True
+                                                             and rb.get("in_stock") is not True)):
                     yield b, 0, 0.0, "stock_depletion", None
                 continue
             units = qa - qb

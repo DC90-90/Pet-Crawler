@@ -68,7 +68,8 @@ export default function SalesPricesPage() {
     ...productColumns(isRTL, categories),
     { id: "my_units", label: isRTL ? `مبيعات ${own} (حبة)` : `${own} sales (units)`, type: "number", width: 140, align: "end",
       exportValue: (r) => (r.my_units != null ? r.my_units : r.my_out_of_stock ? (isRTL ? "نفد" : "out of stock") : ""),
-      render: (r) => (r.my_units != null ? <span className="text-white font-semibold">{fmt(r.my_units, 0)}</span>
+      render: (r) => (r.my_units != null ? <span className="text-white font-semibold">{fmt(r.my_units, 0)}
+          {r.my_units === 0 && r.my_out_of_stock && <span className="font-normal text-[#F59E0B]">{isRTL ? " · نفد" : " · out of stock"}</span>}</span>
         : r.my_out_of_stock ? <span className="text-[#F59E0B]">{isRTL ? "نفد" : "out of stock"}</span> : dash) },
     { id: "market_units", label: isRTL ? `مبيعات كل المتاجر شاملة ${own} (حبة)` : `All stores incl. ${own} (units)`, type: "number", width: 170, align: "end",
       render: (r) => (r.market_units == null ? dash : fmt(r.market_units, 0)) },

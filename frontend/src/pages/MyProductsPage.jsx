@@ -43,7 +43,7 @@ const COLUMNS = [
 const SHARE_REASON = {
   own_out_of_stock: ["Out of stock in my store", "نفد من متجري"],
   own_sales_unmeasured: ["My sales not measured", "مبيعاتي غير مقاسة"],
-  competitor_sales_unmeasured: ["A competitor's sales are not measurable", "مبيعات منافس غير قابلة للقياس"],
+  competitor_sales_unmeasured: ["No competitor has sales readings for it", "لا توجد قراءات مبيعات لأي منافس"],
   no_sales_in_window: ["No seller sold it in the period", "لم يبعه أي بائع خلال الفترة"],
 };
 const pct = (n) => (n == null ? "—" : `${n > 0 ? "+" : ""}${n}%`);
@@ -537,7 +537,9 @@ export default function MyProductsPage() {
                   </TableCell>
                   <TableCell data-testid={`market-share-${p.sku}`}>
                     {p.market_share_pct != null
-                      ? <span className="text-xs font-semibold text-white">{p.market_share_pct}%</span>
+                      ? <span className="text-xs font-semibold text-white"
+                          title={p.market_size_complete ? undefined : (isRTL ? `بين ${p.market_sellers_measured} من ${p.market_sellers_total} بائعين لهم قراءات مبيعات` : `Among the ${p.market_sellers_measured} of ${p.market_sellers_total} sellers with sales readings`)}>
+                          {p.market_share_pct}%{!p.market_size_complete && <span className="text-[#F59E0B]">*</span>}</span>
                       : <span className="text-xs text-[#A1E4DB] opacity-60" title={SHARE_REASON[p.market_share_unavailable_reason]?.[isRTL ? 1 : 0]}>—</span>}
                   </TableCell></>}
                   <TableCell>

@@ -306,6 +306,20 @@ def _resolve_units(pair, sales, store_signals, is_own, own_units):
     return None, None, SRC_NONE, REASON_NO_INTERVAL
 
 
+def share_status(my_units, with_sales, kept):
+    """(comparable, partial, reason) for one product's share.
+
+    A share needed EVERY seller measured; Lana Pets, Zarafa and others publish
+    no sales readings, so 93% of products read "Unavailable" (4 Nov 2026). It
+    is now over the sellers with readings, ours plus at least one competitor,
+    and `partial` says some seller was left out."""
+    comps = [s for s in kept if not s["is_own"]]
+    comparable = my_units is not None and any(not s["is_own"] for s in with_sales)
+    reason = (None if comparable else "own_sales_unmeasured" if my_units is None
+              else "sole_seller" if not comps else "no_competitor_sales_readings")
+    return comparable, comparable and len(with_sales) < len(kept), reason
+
+
 def _row_confidence(sellers, my_source, fresh_days=FRESH_DAYS, now=None):
     """High / Medium / Low / Unavailable + the reason, from match strength,
     denominator coverage and price freshness."""
@@ -531,8 +545,10 @@ def summarize(my_rows, missing_rows, store_rows, *, catalog_total, orders_connec
         "products_contested": len(contested),
         "products_sole_seller": len(sole),
         "sole_seller_revenue": round(sum(r["my_revenue"] or 0 for r in sole), 2),
-        "share_basis": ("products where at least one OTHER tracked seller's sales are "
-                        "measurable — products only we sell are reported separately"),
+        "share_basis": ("products with my sales and at least one OTHER tracked seller's sales "
+                        "readings; stores that publish no readings are left out of that product's "
+                        "market — products only we sell are reported separately"),
+        "products_share_partial": sum(1 for r in contested if r.get("share_partial")),
         "my_units": total_my_units if my_measured else None,
         "my_revenue": total_my_rev if my_measured else None,
         "market_units": total_mkt_units if my_measured else None,
@@ -819,7 +835,7 @@ def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_s
         # sold-counter deltas), never order ledgers, so the previous
         # "all sellers orders_exact" clause made a share impossible by
         # construction; `share_basis` now states what the number rests on.
-        share_comparable = (my_units is not None and len(with_sales) == len(kept) and len(with_sales) >= 2)
+        share_comparable, share_partial, share_reason = share_status(my_units, with_sales, kept)
         share_basis = ("orders_vs_proxy" if (own or {}).get("units_source") == SRC_ORDERS
                        else "proxy_vs_proxy") if share_comparable else None
 
@@ -858,7 +874,9 @@ def _assemble_dataset(*, days, own_store_id, own_price_fn, brand_fn, orders_by_s
             "unit_share_pct": _pct(my_units, market_units) if share_comparable else None,
             "revenue_share_pct": _pct(my_revenue, market_revenue) if share_comparable else None,
             "share_comparable": share_comparable, "cohort_id": cohort["cohort_id"],
-            "share_unavailable_reason": None if share_comparable else "incomplete_or_incompatible_sales_evidence",
+            "share_partial": share_partial,
+            "share_sellers_measured": len(with_sales) if share_comparable else None,
+            "share_unavailable_reason": share_reason,
             "market_value_basis": market_value_basis,
             "market_units_sources": market_units_sources,
             "competitor_count": len(comps),
